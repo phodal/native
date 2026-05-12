@@ -430,6 +430,7 @@ pub const Runtime = struct {
             .source = .{ .origin = message.origin, .window_id = message.window_id },
         }, .{
             .context = self,
+            .request_id = request.id,
             .source = .{ .origin = message.origin, .window_id = message.window_id },
             .respond_fn = asyncBridgeRespond,
             .resource_bytes_fn = asyncBridgeResourceBytes,
@@ -1263,10 +1264,10 @@ test "runtime async bridge can return resource descriptors" {
     const State = struct {
         fn exportBytes(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
             _ = context;
-            try responder.resourceBytes(invocation.request.id, "large payload", .{
+            _ = invocation;
+            try responder.resourceBytes("large payload", .{
                 .mime = "text/plain",
                 .name = "payload.txt",
-                .one_shot = true,
             });
         }
     };
@@ -1296,7 +1297,46 @@ test "runtime async bridge can return resource descriptors" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"kind\":\"resource\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "zero://native/resource/") != null);
     try std.testing.expectEqualStrings("large payload", harness.null_platform.lastResourceBytes());
+    try std.testing.expect(harness.null_platform.resource_one_shot);
+    try std.testing.expect(harness.null_platform.resource_expires_at_ns != null);
     try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "runtime async bridge can opt into reusable resources" {
+    const State = struct {
+        fn exportBytes(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
+            _ = context;
+            _ = invocation;
+            try responder.resourceBytes("reusable payload", bridge.resources.Options.download("payload.txt", "text/plain").reusable().withoutTtl());
+        }
+    };
+
+    var registry = bridge.resources.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state: u8 = 0;
+    const policies = [_]bridge.CommandPolicy{.{ .name = "native.export", .origins = &.{"zero://inline"} }};
+    const handlers = [_]bridge.AsyncHandler{.{ .name = "native.export", .context = &state, .invoke_fn = State.exportBytes }};
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.runtime.options.bridge_resources = &registry;
+    harness.runtime.options.bridge = .{
+        .policy = .{ .enabled = true, .commands = &policies },
+        .async_registry = .{ .handlers = &handlers },
+    };
+
+    const app = App{ .context = &harness, .name = "resources", .source = platform.WebViewSource.html("<p>Resources</p>") };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"1\",\"command\":\"native.export\",\"payload\":null}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+
+    try std.testing.expectEqualStrings("reusable payload", harness.null_platform.lastResourceBytes());
+    try std.testing.expect(!harness.null_platform.resource_one_shot);
+    try std.testing.expect(harness.null_platform.resource_expires_at_ns == null);
+    try std.testing.expectEqual(@as(usize, 1), registry.entries.items.len);
 }
 
 test {

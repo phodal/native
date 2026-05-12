@@ -68,6 +68,9 @@ The JSON bridge is the control plane. For larger byte payloads, return a resourc
 
 ```javascript
 const resource = await window.zero.invoke("native.export", {});
+if (!window.zero.resources.isDescriptor(resource)) {
+  throw new Error("native.export did not return a resource");
+}
 const response = await window.zero.resources.fetch(resource);
 const bytes = new Uint8Array(await response.arrayBuffer());
 
@@ -75,7 +78,28 @@ const stream = await window.zero.resources.stream(resource);
 const reader = stream.getReader();
 ```
 
-Async Zig handlers can use `AsyncResponder.resourceBytes` to register bytes with the runtime and complete the command with a small descriptor instead of embedding the bytes in the JSON response.
+Async Zig handlers can use `AsyncResponder.resourceBytes` to register bytes with the runtime and complete the command with a small descriptor instead of embedding the bytes in the JSON response:
+
+```zig
+fn exportBytes(context: *anyopaque, invocation: zero_native.bridge.Invocation, responder: zero_native.bridge.AsyncResponder) anyerror!void {
+    _ = context;
+    _ = invocation;
+    try responder.resourceBytes("large payload", zero_native.BridgeResourceOptions.download("payload.txt", "text/plain"));
+}
+```
+
+Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. Reusable resources are an advanced opt-in:
+
+```zig
+try responder.resourceBytes(
+    bytes,
+    zero_native.BridgeResourceOptions.download("payload.bin", "application/octet-stream").reusable().withoutTtl(),
+);
+```
+
+The fetch path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). Windows and CEF-backed WebViews report `UnsupportedService` for resource registration until those hosts add native resource serving.
+
+`zero.resources.stream()` exposes the browser response stream. The native implementation still stores the registered bytes in memory before serving them, so this is not yet true native streaming from Zig.
 
 ### Benchmarking large transfers
 

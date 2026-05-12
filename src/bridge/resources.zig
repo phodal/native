@@ -5,6 +5,7 @@ pub const max_resource_id_bytes: usize = 32;
 pub const max_resource_name_bytes: usize = 128;
 pub const max_resource_mime_bytes: usize = 128;
 pub const max_resource_count: usize = 128;
+pub const default_ttl_ns: i128 = 5 * 60 * std.time.ns_per_s;
 
 pub const Error = error{
     ResourceLimitReached,
@@ -21,8 +22,30 @@ pub const Options = struct {
     name: []const u8 = "",
     origin: []const u8 = "",
     window_id: u64 = 0,
-    ttl_ns: ?i128 = null,
-    one_shot: bool = false,
+    ttl_ns: ?i128 = default_ttl_ns,
+    one_shot: bool = true,
+
+    pub fn download(name: []const u8, mime: []const u8) Options {
+        return .{ .name = name, .mime = mime };
+    }
+
+    pub fn withTtlSeconds(self: Options, seconds: u64) Options {
+        var options = self;
+        options.ttl_ns = @as(i128, @intCast(seconds)) * std.time.ns_per_s;
+        return options;
+    }
+
+    pub fn reusable(self: Options) Options {
+        var options = self;
+        options.one_shot = false;
+        return options;
+    }
+
+    pub fn withoutTtl(self: Options) Options {
+        var options = self;
+        options.ttl_ns = null;
+        return options;
+    }
 };
 
 pub const Descriptor = struct {
@@ -220,11 +243,13 @@ test "resource registry creates fetch descriptors" {
     }, 100);
 
     try std.testing.expectEqualStrings("text/plain", descriptor.mime);
+    try std.testing.expect(descriptor.one_shot);
     try std.testing.expect(std.mem.startsWith(u8, descriptor.url, "zero://native/resource/"));
 
     var output: [512]u8 = undefined;
     const json_bytes = try writeDescriptorJson(&output, descriptor);
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"kind\":\"resource\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"oneShot\":true") != null);
 
     var fetch_buffer: [32]u8 = undefined;
     const bytes = try registry.fetchBytes(descriptor.id, .{ .origin = "zero://app", .window_id = 1 }, 101, &fetch_buffer);
@@ -239,6 +264,21 @@ test "resource registry enforces origin and expiration" {
     var fetch_buffer: [32]u8 = undefined;
     try std.testing.expectError(error.ResourceOriginMismatch, registry.fetchBytes(descriptor.id, .{ .origin = "https://example.com" }, 101, &fetch_buffer));
     try std.testing.expectError(error.ResourceExpired, registry.fetchBytes(descriptor.id, .{ .origin = "zero://app" }, 111, &fetch_buffer));
+}
+
+test "resource options default to one-shot TTL and support reusable downloads" {
+    const defaults = Options{};
+    try std.testing.expect(defaults.one_shot);
+    try std.testing.expectEqual(@as(?i128, default_ttl_ns), defaults.ttl_ns);
+
+    const options = Options.download("report.csv", "text/csv").reusable().withoutTtl();
+    try std.testing.expectEqualStrings("report.csv", options.name);
+    try std.testing.expectEqualStrings("text/csv", options.mime);
+    try std.testing.expect(!options.one_shot);
+    try std.testing.expect(options.ttl_ns == null);
+
+    const short_lived = options.withTtlSeconds(30);
+    try std.testing.expectEqual(@as(?i128, 30 * std.time.ns_per_s), short_lived.ttl_ns);
 }
 
 test "resource registry one-shot fetch copies bytes and frees entry" {

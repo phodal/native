@@ -89,6 +89,7 @@ pub const Handler = struct {
 
 pub const AsyncResponder = struct {
     context: *anyopaque,
+    request_id: []const u8,
     source: Source,
     respond_fn: AsyncRespondFn,
     resource_bytes_fn: ?AsyncResourceBytesFn = null,
@@ -107,12 +108,12 @@ pub const AsyncResponder = struct {
         try self.respond(writeErrorResponse(&buffer, id, code, message));
     }
 
-    pub fn resourceBytes(self: AsyncResponder, id: []const u8, bytes: []const u8, options: resources.Options) anyerror!void {
+    pub fn resourceBytes(self: AsyncResponder, bytes: []const u8, options: resources.Options) anyerror!void {
         const resource_fn = self.resource_bytes_fn orelse return error.UnsupportedService;
         var descriptor_buffer: [max_result_bytes]u8 = undefined;
         const descriptor = try resource_fn(self.context, self.source, bytes, options, &descriptor_buffer);
         var response_buffer: [max_response_bytes]u8 = undefined;
-        try self.respond(writeSuccessResponse(&response_buffer, id, descriptor));
+        try self.respond(writeSuccessResponse(&response_buffer, self.request_id, descriptor));
     }
 };
 
@@ -543,11 +544,12 @@ test "async responder can return resource descriptors" {
     var state = State{};
     const responder: AsyncResponder = .{
         .context = &state,
+        .request_id = "request-1",
         .source = .{ .origin = "zero://app", .window_id = 1 },
         .respond_fn = State.respond,
         .resource_bytes_fn = State.resource,
     };
-    try responder.resourceBytes("request-1", "hello", .{ .mime = "text/plain" });
+    try responder.resourceBytes("hello", .{ .mime = "text/plain" });
     try std.testing.expect(std.mem.indexOf(u8, state.response[0..state.response_len], "\"kind\":\"resource\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, state.response[0..state.response_len], "\"text/plain\"") != null);
 }

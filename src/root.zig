@@ -58,6 +58,7 @@ pub const BridgeRegistry = bridge.Registry;
 pub const BridgeResourceRegistry = bridge.resources.Registry;
 pub const BridgeResourceOptions = bridge.resources.Options;
 pub const BridgeResourceDescriptor = bridge.resources.Descriptor;
+pub const BridgeResourceDefaultTtlNs = bridge.resources.default_ttl_ns;
 pub const SecurityPolicy = security.Policy;
 pub const NavigationPolicy = security.NavigationPolicy;
 pub const ExternalLinkPolicy = security.ExternalLinkPolicy;

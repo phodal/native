@@ -32,15 +32,17 @@
     "try{post(envelope);}catch(error){pending.delete(id);reject(error);}" \
     "});" \
     "}" \
+    "function isResourceDescriptor(value){return !!(value&&value.kind==='resource'&&typeof value.url==='string');}" \
     "function resourceUrl(resource){" \
     "if(typeof resource==='string'){return resource;}" \
-    "if(resource&&typeof resource.url==='string'){return resource.url;}" \
+    "if(isResourceDescriptor(resource)){return resource.url;}" \
     "throw new TypeError('resource must be a URL string or resource descriptor');" \
     "}" \
+    "function resourceFetchError(response){var detail=response.statusText?' '+response.statusText:'';return new Error('Resource fetch failed: '+response.status+detail);}" \
     "function resourceFetch(resource,init){return fetch(resourceUrl(resource),init);}" \
-    "function resourceArrayBuffer(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw new Error('Resource fetch failed: '+response.status);}return response.arrayBuffer();});}" \
-    "function resourceBlob(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw new Error('Resource fetch failed: '+response.status);}return response.blob();});}" \
-    "function resourceStream(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw new Error('Resource fetch failed: '+response.status);}return response.body;});}" \
+    "function resourceArrayBuffer(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw resourceFetchError(response);}return response.arrayBuffer();});}" \
+    "function resourceBlob(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw resourceFetchError(response);}return response.blob();});}" \
+    "function resourceStream(resource,init){return resourceFetch(resource,init).then(function(response){if(!response.ok){throw resourceFetchError(response);}return response.body;});}" \
     "function selector(value){return typeof value==='number'?{id:value}:{label:String(value)};}" \
     "function on(name,callback){if(typeof callback!=='function'){throw new TypeError('callback must be a function');}var set=listeners.get(name);if(!set){set=new Set();listeners.set(name,set);}set.add(callback);return function(){off(name,callback);};}" \
     "function off(name,callback){var set=listeners.get(name);if(set){set.delete(callback);if(set.size===0){listeners.delete(name);}}}" \
@@ -56,7 +58,7 @@
     "saveFile:function(options){return invoke('zero-native.dialog.saveFile',options||{});}," \
     "showMessage:function(options){return invoke('zero-native.dialog.showMessage',options||{});}" \
     "});" \
-    "var resources=Object.freeze({url:resourceUrl,fetch:resourceFetch,arrayBuffer:resourceArrayBuffer,blob:resourceBlob,stream:resourceStream});" \
+    "var resources=Object.freeze({isDescriptor:isResourceDescriptor,url:resourceUrl,fetch:resourceFetch,arrayBuffer:resourceArrayBuffer,blob:resourceBlob,stream:resourceStream});" \
     "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,windows:windows,dialogs:dialogs,resources:resources,_complete:complete,_emit:emit}),configurable:false});" \
     "})();"
 

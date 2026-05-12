@@ -895,7 +895,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (int)registerDynamicResourceStream:(NSString *)resourceId mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot size:(uint64_t)size hasSize:(BOOL)hasSize context:(void *)context readCallback:(zero_native_appkit_resource_stream_read_callback_t)readCallback closeCallback:(zero_native_appkit_resource_stream_close_callback_t)closeCallback {
-    if (resourceId.length == 0 || !readCallback || !closeCallback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
+    if (resourceId.length == 0 || !readCallback || !closeCallback || !oneShot) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     [self pruneExpiredDynamicResourcesWithNowNs:ZeroNativeNowNanoseconds()];
     if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return ZERO_NATIVE_RESOURCE_LIMIT;
     ZeroNativeDynamicResource *resource = [[ZeroNativeDynamicResource alloc] init];

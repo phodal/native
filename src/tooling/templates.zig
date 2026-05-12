@@ -180,10 +180,11 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\    const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
         \\    const cef_auto_install_override = b.option(bool, "cef-auto-install", "Override app.zon CEF auto-install setting");
         \\    const package_target = b.option(PackageTarget, "package-target", "Package target: macos, windows, linux") orelse .macos;
+        \\    const webview2_include = b.option([]const u8, "webview2-include", "Path to Microsoft WebView2 SDK include directory") orelse "third_party/webview2/build/native/include";
         \\    const zero_native_path = b.option([]const u8, "zero-native-path", "Path to the zero-native framework checkout") orelse default_zero_native_path;
         \\    const optimize_name = @tagName(optimize);
         \\    const selected_platform: PlatformOption = switch (platform_option) {
-        \\        .auto => if (target.result.os.tag == .macos) .macos else if (target.result.os.tag == .linux) .linux else if (target.result.os.tag == .windows) .windows else .@"null",
+        \\        .auto => if (target.result.os.tag == .macos) .macos else if (target.result.os.tag == .linux) .linux else if (target.result.os.tag == .windows) .windows else .null,
         \\        else => platform_option,
         \\    };
         \\    if (selected_platform == .macos and target.result.os.tag != .macos) {
@@ -199,7 +200,7 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\    const web_engine = web_engine_override orelse app_web_engine.web_engine;
         \\    const cef_dir = cef_dir_override orelse defaultCefDir(selected_platform, app_web_engine.cef_dir);
         \\    const cef_auto_install = cef_auto_install_override orelse app_web_engine.cef_auto_install;
-        \\    if (web_engine == .chromium and selected_platform == .@"null") {
+        \\    if (web_engine == .chromium and selected_platform == .null) {
         \\        @panic("-Dweb-engine=chromium requires -Dplatform=macos, linux, or windows");
         \\    }
         \\
@@ -207,7 +208,7 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\    const options = b.addOptions();
         \\    options.addOption([]const u8, "platform", switch (selected_platform) {
         \\        .auto => unreachable,
-        \\        .@"null" => "null",
+        \\        .null => "null",
         \\        .macos => "macos",
         \\        .linux => "linux",
         \\        .windows => "windows",
@@ -230,7 +231,7 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        .name = app_exe_name,
         \\        .root_module = app_mod,
         \\    });
-        \\    linkPlatform(b, target, app_mod, exe, selected_platform, web_engine, zero_native_path, cef_dir, cef_auto_install);
+        \\    linkPlatform(b, target, app_mod, exe, selected_platform, web_engine, zero_native_path, cef_dir, cef_auto_install, webview2_include);
         \\    b.installArtifact(exe);
         \\
         \\    const frontend_install = b.addSystemCommand(&.{ "npm", "install", "--prefix", "frontend" });
@@ -363,7 +364,7 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\    });
         \\}
         \\
-        \\fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.Build.Module, exe: *std.Build.Step.Compile, platform: PlatformOption, web_engine: WebEngineOption, zero_native_path: []const u8, cef_dir: []const u8, cef_auto_install: bool) void {
+        \\fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.Build.Module, exe: *std.Build.Step.Compile, platform: PlatformOption, web_engine: WebEngineOption, zero_native_path: []const u8, cef_dir: []const u8, cef_auto_install: bool, webview2_include: []const u8) void {
         \\    if (platform == .macos) {
         \\        switch (web_engine) {
         \\            .system => {
@@ -425,7 +426,10 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        if (web_engine == .chromium) app_mod.linkSystemLibrary("stdc++", .{});
         \\    } else if (platform == .windows) {
         \\        switch (web_engine) {
-        \\            .system => app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17" } }),
+        \\            .system => {
+        \\                const webview2_include_arg = b.fmt("-I{s}", .{webview2_include});
+        \\                app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17", webview2_include_arg } });
+        \\            },
         \\            .chromium => {
         \\                const cef_check = addCefCheck(b, target, cef_dir);
         \\                if (cef_auto_install) {

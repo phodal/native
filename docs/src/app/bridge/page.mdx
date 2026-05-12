@@ -75,7 +75,12 @@ if (!window.zero.resources.isDescriptor(resource)) {
 }
 const response = await window.zero.resources.fetch(resource);
 const bytes = new Uint8Array(await response.arrayBuffer());
+```
 
+Use one consumption path per descriptor. Resources are one-shot by default, so a second `fetch()` or `stream()` for the same descriptor will fail unless the Zig handler explicitly registered a reusable byte resource.
+
+```javascript
+const resource = await window.zero.invoke("native.exportStream", {});
 const stream = await window.zero.resources.stream(resource);
 if (!stream) {
   throw new Error("resource response did not include a readable stream");
@@ -119,6 +124,8 @@ try responder.resourceStream(.{
 }, zero_native.BridgeResourceOptions.download("export.bin", "application/octet-stream"));
 ```
 
+The provider context must stay valid until `close_fn` runs. Do not pass a pointer to stack state that can disappear when the bridge handler returns; allocate or otherwise own the stream state for the full resource lifetime, and release it from `close_fn`.
+
 Resource responses also need a registry attached to the runtime:
 
 ```zig
@@ -141,7 +148,7 @@ try responder.resourceBytes(
 );
 ```
 
-The byte resource path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). `resourceStream` registers one-shot provider callbacks so those hosts pull chunks from Zig as the native resource handler serves the browser response. Stream descriptors are single-consumer because providers are read sequentially and are not required to be seekable. Hosts that do not yet have a native resource interceptor reject registration through the normal bridge error path with `handler_failed`.
+The byte resource path currently works with the system WebView engines on macOS (WKWebView), Linux (WebKitGTK), and Windows (WebView2). `resourceStream` registers one-shot provider callbacks so those hosts pull chunks from Zig as the native resource handler serves the browser response. Stream descriptors are single-consumer because providers are read sequentially and are not required to be seekable. Hosts that do not yet have a native resource interceptor reject registration through the normal bridge error path with `handler_failed`.
 
 `zero.resources.stream()` exposes the browser response stream. For `resourceStream` descriptors, the native host pulls from the Zig provider in chunks; for `resourceBytes` descriptors, the source is still a buffered byte slice.
 

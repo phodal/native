@@ -410,7 +410,14 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
     const char *uri = webkit_uri_scheme_request_get_uri(request);
     if (g_str_has_prefix(uri, "zero://native/resource/")) {
         const char *encoded_id = uri + strlen("zero://native/resource/");
-        char *id = g_uri_unescape_string(encoded_id, NULL);
+        size_t encoded_id_len = strcspn(encoded_id, "?#");
+        char *encoded_id_path = zero_native_strndup(encoded_id, encoded_id_len);
+        if (!encoded_id_path) {
+            zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NO_SPACE, "Resource id is invalid");
+            return;
+        }
+        char *id = g_uri_unescape_string(encoded_id_path, NULL);
+        free(encoded_id_path);
         if (!id) {
             zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_INVALID_FILENAME, "Resource id is invalid");
             return;
@@ -987,7 +994,7 @@ int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const 
 }
 
 int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_gtk_resource_stream_read_callback_t read_callback, zero_native_gtk_resource_stream_close_callback_t close_callback) {
-    if (!host || !id || id_len == 0 || !read_callback || !close_callback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
+    if (!host || !id || id_len == 0 || !read_callback || !close_callback || !one_shot) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
     char *resource_id = zero_native_strndup(id, id_len);
     if (!resource_id) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;

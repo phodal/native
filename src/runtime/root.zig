@@ -858,7 +858,7 @@ fn nowNanoseconds() i128 {
             if (!windows.ntdll.RtlQueryPerformanceFrequency(&frequency).toBool()) return 0;
             if (!windows.ntdll.RtlQueryPerformanceCounter(&counter).toBool()) return 0;
             if (frequency <= 0) return 0;
-            return (@as(i128, counter) * std.time.ns_per_s) / @as(i128, frequency);
+            return @divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, frequency));
         },
         .wasi => {
             const wasi = std.os.wasi;

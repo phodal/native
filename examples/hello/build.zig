@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
     const web_engine_override = b.option(WebEngineOption, "web-engine", "Override app.zon web engine: system, chromium");
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
     const cef_auto_install_override = b.option(bool, "cef-auto-install", "Override app.zon CEF auto-install setting");
+    const webview2_include = b.option([]const u8, "webview2-include", "Path to Microsoft WebView2 SDK include directory") orelse "third_party/webview2/build/native/include";
     const zero_native_path = b.option([]const u8, "zero-native-path", "Path to the zero-native framework checkout") orelse default_zero_native_path;
     const selected_platform: PlatformOption = switch (platform_option) {
         .auto => if (target.result.os.tag == .macos) .macos else if (target.result.os.tag == .linux) .linux else if (target.result.os.tag == .windows) .windows else .null,
@@ -83,7 +84,7 @@ pub fn build(b: *std.Build) void {
         .name = app_exe_name,
         .root_module = app_mod,
     });
-    linkPlatform(b, target, app_mod, exe, selected_platform, web_engine, zero_native_path, cef_dir, cef_auto_install);
+    linkPlatform(b, target, app_mod, exe, selected_platform, web_engine, zero_native_path, cef_dir, cef_auto_install, webview2_include);
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -173,7 +174,7 @@ fn externalModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
     });
 }
 
-fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.Build.Module, exe: *std.Build.Step.Compile, platform: PlatformOption, web_engine: WebEngineOption, zero_native_path: []const u8, cef_dir: []const u8, cef_auto_install: bool) void {
+fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.Build.Module, exe: *std.Build.Step.Compile, platform: PlatformOption, web_engine: WebEngineOption, zero_native_path: []const u8, cef_dir: []const u8, cef_auto_install: bool, webview2_include: []const u8) void {
     if (platform == .macos) {
         switch (web_engine) {
             .system => {
@@ -235,7 +236,10 @@ fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.B
         if (web_engine == .chromium) app_mod.linkSystemLibrary("stdc++", .{});
     } else if (platform == .windows) {
         switch (web_engine) {
-            .system => app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{"-std=c++17"} }),
+            .system => {
+                const webview2_include_arg = b.fmt("-I{s}", .{webview2_include});
+                app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17", webview2_include_arg } });
+            },
             .chromium => {
                 const cef_check = addCefCheck(b, target, cef_dir);
                 if (cef_auto_install) {

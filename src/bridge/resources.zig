@@ -89,6 +89,22 @@ const Payload = union(enum) {
     stream: StreamProvider,
 };
 
+const SpinLock = struct {
+    locked: bool = false,
+
+    fn lock(self: *SpinLock) void {
+        while (@cmpxchgWeak(bool, &self.locked, false, true, .acquire, .monotonic) != null) {
+            while (@atomicLoad(bool, &self.locked, .monotonic)) {
+                std.atomic.spinLoopHint();
+            }
+        }
+    }
+
+    fn unlock(self: *SpinLock) void {
+        @atomicStore(bool, &self.locked, false, .release);
+    }
+};
+
 const Entry = struct {
     id: []u8,
     url: []u8,
@@ -100,6 +116,7 @@ const Entry = struct {
     window_id: u64,
     expires_at_ns: ?i128,
     one_shot: bool,
+    stream_started: bool = false,
 
     fn descriptor(self: Entry) Descriptor {
         return .{
@@ -123,6 +140,7 @@ pub const Source = struct {
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
+    mutex: SpinLock = .{},
     entries: std.ArrayList(Entry) = .empty,
     nonce_counter: u64 = 0,
 
@@ -131,6 +149,8 @@ pub const Registry = struct {
     }
 
     pub fn deinit(self: *Registry) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         for (self.entries.items) |entry| {
             self.closeEntry(entry, .revoke);
             self.freeEntry(entry);
@@ -139,6 +159,8 @@ pub const Registry = struct {
     }
 
     pub fn registerBytes(self: *Registry, bytes: []const u8, options: Options, now_ns: i128) !Descriptor {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.pruneExpired(now_ns);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
@@ -174,6 +196,8 @@ pub const Registry = struct {
     }
 
     pub fn registerStream(self: *Registry, provider: StreamProvider, options: Options, now_ns: i128) !Descriptor {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.pruneExpired(now_ns);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
@@ -208,10 +232,13 @@ pub const Registry = struct {
     }
 
     pub fn fetchBytes(self: *Registry, id: []const u8, source: Source, now_ns: i128, output: []u8) ![]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return error.ResourceNotFound;
         const entry = self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
             if (now_ns >= expires) {
+                self.closeEntry(entry, .expired);
                 self.removeAt(index);
                 return error.ResourceExpired;
             }
@@ -230,10 +257,12 @@ pub const Registry = struct {
     }
 
     pub fn readStream(self: *Registry, id: []const u8, source: Source, now_ns: i128, output: []u8) !usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return error.ResourceNotFound;
         var entry = &self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
-            if (now_ns >= expires) {
+            if (!entry.stream_started and now_ns >= expires) {
                 self.closeEntry(entry.*, .expired);
                 self.removeAt(index);
                 return error.ResourceExpired;
@@ -241,6 +270,7 @@ pub const Registry = struct {
         }
         if (entry.origin.len > 0 and !std.mem.eql(u8, entry.origin, source.origin)) return error.ResourceOriginMismatch;
         if (entry.window_id != 0 and entry.window_id != source.window_id) return error.ResourceWindowMismatch;
+        entry.stream_started = true;
         switch (entry.payload) {
             .bytes => |bytes| {
                 if (entry.bytes_offset >= bytes.len) {
@@ -258,6 +288,8 @@ pub const Registry = struct {
     }
 
     pub fn closeStream(self: *Registry, id: []const u8, reason: CloseReason) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return false;
         const entry = self.entries.items[index];
         self.closeEntry(entry, reason);
@@ -273,6 +305,8 @@ pub const Registry = struct {
     }
 
     pub fn revoke(self: *Registry, id: []const u8) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return false;
         self.closeEntry(self.entries.items[index], .revoke);
         self.removeAt(index);
@@ -516,6 +550,79 @@ test "resource registry closes providers on deinit" {
         }, .{ .mime = "text/plain" }, 100);
     }
     try std.testing.expectEqual(CloseReason.revoke, state.close_reason.?);
+}
+
+test "resource registry closes expired streams through fetchBytes path" {
+    const State = struct {
+        close_reason: ?CloseReason = null,
+
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            _ = context;
+            _ = output;
+            return 0;
+        }
+
+        fn close(context: *anyopaque, reason: CloseReason) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.close_reason = reason;
+        }
+    };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    var state = State{};
+
+    const descriptor = try registry.registerStream(.{
+        .context = &state,
+        .read_fn = State.read,
+        .close_fn = State.close,
+    }, .{ .mime = "text/plain", .ttl_ns = 1 }, 100);
+
+    var output: [16]u8 = undefined;
+    try std.testing.expectError(error.ResourceExpired, registry.fetchBytes(descriptor.id, .{}, 101, &output));
+    try std.testing.expectEqual(CloseReason.expired, state.close_reason.?);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "resource registry does not expire streams after reading starts" {
+    const State = struct {
+        bytes: []const u8 = "abcdef",
+        offset: usize = 0,
+        close_reason: ?CloseReason = null,
+
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            if (self.offset >= self.bytes.len) return 0;
+            const count = @min(output.len, self.bytes.len - self.offset);
+            @memcpy(output[0..count], self.bytes[self.offset..][0..count]);
+            self.offset += count;
+            return count;
+        }
+
+        fn close(context: *anyopaque, reason: CloseReason) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.close_reason = reason;
+        }
+    };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    var state = State{};
+
+    const descriptor = try registry.registerStream(.{
+        .context = &state,
+        .read_fn = State.read,
+        .close_fn = State.close,
+    }, .{ .mime = "text/plain", .ttl_ns = 1 }, 100);
+
+    var chunk: [3]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), try registry.readStream(descriptor.id, .{}, 100, &chunk));
+    try std.testing.expectEqualStrings("abc", &chunk);
+    try std.testing.expectEqual(@as(usize, 3), try registry.readStream(descriptor.id, .{}, 102, &chunk));
+    try std.testing.expectEqualStrings("def", &chunk);
+    try std.testing.expectEqual(@as(usize, 0), try registry.readStream(descriptor.id, .{}, 102, &chunk));
+    try std.testing.expect(registry.closeStream(descriptor.id, .complete));
+    try std.testing.expectEqual(CloseReason.complete, state.close_reason.?);
 }
 
 test "resource registry rejects oversized stream reads" {

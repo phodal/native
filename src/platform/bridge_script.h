@@ -9,6 +9,7 @@
     "var nextId=1;" \
     "function post(message){" \
     "if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.zeroNativeBridge){window.webkit.messageHandlers.zeroNativeBridge.postMessage(message);return;}" \
+    "if(window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage){window.chrome.webview.postMessage(message);return;}" \
     "if(window.zeroNativeCefBridge&&window.zeroNativeCefBridge.postMessage){window.zeroNativeCefBridge.postMessage(message);return;}" \
     "throw new Error('zero-native bridge transport is unavailable');" \
     "}" \
@@ -32,7 +33,7 @@
     "try{post(envelope);}catch(error){pending.delete(id);reject(error);}" \
     "});" \
     "}" \
-    "function isResourceDescriptor(value){return !!(value&&value.kind==='resource'&&typeof value.url==='string');}" \
+    "function isResourceDescriptor(value){return !!(value&&value.kind==='resource'&&typeof value.id==='string'&&typeof value.url==='string'&&typeof value.mime==='string');}" \
     "function resourceUrl(resource){" \
     "if(typeof resource==='string'){return resource;}" \
     "if(isResourceDescriptor(resource)){return resource.url;}" \

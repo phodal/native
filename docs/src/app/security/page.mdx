@@ -117,6 +117,12 @@ Native bridge commands are default-deny. A command must be registered by native 
 
 Prefer exact origins over `"*"`. Use `"*"` only for local development or commands that do not expose native state.
 
+## Resource descriptor URLs
+
+Bridge resource descriptors contain `zero://native/resource/*` URLs. Treat these URLs as short-lived capabilities: do not log them, persist them, or pass them to untrusted content. Native resource handlers still enforce the descriptor's origin, window, TTL, and one-shot settings, but leaking the descriptor gives any same-scope document a chance to consume it.
+
+If your app uses a restrictive Content Security Policy, allow resource fetches from `zero://native` in the relevant fetch directives. Prefer consuming descriptors immediately through `window.zero.resources` and then discarding them.
+
 ## Builtin bridge policy
 
 zero-native provides built-in commands for windows (`zero-native.window.*`) and dialogs (`zero-native.dialog.*`). These are controlled separately from app-defined commands via the `builtin_bridge` field in `RuntimeOptions`.

@@ -441,6 +441,7 @@ pub const NullPlatform = struct {
     resource_bytes: [64 * 1024]u8 = undefined,
     resource_bytes_len: usize = 0,
     resource_one_shot: bool = false,
+    resource_registration_fails: bool = false,
 
     pub fn init(surface_value: Surface) NullPlatform {
         return .{ .surface_value = surface_value };
@@ -589,6 +590,7 @@ pub const NullPlatform = struct {
 
     fn registerResourceBytes(context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (self.resource_registration_fails) return error.ResourceLimitReached;
         const id_len = @min(id.len, self.resource_id.len);
         const mime_len = @min(mime.len, self.resource_mime.len);
         const origin_len = @min(origin.len, self.resource_origin.len);

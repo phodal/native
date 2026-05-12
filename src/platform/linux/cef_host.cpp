@@ -196,7 +196,7 @@ void zero_native_gtk_set_security_policy(Host *host, const char *allowed_origins
     (void)external_action;
 }
 
-void zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+int zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     (void)host;
     (void)id;
     (void)id_len;
@@ -210,6 +210,7 @@ void zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t 
     (void)expires_at_ns;
     (void)has_expiry;
     (void)one_shot;
+    return 0;
 }
 
 void zero_native_gtk_revoke_resource(Host *host, const char *id, size_t id_len) {

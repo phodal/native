@@ -7,6 +7,8 @@
 #include <string.h>
 #include "../bridge_script.h"
 
+static const NSUInteger ZeroNativeMaxDynamicResources = 128;
+
 @class ZeroNativeAppKitHost;
 
 static NSRect constrainFrame(NSRect frame);
@@ -108,7 +110,8 @@ static int64_t ZeroNativeNowNanoseconds(void);
 - (void)completeBridgeWithResponse:(NSString *)response windowId:(uint64_t)windowId;
 - (void)emitEventNamed:(NSString *)name detailJSON:(NSString *)detailJSON windowId:(uint64_t)windowId;
 - (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId origin:(NSString *)origin windowId:(uint64_t)windowId nowNs:(int64_t)nowNs consume:(BOOL)consume;
-- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot;
+- (void)pruneExpiredDynamicResourcesWithNowNs:(int64_t)nowNs;
+- (BOOL)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot;
 - (void)revokeDynamicResource:(NSString *)resourceId;
 @end
 
@@ -764,8 +767,21 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     return resource;
 }
 
-- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot {
-    if (resourceId.length == 0 || !data) return;
+- (void)pruneExpiredDynamicResourcesWithNowNs:(int64_t)nowNs {
+    NSMutableArray<NSString *> *expired = [[NSMutableArray alloc] init];
+    [self.dynamicResources enumerateKeysAndObjectsUsingBlock:^(NSString *key, ZeroNativeDynamicResource *resource, BOOL *stop) {
+        (void)stop;
+        if (resource.hasExpiry && nowNs >= resource.expiresAtNs) {
+            [expired addObject:key];
+        }
+    }];
+    if (expired.count > 0) [self.dynamicResources removeObjectsForKeys:expired];
+}
+
+- (BOOL)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot {
+    if (resourceId.length == 0 || !data) return NO;
+    [self pruneExpiredDynamicResourcesWithNowNs:ZeroNativeNowNanoseconds()];
+    if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return NO;
     ZeroNativeDynamicResource *resource = [[ZeroNativeDynamicResource alloc] init];
     resource.data = data;
     resource.mimeType = mimeType.length > 0 ? mimeType : @"application/octet-stream";
@@ -775,6 +791,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     resource.hasExpiry = hasExpiry;
     resource.oneShot = oneShot;
     self.dynamicResources[resourceId] = resource;
+    return YES;
 }
 
 - (void)revokeDynamicResource:(NSString *)resourceId {
@@ -932,13 +949,13 @@ void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, con
     [object setAllowedNavigationOrigins:origins externalURLs:externalURLs externalAction:external_action];
 }
 
-void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+int zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
     NSString *mimeType = mime ? [[NSString alloc] initWithBytes:mime length:mime_len encoding:NSUTF8StringEncoding] : @"application/octet-stream";
     NSString *originString = origin ? [[NSString alloc] initWithBytes:origin length:origin_len encoding:NSUTF8StringEncoding] : @"";
     NSData *data = bytes && bytes_len > 0 ? [NSData dataWithBytes:bytes length:bytes_len] : [NSData data];
-    [object registerDynamicResource:resourceId ?: @"" data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)];
+    return [object registerDynamicResource:resourceId ?: @"" data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)] ? 1 : 0;
 }
 
 void zero_native_appkit_revoke_resource(zero_native_appkit_host_t *host, const char *id, size_t id_len) {

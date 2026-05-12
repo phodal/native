@@ -110,6 +110,23 @@ static void zero_native_remove_resource_at(zero_native_gtk_host_t *host, int ind
     host->resource_count--;
 }
 
+static int64_t zero_native_now_nanoseconds(void) {
+    return (int64_t)g_get_real_time() * 1000;
+}
+
+static void zero_native_prune_expired_resources(zero_native_gtk_host_t *host, int64_t now_ns) {
+    if (!host) return;
+    int index = 0;
+    while (index < host->resource_count) {
+        zero_native_dynamic_resource_t *resource = &host->resources[index];
+        if (resource->has_expiry && now_ns >= resource->expires_at_ns) {
+            zero_native_remove_resource_at(host, index);
+            continue;
+        }
+        index++;
+    }
+}
+
 static zero_native_gtk_window_t *zero_native_window_for_web_view(zero_native_gtk_host_t *host, WebKitWebView *web_view) {
     if (!host || !web_view) return NULL;
     for (int i = 0; i < host->window_count; i++) {
@@ -298,7 +315,7 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
         }
         zero_native_dynamic_resource_t *resource = &host->resources[resource_index];
         zero_native_gtk_window_t *request_window = zero_native_window_for_web_view(host, webkit_uri_scheme_request_get_web_view(request));
-        int64_t now_ns = (int64_t)g_get_real_time() * 1000;
+        int64_t now_ns = zero_native_now_nanoseconds();
         if (resource->has_expiry && now_ns >= resource->expires_at_ns) {
             zero_native_remove_resource_at(host, resource_index);
             zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Resource is expired");
@@ -808,15 +825,16 @@ void zero_native_gtk_set_security_policy(zero_native_gtk_host_t *host, const cha
     host->external_link_action = external_action;
 }
 
-void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
-    if (!host || !id || id_len == 0) return;
+int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+    if (!host || !id || id_len == 0) return 0;
+    zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
     char *resource_id = zero_native_strndup(id, id_len);
-    if (!resource_id) return;
+    if (!resource_id) return 0;
     int existing = zero_native_find_resource_index(host, resource_id);
     if (existing >= 0) zero_native_remove_resource_at(host, existing);
     if (host->resource_count >= ZERO_NATIVE_MAX_RESOURCES) {
         free(resource_id);
-        return;
+        return 0;
     }
     zero_native_dynamic_resource_t *resource = &host->resources[host->resource_count++];
     resource->id = resource_id;
@@ -826,7 +844,7 @@ void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const
     if (!resource->mime || !resource->origin || (bytes_len > 0 && !resource->bytes)) {
         zero_native_clear_resource(resource);
         host->resource_count--;
-        return;
+        return 0;
     }
     if (bytes_len > 0) memcpy(resource->bytes, bytes, bytes_len);
     resource->len = bytes_len;
@@ -834,6 +852,7 @@ void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const
     resource->expires_at_ns = expires_at_ns;
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
+    return 1;
 }
 
 void zero_native_gtk_revoke_resource(zero_native_gtk_host_t *host, const char *id, size_t id_len) {

@@ -88,7 +88,20 @@ fn exportBytes(context: *anyopaque, invocation: zero_native.bridge.Invocation, r
 }
 ```
 
-Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. Reusable resources are an advanced opt-in:
+Resource responses also need a registry attached to the runtime:
+
+```zig
+var bridge_resources = zero_native.BridgeResourceRegistry.init(allocator);
+defer bridge_resources.deinit();
+
+var runtime = zero_native.Runtime.init(.{
+    .platform = platform.platform(),
+    .bridge = app.bridge(),
+    .bridge_resources = &bridge_resources,
+});
+```
+
+Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. The native WebView resource stores enforce the same TTL for resources that are registered but never fetched. Reusable resources are an advanced opt-in:
 
 ```zig
 try responder.resourceBytes(
@@ -97,7 +110,7 @@ try responder.resourceBytes(
 );
 ```
 
-The fetch path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). Windows and CEF-backed WebViews report `UnsupportedService` for resource registration until those hosts add native resource serving.
+The fetch path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). Windows and CEF-backed WebViews reject resource registration through the normal bridge error path with `handler_failed` until those hosts add native resource serving.
 
 `zero.resources.stream()` exposes the browser response stream. The native implementation still stores the registered bytes in memory before serving them, so this is not yet true native streaming from Zig.
 

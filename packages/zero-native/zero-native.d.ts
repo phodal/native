@@ -6,6 +6,18 @@ export type ZeroNativeJson =
   | ZeroNativeJson[]
   | { [key: string]: ZeroNativeJson };
 
+export interface ZeroNativeResourceDescriptor {
+  kind: "resource";
+  id: string;
+  url: string;
+  mime: string;
+  name?: string;
+  size: number;
+  oneShot?: boolean;
+}
+
+export type ZeroNativeInvokeResult = ZeroNativeJson | ZeroNativeResourceDescriptor;
+
 export interface ZeroNativeInvokeError extends Error {
   code: "invalid_request" | "unknown_command" | "permission_denied" | "handler_failed" | "payload_too_large" | "internal_error" | string;
 }
@@ -58,7 +70,7 @@ export interface ZeroNativeMessageDialogOptions {
 }
 
 export interface ZeroNativeApi {
-  invoke<T = ZeroNativeJson>(command: string, payload?: ZeroNativeJson): Promise<T>;
+  invoke<T = ZeroNativeInvokeResult>(command: string, payload?: ZeroNativeJson): Promise<T>;
   on<T = ZeroNativeJson>(name: string, callback: (detail: T) => void): () => void;
   off<T = ZeroNativeJson>(name: string, callback: (detail: T) => void): void;
   windows: {
@@ -71,6 +83,14 @@ export interface ZeroNativeApi {
     openFile(options?: ZeroNativeOpenFileOptions): Promise<string[] | null>;
     saveFile(options?: ZeroNativeSaveFileOptions): Promise<string | null>;
     showMessage(options?: ZeroNativeMessageDialogOptions): Promise<"primary" | "secondary" | "tertiary">;
+  };
+  resources: {
+    isDescriptor(value: unknown): value is ZeroNativeResourceDescriptor;
+    url(resource: string | ZeroNativeResourceDescriptor): string;
+    fetch(resource: string | ZeroNativeResourceDescriptor, init?: RequestInit): Promise<Response>;
+    arrayBuffer(resource: string | ZeroNativeResourceDescriptor, init?: RequestInit): Promise<ArrayBuffer>;
+    blob(resource: string | ZeroNativeResourceDescriptor, init?: RequestInit): Promise<Blob>;
+    stream(resource: string | ZeroNativeResourceDescriptor, init?: RequestInit): Promise<ReadableStream<Uint8Array> | null>;
   };
 }
 

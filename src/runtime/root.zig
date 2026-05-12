@@ -425,7 +425,7 @@ pub const Runtime = struct {
             try self.completeBridgeResponse(message.window_id, response);
             return true;
         }
-        try handler.invoke_fn(handler.context, .{
+        handler.invoke_fn(handler.context, .{
             .request = request,
             .source = .{ .origin = message.origin, .window_id = message.window_id },
         }, .{
@@ -434,7 +434,11 @@ pub const Runtime = struct {
             .source = .{ .origin = message.origin, .window_id = message.window_id },
             .respond_fn = asyncBridgeRespond,
             .resource_bytes_fn = asyncBridgeResourceBytes,
-        });
+        }) catch |err| {
+            var response_buffer: [bridge.max_response_bytes]u8 = undefined;
+            const response = bridge.writeErrorResponse(&response_buffer, request.id, .handler_failed, @errorName(err));
+            try self.completeBridgeResponse(message.window_id, response);
+        };
         return true;
     }
 
@@ -1260,6 +1264,71 @@ test "runtime returns bridge permission errors through platform response service
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
 }
 
+test "runtime async bridge maps handler errors to response errors" {
+    const State = struct {
+        fn fail(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
+            _ = context;
+            _ = invocation;
+            _ = responder;
+            return error.ExpectedAsyncFailure;
+        }
+    };
+
+    var state: u8 = 0;
+    const policies = [_]bridge.CommandPolicy{.{ .name = "native.fail", .origins = &.{"zero://inline"} }};
+    const handlers = [_]bridge.AsyncHandler{.{ .name = "native.fail", .context = &state, .invoke_fn = State.fail }};
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.runtime.options.bridge = .{
+        .policy = .{ .enabled = true, .commands = &policies },
+        .async_registry = .{ .handlers = &handlers },
+    };
+
+    const app = App{ .context = &harness, .name = "async-errors", .source = platform.WebViewSource.html("<p>Bridge</p>") };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"1\",\"command\":\"native.fail\",\"payload\":null}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"handler_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "ExpectedAsyncFailure") != null);
+}
+
+test "runtime async bridge maps unsupported resource responses to response errors" {
+    const State = struct {
+        fn exportBytes(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
+            _ = context;
+            _ = invocation;
+            try responder.resourceBytes("large payload", .{ .mime = "text/plain" });
+        }
+    };
+
+    var state: u8 = 0;
+    const policies = [_]bridge.CommandPolicy{.{ .name = "native.export", .origins = &.{"zero://inline"} }};
+    const handlers = [_]bridge.AsyncHandler{.{ .name = "native.export", .context = &state, .invoke_fn = State.exportBytes }};
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.runtime.options.bridge = .{
+        .policy = .{ .enabled = true, .commands = &policies },
+        .async_registry = .{ .handlers = &handlers },
+    };
+
+    const app = App{ .context = &harness, .name = "resource-errors", .source = platform.WebViewSource.html("<p>Bridge</p>") };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"1\",\"command\":\"native.export\",\"payload\":null}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"handler_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "UnsupportedService") != null);
+}
+
 test "runtime async bridge can return resource descriptors" {
     const State = struct {
         fn exportBytes(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
@@ -1300,6 +1369,44 @@ test "runtime async bridge can return resource descriptors" {
     try std.testing.expect(harness.null_platform.resource_one_shot);
     try std.testing.expect(harness.null_platform.resource_expires_at_ns != null);
     try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "runtime revokes Zig resource entry when native registration fails" {
+    const State = struct {
+        fn exportBytes(context: *anyopaque, invocation: bridge.Invocation, responder: bridge.AsyncResponder) anyerror!void {
+            _ = context;
+            _ = invocation;
+            try responder.resourceBytes("large payload", bridge.resources.Options.download("payload.txt", "text/plain").reusable());
+        }
+    };
+
+    var registry = bridge.resources.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state: u8 = 0;
+    const policies = [_]bridge.CommandPolicy{.{ .name = "native.export", .origins = &.{"zero://inline"} }};
+    const handlers = [_]bridge.AsyncHandler{.{ .name = "native.export", .context = &state, .invoke_fn = State.exportBytes }};
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.resource_registration_fails = true;
+    harness.runtime.options.bridge_resources = &registry;
+    harness.runtime.options.bridge = .{
+        .policy = .{ .enabled = true, .commands = &policies },
+        .async_registry = .{ .handlers = &handlers },
+    };
+
+    const app = App{ .context = &harness, .name = "resource-failure", .source = platform.WebViewSource.html("<p>Resources</p>") };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"1\",\"command\":\"native.export\",\"payload\":null}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"handler_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "ResourceLimitReached") != null);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.lastResourceId().len);
 }
 
 test "runtime async bridge can opt into reusable resources" {

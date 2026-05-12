@@ -193,6 +193,35 @@ static std::string lowerAscii(std::string value) {
     return value;
 }
 
+static std::string jsonStringLiteral(const std::string &value) {
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(value.size() + 2);
+    out.push_back('"');
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    out += "\\u00";
+                    out.push_back(hex[ch >> 4]);
+                    out.push_back(hex[ch & 0x0f]);
+                } else {
+                    out.push_back((char)ch);
+                }
+                break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
 static std::string originForUrl(const std::string &url) {
     if (url.empty()) return "zero://inline";
     size_t colon = url.find(':');
@@ -934,7 +963,7 @@ void zero_native_windows_emit_window_event(Host *host, uint64_t window_id, const
     if (found == host->windows.end() || !found->second.webview) return;
     std::string event_name = slice(name, name_len);
     std::string detail = slice(detail_json, detail_json_len);
-    std::wstring script = L"window.zero&&window.zero._emit(" + widen("\"" + event_name + "\"") + L"," + widen(detail.empty() ? "null" : detail) + L");";
+    std::wstring script = L"window.zero&&window.zero._emit(" + widen(jsonStringLiteral(event_name)) + L"," + widen(detail.empty() ? "null" : detail) + L");";
     found->second.webview->ExecuteScript(script.c_str(), nullptr);
 }
 

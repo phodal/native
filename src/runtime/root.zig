@@ -1509,6 +1509,18 @@ test "runtime async bridge can return streaming resource descriptors" {
 
     var output: [32]u8 = undefined;
     const read_fn = harness.null_platform.resource_stream_read_fn.?;
+    const wrong_window_read = read_fn(
+        harness.null_platform.resource_stream_context,
+        harness.null_platform.lastResourceId().ptr,
+        harness.null_platform.lastResourceId().len,
+        "zero://inline".ptr,
+        "zero://inline".len,
+        2,
+        &output,
+        output.len,
+    );
+    try std.testing.expectEqual(@as(isize, -1), wrong_window_read);
+
     const read = read_fn(
         harness.null_platform.resource_stream_context,
         harness.null_platform.lastResourceId().ptr,

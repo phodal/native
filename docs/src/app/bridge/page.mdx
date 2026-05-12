@@ -139,7 +139,7 @@ var runtime = zero_native.Runtime.init(.{
 });
 ```
 
-Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. The native WebView resource stores enforce the same TTL for resources that are registered but never fetched. Reusable byte resources are an advanced opt-in:
+Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. Byte resources keep enforcing that wall-clock TTL until fully consumed; provider streams use the TTL to limit how long a descriptor can sit unfetched, then remain available once the transfer starts. Reusable byte resources are an advanced opt-in:
 
 ```zig
 try responder.resourceBytes(

@@ -61,6 +61,7 @@ static int64_t ZeroNativeNowNanoseconds(void);
 @property(nonatomic, assign) void *streamContext;
 @property(nonatomic, assign) zero_native_appkit_resource_stream_read_callback_t streamReadCallback;
 @property(nonatomic, assign) zero_native_appkit_resource_stream_close_callback_t streamCloseCallback;
+@property(nonatomic, assign) BOOL closed;
 @end
 
 @interface ZeroNativeAppKitHost : NSObject <WKNavigationDelegate>
@@ -923,6 +924,10 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 - (void)closeDynamicResourceObject:(ZeroNativeDynamicResource *)resource resourceId:(NSString *)resourceId reason:(int)reason {
     if (!resource || resourceId.length == 0) return;
     if (resource.streaming && resource.streamCloseCallback) {
+        @synchronized (resource) {
+            if (resource.closed) return;
+            resource.closed = YES;
+        }
         resource.streamCloseCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], reason);
     }
 }

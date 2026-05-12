@@ -428,7 +428,8 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        switch (web_engine) {
         \\            .system => {
         \\                const webview2_include_arg = b.fmt("-I{s}", .{webview2_include});
-        \\                app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17", webview2_include_arg } });
+        \\                const webview2_fallback_include_arg = b.fmt("-I{s}", .{b.pathJoin(&.{ zero_native_path, "src/platform/windows" })});
+        \\                app_mod.addCSourceFile(.{ .file = zeroNativePath(b, zero_native_path, "src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17", webview2_include_arg, webview2_fallback_include_arg } });
         \\            },
         \\            .chromium => {
         \\                const cef_check = addCefCheck(b, target, cef_dir);

@@ -292,7 +292,11 @@ pub const Registry = struct {
         };
         var entry = &self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
-            if (!entry.stream_started and now_ns >= expires) {
+            const expires_after_start = switch (entry.payload) {
+                .bytes => true,
+                .stream => false,
+            };
+            if ((!entry.stream_started or expires_after_start) and now_ns >= expires) {
                 const pending_close = closeAction(entry.*, .expired);
                 self.removeAt(index);
                 self.mutex.unlock();
@@ -570,6 +574,31 @@ test "resource registry one-shot read stream for bytes frees entry at EOF" {
     try std.testing.expectEqualStrings(" bytes", &chunk);
     try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
     try std.testing.expectError(error.ResourceNotFound, registry.readStream(descriptor.id, .{}, 101, &chunk));
+}
+
+test "resource registry expires byte streams between chunks" {
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const descriptor = try registry.registerBytes("stream bytes", .{ .one_shot = true, .ttl_ns = 2 }, 100);
+
+    var chunk: [6]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 6), try registry.readStream(descriptor.id, .{}, 101, &chunk));
+    try std.testing.expectEqualStrings("stream", &chunk);
+    try std.testing.expectError(error.ResourceExpired, registry.readStream(descriptor.id, .{}, 102, &chunk));
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "resource registry enforces window binding" {
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const descriptor = try registry.registerBytes("window scoped", .{ .window_id = 7 }, 100);
+
+    var output: [32]u8 = undefined;
+    try std.testing.expectError(error.ResourceWindowMismatch, registry.fetchBytes(descriptor.id, .{ .window_id = 8 }, 101, &output));
+    const bytes = try registry.fetchBytes(descriptor.id, .{ .window_id = 7 }, 101, &output);
+    try std.testing.expectEqualStrings("window scoped", bytes);
 }
 
 test "resource registry streams provider chunks and closes" {

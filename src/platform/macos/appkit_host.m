@@ -18,6 +18,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath);
 static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback);
 static NSString *ZeroNativeOriginForURL(NSURL *url);
 static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url);
+static int64_t ZeroNativeNowNanoseconds(void);
 
 @interface ZeroNativeWindowDelegate : NSObject <NSWindowDelegate>
 @property(nonatomic, assign) ZeroNativeAppKitHost *host;
@@ -31,15 +32,21 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 
 @interface ZeroNativeAssetSchemeHandler : NSObject <WKURLSchemeHandler>
 @property(nonatomic, assign) ZeroNativeAppKitHost *host;
+@property(nonatomic, assign) uint64_t windowId;
 @property(nonatomic, strong) NSString *rootPath;
 @property(nonatomic, strong) NSString *entryPath;
+@property(nonatomic, strong) NSString *origin;
 @property(nonatomic, assign) BOOL spaFallback;
-- (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath spaFallback:(BOOL)spaFallback;
+- (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath origin:(NSString *)origin spaFallback:(BOOL)spaFallback;
 @end
 
 @interface ZeroNativeDynamicResource : NSObject
 @property(nonatomic, strong) NSData *data;
 @property(nonatomic, strong) NSString *mimeType;
+@property(nonatomic, strong) NSString *origin;
+@property(nonatomic, assign) uint64_t windowId;
+@property(nonatomic, assign) int64_t expiresAtNs;
+@property(nonatomic, assign) BOOL hasExpiry;
 @property(nonatomic, assign) BOOL oneShot;
 @end
 
@@ -100,8 +107,8 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 - (void)completeBridgeWithResponse:(NSString *)response;
 - (void)completeBridgeWithResponse:(NSString *)response windowId:(uint64_t)windowId;
 - (void)emitEventNamed:(NSString *)name detailJSON:(NSString *)detailJSON windowId:(uint64_t)windowId;
-- (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId consume:(BOOL)consume;
-- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType oneShot:(BOOL)oneShot;
+- (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId origin:(NSString *)origin windowId:(uint64_t)windowId nowNs:(int64_t)nowNs consume:(BOOL)consume;
+- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot;
 - (void)revokeDynamicResource:(NSString *)resourceId;
 @end
 
@@ -161,15 +168,18 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 - (instancetype)init {
     self = [super init];
     if (!self) return nil;
+    self.windowId = 1;
     self.rootPath = @"";
     self.entryPath = @"index.html";
+    self.origin = @"zero://inline";
     self.spaFallback = YES;
     return self;
 }
 
-- (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath spaFallback:(BOOL)spaFallback {
+- (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath origin:(NSString *)origin spaFallback:(BOOL)spaFallback {
     self.rootPath = ZeroNativeResolvedAssetRoot(rootPath ?: @"");
     self.entryPath = entryPath.length > 0 ? entryPath : @"index.html";
+    self.origin = origin.length > 0 ? origin : @"zero://app";
     self.spaFallback = spaFallback;
 }
 
@@ -177,8 +187,9 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
     (void)webView;
     NSURL *url = urlSchemeTask.request.URL;
     if ([url.host isEqualToString:@"native"] && [url.path hasPrefix:@"/resource/"]) {
-        NSString *resourceId = [url.lastPathComponent stringByRemovingPercentEncoding] ?: @"";
-        ZeroNativeDynamicResource *resource = [self.host dynamicResourceForId:resourceId consume:YES];
+        NSString *resourcePath = url.path ?: @"";
+        NSString *resourceId = [[resourcePath substringFromIndex:[@"/resource/" length]] stringByRemovingPercentEncoding] ?: @"";
+        ZeroNativeDynamicResource *resource = [self.host dynamicResourceForId:resourceId origin:self.origin ?: @"" windowId:self.windowId nowNs:ZeroNativeNowNanoseconds() consume:YES];
         if (!resource) {
             NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorFileDoesNotExist userInfo:nil];
             [urlSchemeTask didFailWithError:error];
@@ -285,6 +296,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     ZeroNativeAssetSchemeHandler *assetSchemeHandler = [[ZeroNativeAssetSchemeHandler alloc] init];
     assetSchemeHandler.host = self;
+    assetSchemeHandler.windowId = windowId;
     [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"zero"];
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     ZeroNativeBridgeScriptHandler *bridgeScriptHandler = [[ZeroNativeBridgeScriptHandler alloc] init];
@@ -623,16 +635,19 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     ZeroNativeAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
     if (kind == 1) {
         NSURL *url = [NSURL URLWithString:source];
+        assetSchemeHandler.origin = ZeroNativeOriginForURL(url);
         if (url) {
             [webView loadRequest:[NSURLRequest requestWithURL:url]];
         }
     } else if (kind == 2) {
-        [assetSchemeHandler configureWithRootPath:assetRoot entryPath:entry spaFallback:spaFallback];
-        NSURL *url = ZeroNativeAssetEntryURL(origin.length > 0 ? origin : @"zero://app", entry.length > 0 ? entry : @"index.html");
+        NSString *resolvedOrigin = origin.length > 0 ? origin : @"zero://app";
+        [assetSchemeHandler configureWithRootPath:assetRoot entryPath:entry origin:resolvedOrigin spaFallback:spaFallback];
+        NSURL *url = ZeroNativeAssetEntryURL(resolvedOrigin, entry.length > 0 ? entry : @"index.html");
         if (url) {
             [webView loadRequest:[NSURLRequest requestWithURL:url]];
         }
     } else {
+        assetSchemeHandler.origin = @"zero://inline";
         [webView loadHTMLString:source baseURL:nil];
     }
 }
@@ -708,6 +723,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     }
 
     NSString *origin = [self bridgeOriginForMessage:message];
+    [self assetHandlerForWindowId:windowId].origin = origin;
     NSData *messageData = [messageString dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     NSData *originData = [origin dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     self.bridgeCallback(self.bridgeContext, windowId, (const char *)messageData.bytes, messageData.length, (const char *)originData.bytes, originData.length);
@@ -733,20 +749,30 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     [webView evaluateJavaScript:script completionHandler:nil];
 }
 
-- (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId consume:(BOOL)consume {
+- (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId origin:(NSString *)origin windowId:(uint64_t)windowId nowNs:(int64_t)nowNs consume:(BOOL)consume {
     if (resourceId.length == 0) return nil;
     ZeroNativeDynamicResource *resource = self.dynamicResources[resourceId];
+    if (resource.hasExpiry && nowNs >= resource.expiresAtNs) {
+        [self.dynamicResources removeObjectForKey:resourceId];
+        return nil;
+    }
+    if (resource.origin.length > 0 && ![resource.origin isEqualToString:(origin ?: @"")]) return nil;
+    if (resource.windowId != 0 && resource.windowId != windowId) return nil;
     if (resource && consume && resource.oneShot) {
         [self.dynamicResources removeObjectForKey:resourceId];
     }
     return resource;
 }
 
-- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType oneShot:(BOOL)oneShot {
+- (void)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot {
     if (resourceId.length == 0 || !data) return;
     ZeroNativeDynamicResource *resource = [[ZeroNativeDynamicResource alloc] init];
     resource.data = data;
     resource.mimeType = mimeType.length > 0 ? mimeType : @"application/octet-stream";
+    resource.origin = origin ?: @"";
+    resource.windowId = windowId;
+    resource.expiresAtNs = expiresAtNs;
+    resource.hasExpiry = hasExpiry;
     resource.oneShot = oneShot;
     self.dynamicResources[resourceId] = resource;
 }
@@ -807,6 +833,10 @@ static NSString *ZeroNativeOriginForURL(NSURL *url) {
     NSNumber *port = url.port;
     if (port) return [NSString stringWithFormat:@"%@://%@:%@", scheme, host, port];
     return [NSString stringWithFormat:@"%@://%@", scheme, host];
+}
+
+static int64_t ZeroNativeNowNanoseconds(void) {
+    return (int64_t)([[NSDate date] timeIntervalSince1970] * 1000000000.0);
 }
 
 static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url) {
@@ -902,12 +932,13 @@ void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, con
     [object setAllowedNavigationOrigins:origins externalURLs:externalURLs externalAction:external_action];
 }
 
-void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, int one_shot) {
+void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
     NSString *mimeType = mime ? [[NSString alloc] initWithBytes:mime length:mime_len encoding:NSUTF8StringEncoding] : @"application/octet-stream";
+    NSString *originString = origin ? [[NSString alloc] initWithBytes:origin length:origin_len encoding:NSUTF8StringEncoding] : @"";
     NSData *data = bytes && bytes_len > 0 ? [NSData dataWithBytes:bytes length:bytes_len] : [NSData data];
-    [object registerDynamicResource:resourceId ?: @"" data:data mimeType:mimeType ?: @"application/octet-stream" oneShot:(one_shot != 0)];
+    [object registerDynamicResource:resourceId ?: @"" data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)];
 }
 
 void zero_native_appkit_revoke_resource(zero_native_appkit_host_t *host, const char *id, size_t id_len) {

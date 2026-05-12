@@ -208,12 +208,14 @@ pub const Runtime = struct {
         var resolved_options = options;
         if (resolved_options.origin.len == 0) resolved_options.origin = source.origin;
         if (resolved_options.window_id == 0) resolved_options.window_id = source.window_id;
-        const descriptor = try registry.registerBytes(bytes, resolved_options, self.timestamp_ns);
-        self.options.platform.services.registerResourceBytes(descriptor.id, descriptor.mime, bytes, descriptor.one_shot) catch |err| {
-            _ = registry.revoke(descriptor.id);
-            return err;
-        };
-        return bridge.resources.writeDescriptorJson(output, descriptor);
+        const now_ns = nowNanoseconds();
+        const expires_at_ns = if (resolved_options.ttl_ns) |ttl| now_ns + ttl else null;
+        const descriptor = try registry.registerBytes(bytes, resolved_options, now_ns);
+        errdefer _ = registry.revoke(descriptor.id);
+        const descriptor_json = try bridge.resources.writeDescriptorJson(output, descriptor);
+        try self.options.platform.services.registerResourceBytes(descriptor.id, descriptor.mime, bytes, resolved_options.origin, resolved_options.window_id, expires_at_ns, descriptor.one_shot);
+        if (descriptor.one_shot) _ = registry.revoke(descriptor.id);
+        return descriptor_json;
     }
 
     pub fn dispatchPlatformEvent(self: *Runtime, app: App, event_value: platform.Event) anyerror!void {
@@ -1294,6 +1296,7 @@ test "runtime async bridge can return resource descriptors" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"kind\":\"resource\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "zero://native/resource/") != null);
     try std.testing.expectEqualStrings("large payload", harness.null_platform.lastResourceBytes());
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
 }
 
 test {

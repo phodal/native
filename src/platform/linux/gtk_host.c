@@ -13,8 +13,12 @@
 typedef struct zero_native_dynamic_resource {
     char *id;
     char *mime;
+    char *origin;
     unsigned char *bytes;
     size_t len;
+    uint64_t window_id;
+    int64_t expires_at_ns;
+    int has_expiry;
     int one_shot;
 } zero_native_dynamic_resource_t;
 
@@ -83,6 +87,7 @@ static void zero_native_clear_resource(zero_native_dynamic_resource_t *resource)
     if (!resource) return;
     free(resource->id);
     free(resource->mime);
+    free(resource->origin);
     free(resource->bytes);
     memset(resource, 0, sizeof(*resource));
 }
@@ -103,6 +108,14 @@ static void zero_native_remove_resource_at(zero_native_gtk_host_t *host, int ind
     }
     memset(&host->resources[host->resource_count - 1], 0, sizeof(host->resources[0]));
     host->resource_count--;
+}
+
+static zero_native_gtk_window_t *zero_native_window_for_web_view(zero_native_gtk_host_t *host, WebKitWebView *web_view) {
+    if (!host || !web_view) return NULL;
+    for (int i = 0; i < host->window_count; i++) {
+        if (host->windows[i].web_view == web_view) return &host->windows[i];
+    }
+    return NULL;
 }
 
 static char **zero_native_parse_newline_list(const char *bytes, size_t len, int *out_count) {
@@ -284,11 +297,25 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
             return;
         }
         zero_native_dynamic_resource_t *resource = &host->resources[resource_index];
+        zero_native_gtk_window_t *request_window = zero_native_window_for_web_view(host, webkit_uri_scheme_request_get_web_view(request));
+        int64_t now_ns = (int64_t)g_get_real_time() * 1000;
+        if (resource->has_expiry && now_ns >= resource->expires_at_ns) {
+            zero_native_remove_resource_at(host, resource_index);
+            zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Resource is expired");
+            return;
+        }
+        char *request_origin = request_window ? (request_window->bridge_origin ? g_strdup(request_window->bridge_origin) : zero_native_origin_for_uri(webkit_web_view_get_uri(request_window->web_view))) : g_strdup("");
+        if ((resource->origin && resource->origin[0] && strcmp(resource->origin, request_origin ? request_origin : "") != 0) || (resource->window_id != 0 && (!request_window || resource->window_id != request_window->id))) {
+            g_free(request_origin);
+            zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Resource is not available to this WebView");
+            return;
+        }
         GBytes *bytes = g_bytes_new(resource->bytes, resource->len);
         GInputStream *stream = g_memory_input_stream_new_from_bytes(bytes);
         webkit_uri_scheme_request_finish(request, stream, (gint64)resource->len, resource->mime && resource->mime[0] ? resource->mime : "application/octet-stream");
         g_object_unref(stream);
         g_bytes_unref(bytes);
+        g_free(request_origin);
         if (resource->one_shot) zero_native_remove_resource_at(host, resource_index);
         return;
     }
@@ -781,7 +808,7 @@ void zero_native_gtk_set_security_policy(zero_native_gtk_host_t *host, const cha
     host->external_link_action = external_action;
 }
 
-void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, int one_shot) {
+void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     if (!host || !id || id_len == 0) return;
     char *resource_id = zero_native_strndup(id, id_len);
     if (!resource_id) return;
@@ -794,9 +821,18 @@ void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const
     zero_native_dynamic_resource_t *resource = &host->resources[host->resource_count++];
     resource->id = resource_id;
     resource->mime = mime && mime_len > 0 ? zero_native_strndup(mime, mime_len) : zero_native_strndup("application/octet-stream", strlen("application/octet-stream"));
+    resource->origin = origin && origin_len > 0 ? zero_native_strndup(origin, origin_len) : zero_native_strndup("", 0);
     resource->bytes = bytes_len > 0 ? malloc(bytes_len) : NULL;
-    if (bytes_len > 0 && resource->bytes) memcpy(resource->bytes, bytes, bytes_len);
+    if (!resource->mime || !resource->origin || (bytes_len > 0 && !resource->bytes)) {
+        zero_native_clear_resource(resource);
+        host->resource_count--;
+        return;
+    }
+    if (bytes_len > 0) memcpy(resource->bytes, bytes, bytes_len);
     resource->len = bytes_len;
+    resource->window_id = window_id;
+    resource->expires_at_ns = expires_at_ns;
+    resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
 }
 

@@ -196,7 +196,7 @@ void zero_native_gtk_set_security_policy(Host *host, const char *allowed_origins
     (void)external_action;
 }
 
-void zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, int one_shot) {
+void zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     (void)host;
     (void)id;
     (void)id_len;
@@ -204,6 +204,11 @@ void zero_native_gtk_register_resource_bytes(Host *host, const char *id, size_t 
     (void)mime_len;
     (void)bytes;
     (void)bytes_len;
+    (void)origin;
+    (void)origin_len;
+    (void)window_id;
+    (void)expires_at_ns;
+    (void)has_expiry;
     (void)one_shot;
 }
 

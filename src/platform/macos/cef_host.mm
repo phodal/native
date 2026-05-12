@@ -963,7 +963,7 @@ void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, con
     [object setAllowedNavigationOrigins:origins externalURLs:externalURLs externalAction:external_action];
 }
 
-void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, int one_shot) {
+void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     (void)host;
     (void)id;
     (void)id_len;
@@ -971,6 +971,11 @@ void zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host,
     (void)mime_len;
     (void)bytes;
     (void)bytes_len;
+    (void)origin;
+    (void)origin_len;
+    (void)window_id;
+    (void)expires_at_ns;
+    (void)has_expiry;
     (void)one_shot;
 }
 

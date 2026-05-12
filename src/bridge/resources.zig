@@ -77,6 +77,7 @@ pub const Registry = struct {
     }
 
     pub fn registerBytes(self: *Registry, bytes: []const u8, options: Options, now_ns: i128) !Descriptor {
+        self.pruneExpired(now_ns);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
 
@@ -110,7 +111,7 @@ pub const Registry = struct {
         return entry.descriptor();
     }
 
-    pub fn fetchBytes(self: *Registry, id: []const u8, source: Source, now_ns: i128) ![]const u8 {
+    pub fn fetchBytes(self: *Registry, id: []const u8, source: Source, now_ns: i128, output: []u8) ![]const u8 {
         const index = self.findIndex(id) orelse return error.ResourceNotFound;
         const entry = self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
@@ -121,9 +122,11 @@ pub const Registry = struct {
         }
         if (entry.origin.len > 0 and !std.mem.eql(u8, entry.origin, source.origin)) return error.ResourceOriginMismatch;
         if (entry.window_id != 0 and entry.window_id != source.window_id) return error.ResourceWindowMismatch;
-        const bytes = entry.bytes;
-        if (entry.one_shot) _ = self.entries.orderedRemove(index);
-        return bytes;
+        if (output.len < entry.bytes.len) return error.NoSpaceLeft;
+        @memcpy(output[0..entry.bytes.len], entry.bytes);
+        const len = entry.bytes.len;
+        if (entry.one_shot) self.removeAt(index);
+        return output[0..len];
     }
 
     pub fn revoke(self: *Registry, id: []const u8) bool {
@@ -142,6 +145,19 @@ pub const Registry = struct {
     fn removeAt(self: *Registry, index: usize) void {
         const entry = self.entries.orderedRemove(index);
         self.freeEntry(entry);
+    }
+
+    fn pruneExpired(self: *Registry, now_ns: i128) void {
+        var index: usize = 0;
+        while (index < self.entries.items.len) {
+            if (self.entries.items[index].expires_at_ns) |expires| {
+                if (now_ns >= expires) {
+                    self.removeAt(index);
+                    continue;
+                }
+            }
+            index += 1;
+        }
     }
 
     fn freeEntry(self: *Registry, entry: Entry) void {
@@ -210,7 +226,8 @@ test "resource registry creates fetch descriptors" {
     const json_bytes = try writeDescriptorJson(&output, descriptor);
     try std.testing.expect(std.mem.indexOf(u8, json_bytes, "\"kind\":\"resource\"") != null);
 
-    const bytes = try registry.fetchBytes(descriptor.id, .{ .origin = "zero://app", .window_id = 1 }, 101);
+    var fetch_buffer: [32]u8 = undefined;
+    const bytes = try registry.fetchBytes(descriptor.id, .{ .origin = "zero://app", .window_id = 1 }, 101, &fetch_buffer);
     try std.testing.expectEqualStrings("hello", bytes);
 }
 
@@ -219,6 +236,20 @@ test "resource registry enforces origin and expiration" {
     defer registry.deinit();
 
     const descriptor = try registry.registerBytes("secret", .{ .origin = "zero://app", .ttl_ns = 10 }, 100);
-    try std.testing.expectError(error.ResourceOriginMismatch, registry.fetchBytes(descriptor.id, .{ .origin = "https://example.com" }, 101));
-    try std.testing.expectError(error.ResourceExpired, registry.fetchBytes(descriptor.id, .{ .origin = "zero://app" }, 111));
+    var fetch_buffer: [32]u8 = undefined;
+    try std.testing.expectError(error.ResourceOriginMismatch, registry.fetchBytes(descriptor.id, .{ .origin = "https://example.com" }, 101, &fetch_buffer));
+    try std.testing.expectError(error.ResourceExpired, registry.fetchBytes(descriptor.id, .{ .origin = "zero://app" }, 111, &fetch_buffer));
+}
+
+test "resource registry one-shot fetch copies bytes and frees entry" {
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const descriptor = try registry.registerBytes("consume me", .{ .one_shot = true }, 100);
+
+    var fetch_buffer: [32]u8 = undefined;
+    const bytes = try registry.fetchBytes(descriptor.id, .{}, 101, &fetch_buffer);
+    try std.testing.expectEqualStrings("consume me", bytes);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+    try std.testing.expectError(error.ResourceNotFound, registry.fetchBytes(descriptor.id, .{}, 102, &fetch_buffer));
 }

@@ -91,7 +91,7 @@ void zero_native_gtk_bridge_respond(zero_native_gtk_host_t *host, const char *re
 void zero_native_gtk_bridge_respond_window(zero_native_gtk_host_t *host, uint64_t window_id, const char *response, size_t response_len);
 void zero_native_gtk_emit_window_event(zero_native_gtk_host_t *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len);
 void zero_native_gtk_set_security_policy(zero_native_gtk_host_t *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action);
-void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, int one_shot);
+void zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot);
 void zero_native_gtk_revoke_resource(zero_native_gtk_host_t *host, const char *id, size_t id_len);
 int zero_native_gtk_create_window(zero_native_gtk_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame);
 int zero_native_gtk_focus_window(zero_native_gtk_host_t *host, uint64_t window_id);

@@ -209,11 +209,10 @@ pub const Runtime = struct {
         if (resolved_options.origin.len == 0) resolved_options.origin = source.origin;
         if (resolved_options.window_id == 0) resolved_options.window_id = source.window_id;
         const now_ns = nowNanoseconds();
-        const expires_at_ns = if (resolved_options.ttl_ns) |ttl| now_ns + ttl else null;
         const descriptor = try registry.registerBytes(bytes, resolved_options, now_ns);
         errdefer _ = registry.revoke(descriptor.id);
         const descriptor_json = try bridge.resources.writeDescriptorJson(output, descriptor);
-        try self.options.platform.services.registerResourceBytes(descriptor.id, descriptor.mime, bytes, resolved_options.origin, resolved_options.window_id, expires_at_ns, descriptor.one_shot);
+        try self.options.platform.services.registerResourceBytes(descriptor.id, descriptor.mime, bytes, resolved_options.origin, resolved_options.window_id, resolved_options.ttl_ns, descriptor.one_shot);
         // One-shot byte resources are fully owned by the native host after registration;
         // revoke the Zig entry so it doesn't linger. Stream resources stay in the Zig
         // registry because the native host pulls chunks through readStream callbacks.
@@ -227,7 +226,6 @@ pub const Runtime = struct {
         if (resolved_options.origin.len == 0) resolved_options.origin = source.origin;
         if (resolved_options.window_id == 0) resolved_options.window_id = source.window_id;
         const now_ns = nowNanoseconds();
-        const expires_at_ns = if (resolved_options.ttl_ns) |ttl| now_ns + ttl else null;
         const descriptor = try registry.registerStream(provider, resolved_options, now_ns);
         errdefer _ = registry.revoke(descriptor.id);
         const descriptor_json = try bridge.resources.writeDescriptorJson(output, descriptor);
@@ -236,7 +234,7 @@ pub const Runtime = struct {
             .mime = descriptor.mime,
             .origin = resolved_options.origin,
             .window_id = resolved_options.window_id,
-            .expires_at_ns = expires_at_ns,
+            .ttl_ns = resolved_options.ttl_ns,
             .one_shot = descriptor.one_shot,
             .size = descriptor.size,
             .callback_context = self,
@@ -1446,7 +1444,7 @@ test "runtime async bridge can return resource descriptors" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "zero://native/resource/") != null);
     try std.testing.expectEqualStrings("large payload", harness.null_platform.lastResourceBytes());
     try std.testing.expect(harness.null_platform.resource_one_shot);
-    try std.testing.expect(harness.null_platform.resource_expires_at_ns != null);
+    try std.testing.expect(harness.null_platform.resource_ttl_ns != null);
     try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
 }
 
@@ -1614,7 +1612,7 @@ test "runtime async bridge can opt into reusable resources" {
 
     try std.testing.expectEqualStrings("reusable payload", harness.null_platform.lastResourceBytes());
     try std.testing.expect(!harness.null_platform.resource_one_shot);
-    try std.testing.expect(harness.null_platform.resource_expires_at_ns == null);
+    try std.testing.expect(harness.null_platform.resource_ttl_ns == null);
     try std.testing.expectEqual(@as(usize, 1), registry.entries.items.len);
 }
 

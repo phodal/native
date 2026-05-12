@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cctype>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -29,7 +30,6 @@
 
 #if __has_include(<WebView2.h>)
 
-using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 namespace {
@@ -58,6 +58,48 @@ enum ResourceCloseReason {
 };
 
 static const size_t kMaxDynamicResources = 128;
+
+template <typename Interface, const IID *InterfaceId, typename... Args>
+class ComCallback final : public Interface {
+public:
+    using Fn = std::function<HRESULT(Args...)>;
+
+    explicit ComCallback(Fn fn) : fn_(std::move(fn)) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject) override {
+        if (!ppvObject) return E_POINTER;
+        if (riid == IID_IUnknown || riid == *InterfaceId) {
+            *ppvObject = static_cast<Interface *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_count_; }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG count = --ref_count_;
+        if (count == 0) delete this;
+        return count;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(Args... args) override {
+        return fn_(args...);
+    }
+
+private:
+    std::atomic<ULONG> ref_count_{1};
+    Fn fn_;
+};
+
+template <typename Interface, const IID *InterfaceId, typename... Args>
+static ComPtr<Interface> makeCallback(typename ComCallback<Interface, InterfaceId, Args...>::Fn fn) {
+    ComPtr<Interface> handler;
+    handler.Attach(new ComCallback<Interface, InterfaceId, Args...>(std::move(fn)));
+    return handler;
+}
 
 struct WindowsEvent {
     int kind;
@@ -184,6 +226,14 @@ static int64_t nowNanoseconds() {
     const uint64_t unix_epoch_ticks = 116444736000000000ULL;
     if (ticks.QuadPart <= unix_epoch_ticks) return 0;
     return (int64_t)((ticks.QuadPart - unix_epoch_ticks) * 100);
+}
+
+static int64_t expiryFromTtl(int64_t ttl_ns, int has_expiry) {
+    if (!has_expiry) return 0;
+    int64_t now_ns = nowNanoseconds();
+    if (ttl_ns > 0 && now_ns > INT64_MAX - ttl_ns) return INT64_MAX;
+    if (ttl_ns < 0 && now_ns < INT64_MIN - ttl_ns) return INT64_MIN;
+    return now_ns + ttl_ns;
 }
 
 static std::string lowerAscii(std::string value) {
@@ -726,7 +776,7 @@ static bool createNativeWindow(Host *host, Window &window) {
 static void setupWebView(Host *host, Window &window) {
     if (!window.webview) return;
     window.webview->AddScriptToExecuteOnDocumentCreated(widen(std::string(ZERO_NATIVE_BRIDGE_SCRIPT)).c_str(), nullptr);
-    window.webview->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+    auto message_handler = makeCallback<ICoreWebView2WebMessageReceivedEventHandler, &IID_ICoreWebView2WebMessageReceivedEventHandler, ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *>(
         [host, window_id = window.id](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
             if (!host || !host->bridge_callback || !args) return S_OK;
             LPWSTR message_w = nullptr;
@@ -743,9 +793,9 @@ static void setupWebView(Host *host, Window &window) {
             if (found != host->windows.end()) found->second.current_origin = origin;
             host->bridge_callback(host->bridge_context, window_id, message.c_str(), message.size(), origin.c_str(), origin.size());
             return S_OK;
-        }).Get(),
-        &window.message_token);
-    window.webview->add_SourceChanged(Callback<ICoreWebView2SourceChangedEventHandler>(
+        });
+    window.webview->add_WebMessageReceived(message_handler.Get(), &window.message_token);
+    auto source_handler = makeCallback<ICoreWebView2SourceChangedEventHandler, &IID_ICoreWebView2SourceChangedEventHandler, ICoreWebView2 *, ICoreWebView2SourceChangedEventArgs *>(
         [host, window_id = window.id](ICoreWebView2 *sender, ICoreWebView2SourceChangedEventArgs *) -> HRESULT {
             if (!host || !sender) return S_OK;
             LPWSTR source_w = nullptr;
@@ -755,10 +805,10 @@ static void setupWebView(Host *host, Window &window) {
             auto found = host->windows.find(window_id);
             if (found != host->windows.end()) found->second.current_origin = origin;
             return S_OK;
-        }).Get(),
-        &window.source_token);
+        });
+    window.webview->add_SourceChanged(source_handler.Get(), &window.source_token);
     window.webview->AddWebResourceRequestedFilter(L"zero://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-    window.webview->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+    auto resource_handler = makeCallback<ICoreWebView2WebResourceRequestedEventHandler, &IID_ICoreWebView2WebResourceRequestedEventHandler, ICoreWebView2 *, ICoreWebView2WebResourceRequestedEventArgs *>(
         [host, window_id = window.id](ICoreWebView2 *, ICoreWebView2WebResourceRequestedEventArgs *args) -> HRESULT {
             if (!host || !args) return S_OK;
             auto found = host->windows.find(window_id);
@@ -776,8 +826,8 @@ static void setupWebView(Host *host, Window &window) {
             createTextResponse(host, 404, L"Not Found", "Resource not found", &response);
             if (response) args->put_Response(response.Get());
             return S_OK;
-        }).Get(),
-        &window.resource_token);
+        });
+    window.webview->add_WebResourceRequested(resource_handler.Get(), &window.resource_token);
 }
 
 static bool loadWebView2Loader(Host *host) {
@@ -793,7 +843,7 @@ static void initializeWebView(Host *host, uint64_t window_id) {
     auto found = host->windows.find(window_id);
     if (found == host->windows.end() || !found->second.hwnd) return;
     if (host->environment) {
-        host->environment->CreateCoreWebView2Controller(found->second.hwnd, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+        auto controller_handler = makeCallback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, &IID_ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, HRESULT, ICoreWebView2Controller *>(
             [host, window_id](HRESULT result, ICoreWebView2Controller *controller) -> HRESULT {
                 if (FAILED(result) || !controller) return S_OK;
                 auto window_found = host->windows.find(window_id);
@@ -807,7 +857,8 @@ static void initializeWebView(Host *host, uint64_t window_id) {
                 setupWebView(host, window);
                 navigateWindow(window);
                 return S_OK;
-            }).Get());
+            });
+        host->environment->CreateCoreWebView2Controller(found->second.hwnd, controller_handler.Get());
         return;
     }
     if (host->environment_requested) return;
@@ -815,7 +866,7 @@ static void initializeWebView(Host *host, uint64_t window_id) {
     wchar_t temp_path[MAX_PATH] = {};
     DWORD temp_len = GetTempPathW(MAX_PATH, temp_path);
     std::wstring user_data = temp_len > 0 ? std::wstring(temp_path, temp_len) + L"zero-native-webview2" : L"zero-native-webview2";
-    host->create_environment(nullptr, user_data.c_str(), nullptr, Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+    auto environment_handler = makeCallback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, &IID_ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler, HRESULT, ICoreWebView2Environment *>(
         [host, window_id](HRESULT result, ICoreWebView2Environment *environment) -> HRESULT {
             host->environment_requested = false;
             if (FAILED(result) || !environment) return S_OK;
@@ -825,7 +876,8 @@ static void initializeWebView(Host *host, uint64_t window_id) {
                 if (entry.first != window_id && entry.second.hwnd && !entry.second.webview) initializeWebView(host, entry.first);
             }
             return S_OK;
-        }).Get());
+        });
+    host->create_environment(nullptr, user_data.c_str(), nullptr, environment_handler.Get());
 }
 
 static int registerResource(Host *host, std::shared_ptr<DynamicResource> resource) {
@@ -976,7 +1028,7 @@ void zero_native_windows_set_security_policy(Host *host, const char *allowed_ori
     (void)external_action;
 }
 
-int zero_native_windows_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+int zero_native_windows_register_resource_bytes(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot) {
     if (!host || !id || id_len == 0 || (!bytes && bytes_len > 0)) return kResourceInvalidArgument;
     auto resource = std::make_shared<DynamicResource>();
     if (!resource) return kResourceOutOfMemory;
@@ -984,7 +1036,7 @@ int zero_native_windows_register_resource_bytes(Host *host, const char *id, size
     resource->mime = mime && mime_len > 0 ? slice(mime, mime_len) : "application/octet-stream";
     resource->origin = slice(origin, origin_len);
     resource->window_id = window_id;
-    resource->expires_at_ns = expires_at_ns;
+    resource->expires_at_ns = expiryFromTtl(ttl_ns, has_expiry);
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
     resource->streaming = false;
@@ -992,7 +1044,7 @@ int zero_native_windows_register_resource_bytes(Host *host, const char *id, size
     return registerResource(host, resource);
 }
 
-int zero_native_windows_register_resource_stream(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, ResourceStreamReadCallback read_callback, ResourceStreamCloseCallback close_callback) {
+int zero_native_windows_register_resource_stream(Host *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, ResourceStreamReadCallback read_callback, ResourceStreamCloseCallback close_callback) {
     if (!host || !id || id_len == 0 || !read_callback || !close_callback || !one_shot) return kResourceInvalidArgument;
     auto resource = std::make_shared<DynamicResource>();
     if (!resource) return kResourceOutOfMemory;
@@ -1000,7 +1052,7 @@ int zero_native_windows_register_resource_stream(Host *host, const char *id, siz
     resource->mime = mime && mime_len > 0 ? slice(mime, mime_len) : "application/octet-stream";
     resource->origin = slice(origin, origin_len);
     resource->window_id = window_id;
-    resource->expires_at_ns = expires_at_ns;
+    resource->expires_at_ns = expiryFromTtl(ttl_ns, has_expiry);
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = true;
     resource->streaming = true;

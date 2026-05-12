@@ -215,6 +215,13 @@ static int64_t zero_native_now_nanoseconds(void) {
     return (int64_t)g_get_real_time() * 1000;
 }
 
+static int64_t zero_native_expiry_from_ttl(int64_t now_ns, int64_t ttl_ns, int has_expiry) {
+    if (!has_expiry) return 0;
+    if (ttl_ns > 0 && now_ns > INT64_MAX - ttl_ns) return INT64_MAX;
+    if (ttl_ns < 0 && now_ns < INT64_MIN - ttl_ns) return INT64_MIN;
+    return now_ns + ttl_ns;
+}
+
 static void zero_native_prune_expired_resources(zero_native_gtk_host_t *host, int64_t now_ns) {
     if (!host) return;
     int index = 0;
@@ -960,9 +967,10 @@ void zero_native_gtk_set_security_policy(zero_native_gtk_host_t *host, const cha
     host->external_link_action = external_action;
 }
 
-int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot) {
     if (!host || !id || id_len == 0 || (!bytes && bytes_len > 0)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
-    zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
+    int64_t now_ns = zero_native_now_nanoseconds();
+    zero_native_prune_expired_resources(host, now_ns);
     char *resource_id = zero_native_strndup(id, id_len);
     if (!resource_id) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     int existing = zero_native_find_resource_index(host, resource_id);
@@ -987,15 +995,16 @@ int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const 
     if (bytes_len > 0) memcpy(resource->bytes, bytes, bytes_len);
     resource->len = bytes_len;
     resource->window_id = window_id;
-    resource->expires_at_ns = expires_at_ns;
+    resource->expires_at_ns = zero_native_expiry_from_ttl(now_ns, ttl_ns, has_expiry);
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
     return ZERO_NATIVE_RESOURCE_OK;
 }
 
-int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_gtk_resource_stream_read_callback_t read_callback, zero_native_gtk_resource_stream_close_callback_t close_callback) {
+int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_gtk_resource_stream_read_callback_t read_callback, zero_native_gtk_resource_stream_close_callback_t close_callback) {
     if (!host || !id || id_len == 0 || !read_callback || !close_callback || !one_shot) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
-    zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
+    int64_t now_ns = zero_native_now_nanoseconds();
+    zero_native_prune_expired_resources(host, now_ns);
     char *resource_id = zero_native_strndup(id, id_len);
     if (!resource_id) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     int existing = zero_native_find_resource_index(host, resource_id);
@@ -1019,7 +1028,7 @@ int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const
     resource->bytes = NULL;
     resource->len = 0;
     resource->window_id = window_id;
-    resource->expires_at_ns = expires_at_ns;
+    resource->expires_at_ns = zero_native_expiry_from_ttl(now_ns, ttl_ns, has_expiry);
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
     resource->streaming = 1;

@@ -213,7 +213,7 @@ pub const ResourceStreamRegistration = struct {
     mime: []const u8,
     origin: []const u8 = "",
     window_id: WindowId = 0,
-    expires_at_ns: ?i128 = null,
+    ttl_ns: ?i128 = null,
     one_shot: bool = true,
     size: ?usize = null,
     callback_context: ?*anyopaque,
@@ -221,11 +221,11 @@ pub const ResourceStreamRegistration = struct {
     close_fn: ResourceStreamCloseFn,
 };
 
-pub fn optionalTimestampForC(value: ?i128) i64 {
-    const timestamp = value orelse return 0;
-    if (timestamp > std.math.maxInt(i64)) return std.math.maxInt(i64);
-    if (timestamp < std.math.minInt(i64)) return std.math.minInt(i64);
-    return @intCast(timestamp);
+pub fn optionalDurationForC(value: ?i128) i64 {
+    const duration = value orelse return 0;
+    if (duration > std.math.maxInt(i64)) return std.math.maxInt(i64);
+    if (duration < std.math.minInt(i64)) return std.math.minInt(i64);
+    return @intCast(duration);
 }
 
 pub const max_dialog_path_bytes: usize = 4096;
@@ -338,7 +338,7 @@ pub const PlatformServices = struct {
     remove_tray_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     configure_security_policy_fn: ?*const fn (context: ?*anyopaque, policy: security.Policy) anyerror!void = null,
     emit_window_event_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void = null,
-    register_resource_bytes_fn: ?*const fn (context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void = null,
+    register_resource_bytes_fn: ?*const fn (context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, ttl_ns: ?i128, one_shot: bool) anyerror!void = null,
     register_resource_stream_fn: ?*const fn (context: ?*anyopaque, registration: ResourceStreamRegistration) anyerror!void = null,
     revoke_resource_fn: ?*const fn (context: ?*anyopaque, id: []const u8) anyerror!void = null,
 
@@ -431,9 +431,9 @@ pub const PlatformServices = struct {
         return emit_fn(self.context, window_id, name, detail_json);
     }
 
-    pub fn registerResourceBytes(self: PlatformServices, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void {
+    pub fn registerResourceBytes(self: PlatformServices, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, ttl_ns: ?i128, one_shot: bool) anyerror!void {
         const register_fn = self.register_resource_bytes_fn orelse return error.UnsupportedService;
-        return register_fn(self.context, id, mime, bytes, origin, window_id, expires_at_ns, one_shot);
+        return register_fn(self.context, id, mime, bytes, origin, window_id, ttl_ns, one_shot);
     }
 
     pub fn registerResourceStream(self: PlatformServices, registration: ResourceStreamRegistration) anyerror!void {
@@ -491,7 +491,7 @@ pub const NullPlatform = struct {
     resource_origin: [256]u8 = undefined,
     resource_origin_len: usize = 0,
     resource_window_id: WindowId = 0,
-    resource_expires_at_ns: ?i128 = null,
+    resource_ttl_ns: ?i128 = null,
     resource_bytes: [64 * 1024]u8 = undefined,
     resource_bytes_len: usize = 0,
     resource_one_shot: bool = false,
@@ -648,7 +648,7 @@ pub const NullPlatform = struct {
         _ = detail_json;
     }
 
-    fn registerResourceBytes(context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void {
+    fn registerResourceBytes(context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: WindowId, ttl_ns: ?i128, one_shot: bool) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         if (self.resource_registration_fails) return error.ResourceLimitReached;
         const id_len = @min(id.len, self.resource_id.len);
@@ -663,7 +663,7 @@ pub const NullPlatform = struct {
         self.resource_mime_len = mime_len;
         self.resource_origin_len = origin_len;
         self.resource_window_id = window_id;
-        self.resource_expires_at_ns = expires_at_ns;
+        self.resource_ttl_ns = ttl_ns;
         self.resource_bytes_len = bytes_len;
         self.resource_one_shot = one_shot;
     }
@@ -681,7 +681,7 @@ pub const NullPlatform = struct {
         self.resource_mime_len = mime_len;
         self.resource_origin_len = origin_len;
         self.resource_window_id = registration.window_id;
-        self.resource_expires_at_ns = registration.expires_at_ns;
+        self.resource_ttl_ns = registration.ttl_ns;
         self.resource_bytes_len = 0;
         self.resource_one_shot = registration.one_shot;
         self.resource_stream_size = registration.size;
@@ -702,7 +702,7 @@ pub const NullPlatform = struct {
             self.resource_mime_len = 0;
             self.resource_origin_len = 0;
             self.resource_window_id = 0;
-            self.resource_expires_at_ns = null;
+            self.resource_ttl_ns = null;
             self.resource_bytes_len = 0;
             self.resource_one_shot = false;
             self.resource_stream_size = null;
@@ -794,7 +794,7 @@ test "null platform records registered resource bytes" {
     try std.testing.expectEqualStrings("hello", null_platform.lastResourceBytes());
     try std.testing.expectEqualStrings("zero://inline", null_platform.lastResourceOrigin());
     try std.testing.expectEqual(@as(WindowId, 7), null_platform.resource_window_id);
-    try std.testing.expectEqual(@as(?i128, 123), null_platform.resource_expires_at_ns);
+    try std.testing.expectEqual(@as(?i128, 123), null_platform.resource_ttl_ns);
 }
 
 test "null platform records registered resource stream callbacks" {
@@ -826,7 +826,7 @@ test "null platform records registered resource stream callbacks" {
         .mime = "text/plain",
         .origin = "zero://inline",
         .window_id = 7,
-        .expires_at_ns = 123,
+        .ttl_ns = 123,
         .one_shot = true,
         .size = 6,
         .callback_context = null,

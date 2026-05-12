@@ -1039,6 +1039,14 @@ static int64_t ZeroNativeNowNanoseconds(void) {
     return (int64_t)([[NSDate date] timeIntervalSince1970] * 1000000000.0);
 }
 
+static int64_t ZeroNativeExpiryFromTTL(int64_t ttlNs, BOOL hasExpiry) {
+    if (!hasExpiry) return 0;
+    int64_t nowNs = ZeroNativeNowNanoseconds();
+    if (ttlNs > 0 && nowNs > INT64_MAX - ttlNs) return INT64_MAX;
+    if (ttlNs < 0 && nowNs < INT64_MIN - ttlNs) return INT64_MIN;
+    return nowNs + ttlNs;
+}
+
 static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url) {
     NSString *origin = ZeroNativeOriginForURL(url);
     NSString *absolute = url.absoluteString ?: @"";
@@ -1134,7 +1142,7 @@ void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, con
     [object setAllowedNavigationOrigins:origins externalURLs:externalURLs externalAction:external_action];
 }
 
-int zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
+int zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     if (!object || !id || id_len == 0 || (!bytes && bytes_len > 0)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
@@ -1143,17 +1151,19 @@ int zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, 
     if (!resourceId || (mime && !mimeType) || (origin && !originString)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSData *data = bytes && bytes_len > 0 ? [NSData dataWithBytes:bytes length:bytes_len] : [NSData data];
     if (!data) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
-    return [object registerDynamicResource:resourceId data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)];
+    int64_t expiresAtNs = ZeroNativeExpiryFromTTL(ttl_ns, has_expiry != 0);
+    return [object registerDynamicResource:resourceId data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expiresAtNs hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)];
 }
 
-int zero_native_appkit_register_resource_stream(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_appkit_resource_stream_read_callback_t read_callback, zero_native_appkit_resource_stream_close_callback_t close_callback) {
+int zero_native_appkit_register_resource_stream(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t ttl_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_appkit_resource_stream_read_callback_t read_callback, zero_native_appkit_resource_stream_close_callback_t close_callback) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     if (!object || !id || id_len == 0 || !read_callback || !close_callback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
     NSString *mimeType = mime ? [[NSString alloc] initWithBytes:mime length:mime_len encoding:NSUTF8StringEncoding] : @"application/octet-stream";
     NSString *originString = origin ? [[NSString alloc] initWithBytes:origin length:origin_len encoding:NSUTF8StringEncoding] : @"";
     if (!resourceId || (mime && !mimeType) || (origin && !originString)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
-    return [object registerDynamicResourceStream:resourceId mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0) size:size hasSize:(has_size != 0) context:callback_context readCallback:read_callback closeCallback:close_callback];
+    int64_t expiresAtNs = ZeroNativeExpiryFromTTL(ttl_ns, has_expiry != 0);
+    return [object registerDynamicResourceStream:resourceId mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expiresAtNs hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0) size:size hasSize:(has_size != 0) context:callback_context readCallback:read_callback closeCallback:close_callback];
 }
 
 void zero_native_appkit_revoke_resource(zero_native_appkit_host_t *host, const char *id, size_t id_len) {

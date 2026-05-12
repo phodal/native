@@ -214,6 +214,9 @@ pub const Runtime = struct {
         errdefer _ = registry.revoke(descriptor.id);
         const descriptor_json = try bridge.resources.writeDescriptorJson(output, descriptor);
         try self.options.platform.services.registerResourceBytes(descriptor.id, descriptor.mime, bytes, resolved_options.origin, resolved_options.window_id, expires_at_ns, descriptor.one_shot);
+        // One-shot byte resources are fully owned by the native host after registration;
+        // revoke the Zig entry so it doesn't linger. Stream resources stay in the Zig
+        // registry because the native host pulls chunks through readStream callbacks.
         if (descriptor.one_shot) _ = registry.revoke(descriptor.id);
         return descriptor_json;
     }

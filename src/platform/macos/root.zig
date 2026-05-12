@@ -1,4 +1,3 @@
-const std = @import("std");
 const geometry = @import("geometry");
 const platform_mod = @import("../root.zig");
 const policy_values = @import("../policy_values.zig");
@@ -319,7 +318,7 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 fn registerResourceBytes(context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: platform_mod.WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine == .chromium) return error.UnsupportedService;
-    if (zero_native_appkit_register_resource_bytes(self.host, id.ptr, id.len, mime.ptr, mime.len, bytes.ptr, bytes.len, origin.ptr, origin.len, window_id, optionalTimestampForC(expires_at_ns), if (expires_at_ns != null) 1 else 0, if (one_shot) 1 else 0) == 0) return error.ResourceLimitReached;
+    if (zero_native_appkit_register_resource_bytes(self.host, id.ptr, id.len, mime.ptr, mime.len, bytes.ptr, bytes.len, origin.ptr, origin.len, window_id, platform_mod.optionalTimestampForC(expires_at_ns), if (expires_at_ns != null) 1 else 0, if (one_shot) 1 else 0) == 0) return error.ResourceLimitReached;
 }
 
 fn registerResourceStream(context: ?*anyopaque, registration: platform_mod.ResourceStreamRegistration) anyerror!void {
@@ -334,7 +333,7 @@ fn registerResourceStream(context: ?*anyopaque, registration: platform_mod.Resou
         registration.origin.ptr,
         registration.origin.len,
         registration.window_id,
-        optionalTimestampForC(registration.expires_at_ns),
+        platform_mod.optionalTimestampForC(registration.expires_at_ns),
         if (registration.expires_at_ns != null) 1 else 0,
         if (registration.one_shot) 1 else 0,
         @intCast(registration.size orelse 0),
@@ -349,13 +348,6 @@ fn revokeResource(context: ?*anyopaque, id: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine == .chromium) return error.UnsupportedService;
     zero_native_appkit_revoke_resource(self.host, id.ptr, id.len);
-}
-
-fn optionalTimestampForC(value: ?i128) i64 {
-    const timestamp = value orelse return 0;
-    if (timestamp > std.math.maxInt(i64)) return std.math.maxInt(i64);
-    if (timestamp < std.math.minInt(i64)) return std.math.minInt(i64);
-    return @intCast(timestamp);
 }
 
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {

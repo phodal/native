@@ -39,6 +39,7 @@ static int64_t ZeroNativeNowNanoseconds(void);
 @property(nonatomic, strong) NSString *entryPath;
 @property(nonatomic, strong) NSString *origin;
 @property(nonatomic, assign) BOOL spaFallback;
+@property(nonatomic, strong) NSMutableSet<id<WKURLSchemeTask>> *cancelledTasks;
 - (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath origin:(NSString *)origin spaFallback:(BOOL)spaFallback;
 @end
 
@@ -184,6 +185,7 @@ static int64_t ZeroNativeNowNanoseconds(void);
     self.entryPath = @"index.html";
     self.origin = @"zero://inline";
     self.spaFallback = YES;
+    self.cancelledTasks = [[NSMutableSet alloc] init];
     return self;
 }
 
@@ -210,24 +212,58 @@ static int64_t ZeroNativeNowNanoseconds(void);
         NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url MIMEType:resource.mimeType expectedContentLength:length textEncodingName:nil];
         [urlSchemeTask didReceiveResponse:response];
         if (resource.streaming) {
-            uint8_t buffer[64 * 1024];
-            NSString *requestOrigin = self.origin ?: @"";
-            while (true) {
-                intptr_t count = resource.streamReadCallback ? resource.streamReadCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], requestOrigin.UTF8String, [requestOrigin lengthOfBytesUsingEncoding:NSUTF8StringEncoding], self.windowId, (char *)buffer, sizeof(buffer)) : -1;
-                if (count < 0) {
-                    [self.host closeDynamicResource:resourceId reason:4];
-                    NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotDecodeContentData userInfo:nil];
-                    [urlSchemeTask didFailWithError:error];
-                    return;
+            NSString *requestOrigin = [self.origin copy] ?: @"";
+            uint64_t taskWindowId = self.windowId;
+            ZeroNativeAppKitHost *host = self.host;
+            NSMutableSet<id<WKURLSchemeTask>> *cancelled = self.cancelledTasks;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                uint8_t buffer[64 * 1024];
+                BOOL failed = NO;
+                while (true) {
+                    @synchronized (cancelled) {
+                        if ([cancelled containsObject:urlSchemeTask]) {
+                            failed = YES;
+                            break;
+                        }
+                    }
+                    intptr_t count = resource.streamReadCallback ? resource.streamReadCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], requestOrigin.UTF8String, [requestOrigin lengthOfBytesUsingEncoding:NSUTF8StringEncoding], taskWindowId, (char *)buffer, sizeof(buffer)) : -1;
+                    if (count < 0) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [host closeDynamicResource:resourceId reason:4];
+                            @synchronized (cancelled) {
+                                if (![cancelled containsObject:urlSchemeTask]) {
+                                    NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotDecodeContentData userInfo:nil];
+                                    [urlSchemeTask didFailWithError:error];
+                                }
+                                [cancelled removeObject:urlSchemeTask];
+                            }
+                        });
+                        return;
+                    }
+                    if (count == 0) break;
+                    NSData *chunk = [NSData dataWithBytes:buffer length:(NSUInteger)count];
+                    dispatch_sync(dispatch_get_main_queue(), ^{
+                        @synchronized (cancelled) {
+                            if (![cancelled containsObject:urlSchemeTask]) {
+                                [urlSchemeTask didReceiveData:chunk];
+                            }
+                        }
+                    });
                 }
-                if (count == 0) break;
-                [urlSchemeTask didReceiveData:[NSData dataWithBytes:buffer length:(NSUInteger)count]];
-            }
-            [self.host closeDynamicResource:resourceId reason:0];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (!failed) [host closeDynamicResource:resourceId reason:0];
+                    @synchronized (cancelled) {
+                        if (![cancelled containsObject:urlSchemeTask]) {
+                            if (!failed) [urlSchemeTask didFinish];
+                        }
+                        [cancelled removeObject:urlSchemeTask];
+                    }
+                });
+            });
         } else {
             [urlSchemeTask didReceiveData:resource.data];
+            [urlSchemeTask didFinish];
         }
-        [urlSchemeTask didFinish];
         return;
     }
     NSString *relativePath = ZeroNativeSafeAssetPath(urlSchemeTask.request.URL, self.entryPath);
@@ -263,6 +299,9 @@ static int64_t ZeroNativeNowNanoseconds(void);
 
 - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     (void)webView;
+    @synchronized (self.cancelledTasks) {
+        [self.cancelledTasks addObject:urlSchemeTask];
+    }
     NSURL *url = urlSchemeTask.request.URL;
     if ([url.host isEqualToString:@"native"] && [url.path hasPrefix:@"/resource/"]) {
         NSString *resourcePath = url.path ?: @"";

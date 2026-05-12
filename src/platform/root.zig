@@ -204,6 +204,13 @@ pub const ResourceStreamRegistration = struct {
     close_fn: ResourceStreamCloseFn,
 };
 
+pub fn optionalTimestampForC(value: ?i128) i64 {
+    const timestamp = value orelse return 0;
+    if (timestamp > std.math.maxInt(i64)) return std.math.maxInt(i64);
+    if (timestamp < std.math.minInt(i64)) return std.math.minInt(i64);
+    return @intCast(timestamp);
+}
+
 pub const max_dialog_path_bytes: usize = 4096;
 pub const max_dialog_paths_bytes: usize = 16 * 4096;
 

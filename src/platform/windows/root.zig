@@ -1,4 +1,3 @@
-const std = @import("std");
 const geometry = @import("geometry");
 const platform_mod = @import("../root.zig");
 const policy_values = @import("../policy_values.zig");
@@ -281,13 +280,6 @@ fn revokeResource(context: ?*anyopaque, id: []const u8) anyerror!void {
     _ = context;
     _ = id;
     return error.UnsupportedService;
-}
-
-fn optionalTimestampForC(value: ?i128) i64 {
-    const timestamp = value orelse return 0;
-    if (timestamp > @as(i128, @intCast(std.math.maxInt(i64)))) return std.math.maxInt(i64);
-    if (timestamp < @as(i128, @intCast(std.math.minInt(i64)))) return std.math.minInt(i64);
-    return @intCast(timestamp);
 }
 
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {

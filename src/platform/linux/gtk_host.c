@@ -409,9 +409,15 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
     zero_native_gtk_host_t *host = data;
     const char *uri = webkit_uri_scheme_request_get_uri(request);
     if (g_str_has_prefix(uri, "zero://native/resource/")) {
-        const char *id = uri + strlen("zero://native/resource/");
+        const char *encoded_id = uri + strlen("zero://native/resource/");
+        char *id = g_uri_unescape_string(encoded_id, NULL);
+        if (!id) {
+            zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_INVALID_FILENAME, "Resource id is invalid");
+            return;
+        }
         int resource_index = zero_native_find_resource_index(host, id);
         if (resource_index < 0) {
+            g_free(id);
             zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Resource is not registered");
             return;
         }
@@ -421,12 +427,14 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
         if (resource->has_expiry && now_ns >= resource->expires_at_ns) {
             zero_native_close_resource(resource, 3);
             zero_native_remove_resource_at(host, resource_index);
+            g_free(id);
             zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Resource is expired");
             return;
         }
         char *request_origin = request_window ? (request_window->bridge_origin ? g_strdup(request_window->bridge_origin) : zero_native_origin_for_uri(webkit_web_view_get_uri(request_window->web_view))) : g_strdup("");
         if ((resource->origin && resource->origin[0] && strcmp(resource->origin, request_origin ? request_origin : "") != 0) || (resource->window_id != 0 && (!request_window || resource->window_id != request_window->id))) {
             g_free(request_origin);
+            g_free(id);
             zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Resource is not available to this WebView");
             return;
         }
@@ -436,6 +444,7 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
             stream = zero_native_resource_input_stream_new(resource, request_origin ? request_origin : "", request_window ? request_window->id : 0);
             if (!stream) {
                 g_free(request_origin);
+                g_free(id);
                 zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_FAILED, "Resource stream is not available");
                 return;
             }
@@ -449,6 +458,7 @@ static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gp
         g_object_unref(stream);
         g_free(request_origin);
         if (resource->one_shot) zero_native_remove_resource_at(host, resource_index);
+        g_free(id);
         return;
     }
     zero_native_gtk_window_t *win = zero_native_window_for_asset_uri(host, uri);
@@ -804,7 +814,10 @@ void zero_native_gtk_destroy(zero_native_gtk_host_t *host) {
     free(host->window_label);
     zero_native_free_string_list(host->allowed_origins, host->allowed_origins_count);
     zero_native_free_string_list(host->allowed_external_urls, host->allowed_external_urls_count);
-    for (int i = 0; i < host->resource_count; i++) zero_native_clear_resource(&host->resources[i]);
+    for (int i = 0; i < host->resource_count; i++) {
+        zero_native_close_resource(&host->resources[i], 2);
+        zero_native_clear_resource(&host->resources[i]);
+    }
     free(host);
 }
 
@@ -941,15 +954,18 @@ void zero_native_gtk_set_security_policy(zero_native_gtk_host_t *host, const cha
 }
 
 int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
-    if (!host || !id || id_len == 0) return 0;
+    if (!host || !id || id_len == 0 || (!bytes && bytes_len > 0)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
     char *resource_id = zero_native_strndup(id, id_len);
-    if (!resource_id) return 0;
+    if (!resource_id) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     int existing = zero_native_find_resource_index(host, resource_id);
-    if (existing >= 0) zero_native_remove_resource_at(host, existing);
+    if (existing >= 0) {
+        zero_native_close_resource(&host->resources[existing], 2);
+        zero_native_remove_resource_at(host, existing);
+    }
     if (host->resource_count >= ZERO_NATIVE_MAX_RESOURCES) {
         free(resource_id);
-        return 0;
+        return ZERO_NATIVE_RESOURCE_LIMIT;
     }
     zero_native_dynamic_resource_t *resource = &host->resources[host->resource_count++];
     resource->id = resource_id;
@@ -959,7 +975,7 @@ int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const 
     if (!resource->mime || !resource->origin || (bytes_len > 0 && !resource->bytes)) {
         zero_native_clear_resource(resource);
         host->resource_count--;
-        return 0;
+        return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     }
     if (bytes_len > 0) memcpy(resource->bytes, bytes, bytes_len);
     resource->len = bytes_len;
@@ -967,19 +983,22 @@ int zero_native_gtk_register_resource_bytes(zero_native_gtk_host_t *host, const 
     resource->expires_at_ns = expires_at_ns;
     resource->has_expiry = has_expiry != 0;
     resource->one_shot = one_shot != 0;
-    return 1;
+    return ZERO_NATIVE_RESOURCE_OK;
 }
 
 int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_gtk_resource_stream_read_callback_t read_callback, zero_native_gtk_resource_stream_close_callback_t close_callback) {
-    if (!host || !id || id_len == 0 || !read_callback || !close_callback) return 0;
+    if (!host || !id || id_len == 0 || !read_callback || !close_callback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     zero_native_prune_expired_resources(host, zero_native_now_nanoseconds());
     char *resource_id = zero_native_strndup(id, id_len);
-    if (!resource_id) return 0;
+    if (!resource_id) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     int existing = zero_native_find_resource_index(host, resource_id);
-    if (existing >= 0) zero_native_remove_resource_at(host, existing);
+    if (existing >= 0) {
+        zero_native_close_resource(&host->resources[existing], 2);
+        zero_native_remove_resource_at(host, existing);
+    }
     if (host->resource_count >= ZERO_NATIVE_MAX_RESOURCES) {
         free(resource_id);
-        return 0;
+        return ZERO_NATIVE_RESOURCE_LIMIT;
     }
     zero_native_dynamic_resource_t *resource = &host->resources[host->resource_count++];
     resource->id = resource_id;
@@ -988,7 +1007,7 @@ int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const
     if (!resource->mime || !resource->origin) {
         zero_native_clear_resource(resource);
         host->resource_count--;
-        return 0;
+        return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     }
     resource->bytes = NULL;
     resource->len = 0;
@@ -1002,7 +1021,7 @@ int zero_native_gtk_register_resource_stream(zero_native_gtk_host_t *host, const
     resource->stream_context = callback_context;
     resource->stream_read_callback = read_callback;
     resource->stream_close_callback = close_callback;
-    return 1;
+    return ZERO_NATIVE_RESOURCE_OK;
 }
 
 void zero_native_gtk_revoke_resource(zero_native_gtk_host_t *host, const char *id, size_t id_len) {

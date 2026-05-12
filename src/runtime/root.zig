@@ -851,7 +851,21 @@ pub const Runtime = struct {
 
 fn nowNanoseconds() i128 {
     switch (@import("builtin").os.tag) {
-        .windows, .wasi => return 0,
+        .windows => {
+            const windows = std.os.windows;
+            var frequency: windows.LARGE_INTEGER = undefined;
+            var counter: windows.LARGE_INTEGER = undefined;
+            if (!windows.ntdll.RtlQueryPerformanceFrequency(&frequency).toBool()) return 0;
+            if (!windows.ntdll.RtlQueryPerformanceCounter(&counter).toBool()) return 0;
+            if (frequency <= 0) return 0;
+            return (@as(i128, counter) * std.time.ns_per_s) / @as(i128, frequency);
+        },
+        .wasi => {
+            const wasi = std.os.wasi;
+            var timestamp: wasi.timestamp_t = 0;
+            if (wasi.clock_time_get(.MONOTONIC, 1, &timestamp) != .SUCCESS) return 0;
+            return @intCast(timestamp);
+        },
         else => {
             var ts: std.posix.timespec = undefined;
             switch (std.posix.errno(std.posix.system.clock_gettime(.REALTIME, &ts))) {

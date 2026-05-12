@@ -132,7 +132,7 @@ var runtime = zero_native.Runtime.init(.{
 });
 ```
 
-Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. The native WebView resource stores enforce the same TTL for resources that are registered but never fetched. Reusable resources are an advanced opt-in:
+Resources are one-shot by default and expire after `BridgeResourceDefaultTtlNs` so abandoned descriptors do not live forever. The native WebView resource stores enforce the same TTL for resources that are registered but never fetched. Reusable byte resources are an advanced opt-in:
 
 ```zig
 try responder.resourceBytes(
@@ -141,7 +141,7 @@ try responder.resourceBytes(
 );
 ```
 
-The byte resource path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). `resourceStream` registers provider callbacks so those hosts pull chunks from Zig as the native resource handler serves the browser response. Hosts that do not yet have a native resource interceptor reject registration through the normal bridge error path with `handler_failed`.
+The byte resource path currently works with the system WebView engines on macOS (WKWebView) and Linux (WebKitGTK). `resourceStream` registers one-shot provider callbacks so those hosts pull chunks from Zig as the native resource handler serves the browser response. Stream descriptors are single-consumer because providers are read sequentially and are not required to be seekable. Hosts that do not yet have a native resource interceptor reject registration through the normal bridge error path with `handler_failed`.
 
 `zero.resources.stream()` exposes the browser response stream. For `resourceStream` descriptors, the native host pulls from the Zig provider in chunks; for `resourceBytes` descriptors, the source is still a buffered byte slice.
 

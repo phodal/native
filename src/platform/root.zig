@@ -188,6 +188,23 @@ pub const ResourceCloseReason = enum(c_int) {
     failure = 4,
 };
 
+pub const ResourceRegistrationResult = enum(c_int) {
+    invalid_argument = 0,
+    ok = 1,
+    resource_limit = 2,
+    out_of_memory = 3,
+};
+
+pub fn checkResourceRegistrationResult(result: c_int) anyerror!void {
+    return switch (result) {
+        @intFromEnum(ResourceRegistrationResult.ok) => {},
+        @intFromEnum(ResourceRegistrationResult.invalid_argument) => error.InvalidResourceMetadata,
+        @intFromEnum(ResourceRegistrationResult.resource_limit) => error.ResourceLimitReached,
+        @intFromEnum(ResourceRegistrationResult.out_of_memory) => error.OutOfMemory,
+        else => error.InvalidResourceMetadata,
+    };
+}
+
 pub const ResourceStreamReadFn = *const fn (context: ?*anyopaque, id: [*]const u8, id_len: usize, origin: [*]const u8, origin_len: usize, window_id: WindowId, buffer: [*]u8, buffer_len: usize) callconv(.c) isize;
 pub const ResourceStreamCloseFn = *const fn (context: ?*anyopaque, id: [*]const u8, id_len: usize, reason: ResourceCloseReason) callconv(.c) void;
 

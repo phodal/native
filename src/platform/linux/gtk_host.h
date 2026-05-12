@@ -39,6 +39,13 @@ typedef void (*zero_native_gtk_bridge_callback_t)(void *context, uint64_t window
 typedef intptr_t (*zero_native_gtk_resource_stream_read_callback_t)(void *context, const char *id, size_t id_len, const char *origin, size_t origin_len, uint64_t window_id, char *buffer, size_t buffer_len);
 typedef void (*zero_native_gtk_resource_stream_close_callback_t)(void *context, const char *id, size_t id_len, int reason);
 
+typedef enum {
+    ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT = 0,
+    ZERO_NATIVE_RESOURCE_OK = 1,
+    ZERO_NATIVE_RESOURCE_LIMIT = 2,
+    ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY = 3,
+} zero_native_resource_registration_result_t;
+
 typedef struct {
     const char *title;
     size_t title_len;

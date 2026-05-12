@@ -10,6 +10,7 @@
 static const NSUInteger ZeroNativeMaxDynamicResources = 128;
 
 @class ZeroNativeAppKitHost;
+@class ZeroNativeDynamicResource;
 
 static NSRect constrainFrame(NSRect frame);
 static NSString *ZeroNativeAppKitBridgeScript(void);
@@ -39,7 +40,9 @@ static int64_t ZeroNativeNowNanoseconds(void);
 @property(nonatomic, strong) NSString *entryPath;
 @property(nonatomic, strong) NSString *origin;
 @property(nonatomic, assign) BOOL spaFallback;
-@property(nonatomic, strong) NSMutableSet<id<WKURLSchemeTask>> *cancelledTasks;
+@property(nonatomic, strong) NSMutableSet<NSValue *> *cancelledTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSValue *, ZeroNativeDynamicResource *> *activeResourceTasks;
+@property(nonatomic, strong) NSMutableDictionary<NSValue *, NSString *> *activeResourceTaskIds;
 - (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath origin:(NSString *)origin spaFallback:(BOOL)spaFallback;
 @end
 
@@ -118,9 +121,11 @@ static int64_t ZeroNativeNowNanoseconds(void);
 - (void)emitEventNamed:(NSString *)name detailJSON:(NSString *)detailJSON windowId:(uint64_t)windowId;
 - (ZeroNativeDynamicResource *)dynamicResourceForId:(NSString *)resourceId origin:(NSString *)origin windowId:(uint64_t)windowId nowNs:(int64_t)nowNs consume:(BOOL)consume;
 - (void)pruneExpiredDynamicResourcesWithNowNs:(int64_t)nowNs;
-- (BOOL)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot;
-- (BOOL)registerDynamicResourceStream:(NSString *)resourceId mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot size:(uint64_t)size hasSize:(BOOL)hasSize context:(void *)context readCallback:(zero_native_appkit_resource_stream_read_callback_t)readCallback closeCallback:(zero_native_appkit_resource_stream_close_callback_t)closeCallback;
+- (int)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot;
+- (int)registerDynamicResourceStream:(NSString *)resourceId mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot size:(uint64_t)size hasSize:(BOOL)hasSize context:(void *)context readCallback:(zero_native_appkit_resource_stream_read_callback_t)readCallback closeCallback:(zero_native_appkit_resource_stream_close_callback_t)closeCallback;
+- (void)closeDynamicResourceObject:(ZeroNativeDynamicResource *)resource resourceId:(NSString *)resourceId reason:(int)reason;
 - (void)closeDynamicResource:(NSString *)resourceId reason:(int)reason;
+- (void)closeAllDynamicResourcesWithReason:(int)reason;
 - (void)revokeDynamicResource:(NSString *)resourceId;
 @end
 
@@ -186,6 +191,8 @@ static int64_t ZeroNativeNowNanoseconds(void);
     self.origin = @"zero://inline";
     self.spaFallback = YES;
     self.cancelledTasks = [[NSMutableSet alloc] init];
+    self.activeResourceTasks = [[NSMutableDictionary alloc] init];
+    self.activeResourceTaskIds = [[NSMutableDictionary alloc] init];
     return self;
 }
 
@@ -215,27 +222,37 @@ static int64_t ZeroNativeNowNanoseconds(void);
             NSString *requestOrigin = [self.origin copy] ?: @"";
             uint64_t taskWindowId = self.windowId;
             ZeroNativeAppKitHost *host = self.host;
-            NSMutableSet<id<WKURLSchemeTask>> *cancelled = self.cancelledTasks;
+            NSMutableSet<NSValue *> *cancelled = self.cancelledTasks;
+            NSMutableDictionary<NSValue *, ZeroNativeDynamicResource *> *activeResources = self.activeResourceTasks;
+            NSMutableDictionary<NSValue *, NSString *> *activeResourceIds = self.activeResourceTaskIds;
+            NSValue *taskKey = [NSValue valueWithNonretainedObject:urlSchemeTask];
+            @synchronized (cancelled) {
+                [cancelled removeObject:taskKey];
+                activeResources[taskKey] = resource;
+                activeResourceIds[taskKey] = resourceId;
+            }
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 uint8_t buffer[64 * 1024];
                 BOOL failed = NO;
                 while (true) {
                     @synchronized (cancelled) {
-                        if ([cancelled containsObject:urlSchemeTask]) {
+                        if ([cancelled containsObject:taskKey]) {
                             failed = YES;
                             break;
                         }
                     }
                     intptr_t count = resource.streamReadCallback ? resource.streamReadCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], requestOrigin.UTF8String, [requestOrigin lengthOfBytesUsingEncoding:NSUTF8StringEncoding], taskWindowId, (char *)buffer, sizeof(buffer)) : -1;
-                    if (count < 0) {
+                    if (count < 0 || (uint64_t)count > sizeof(buffer)) {
                         dispatch_async(dispatch_get_main_queue(), ^{
-                            [host closeDynamicResource:resourceId reason:4];
                             @synchronized (cancelled) {
-                                if (![cancelled containsObject:urlSchemeTask]) {
+                                if (![cancelled containsObject:taskKey]) {
+                                    [host closeDynamicResourceObject:resource resourceId:resourceId reason:4];
                                     NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotDecodeContentData userInfo:nil];
                                     [urlSchemeTask didFailWithError:error];
                                 }
-                                [cancelled removeObject:urlSchemeTask];
+                                [cancelled removeObject:taskKey];
+                                [activeResources removeObjectForKey:taskKey];
+                                [activeResourceIds removeObjectForKey:taskKey];
                             }
                         });
                         return;
@@ -244,19 +261,21 @@ static int64_t ZeroNativeNowNanoseconds(void);
                     NSData *chunk = [NSData dataWithBytes:buffer length:(NSUInteger)count];
                     dispatch_sync(dispatch_get_main_queue(), ^{
                         @synchronized (cancelled) {
-                            if (![cancelled containsObject:urlSchemeTask]) {
+                            if (![cancelled containsObject:taskKey]) {
                                 [urlSchemeTask didReceiveData:chunk];
                             }
                         }
                     });
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    if (!failed) [host closeDynamicResource:resourceId reason:0];
                     @synchronized (cancelled) {
-                        if (![cancelled containsObject:urlSchemeTask]) {
+                        if (![cancelled containsObject:taskKey]) {
+                            if (!failed) [host closeDynamicResourceObject:resource resourceId:resourceId reason:0];
                             if (!failed) [urlSchemeTask didFinish];
                         }
-                        [cancelled removeObject:urlSchemeTask];
+                        [cancelled removeObject:taskKey];
+                        [activeResources removeObjectForKey:taskKey];
+                        [activeResourceIds removeObjectForKey:taskKey];
                     }
                 });
             });
@@ -299,14 +318,20 @@ static int64_t ZeroNativeNowNanoseconds(void);
 
 - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     (void)webView;
+    NSValue *taskKey = [NSValue valueWithNonretainedObject:urlSchemeTask];
+    ZeroNativeDynamicResource *resource = nil;
+    NSString *resourceId = nil;
     @synchronized (self.cancelledTasks) {
-        [self.cancelledTasks addObject:urlSchemeTask];
+        resource = self.activeResourceTasks[taskKey];
+        resourceId = self.activeResourceTaskIds[taskKey];
+        if (resource) {
+            [self.cancelledTasks addObject:taskKey];
+            [self.activeResourceTasks removeObjectForKey:taskKey];
+            [self.activeResourceTaskIds removeObjectForKey:taskKey];
+        }
     }
-    NSURL *url = urlSchemeTask.request.URL;
-    if ([url.host isEqualToString:@"native"] && [url.path hasPrefix:@"/resource/"]) {
-        NSString *resourcePath = url.path ?: @"";
-        NSString *resourceId = [[resourcePath substringFromIndex:[@"/resource/" length]] stringByRemovingPercentEncoding] ?: @"";
-        [self.host closeDynamicResource:resourceId reason:1];
+    if (resource) {
+        [self.host closeDynamicResourceObject:resource resourceId:resourceId ?: @"" reason:1];
     }
 }
 
@@ -618,6 +643,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 - (void)stop {
     [self.timer invalidate];
     self.timer = nil;
+    [self closeAllDynamicResourcesWithReason:2];
     [NSApp stop:nil];
     NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
                                         location:NSZeroPoint
@@ -831,7 +857,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     }
     if (resource.origin.length > 0 && ![resource.origin isEqualToString:(origin ?: @"")]) return nil;
     if (resource.windowId != 0 && resource.windowId != windowId) return nil;
-    if (resource && consume && resource.oneShot && !resource.streaming) {
+    if (resource && consume && resource.oneShot) {
         [self.dynamicResources removeObjectForKey:resourceId];
     }
     return resource;
@@ -850,11 +876,12 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     }
 }
 
-- (BOOL)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot {
-    if (resourceId.length == 0 || !data) return NO;
+- (int)registerDynamicResource:(NSString *)resourceId data:(NSData *)data mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot {
+    if (resourceId.length == 0 || !data) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     [self pruneExpiredDynamicResourcesWithNowNs:ZeroNativeNowNanoseconds()];
-    if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return NO;
+    if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return ZERO_NATIVE_RESOURCE_LIMIT;
     ZeroNativeDynamicResource *resource = [[ZeroNativeDynamicResource alloc] init];
+    if (!resource) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     resource.data = data;
     resource.mimeType = mimeType.length > 0 ? mimeType : @"application/octet-stream";
     resource.origin = origin ?: @"";
@@ -862,15 +889,17 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     resource.expiresAtNs = expiresAtNs;
     resource.hasExpiry = hasExpiry;
     resource.oneShot = oneShot;
+    if (self.dynamicResources[resourceId]) [self closeDynamicResource:resourceId reason:2];
     self.dynamicResources[resourceId] = resource;
-    return YES;
+    return ZERO_NATIVE_RESOURCE_OK;
 }
 
-- (BOOL)registerDynamicResourceStream:(NSString *)resourceId mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot size:(uint64_t)size hasSize:(BOOL)hasSize context:(void *)context readCallback:(zero_native_appkit_resource_stream_read_callback_t)readCallback closeCallback:(zero_native_appkit_resource_stream_close_callback_t)closeCallback {
-    if (resourceId.length == 0 || !readCallback || !closeCallback) return NO;
+- (int)registerDynamicResourceStream:(NSString *)resourceId mimeType:(NSString *)mimeType origin:(NSString *)origin windowId:(uint64_t)windowId expiresAtNs:(int64_t)expiresAtNs hasExpiry:(BOOL)hasExpiry oneShot:(BOOL)oneShot size:(uint64_t)size hasSize:(BOOL)hasSize context:(void *)context readCallback:(zero_native_appkit_resource_stream_read_callback_t)readCallback closeCallback:(zero_native_appkit_resource_stream_close_callback_t)closeCallback {
+    if (resourceId.length == 0 || !readCallback || !closeCallback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     [self pruneExpiredDynamicResourcesWithNowNs:ZeroNativeNowNanoseconds()];
-    if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return NO;
+    if (!self.dynamicResources[resourceId] && self.dynamicResources.count >= ZeroNativeMaxDynamicResources) return ZERO_NATIVE_RESOURCE_LIMIT;
     ZeroNativeDynamicResource *resource = [[ZeroNativeDynamicResource alloc] init];
+    if (!resource) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
     resource.data = [NSData data];
     resource.mimeType = mimeType.length > 0 ? mimeType : @"application/octet-stream";
     resource.origin = origin ?: @"";
@@ -884,18 +913,47 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     resource.streamContext = context;
     resource.streamReadCallback = readCallback;
     resource.streamCloseCallback = closeCallback;
+    if (self.dynamicResources[resourceId]) [self closeDynamicResource:resourceId reason:2];
     self.dynamicResources[resourceId] = resource;
-    return YES;
+    return ZERO_NATIVE_RESOURCE_OK;
+}
+
+- (void)closeDynamicResourceObject:(ZeroNativeDynamicResource *)resource resourceId:(NSString *)resourceId reason:(int)reason {
+    if (!resource || resourceId.length == 0) return;
+    if (resource.streaming && resource.streamCloseCallback) {
+        resource.streamCloseCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], reason);
+    }
 }
 
 - (void)closeDynamicResource:(NSString *)resourceId reason:(int)reason {
     if (resourceId.length == 0) return;
     ZeroNativeDynamicResource *resource = self.dynamicResources[resourceId];
     if (!resource) return;
-    if (resource.streaming && resource.streamCloseCallback) {
-        resource.streamCloseCallback(resource.streamContext, resourceId.UTF8String, [resourceId lengthOfBytesUsingEncoding:NSUTF8StringEncoding], reason);
-    }
+    [self closeDynamicResourceObject:resource resourceId:resourceId reason:reason];
     if (resource.oneShot || reason == 2 || reason == 3) {
+        [self.dynamicResources removeObjectForKey:resourceId];
+    }
+}
+
+- (void)closeAllDynamicResourcesWithReason:(int)reason {
+    NSMutableArray<ZeroNativeAssetSchemeHandler *> *handlers = [[NSMutableArray alloc] initWithArray:self.assetSchemeHandlers.allValues];
+    if (self.assetSchemeHandler && ![handlers containsObject:self.assetSchemeHandler]) [handlers addObject:self.assetSchemeHandler];
+    for (ZeroNativeAssetSchemeHandler *handler in handlers) {
+        @synchronized (handler.cancelledTasks) {
+            NSArray<NSValue *> *taskKeys = [handler.activeResourceTaskIds.allKeys copy];
+            for (NSValue *taskKey in taskKeys) {
+                ZeroNativeDynamicResource *resource = handler.activeResourceTasks[taskKey];
+                NSString *resourceId = handler.activeResourceTaskIds[taskKey];
+                [self closeDynamicResourceObject:resource resourceId:resourceId reason:reason];
+            }
+            [handler.cancelledTasks addObjectsFromArray:taskKeys];
+            [handler.activeResourceTasks removeAllObjects];
+            [handler.activeResourceTaskIds removeAllObjects];
+        }
+    }
+    NSArray<NSString *> *resourceIds = [self.dynamicResources.allKeys copy];
+    for (NSString *resourceId in resourceIds) {
+        [self closeDynamicResource:resourceId reason:reason];
         [self.dynamicResources removeObjectForKey:resourceId];
     }
 }
@@ -992,6 +1050,8 @@ void zero_native_appkit_destroy(zero_native_appkit_host_t *host) {
     if (!host) {
         return;
     }
+    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+    [object closeAllDynamicResourcesWithReason:2];
     CFBridgingRelease(host);
 }
 
@@ -1057,19 +1117,24 @@ void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, con
 
 int zero_native_appkit_register_resource_bytes(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *bytes, size_t bytes_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+    if (!object || !id || id_len == 0 || (!bytes && bytes_len > 0)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
     NSString *mimeType = mime ? [[NSString alloc] initWithBytes:mime length:mime_len encoding:NSUTF8StringEncoding] : @"application/octet-stream";
     NSString *originString = origin ? [[NSString alloc] initWithBytes:origin length:origin_len encoding:NSUTF8StringEncoding] : @"";
+    if (!resourceId || (mime && !mimeType) || (origin && !originString)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSData *data = bytes && bytes_len > 0 ? [NSData dataWithBytes:bytes length:bytes_len] : [NSData data];
-    return [object registerDynamicResource:resourceId ?: @"" data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)] ? 1 : 0;
+    if (!data) return ZERO_NATIVE_RESOURCE_OUT_OF_MEMORY;
+    return [object registerDynamicResource:resourceId data:data mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0)];
 }
 
 int zero_native_appkit_register_resource_stream(zero_native_appkit_host_t *host, const char *id, size_t id_len, const char *mime, size_t mime_len, const char *origin, size_t origin_len, uint64_t window_id, int64_t expires_at_ns, int has_expiry, int one_shot, uint64_t size, int has_size, void *callback_context, zero_native_appkit_resource_stream_read_callback_t read_callback, zero_native_appkit_resource_stream_close_callback_t close_callback) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+    if (!object || !id || id_len == 0 || !read_callback || !close_callback) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
     NSString *resourceId = id ? [[NSString alloc] initWithBytes:id length:id_len encoding:NSUTF8StringEncoding] : @"";
     NSString *mimeType = mime ? [[NSString alloc] initWithBytes:mime length:mime_len encoding:NSUTF8StringEncoding] : @"application/octet-stream";
     NSString *originString = origin ? [[NSString alloc] initWithBytes:origin length:origin_len encoding:NSUTF8StringEncoding] : @"";
-    return [object registerDynamicResourceStream:resourceId ?: @"" mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0) size:size hasSize:(has_size != 0) context:callback_context readCallback:read_callback closeCallback:close_callback] ? 1 : 0;
+    if (!resourceId || (mime && !mimeType) || (origin && !originString)) return ZERO_NATIVE_RESOURCE_INVALID_ARGUMENT;
+    return [object registerDynamicResourceStream:resourceId mimeType:mimeType ?: @"application/octet-stream" origin:originString ?: @"" windowId:window_id expiresAtNs:expires_at_ns hasExpiry:(has_expiry != 0) oneShot:(one_shot != 0) size:size hasSize:(has_size != 0) context:callback_context readCallback:read_callback closeCallback:close_callback];
 }
 
 void zero_native_appkit_revoke_resource(zero_native_appkit_host_t *host, const char *id, size_t id_len) {

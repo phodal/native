@@ -4,6 +4,7 @@ const json = @import("json");
 pub const max_resource_id_bytes: usize = 32;
 pub const max_resource_name_bytes: usize = 128;
 pub const max_resource_mime_bytes: usize = 128;
+pub const max_resource_origin_bytes: usize = 256;
 pub const max_resource_count: usize = 128;
 pub const default_ttl_ns: i128 = 5 * 60 * std.time.ns_per_s;
 
@@ -73,7 +74,9 @@ pub const StreamProvider = struct {
     size: ?usize = null,
 
     fn read(self: StreamProvider, output: []u8) !usize {
-        return self.read_fn(self.context, output);
+        const count = try self.read_fn(self.context, output);
+        if (count > output.len) return error.NoSpaceLeft;
+        return count;
     }
 
     fn close(self: StreamProvider, reason: CloseReason) void {
@@ -128,7 +131,10 @@ pub const Registry = struct {
     }
 
     pub fn deinit(self: *Registry) void {
-        for (self.entries.items) |entry| self.freeEntry(entry);
+        for (self.entries.items) |entry| {
+            self.closeEntry(entry, .revoke);
+            self.freeEntry(entry);
+        }
         self.entries.deinit(self.allocator);
     }
 
@@ -171,6 +177,7 @@ pub const Registry = struct {
         self.pruneExpired(now_ns);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
+        if (!options.one_shot) return error.InvalidResourceMetadata;
 
         var id_buffer: [max_resource_id_bytes]u8 = undefined;
         const id = try self.generateId(&id_buffer, now_ns);
@@ -236,10 +243,14 @@ pub const Registry = struct {
         if (entry.window_id != 0 and entry.window_id != source.window_id) return error.ResourceWindowMismatch;
         switch (entry.payload) {
             .bytes => |bytes| {
-                if (entry.bytes_offset >= bytes.len) return 0;
+                if (entry.bytes_offset >= bytes.len) {
+                    if (entry.one_shot) self.removeAt(index);
+                    return 0;
+                }
                 const count = @min(output.len, bytes.len - entry.bytes_offset);
                 @memcpy(output[0..count], bytes[entry.bytes_offset..][0..count]);
                 entry.bytes_offset += count;
+                if (entry.one_shot and entry.bytes_offset >= bytes.len) self.removeAt(index);
                 return count;
             },
             .stream => |provider| return provider.read(output),
@@ -250,7 +261,12 @@ pub const Registry = struct {
         const index = self.findIndex(id) orelse return false;
         const entry = self.entries.items[index];
         self.closeEntry(entry, reason);
-        if (entry.one_shot or reason == .revoke or reason == .expired) {
+        const completed_stream = reason == .complete and switch (entry.payload) {
+            .bytes => false,
+            .stream => true,
+        };
+        const should_remove = entry.one_shot or reason == .revoke or reason == .expired or reason == .cancel or reason == .failure or completed_stream;
+        if (should_remove) {
             self.removeAt(index);
         }
         return true;
@@ -346,6 +362,7 @@ pub fn writeDescriptorJson(output: []u8, descriptor: Descriptor) ![]const u8 {
 fn validateMetadata(options: Options) !void {
     if (options.mime.len == 0 or options.mime.len > max_resource_mime_bytes) return error.InvalidResourceMetadata;
     if (options.name.len > max_resource_name_bytes) return error.InvalidResourceMetadata;
+    if (options.origin.len > max_resource_origin_bytes) return error.InvalidResourceMetadata;
 }
 
 test "resource registry creates fetch descriptors" {
@@ -411,6 +428,21 @@ test "resource registry one-shot fetch copies bytes and frees entry" {
     try std.testing.expectError(error.ResourceNotFound, registry.fetchBytes(descriptor.id, .{}, 102, &fetch_buffer));
 }
 
+test "resource registry one-shot read stream for bytes frees entry at EOF" {
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    const descriptor = try registry.registerBytes("stream bytes", .{ .one_shot = true }, 100);
+
+    var chunk: [6]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 6), try registry.readStream(descriptor.id, .{}, 101, &chunk));
+    try std.testing.expectEqualStrings("stream", &chunk);
+    try std.testing.expectEqual(@as(usize, 6), try registry.readStream(descriptor.id, .{}, 101, &chunk));
+    try std.testing.expectEqualStrings(" bytes", &chunk);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+    try std.testing.expectError(error.ResourceNotFound, registry.readStream(descriptor.id, .{}, 101, &chunk));
+}
+
 test "resource registry streams provider chunks and closes" {
     const State = struct {
         bytes: []const u8 = "stream me",
@@ -455,4 +487,122 @@ test "resource registry streams provider chunks and closes" {
     try std.testing.expect(registry.closeStream(descriptor.id, .complete));
     try std.testing.expectEqual(CloseReason.complete, state.close_reason.?);
     try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "resource registry closes providers on deinit" {
+    const State = struct {
+        close_reason: ?CloseReason = null,
+
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            _ = context;
+            _ = output;
+            return 0;
+        }
+
+        fn close(context: *anyopaque, reason: CloseReason) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.close_reason = reason;
+        }
+    };
+
+    var state = State{};
+    {
+        var registry = Registry.init(std.testing.allocator);
+        defer registry.deinit();
+        _ = try registry.registerStream(.{
+            .context = &state,
+            .read_fn = State.read,
+            .close_fn = State.close,
+        }, .{ .mime = "text/plain" }, 100);
+    }
+    try std.testing.expectEqual(CloseReason.revoke, state.close_reason.?);
+}
+
+test "resource registry rejects oversized stream reads" {
+    const State = struct {
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            _ = context;
+            return output.len + 1;
+        }
+    };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state = State{};
+    const descriptor = try registry.registerStream(.{
+        .context = &state,
+        .read_fn = State.read,
+    }, .{ .mime = "text/plain" }, 100);
+
+    var chunk: [4]u8 = undefined;
+    try std.testing.expectError(error.NoSpaceLeft, registry.readStream(descriptor.id, .{}, 101, &chunk));
+}
+
+test "resource registry removes streams on cancel and failure" {
+    const State = struct {
+        close_reason: ?CloseReason = null,
+
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            _ = context;
+            _ = output;
+            return 0;
+        }
+
+        fn close(context: *anyopaque, reason: CloseReason) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.close_reason = reason;
+        }
+    };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var cancel_state = State{};
+    const cancel_descriptor = try registry.registerStream(.{
+        .context = &cancel_state,
+        .read_fn = State.read,
+        .close_fn = State.close,
+    }, .{ .mime = "text/plain" }, 100);
+    try std.testing.expect(registry.closeStream(cancel_descriptor.id, .cancel));
+    try std.testing.expectEqual(CloseReason.cancel, cancel_state.close_reason.?);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+
+    var failure_state = State{};
+    const failure_descriptor = try registry.registerStream(.{
+        .context = &failure_state,
+        .read_fn = State.read,
+        .close_fn = State.close,
+    }, .{ .mime = "text/plain" }, 100);
+    try std.testing.expect(registry.closeStream(failure_descriptor.id, .failure));
+    try std.testing.expectEqual(CloseReason.failure, failure_state.close_reason.?);
+    try std.testing.expectEqual(@as(usize, 0), registry.entries.items.len);
+}
+
+test "resource registry validates origin metadata length" {
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var origin: [max_resource_origin_bytes + 1]u8 = undefined;
+    @memset(&origin, 'a');
+    try std.testing.expectError(error.InvalidResourceMetadata, registry.registerBytes("hello", .{ .origin = &origin }, 100));
+}
+
+test "resource registry rejects reusable streams" {
+    const State = struct {
+        fn read(context: *anyopaque, output: []u8) anyerror!usize {
+            _ = context;
+            _ = output;
+            return 0;
+        }
+    };
+
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    var state = State{};
+
+    try std.testing.expectError(error.InvalidResourceMetadata, registry.registerStream(.{
+        .context = &state,
+        .read_fn = State.read,
+    }, .{ .mime = "text/plain", .one_shot = false }, 100));
 }

@@ -318,13 +318,13 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 fn registerResourceBytes(context: ?*anyopaque, id: []const u8, mime: []const u8, bytes: []const u8, origin: []const u8, window_id: platform_mod.WindowId, expires_at_ns: ?i128, one_shot: bool) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine == .chromium) return error.UnsupportedService;
-    if (zero_native_appkit_register_resource_bytes(self.host, id.ptr, id.len, mime.ptr, mime.len, bytes.ptr, bytes.len, origin.ptr, origin.len, window_id, platform_mod.optionalTimestampForC(expires_at_ns), if (expires_at_ns != null) 1 else 0, if (one_shot) 1 else 0) == 0) return error.ResourceLimitReached;
+    try platform_mod.checkResourceRegistrationResult(zero_native_appkit_register_resource_bytes(self.host, id.ptr, id.len, mime.ptr, mime.len, bytes.ptr, bytes.len, origin.ptr, origin.len, window_id, platform_mod.optionalTimestampForC(expires_at_ns), if (expires_at_ns != null) 1 else 0, if (one_shot) 1 else 0));
 }
 
 fn registerResourceStream(context: ?*anyopaque, registration: platform_mod.ResourceStreamRegistration) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine == .chromium) return error.UnsupportedService;
-    if (zero_native_appkit_register_resource_stream(
+    try platform_mod.checkResourceRegistrationResult(zero_native_appkit_register_resource_stream(
         self.host,
         registration.id.ptr,
         registration.id.len,
@@ -341,7 +341,7 @@ fn registerResourceStream(context: ?*anyopaque, registration: platform_mod.Resou
         registration.callback_context,
         registration.read_fn,
         registration.close_fn,
-    ) == 0) return error.ResourceLimitReached;
+    ));
 }
 
 fn revokeResource(context: ?*anyopaque, id: []const u8) anyerror!void {

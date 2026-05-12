@@ -90,14 +90,44 @@ pub const Handler = struct {
 
 pub const AsyncResponder = struct {
     context: *anyopaque,
-    request_id: []const u8,
-    source: Source,
+    request_id: []const u8 = "",
+    source: Source = .{},
     respond_fn: AsyncRespondFn,
     resource_bytes_fn: ?AsyncResourceBytesFn = null,
     resource_stream_fn: ?AsyncResourceStreamFn = null,
+    request_id_storage: [max_id_bytes]u8 = undefined,
+    request_id_len: usize = 0,
+    source_origin_storage: [resources.max_resource_origin_bytes]u8 = undefined,
+    source_origin_len: usize = 0,
+    source_window_id: u64 = 0,
+    source_storage_set: bool = false,
+
+    pub fn init(
+        context: *anyopaque,
+        request_id: []const u8,
+        source: Source,
+        respond_fn: AsyncRespondFn,
+        resource_bytes_fn: ?AsyncResourceBytesFn,
+        resource_stream_fn: ?AsyncResourceStreamFn,
+    ) !AsyncResponder {
+        if (request_id.len > max_id_bytes or source.origin.len > resources.max_resource_origin_bytes) return error.NoSpaceLeft;
+        var responder: AsyncResponder = .{
+            .context = context,
+            .respond_fn = respond_fn,
+            .resource_bytes_fn = resource_bytes_fn,
+            .resource_stream_fn = resource_stream_fn,
+            .source_window_id = source.window_id,
+            .source_storage_set = true,
+        };
+        @memcpy(responder.request_id_storage[0..request_id.len], request_id);
+        responder.request_id_len = request_id.len;
+        @memcpy(responder.source_origin_storage[0..source.origin.len], source.origin);
+        responder.source_origin_len = source.origin.len;
+        return responder;
+    }
 
     pub fn respond(self: AsyncResponder, response: []const u8) anyerror!void {
-        return self.respond_fn(self.context, self.source, response);
+        return self.respond_fn(self.context, self.sourceValue(), response);
     }
 
     pub fn success(self: AsyncResponder, id: []const u8, result: []const u8) anyerror!void {
@@ -113,17 +143,30 @@ pub const AsyncResponder = struct {
     pub fn resourceBytes(self: AsyncResponder, bytes: []const u8, options: resources.Options) anyerror!void {
         const resource_fn = self.resource_bytes_fn orelse return error.UnsupportedService;
         var descriptor_buffer: [max_result_bytes]u8 = undefined;
-        const descriptor = try resource_fn(self.context, self.source, bytes, options, &descriptor_buffer);
+        const descriptor = try resource_fn(self.context, self.sourceValue(), bytes, options, &descriptor_buffer);
         var response_buffer: [max_response_bytes]u8 = undefined;
-        try self.respond(writeSuccessResponse(&response_buffer, self.request_id, descriptor));
+        try self.respond(writeSuccessResponse(&response_buffer, self.requestId(), descriptor));
     }
 
     pub fn resourceStream(self: AsyncResponder, provider: resources.StreamProvider, options: resources.Options) anyerror!void {
         const resource_fn = self.resource_stream_fn orelse return error.UnsupportedService;
         var descriptor_buffer: [max_result_bytes]u8 = undefined;
-        const descriptor = try resource_fn(self.context, self.source, provider, options, &descriptor_buffer);
+        const descriptor = try resource_fn(self.context, self.sourceValue(), provider, options, &descriptor_buffer);
         var response_buffer: [max_response_bytes]u8 = undefined;
-        try self.respond(writeSuccessResponse(&response_buffer, self.request_id, descriptor));
+        try self.respond(writeSuccessResponse(&response_buffer, self.requestId(), descriptor));
+    }
+
+    fn requestId(self: *const AsyncResponder) []const u8 {
+        if (self.request_id_len > 0) return self.request_id_storage[0..self.request_id_len];
+        return self.request_id;
+    }
+
+    fn sourceValue(self: *const AsyncResponder) Source {
+        if (!self.source_storage_set) return self.source;
+        return .{
+            .origin = self.source_origin_storage[0..self.source_origin_len],
+            .window_id = self.source_window_id,
+        };
     }
 };
 

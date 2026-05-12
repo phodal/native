@@ -121,6 +121,7 @@ struct Window {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken message_token = {};
+    EventRegistrationToken source_token = {};
     EventRegistrationToken resource_token = {};
 };
 
@@ -205,6 +206,26 @@ static std::string originForUrl(const std::string &url) {
     std::string authority = url.substr(authority_start, authority_end == std::string::npos ? std::string::npos : authority_end - authority_start);
     if (authority.empty()) return scheme + "://local";
     return scheme + "://" + authority;
+}
+
+static std::string requestHeader(ICoreWebView2HttpRequestHeaders *headers, const wchar_t *name) {
+    if (!headers) return std::string();
+    LPWSTR value_w = nullptr;
+    if (FAILED(headers->GetHeader(name, &value_w)) || !value_w) return std::string();
+    std::string value = narrow(value_w);
+    CoTaskMemFree(value_w);
+    return value;
+}
+
+static std::string originForResourceRequest(ICoreWebView2WebResourceRequest *request, const Window &window) {
+    ComPtr<ICoreWebView2HttpRequestHeaders> headers;
+    if (request && SUCCEEDED(request->get_Headers(&headers)) && headers) {
+        std::string origin = requestHeader(headers.Get(), L"Origin");
+        if (!origin.empty() && origin != "null") return originForUrl(origin);
+        std::string referer = requestHeader(headers.Get(), L"Referer");
+        if (!referer.empty()) return originForUrl(referer);
+    }
+    return window.current_origin;
 }
 
 static int hexValue(char ch) {
@@ -519,16 +540,16 @@ static void createTextResponse(Host *host, int status, const wchar_t *reason, co
     createResponse(host, stream.Get(), status, reason, "text/plain", strlen(message), true, response);
 }
 
-static bool serveDynamicResource(Host *host, Window &window, const std::string &uri, ICoreWebView2WebResourceRequestedEventArgs *args) {
+static bool serveDynamicResource(Host *host, Window &window, const std::string &uri, const std::string &request_origin, ICoreWebView2WebResourceRequestedEventArgs *args) {
     std::string resource_id = resourceIdFromUri(uri);
     if (resource_id.empty()) return false;
-    std::shared_ptr<DynamicResource> resource = claimResource(host, resource_id, window.current_origin, window.id, nowNanoseconds());
+    std::shared_ptr<DynamicResource> resource = claimResource(host, resource_id, request_origin, window.id, nowNanoseconds());
     ComPtr<ICoreWebView2WebResourceResponse> response;
     if (!resource) {
         createTextResponse(host, 404, L"Not Found", "Resource is not registered", &response);
     } else if (resource->streaming) {
         ComPtr<IStream> stream;
-        stream.Attach(new ResourceCallbackStream(resource, window.current_origin, window.id));
+        stream.Attach(new ResourceCallbackStream(resource, request_origin, window.id));
         createResponse(host, stream.Get(), 200, L"OK", resource->mime, resource->size, resource->has_size, &response);
     } else {
         ComPtr<IStream> stream;
@@ -695,6 +716,18 @@ static void setupWebView(Host *host, Window &window) {
             return S_OK;
         }).Get(),
         &window.message_token);
+    window.webview->add_SourceChanged(Callback<ICoreWebView2SourceChangedEventHandler>(
+        [host, window_id = window.id](ICoreWebView2 *sender, ICoreWebView2SourceChangedEventArgs *) -> HRESULT {
+            if (!host || !sender) return S_OK;
+            LPWSTR source_w = nullptr;
+            if (FAILED(sender->get_Source(&source_w)) || !source_w) return S_OK;
+            std::string origin = originForUrl(narrow(source_w));
+            CoTaskMemFree(source_w);
+            auto found = host->windows.find(window_id);
+            if (found != host->windows.end()) found->second.current_origin = origin;
+            return S_OK;
+        }).Get(),
+        &window.source_token);
     window.webview->AddWebResourceRequestedFilter(L"zero://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
     window.webview->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(
         [host, window_id = window.id](ICoreWebView2 *, ICoreWebView2WebResourceRequestedEventArgs *args) -> HRESULT {
@@ -707,7 +740,8 @@ static void setupWebView(Host *host, Window &window) {
             if (FAILED(request->get_Uri(&uri_w)) || !uri_w) return S_OK;
             std::string uri = narrow(uri_w);
             CoTaskMemFree(uri_w);
-            if (serveDynamicResource(host, found->second, uri, args)) return S_OK;
+            const std::string request_origin = originForResourceRequest(request.Get(), found->second);
+            if (serveDynamicResource(host, found->second, uri, request_origin, args)) return S_OK;
             if (serveAssetResource(host, found->second, uri, args)) return S_OK;
             ComPtr<ICoreWebView2WebResourceResponse> response;
             createTextResponse(host, 404, L"Not Found", "Resource not found", &response);

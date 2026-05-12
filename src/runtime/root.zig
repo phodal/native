@@ -453,17 +453,24 @@ pub const Runtime = struct {
             try self.completeBridgeResponse(message.window_id, response);
             return true;
         }
+        const source: bridge.Source = .{ .origin = message.origin, .window_id = message.window_id };
+        const responder = bridge.AsyncResponder.init(
+            self,
+            request.id,
+            source,
+            asyncBridgeRespond,
+            asyncBridgeResourceBytes,
+            asyncBridgeResourceStream,
+        ) catch |err| {
+            var response_buffer: [bridge.max_response_bytes]u8 = undefined;
+            const response = bridge.writeErrorResponse(&response_buffer, request.id, .handler_failed, @errorName(err));
+            try self.completeBridgeResponse(message.window_id, response);
+            return true;
+        };
         handler.invoke_fn(handler.context, .{
             .request = request,
-            .source = .{ .origin = message.origin, .window_id = message.window_id },
-        }, .{
-            .context = self,
-            .request_id = request.id,
-            .source = .{ .origin = message.origin, .window_id = message.window_id },
-            .respond_fn = asyncBridgeRespond,
-            .resource_bytes_fn = asyncBridgeResourceBytes,
-            .resource_stream_fn = asyncBridgeResourceStream,
-        }) catch |err| {
+            .source = source,
+        }, responder) catch |err| {
             var response_buffer: [bridge.max_response_bytes]u8 = undefined;
             const response = bridge.writeErrorResponse(&response_buffer, request.id, .handler_failed, @errorName(err));
             try self.completeBridgeResponse(message.window_id, response);

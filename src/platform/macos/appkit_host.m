@@ -20,6 +20,7 @@ static NSString *ZeroNativeSafeAssetPath(NSURL *url, NSString *entryPath);
 static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath);
 static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback);
 static NSString *ZeroNativeOriginForURL(NSURL *url);
+static NSString *ZeroNativeOriginForResourceRequest(NSURLRequest *request, NSString *fallback);
 static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url);
 static int64_t ZeroNativeNowNanoseconds(void);
 
@@ -209,7 +210,8 @@ static int64_t ZeroNativeNowNanoseconds(void);
     if ([url.host isEqualToString:@"native"] && [url.path hasPrefix:@"/resource/"]) {
         NSString *resourcePath = url.path ?: @"";
         NSString *resourceId = [[resourcePath substringFromIndex:[@"/resource/" length]] stringByRemovingPercentEncoding] ?: @"";
-        ZeroNativeDynamicResource *resource = [self.host dynamicResourceForId:resourceId origin:self.origin ?: @"" windowId:self.windowId nowNs:ZeroNativeNowNanoseconds() consume:YES];
+        NSString *requestOrigin = ZeroNativeOriginForResourceRequest(urlSchemeTask.request, self.origin ?: @"");
+        ZeroNativeDynamicResource *resource = [self.host dynamicResourceForId:resourceId origin:requestOrigin windowId:self.windowId nowNs:ZeroNativeNowNanoseconds() consume:YES];
         if (!resource) {
             NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorFileDoesNotExist userInfo:nil];
             [urlSchemeTask didFailWithError:error];
@@ -219,7 +221,7 @@ static int64_t ZeroNativeNowNanoseconds(void);
         NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url MIMEType:resource.mimeType expectedContentLength:length textEncodingName:nil];
         [urlSchemeTask didReceiveResponse:response];
         if (resource.streaming) {
-            NSString *requestOrigin = [self.origin copy] ?: @"";
+            requestOrigin = [requestOrigin copy] ?: @"";
             uint64_t taskWindowId = self.windowId;
             ZeroNativeAppKitHost *host = self.host;
             NSMutableSet<NSValue *> *cancelled = self.cancelledTasks;
@@ -1014,6 +1016,18 @@ static NSString *ZeroNativeOriginForURL(NSURL *url) {
     NSNumber *port = url.port;
     if (port) return [NSString stringWithFormat:@"%@://%@:%@", scheme, host, port];
     return [NSString stringWithFormat:@"%@://%@", scheme, host];
+}
+
+static NSString *ZeroNativeOriginForResourceRequest(NSURLRequest *request, NSString *fallback) {
+    NSURL *documentURL = request.mainDocumentURL;
+    if (documentURL) {
+        NSString *scheme = documentURL.scheme.lowercaseString ?: @"";
+        if (![scheme isEqualToString:@"zero"] || ![documentURL.host isEqualToString:@"native"]) {
+            NSString *origin = ZeroNativeOriginForURL(documentURL);
+            if (origin.length > 0) return origin;
+        }
+    }
+    return fallback ?: @"";
 }
 
 static int64_t ZeroNativeNowNanoseconds(void) {

@@ -52,7 +52,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-      - run: zig build test-webview-system-link -Dplatform=windows
+      - name: Install WebView2 SDK headers
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory third_party/webview2 -ExcludeVersion
+          "WEBVIEW2_INCLUDE=$PWD/third_party/webview2/Microsoft.Web.WebView2/build/native/include" >> $env:GITHUB_ENV
+      - run: zig build test-webview-system-link -Dplatform=windows -Dwebview2-include="$env:WEBVIEW2_INCLUDE"
 
   cef-platform-tooling:
     name: CEF Platform Tooling

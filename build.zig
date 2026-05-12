@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
     const cef_auto_install_override = b.option(bool, "cef-auto-install", "Override app.zon CEF auto-install setting");
     _ = b.option(bool, "js-bridge", "Enable optional JavaScript bridge stubs") orelse false;
+    const webview2_include = b.option([]const u8, "webview2-include", "Path to Microsoft WebView2 SDK include directory") orelse "third_party/webview2/build/native/include";
     const package_target = b.option(PackageTarget, "package-target", "Package target: macos, windows, linux, ios, android") orelse .macos;
     const signing_mode = b.option(SigningMode, "signing", "Signing mode: none, adhoc, identity") orelse .none;
     const package_version = packageVersion(b);
@@ -188,12 +189,12 @@ pub fn build(b: *std.Build) void {
     const run_hello_step = b.step("run-hello", "Run the zero-native hello WebView example");
     run_hello_step.dependOn(&run_hello.step);
 
-    const run_webview = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}), b.fmt("-Dweb-engine={s}", .{@tagName(web_engine)}), b.fmt("-Dcef-dir={s}", .{cef_dir}) });
+    const run_webview = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}), b.fmt("-Dweb-engine={s}", .{@tagName(web_engine)}), b.fmt("-Dcef-dir={s}", .{cef_dir}), b.fmt("-Dwebview2-include={s}", .{webview2_include}) });
     run_webview.setCwd(b.path("examples/webview"));
     const run_webview_step = b.step("run-webview", "Run the zero-native WebView example");
     run_webview_step.dependOn(&run_webview.step);
 
-    const build_webview_system = b.addSystemCommand(&.{ "zig", "build", b.fmt("-Dplatform={s}", .{platform_arg}), "-Dweb-engine=system" });
+    const build_webview_system = b.addSystemCommand(&.{ "zig", "build", b.fmt("-Dplatform={s}", .{platform_arg}), "-Dweb-engine=system", b.fmt("-Dwebview2-include={s}", .{webview2_include}) });
     build_webview_system.setCwd(b.path("examples/webview"));
     const webview_system_link_step = b.step("test-webview-system-link", "Build the WebView example with the system engine");
     webview_system_link_step.dependOn(&build_webview_system.step);

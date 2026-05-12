@@ -10,6 +10,7 @@ packages/zero-native/src/
 third_party/cef/macos/
 third_party/cef/windows/
 third_party/cef/linux/
+third_party/webview2/
 
 # Compiled static libraries
 *.a

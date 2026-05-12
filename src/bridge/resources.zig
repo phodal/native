@@ -117,6 +117,8 @@ const Entry = struct {
     expires_at_ns: ?i128,
     one_shot: bool,
     stream_started: bool = false,
+    stream_reading: bool = false,
+    stream_close_pending: ?CloseReason = null,
 
     fn descriptor(self: Entry) Descriptor {
         return .{
@@ -130,6 +132,15 @@ const Entry = struct {
             },
             .one_shot = self.one_shot,
         };
+    }
+};
+
+const PendingClose = struct {
+    provider: StreamProvider,
+    reason: CloseReason,
+
+    fn run(self: PendingClose) void {
+        self.provider.close(self.reason);
     }
 };
 
@@ -150,18 +161,30 @@ pub const Registry = struct {
 
     pub fn deinit(self: *Registry) void {
         self.mutex.lock();
-        defer self.mutex.unlock();
-        for (self.entries.items) |entry| {
-            self.closeEntry(entry, .revoke);
+        var pending_closes: [max_resource_count]PendingClose = undefined;
+        var pending_count: usize = 0;
+        while (self.entries.items.len > 0) {
+            const entry = self.entries.orderedRemove(0);
+            if (closeAction(entry, .revoke)) |action| {
+                pending_closes[pending_count] = action;
+                pending_count += 1;
+            }
             self.freeEntry(entry);
         }
+        self.mutex.unlock();
+        runPendingCloses(pending_closes[0..pending_count]);
+        self.mutex.lock();
         self.entries.deinit(self.allocator);
+        self.mutex.unlock();
     }
 
     pub fn registerBytes(self: *Registry, bytes: []const u8, options: Options, now_ns: i128) !Descriptor {
         self.mutex.lock();
+        var pending_closes: [max_resource_count]PendingClose = undefined;
+        var pending_count: usize = 0;
+        defer runPendingCloses(pending_closes[0..pending_count]);
         defer self.mutex.unlock();
-        self.pruneExpired(now_ns);
+        pending_count = self.pruneExpired(now_ns, &pending_closes);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
 
@@ -197,8 +220,11 @@ pub const Registry = struct {
 
     pub fn registerStream(self: *Registry, provider: StreamProvider, options: Options, now_ns: i128) !Descriptor {
         self.mutex.lock();
+        var pending_closes: [max_resource_count]PendingClose = undefined;
+        var pending_count: usize = 0;
+        defer runPendingCloses(pending_closes[0..pending_count]);
         defer self.mutex.unlock();
-        self.pruneExpired(now_ns);
+        pending_count = self.pruneExpired(now_ns, &pending_closes);
         if (self.entries.items.len >= max_resource_count) return error.ResourceLimitReached;
         try validateMetadata(options);
         if (!options.one_shot) return error.InvalidResourceMetadata;
@@ -233,12 +259,14 @@ pub const Registry = struct {
 
     pub fn fetchBytes(self: *Registry, id: []const u8, source: Source, now_ns: i128, output: []u8) ![]const u8 {
         self.mutex.lock();
+        var pending_close: ?PendingClose = null;
+        defer if (pending_close) |action| action.run();
         defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return error.ResourceNotFound;
         const entry = self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
             if (now_ns >= expires) {
-                self.closeEntry(entry, .expired);
+                pending_close = closeAction(entry, .expired);
                 self.removeAt(index);
                 return error.ResourceExpired;
             }
@@ -258,41 +286,72 @@ pub const Registry = struct {
 
     pub fn readStream(self: *Registry, id: []const u8, source: Source, now_ns: i128, output: []u8) !usize {
         self.mutex.lock();
-        defer self.mutex.unlock();
-        const index = self.findIndex(id) orelse return error.ResourceNotFound;
+        const index = self.findIndex(id) orelse {
+            self.mutex.unlock();
+            return error.ResourceNotFound;
+        };
         var entry = &self.entries.items[index];
         if (entry.expires_at_ns) |expires| {
             if (!entry.stream_started and now_ns >= expires) {
-                self.closeEntry(entry.*, .expired);
+                const pending_close = closeAction(entry.*, .expired);
                 self.removeAt(index);
+                self.mutex.unlock();
+                if (pending_close) |action| action.run();
                 return error.ResourceExpired;
             }
         }
-        if (entry.origin.len > 0 and !std.mem.eql(u8, entry.origin, source.origin)) return error.ResourceOriginMismatch;
-        if (entry.window_id != 0 and entry.window_id != source.window_id) return error.ResourceWindowMismatch;
+        if (entry.origin.len > 0 and !std.mem.eql(u8, entry.origin, source.origin)) {
+            self.mutex.unlock();
+            return error.ResourceOriginMismatch;
+        }
+        if (entry.window_id != 0 and entry.window_id != source.window_id) {
+            self.mutex.unlock();
+            return error.ResourceWindowMismatch;
+        }
         entry.stream_started = true;
         switch (entry.payload) {
             .bytes => |bytes| {
                 if (entry.bytes_offset >= bytes.len) {
                     if (entry.one_shot) self.removeAt(index);
+                    self.mutex.unlock();
                     return 0;
                 }
                 const count = @min(output.len, bytes.len - entry.bytes_offset);
                 @memcpy(output[0..count], bytes[entry.bytes_offset..][0..count]);
                 entry.bytes_offset += count;
                 if (entry.one_shot and entry.bytes_offset >= bytes.len) self.removeAt(index);
+                self.mutex.unlock();
                 return count;
             },
-            .stream => |provider| return provider.read(output),
+            .stream => |provider| {
+                if (entry.stream_reading) {
+                    self.mutex.unlock();
+                    return error.InvalidResourceProvider;
+                }
+                entry.stream_reading = true;
+                self.mutex.unlock();
+                const count = provider.read(output) catch |err| {
+                    self.finishStreamRead(id);
+                    return err;
+                };
+                self.finishStreamRead(id);
+                return count;
+            },
         }
     }
 
     pub fn closeStream(self: *Registry, id: []const u8, reason: CloseReason) bool {
         self.mutex.lock();
+        var pending_close: ?PendingClose = null;
+        defer if (pending_close) |action| action.run();
         defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return false;
-        const entry = self.entries.items[index];
-        self.closeEntry(entry, reason);
+        var entry = &self.entries.items[index];
+        if (entry.stream_reading) {
+            if (entry.stream_close_pending == null) entry.stream_close_pending = reason;
+            return true;
+        }
+        pending_close = closeAction(entry.*, reason);
         const completed_stream = reason == .complete and switch (entry.payload) {
             .bytes => false,
             .stream => true,
@@ -306,9 +365,16 @@ pub const Registry = struct {
 
     pub fn revoke(self: *Registry, id: []const u8) bool {
         self.mutex.lock();
+        var pending_close: ?PendingClose = null;
+        defer if (pending_close) |action| action.run();
         defer self.mutex.unlock();
         const index = self.findIndex(id) orelse return false;
-        self.closeEntry(self.entries.items[index], .revoke);
+        var entry = &self.entries.items[index];
+        if (entry.stream_reading) {
+            if (entry.stream_close_pending == null) entry.stream_close_pending = .revoke;
+            return true;
+        }
+        pending_close = closeAction(entry.*, .revoke);
         self.removeAt(index);
         return true;
     }
@@ -325,26 +391,44 @@ pub const Registry = struct {
         self.freeEntry(entry);
     }
 
-    fn pruneExpired(self: *Registry, now_ns: i128) void {
+    fn pruneExpired(self: *Registry, now_ns: i128, pending_closes: *[max_resource_count]PendingClose) usize {
+        var pending_count: usize = 0;
         var index: usize = 0;
         while (index < self.entries.items.len) {
-            if (self.entries.items[index].expires_at_ns) |expires| {
-                if (now_ns >= expires) {
-                    self.closeEntry(self.entries.items[index], .expired);
+            var entry = &self.entries.items[index];
+            if (entry.expires_at_ns) |expires| {
+                if (!entry.stream_started and now_ns >= expires) {
+                    if (entry.stream_reading) {
+                        if (entry.stream_close_pending == null) entry.stream_close_pending = .expired;
+                        index += 1;
+                        continue;
+                    }
+                    if (closeAction(entry.*, .expired)) |action| {
+                        pending_closes[pending_count] = action;
+                        pending_count += 1;
+                    }
                     self.removeAt(index);
                     continue;
                 }
             }
             index += 1;
         }
+        return pending_count;
     }
 
-    fn closeEntry(self: *Registry, entry: Entry, reason: CloseReason) void {
-        _ = self;
-        switch (entry.payload) {
-            .bytes => {},
-            .stream => |provider| provider.close(reason),
+    fn finishStreamRead(self: *Registry, id: []const u8) void {
+        self.mutex.lock();
+        var pending_close: ?PendingClose = null;
+        if (self.findIndex(id)) |index| {
+            var entry = &self.entries.items[index];
+            entry.stream_reading = false;
+            if (entry.stream_close_pending) |reason| {
+                pending_close = closeAction(entry.*, reason);
+                self.removeAt(index);
+            }
         }
+        self.mutex.unlock();
+        if (pending_close) |action| action.run();
     }
 
     fn freeEntry(self: *Registry, entry: Entry) void {
@@ -374,6 +458,17 @@ pub const Registry = struct {
         return buffer[0..32];
     }
 };
+
+fn closeAction(entry: Entry, reason: CloseReason) ?PendingClose {
+    return switch (entry.payload) {
+        .bytes => null,
+        .stream => |provider| .{ .provider = provider, .reason = reason },
+    };
+}
+
+fn runPendingCloses(pending_closes: []const PendingClose) void {
+    for (pending_closes) |pending_close| pending_close.run();
+}
 
 pub fn writeDescriptorJson(output: []u8, descriptor: Descriptor) ![]const u8 {
     var writer = std.Io.Writer.fixed(output);

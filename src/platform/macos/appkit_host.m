@@ -24,6 +24,10 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 @property(nonatomic, assign) uint64_t windowId;
 @end
 
+@interface ZeroNativeWebView : WKWebView
+@property(nonatomic, strong) NSArray<NSValue *> *coveredMouseRects;
+@end
+
 @interface ZeroNativeBridgeScriptHandler : NSObject <WKScriptMessageHandler>
 @property(nonatomic, assign) ZeroNativeAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
@@ -83,6 +87,9 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 - (BOOL)setWebViewLayerInWindow:(uint64_t)windowId label:(NSString *)label layer:(NSInteger)layer;
 - (BOOL)closeWebViewInWindow:(uint64_t)windowId label:(NSString *)label;
 - (void)closeWebViewsInWindow:(uint64_t)windowId;
+- (void)reorderWebViewsInWindow:(uint64_t)windowId;
+- (void)updateCoveredMouseRectsInWindow:(uint64_t)windowId;
+- (void)applyCoveredMouseRects:(NSArray<NSValue *> *)rects toWebView:(WKWebView *)webView;
 - (void)removeBridgeHandlerForChildWebView:(WKWebView *)webView key:(NSString *)key;
 - (void)removeAllChildBridgeHandlers;
 - (void)configureApplication;
@@ -150,6 +157,37 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
         [self.host stop];
     }
 }
+
+@end
+
+@implementation ZeroNativeWebView
+
+- (BOOL)pointIsCovered:(NSPoint)point {
+    for (NSValue *value in self.coveredMouseRects) {
+        if (NSPointInRect(point, value.rectValue)) return YES;
+    }
+    return NO;
+}
+
+- (BOOL)eventIsCovered:(NSEvent *)event {
+    if (!event) return NO;
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    return [self pointIsCovered:point];
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    if ([self pointIsCovered:point]) return nil;
+    return [super hitTest:point];
+}
+
+- (void)mouseEntered:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseEntered:event]; }
+- (void)mouseExited:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseExited:event]; }
+- (void)mouseMoved:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseMoved:event]; }
+- (void)mouseDown:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseDown:event]; }
+- (void)mouseUp:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseUp:event]; }
+- (void)mouseDragged:(NSEvent *)event { if (![self eventIsCovered:event]) [super mouseDragged:event]; }
+- (void)rightMouseDown:(NSEvent *)event { if (![self eventIsCovered:event]) [super rightMouseDown:event]; }
+- (void)rightMouseUp:(NSEvent *)event { if (![self eventIsCovered:event]) [super rightMouseUp:event]; }
 
 @end
 
@@ -293,7 +331,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
     }
     NSView *container = [[NSView alloc] initWithFrame:rect];
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    WKWebView *webView = [[WKWebView alloc] initWithFrame:container.bounds configuration:configuration];
+    WKWebView *webView = [[ZeroNativeWebView alloc] initWithFrame:container.bounds configuration:configuration];
     webView.wantsLayer = YES;
     webView.layer.backgroundColor = NSColor.clearColor.CGColor;
     [webView setValue:@NO forKey:@"drawsBackground"];
@@ -410,7 +448,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
         [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
     }
 
-    WKWebView *webview = [[WKWebView alloc] initWithFrame:[self webViewFrameForWindow:window x:x y:y width:width height:height] configuration:configuration];
+    WKWebView *webview = [[ZeroNativeWebView alloc] initWithFrame:[self webViewFrameForWindow:window x:x y:y width:width height:height] configuration:configuration];
     webview.wantsLayer = YES;
     webview.layer.zPosition = layer;
     if (transparent) {
@@ -426,6 +464,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
     [webview loadRequest:[NSURLRequest requestWithURL:targetURL]];
     self.childWebViews[key] = webview;
     if (bridgeEnabled) [self.bridgeEnabledChildWebViewKeys addObject:key];
+    [self reorderWebViewsInWindow:windowId];
     [self scheduleBridgeFrames];
     return YES;
 }
@@ -438,12 +477,14 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
         if (!window || !webView) return NO;
         webView.autoresizingMask = NSViewNotSizable;
         webView.frame = [self webViewFrameForWindow:window x:x y:y width:width height:height];
+        [self reorderWebViewsInWindow:windowId];
         [self scheduleBridgeFrames];
         return YES;
     }
     WKWebView *webview = self.childWebViews[[self webViewKeyForWindow:windowId label:label]];
     if (!window || !webview) return NO;
     webview.frame = [self webViewFrameForWindow:window x:x y:y width:width height:height];
+    [self reorderWebViewsInWindow:windowId];
     [self scheduleBridgeFrames];
     return YES;
 }
@@ -488,12 +529,14 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
         if (!webView) return NO;
         webView.wantsLayer = YES;
         webView.layer.zPosition = layer;
+        [self reorderWebViewsInWindow:windowId];
         return YES;
     }
     WKWebView *webview = self.childWebViews[[self webViewKeyForWindow:windowId label:label]];
     if (!webview) return NO;
     webview.wantsLayer = YES;
     webview.layer.zPosition = layer;
+    [self reorderWebViewsInWindow:windowId];
     return YES;
 }
 
@@ -504,6 +547,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
     [self removeBridgeHandlerForChildWebView:webview key:key];
     [webview removeFromSuperview];
     [self.childWebViews removeObjectForKey:key];
+    [self reorderWebViewsInWindow:windowId];
     [self scheduleBridgeFrames];
     return YES;
 }
@@ -518,6 +562,133 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
         [webview removeFromSuperview];
         [self.childWebViews removeObjectForKey:key];
     }
+    [self reorderWebViewsInWindow:windowId];
+}
+
+- (void)reorderWebViewsInWindow:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
+    NSView *contentView = window.contentView;
+    if (!contentView) return;
+
+    NSMutableArray<NSView *> *views = [[NSMutableArray alloc] init];
+    WKWebView *mainWebView = self.webViews[@(windowId)];
+    if (mainWebView && mainWebView.superview == contentView) {
+        [views addObject:mainWebView];
+    }
+
+    NSString *prefix = [NSString stringWithFormat:@"%llu:", windowId];
+    for (NSString *key in self.childWebViews) {
+        if (![key hasPrefix:prefix]) continue;
+        WKWebView *view = self.childWebViews[key];
+        if (view && view.superview == contentView) {
+            [views addObject:view];
+        }
+    }
+
+    [views sortUsingComparator:^NSComparisonResult(NSView *first, NSView *second) {
+        CGFloat firstLayer = first.layer.zPosition;
+        CGFloat secondLayer = second.layer.zPosition;
+        if (firstLayer < secondLayer) return NSOrderedAscending;
+        if (firstLayer > secondLayer) return NSOrderedDescending;
+        NSUInteger firstIndex = [contentView.subviews indexOfObjectIdenticalTo:first];
+        NSUInteger secondIndex = [contentView.subviews indexOfObjectIdenticalTo:second];
+        if (firstIndex < secondIndex) return NSOrderedAscending;
+        if (firstIndex > secondIndex) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+
+    NSView *previous = nil;
+    for (NSView *view in views) {
+        [contentView addSubview:view positioned:NSWindowAbove relativeTo:previous];
+        previous = view;
+    }
+    [self updateCoveredMouseRectsInWindow:windowId];
+}
+
+- (void)updateCoveredMouseRectsInWindow:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
+    NSView *contentView = window.contentView;
+    if (!contentView) return;
+
+    NSMutableArray<NSView *> *views = [[NSMutableArray alloc] init];
+    WKWebView *mainWebView = self.webViews[@(windowId)];
+    if ([mainWebView isKindOfClass:[ZeroNativeWebView class]] && mainWebView.superview == contentView) {
+        [views addObject:mainWebView];
+    }
+
+    NSString *prefix = [NSString stringWithFormat:@"%llu:", windowId];
+    for (NSString *key in self.childWebViews) {
+        if (![key hasPrefix:prefix]) continue;
+        WKWebView *webView = self.childWebViews[key];
+        if ([webView isKindOfClass:[ZeroNativeWebView class]] && webView.superview == contentView) {
+            [views addObject:webView];
+        }
+    }
+
+    [views sortUsingComparator:^NSComparisonResult(NSView *first, NSView *second) {
+        CGFloat firstLayer = first.layer.zPosition;
+        CGFloat secondLayer = second.layer.zPosition;
+        if (firstLayer < secondLayer) return NSOrderedAscending;
+        if (firstLayer > secondLayer) return NSOrderedDescending;
+        NSUInteger firstIndex = [contentView.subviews indexOfObjectIdenticalTo:first];
+        NSUInteger secondIndex = [contentView.subviews indexOfObjectIdenticalTo:second];
+        if (firstIndex < secondIndex) return NSOrderedAscending;
+        if (firstIndex > secondIndex) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+
+    for (NSUInteger index = 0; index < views.count; index++) {
+        ZeroNativeWebView *webView = (ZeroNativeWebView *)views[index];
+        NSMutableArray<NSValue *> *coveredRects = [[NSMutableArray alloc] init];
+        for (NSUInteger coverIndex = index + 1; coverIndex < views.count; coverIndex++) {
+            NSView *coveringView = views[coverIndex];
+            NSRect intersection = NSIntersectionRect(webView.frame, coveringView.frame);
+            if (NSIsEmptyRect(intersection)) continue;
+            [coveredRects addObject:[NSValue valueWithRect:[webView convertRect:intersection fromView:contentView]]];
+        }
+        webView.coveredMouseRects = coveredRects;
+        [self applyCoveredMouseRects:coveredRects toWebView:webView];
+    }
+}
+
+- (void)applyCoveredMouseRects:(NSArray<NSValue *> *)rects toWebView:(WKWebView *)webView {
+    NSMutableString *rectsJson = [[NSMutableString alloc] initWithString:@"["];
+    for (NSUInteger index = 0; index < rects.count; index++) {
+        NSRect rect = rects[index].rectValue;
+        CGFloat x = rect.origin.x;
+        CGFloat y = webView.isFlipped ? rect.origin.y : webView.bounds.size.height - rect.origin.y - rect.size.height;
+        if (index > 0) [rectsJson appendString:@","];
+        [rectsJson appendFormat:@"{\"x\":%.3f,\"y\":%.3f,\"width\":%.3f,\"height\":%.3f}", x, y, rect.size.width, rect.size.height];
+    }
+    [rectsJson appendString:@"]"];
+
+    // WKWebView can keep CSS hover active via internal tracking even after
+    // AppKit hit-testing excludes the view, so mirror native coverage into the
+    // document as transparent fixed-position event covers.
+    NSString *script = [NSString stringWithFormat:
+        @"(function(rects){"
+         "var id='__zero_native_covered_mouse_rects__';"
+         "var root=document.getElementById(id);"
+         "if(!rects.length){if(root)root.remove();return;}"
+         "var parent=document.documentElement||document.body;"
+         "if(!parent)return;"
+         "if(!root){"
+           "root=document.createElement('div');"
+           "root.id=id;"
+           "root.style.cssText='position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;';"
+           "parent.appendChild(root);"
+         "}"
+         "root.textContent='';"
+         "rects.forEach(function(r){"
+           "var cover=document.createElement('div');"
+           "cover.style.cssText='position:fixed;left:'+r.x+'px;top:'+r.y+'px;width:'+r.width+'px;height:'+r.height+'px;background:transparent;z-index:2147483647;pointer-events:auto;';"
+           "['pointerover','pointerenter','pointermove','pointerout','pointerleave','pointerdown','pointerup','pointercancel','mouseover','mouseenter','mousemove','mouseout','mouseleave','mousedown','mouseup','click','contextmenu'].forEach(function(type){"
+             "cover.addEventListener(type,function(event){event.preventDefault();event.stopPropagation();},true);"
+           "});"
+           "root.appendChild(cover);"
+         "});"
+        "})(%@);", rectsJson];
+    [webView evaluateJavaScript:script completionHandler:nil];
 }
 
 - (void)removeBridgeHandlerForChildWebView:(WKWebView *)webView key:(NSString *)key {
@@ -939,6 +1110,25 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     if (!data) return;
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     [self emitEventNamed:@"webview:navigate" detailJSON:json ?: @"{}" windowId:windowId];
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    (void)navigation;
+    for (NSNumber *key in self.webViews) {
+        if (self.webViews[key] == webView) {
+            [self updateCoveredMouseRectsInWindow:key.unsignedLongLongValue];
+            return;
+        }
+    }
+    for (NSString *key in self.childWebViews) {
+        if (self.childWebViews[key] != webView) continue;
+        NSRange separator = [key rangeOfString:@":"];
+        if (separator.location != NSNotFound) {
+            uint64_t windowId = (uint64_t)[[key substringToIndex:separator.location] longLongValue];
+            [self updateCoveredMouseRectsInWindow:windowId];
+        }
+        return;
+    }
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {

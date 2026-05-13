@@ -305,8 +305,9 @@ suggestions.addEventListener("mousedown", function (event) {
   if (!item) return;
   var idx = parseInt(item.getAttribute("data-index"), 10);
   if (idx >= 0 && idx < suggestFiltered.length) {
+    var url = suggestFiltered[idx];
     hideSuggestions();
-    navigateTo(suggestFiltered[idx]);
+    navigateTo(url);
   }
 });
 

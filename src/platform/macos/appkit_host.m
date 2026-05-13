@@ -74,6 +74,7 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 - (void)focusWindowWithId:(uint64_t)windowId;
 - (void)closeWindowWithId:(uint64_t)windowId;
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId;
+- (WKWebView *)mainWebViewForWindow:(NSWindow *)window;
 - (ZeroNativeAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
 - (BOOL)createWebViewInWindow:(uint64_t)windowId label:(NSString *)label url:(NSString *)url x:(double)x y:(double)y width:(double)width height:(double)height layer:(NSInteger)layer transparent:(BOOL)transparent bridgeEnabled:(BOOL)bridgeEnabled;
 - (BOOL)setWebViewFrameInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height;
@@ -357,6 +358,14 @@ static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url)
 
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId {
     return self.webViews[@(windowId)] ?: self.webView;
+}
+
+- (WKWebView *)mainWebViewForWindow:(NSWindow *)window {
+    if (!window) return self.webView;
+    for (NSNumber *key in self.windows) {
+        if (self.windows[key] == window) return self.webViews[key] ?: self.webView;
+    }
+    return self.webView;
 }
 
 - (ZeroNativeAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId {
@@ -1063,16 +1072,16 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 - (void)reload:(id)sender {
     (void)sender;
-    WKWebView *webView = (WKWebView *)NSApp.keyWindow.contentView;
-    if (![webView isKindOfClass:[WKWebView class]]) webView = self.webView;
+    WKWebView *webView = [self mainWebViewForWindow:NSApp.keyWindow];
+    if (!webView) return;
     [webView reload];
     [self scheduleFrame];
 }
 
 - (void)toggleWebInspector:(id)sender {
     (void)sender;
-    WKWebView *webView = (WKWebView *)NSApp.keyWindow.contentView;
-    if (![webView isKindOfClass:[WKWebView class]]) webView = self.webView;
+    WKWebView *webView = [self mainWebViewForWindow:NSApp.keyWindow];
+    if (!webView) return;
     SEL selector = NSSelectorFromString(@"_showInspector");
     if ([webView respondsToSelector:selector]) {
         ((void (*)(id, SEL))[webView methodForSelector:selector])(webView, selector);

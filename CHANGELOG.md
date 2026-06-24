@@ -2,9 +2,30 @@
 
 All notable changes to zero-native will be documented in this file.
 
-## 0.2.0
+## 0.3.0
 
 <!-- release:start -->
+
+### New Features
+
+- **Keyboard shortcuts**: Add app-level keyboard shortcuts with manifest and runtime configuration, native delivery to Zig `Event.shortcut`, and typed JavaScript `window.zero` shortcut events (#62).
+- **Manifest-driven runner shortcuts**: Load `app.zon` shortcuts automatically in generated runners, with a `RunOptions.shortcuts` override for apps that build shortcut lists in Zig (#62).
+
+### Improvements
+
+- **Shortcut documentation and validation**: Document the `app.zon` shortcut schema, portable key names, modifier behavior, backend support, and validation limits (#62).
+- **Windows WebView2 child bridges**: Enable bridge-enabled trusted child WebViews on Windows WebView2, bringing that backend closer to the macOS and Linux system WebView behavior (#62).
+
+### Bug Fixes
+
+- **Shortcut matching and delivery**: Fix shortcut modifier handling, shifted punctuation matching, backend event routing, and edge cases across AppKit, GTK, WebView2, and macOS CEF (#62).
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.2.0
 
 ### New Features
 
@@ -34,7 +55,6 @@ All notable changes to zero-native will be documented in this file.
 - @Anshuman71
 - @PrathamGhaywat
 - @ctate
-<!-- release:end -->
 
 ## 0.1.9
 

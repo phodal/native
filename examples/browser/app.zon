@@ -15,4 +15,10 @@
     },
     .web_engine = "system",
     .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+    .shortcuts = .{
+        .{ .id = "zoom-in", .key = "=", .modifiers = .{ "primary" } },
+        .{ .id = "zoom-out", .key = "-", .modifiers = .{ "primary" } },
+        .{ .id = "zoom-reset", .key = "0", .modifiers = .{ "primary" } },
+        .{ .id = "reload", .key = "r", .modifiers = .{ "primary" } },
+    },
 }

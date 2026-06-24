@@ -22,6 +22,10 @@ pub const ValidationError = error{
     NoSpaceLeft,
 };
 
+pub const max_shortcuts: usize = 64;
+pub const max_shortcut_id_bytes: usize = 64;
+pub const max_shortcut_key_bytes: usize = 32;
+
 pub const Platform = enum {
     macos,
     windows,
@@ -289,7 +293,9 @@ pub fn validateWindows(windows: []const Window) ValidationError!void {
 }
 
 pub fn validateShortcuts(shortcuts: []const Shortcut) ValidationError!void {
+    if (shortcuts.len > max_shortcuts) return error.InvalidShortcut;
     for (shortcuts, 0..) |shortcut, i| {
+        if (shortcut.id.len > max_shortcut_id_bytes) return error.InvalidShortcut;
         try validateName(shortcut.id);
         try validateShortcutKey(shortcut.key);
         for (shortcuts[0..i]) |previous| {
@@ -491,7 +497,7 @@ fn validateReadyPath(path: []const u8) ValidationError!void {
 }
 
 fn validateShortcutKey(key: []const u8) ValidationError!void {
-    if (key.len == 0 or key.len > 32) return error.InvalidShortcut;
+    if (key.len == 0 or key.len > max_shortcut_key_bytes) return error.InvalidShortcut;
     if (key.len == 1) {
         if (isPortableShortcutKey(key[0])) return;
         return error.InvalidShortcut;
@@ -655,6 +661,22 @@ test "manifest validates keyboard shortcuts" {
         },
     };
     try std.testing.expectError(error.InvalidShortcut, validateManifest(invalid_key));
+
+    const too_many = [_]Shortcut{.{ .id = "duplicate-ok-for-limit-check", .key = "p" }} ** (max_shortcuts + 1);
+    const too_many_manifest: Manifest = .{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .shortcuts = &too_many,
+    };
+    try std.testing.expectError(error.InvalidShortcut, validateManifest(too_many_manifest));
+
+    const long_id = [_]u8{'x'} ** (max_shortcut_id_bytes + 1);
+    const long_id_manifest: Manifest = .{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .shortcuts = &.{.{ .id = long_id[0..], .key = "p" }},
+    };
+    try std.testing.expectError(error.InvalidShortcut, validateManifest(long_id_manifest));
 }
 
 test "frontend validation accepts managed dev server config" {

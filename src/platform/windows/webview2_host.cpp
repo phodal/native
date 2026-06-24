@@ -132,6 +132,35 @@ static std::string slice(const char *bytes, size_t len) {
     return bytes && len > 0 ? std::string(bytes, len) : std::string();
 }
 
+static std::string jsonStringLiteral(const std::string &value) {
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(value.size() + 2);
+    out.push_back('"');
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    out += "\\u00";
+                    out.push_back(hex[(ch >> 4) & 0xf]);
+                    out.push_back(hex[ch & 0xf]);
+                } else {
+                    out.push_back(static_cast<char>(ch));
+                }
+                break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
 static std::wstring widen(const std::string &value) {
     if (value.empty()) return std::wstring();
     int count = MultiByteToWideChar(CP_UTF8, 0, value.data(), (int)value.size(), nullptr, 0);
@@ -341,6 +370,18 @@ static void destroyAllWindows(Host *host) {
 #if ZERO_NATIVE_HAS_WEBVIEW2
 using CreateEnvironmentFn = HRESULT (STDAPICALLTYPE *)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
 
+static const wchar_t *zeroNativeEventBridgeScript() {
+    return LR"ZN((function(){
+if(window.zero&&window.zero.on&&window.zero._emit){return;}
+var listeners=new Map();
+function on(name,callback){if(typeof callback!=='function'){throw new TypeError('callback must be a function');}var set=listeners.get(name);if(!set){set=new Set();listeners.set(name,set);}set.add(callback);return function(){off(name,callback);};}
+function off(name,callback){var set=listeners.get(name);if(set){set.delete(callback);if(set.size===0){listeners.delete(name);}}}
+function emit(name,detail){var set=listeners.get(name);if(set){Array.from(set).forEach(function(callback){callback(detail);});}window.dispatchEvent(new CustomEvent('zero-native:'+name,{detail:detail}));}
+try{Object.defineProperty(window,'zero',{value:Object.freeze({on:on,off:off,_emit:emit}),configurable:false});}catch(error){}
+})();
+)ZN";
+}
+
 static RECT webViewRect(const ChildWebView &webview) {
     RECT rect = {};
     rect.left = 0;
@@ -412,6 +453,7 @@ static bool createChildWebView(Host *host, const std::string &key) {
                     controller->put_ZoomFactor(found->second.zoom);
                     controller->put_IsVisible(TRUE);
                     if (found->second.webview) {
+                        found->second.webview->AddScriptToExecuteOnDocumentCreated(zeroNativeEventBridgeScript(), nullptr);
                         EventRegistrationToken token = {};
                         found->second.webview->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
                             [host, lifetime](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
@@ -673,12 +715,26 @@ void zero_native_windows_bridge_respond_webview(Host *host, uint64_t window_id, 
 }
 
 void zero_native_windows_emit_window_event(Host *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len) {
+#if ZERO_NATIVE_HAS_WEBVIEW2
+    if (!host) return;
+    std::string event_name = slice(name, name_len);
+    if (event_name.empty()) return;
+    std::string detail = detail_json && detail_json_len > 0 ? slice(detail_json, detail_json_len) : std::string("null");
+    std::string script = "(function(){var name=" + jsonStringLiteral(event_name) + ";var detail=" + detail + ";if(window.zero&&window.zero._emit){window.zero._emit(name,detail);return;}window.dispatchEvent(new CustomEvent('zero-native:'+name,{detail:detail}));})();";
+    std::wstring script_wide = widen(script);
+    for (auto &entry : host->webviews) {
+        ChildWebView &webview = entry.second;
+        if (webview.window_id != window_id || !webview.webview) continue;
+        webview.webview->ExecuteScript(script_wide.c_str(), nullptr);
+    }
+#else
     (void)host;
     (void)window_id;
     (void)name;
     (void)name_len;
     (void)detail_json;
     (void)detail_json_len;
+#endif
 }
 
 void zero_native_windows_set_security_policy(Host *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action) {

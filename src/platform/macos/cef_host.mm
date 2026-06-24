@@ -1253,22 +1253,6 @@ static const char *ZeroNativeCefBridgeScript() {
         return YES;
     }
 
-    if (ZeroNativeShortcutModifiersMatch(ZeroNativeShortcutModifierCommand, event.modifierFlags)) {
-        if ([key isEqualToString:@"="] || [key isEqualToString:@"+"]) {
-            [self emitShortcutWithId:@"zoom-in" key:key modifiers:ZeroNativeShortcutModifierCommand event:event];
-            return YES;
-        } else if ([key isEqualToString:@"-"]) {
-            [self emitShortcutWithId:@"zoom-out" key:key modifiers:ZeroNativeShortcutModifierCommand event:event];
-            return YES;
-        } else if ([key isEqualToString:@"0"]) {
-            [self emitShortcutWithId:@"zoom-reset" key:key modifiers:ZeroNativeShortcutModifierCommand event:event];
-            return YES;
-        } else if ([key isEqualToString:@"r"]) {
-            [self emitShortcutWithId:@"reload" key:key modifiers:ZeroNativeShortcutModifierCommand event:event];
-            return YES;
-        }
-    }
-
     return NO;
 }
 

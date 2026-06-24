@@ -15,6 +15,8 @@ Declare shortcuts in `app.zon`:
 
 `primary` maps to Command on macOS and Control on Windows/Linux. Use `command`, `control`, `option` or `alt`, and `shift` when a platform-specific modifier is required.
 
+An app can define up to 64 shortcuts. Shortcut ids can be up to 64 bytes and keys can be up to 32 bytes.
+
 Linux Chromium builds currently reject non-empty shortcut configuration. Use the system WebView backend on Linux when an app needs native shortcut events.
 
 ## Runtime

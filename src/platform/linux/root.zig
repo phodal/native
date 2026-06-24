@@ -531,6 +531,7 @@ fn configureSecurityPolicy(context: ?*anyopaque, policy: security.Policy) anyerr
 fn configureShortcuts(context: ?*anyopaque, shortcuts: []const platform_mod.Shortcut) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     if (shortcuts.len > platform_mod.max_shortcuts) return error.InvalidShortcut;
+    if (self.web_engine == .chromium and shortcuts.len > 0) return error.UnsupportedService;
     var ids: [platform_mod.max_shortcuts][*]const u8 = undefined;
     var id_lens: [platform_mod.max_shortcuts]usize = undefined;
     var keys: [platform_mod.max_shortcuts][*]const u8 = undefined;

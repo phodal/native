@@ -1253,7 +1253,7 @@ static const char *ZeroNativeCefBridgeScript() {
         return YES;
     }
 
-    if (self.shortcuts.count == 0 && ZeroNativeShortcutModifiersMatch(ZeroNativeShortcutModifierCommand, event.modifierFlags)) {
+    if (ZeroNativeShortcutModifiersMatch(ZeroNativeShortcutModifierCommand, event.modifierFlags)) {
         if ([key isEqualToString:@"="] || [key isEqualToString:@"+"]) {
             [self emitShortcutWithId:@"zoom-in" key:key modifiers:ZeroNativeShortcutModifierCommand event:event];
             return YES;

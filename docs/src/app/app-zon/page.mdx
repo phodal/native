@@ -123,6 +123,8 @@ The optional `shortcuts` list defines app-level keyboard shortcuts. Generated ru
 
 `id` is the event identifier. `key` accepts letters, digits, the unshifted punctuation keys `=`, `-`, `,`, `.`, `/`, `;`, `'`, `[`, `]`, `\`, and `` ` ``, or a named key. `modifiers` accepts `primary`, `command`, `control`, `option`, `alt`, and `shift`.
 
+Linux Chromium builds currently reject non-empty `shortcuts`; use the Linux system WebView backend when an app needs native shortcut events.
+
 ## `frontend.dev`
 
 The optional `frontend.dev` block configures the managed dev server for `zero-native dev` and `zig build dev`:

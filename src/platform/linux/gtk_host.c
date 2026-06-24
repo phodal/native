@@ -507,8 +507,22 @@ static void zero_native_emit_resize(zero_native_gtk_host_t *host, zero_native_gt
 static const char *zero_native_shortcut_key_for_keyval(guint keyval, char *buffer, size_t buffer_len) {
     if (!buffer || buffer_len < 2) return "";
     guint lower = gdk_keyval_to_lower(keyval);
+    switch (lower) {
+        case '+': lower = '='; break;
+        case '_': lower = '-'; break;
+        case '<': lower = ','; break;
+        case '>': lower = '.'; break;
+        case '?': lower = '/'; break;
+        case ':': lower = ';'; break;
+        case '"': lower = '\''; break;
+        case '{': lower = '['; break;
+        case '}': lower = ']'; break;
+        case '|': lower = '\\'; break;
+        case '~': lower = '`'; break;
+        default: break;
+    }
     if ((lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9') ||
-        lower == '=' || lower == '+' || lower == '-' || lower == ',' ||
+        lower == '=' || lower == '-' || lower == ',' ||
         lower == '.' || lower == '/' || lower == ';' || lower == '\'' ||
         lower == '[' || lower == ']' || lower == '\\' || lower == '`') {
         buffer[0] = (char)lower;

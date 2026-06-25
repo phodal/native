@@ -490,7 +490,12 @@ fn mobileShellModel(metadata: manifest_tool.Metadata) MobileShellModel {
     return model;
 }
 
-fn sourceStringLiteralAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+const SourceStringTarget = enum {
+    swift,
+    kotlin,
+};
+
+fn sourceStringLiteralAlloc(allocator: std.mem.Allocator, value: []const u8, target: SourceStringTarget) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.append(allocator, '"');
@@ -501,6 +506,7 @@ fn sourceStringLiteralAlloc(allocator: std.mem.Allocator, value: []const u8) ![]
             '\n' => try out.appendSlice(allocator, "\\n"),
             '\r' => try out.appendSlice(allocator, "\\r"),
             '\t' => try out.appendSlice(allocator, "\\t"),
+            '$' => if (target == .kotlin) try out.appendSlice(allocator, "\\$") else try out.append(allocator, ch),
             else => try out.append(allocator, ch),
         }
     }
@@ -525,21 +531,21 @@ fn iosDefaultShellConfig() []const u8 {
 }
 
 fn iosShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel) ![]const u8 {
-    const title = try sourceStringLiteralAlloc(allocator, model.title);
+    const title = try sourceStringLiteralAlloc(allocator, model.title, .swift);
     defer allocator.free(title);
-    const status = try sourceStringLiteralAlloc(allocator, model.status);
+    const status = try sourceStringLiteralAlloc(allocator, model.status, .swift);
     defer allocator.free(status);
-    const primary_title = try sourceStringLiteralAlloc(allocator, model.primary_button_title);
+    const primary_title = try sourceStringLiteralAlloc(allocator, model.primary_button_title, .swift);
     defer allocator.free(primary_title);
-    const primary_command = try sourceStringLiteralAlloc(allocator, model.primary_command);
+    const primary_command = try sourceStringLiteralAlloc(allocator, model.primary_command, .swift);
     defer allocator.free(primary_command);
-    const secondary_title = try sourceStringLiteralAlloc(allocator, model.secondary_button_title);
+    const secondary_title = try sourceStringLiteralAlloc(allocator, model.secondary_button_title, .swift);
     defer allocator.free(secondary_title);
-    const secondary_command = try sourceStringLiteralAlloc(allocator, model.secondary_command);
+    const secondary_command = try sourceStringLiteralAlloc(allocator, model.secondary_command, .swift);
     defer allocator.free(secondary_command);
-    const asset_root = try sourceStringLiteralAlloc(allocator, model.asset_root_subdirectory);
+    const asset_root = try sourceStringLiteralAlloc(allocator, model.asset_root_subdirectory, .swift);
     defer allocator.free(asset_root);
-    const asset_entry = try sourceStringLiteralAlloc(allocator, model.asset_entry_path);
+    const asset_entry = try sourceStringLiteralAlloc(allocator, model.asset_entry_path, .swift);
     defer allocator.free(asset_entry);
 
     return std.fmt.allocPrint(allocator,
@@ -902,21 +908,21 @@ fn androidDefaultShellConfig() []const u8 {
 }
 
 fn androidShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel) ![]const u8 {
-    const title = try sourceStringLiteralAlloc(allocator, model.title);
+    const title = try sourceStringLiteralAlloc(allocator, model.title, .kotlin);
     defer allocator.free(title);
-    const status = try sourceStringLiteralAlloc(allocator, model.status);
+    const status = try sourceStringLiteralAlloc(allocator, model.status, .kotlin);
     defer allocator.free(status);
-    const primary_title = try sourceStringLiteralAlloc(allocator, model.primary_button_title);
+    const primary_title = try sourceStringLiteralAlloc(allocator, model.primary_button_title, .kotlin);
     defer allocator.free(primary_title);
-    const primary_command = try sourceStringLiteralAlloc(allocator, model.primary_command);
+    const primary_command = try sourceStringLiteralAlloc(allocator, model.primary_command, .kotlin);
     defer allocator.free(primary_command);
-    const secondary_title = try sourceStringLiteralAlloc(allocator, model.secondary_button_title);
+    const secondary_title = try sourceStringLiteralAlloc(allocator, model.secondary_button_title, .kotlin);
     defer allocator.free(secondary_title);
-    const secondary_command = try sourceStringLiteralAlloc(allocator, model.secondary_command);
+    const secondary_command = try sourceStringLiteralAlloc(allocator, model.secondary_command, .kotlin);
     defer allocator.free(secondary_command);
-    const asset_root = try sourceStringLiteralAlloc(allocator, model.asset_root_subdirectory);
+    const asset_root = try sourceStringLiteralAlloc(allocator, model.asset_root_subdirectory, .kotlin);
     defer allocator.free(asset_root);
-    const asset_entry = try sourceStringLiteralAlloc(allocator, model.asset_entry_path);
+    const asset_entry = try sourceStringLiteralAlloc(allocator, model.asset_entry_path, .kotlin);
     defer allocator.free(asset_entry);
 
     return std.fmt.allocPrint(allocator,
@@ -1963,6 +1969,23 @@ test "mobile package templates include native command shells" {
     const android_jni = androidJni();
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "#include <stdint.h>") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_root") != null);
+}
+
+test "android shell config escapes Kotlin string interpolation" {
+    var model = defaultMobileShellModel();
+    model.title = "Sales $HOME";
+    model.status = "Total ${amount}";
+    model.primary_button_title = "Back $1";
+
+    const android_config = try androidShellConfigAlloc(std.testing.allocator, model);
+    defer std.testing.allocator.free(android_config);
+    try std.testing.expect(std.mem.indexOf(u8, android_config, "const val title = \"Sales \\$HOME\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_config, "const val status = \"Total \\${amount}\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_config, "const val primaryButtonTitle = \"Back \\$1\"") != null);
+
+    const ios_config = try iosShellConfigAlloc(std.testing.allocator, model);
+    defer std.testing.allocator.free(ios_config);
+    try std.testing.expect(std.mem.indexOf(u8, ios_config, "static let title = \"Sales $HOME\"") != null);
 }
 
 test "mobile skeletons create native library drop-in directories" {

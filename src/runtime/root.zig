@@ -154,6 +154,7 @@ pub const Runtime = struct {
     last_invalidation_reason: InvalidationReason = .startup,
     last_diagnostics: FrameDiagnostics = .{},
     loaded_source: ?platform.WebViewSource = null,
+    loaded_source_storage: RuntimeSourceStorage = .{},
     async_bridge_responses: [max_async_bridge_responses]AsyncBridgeResponseSlot = [_]AsyncBridgeResponseSlot{.{}} ** max_async_bridge_responses,
     automation_windows: [automation.snapshot.max_windows]automation.snapshot.Window = undefined,
     automation_views: [automation.snapshot.max_views]platform.ViewInfo = undefined,
@@ -797,24 +798,26 @@ pub const Runtime = struct {
     }
 
     fn loadStartupWindows(self: *Runtime, app: App) anyerror!void {
-        const source = try app.webViewSource();
+        const source = try self.copyLoadedSource(try app.webViewSource());
         self.loaded_source = source;
         const app_info = self.options.platform.app_info;
         const count = app_info.startupWindowCount();
         var index: usize = 0;
         while (index < count) : (index += 1) {
             const window = app_info.resolvedStartupWindow(index);
-            if (self.findWindowIndexById(window.id)) |runtime_index| {
+            const runtime_index = if (self.findWindowIndexById(window.id)) |runtime_index| blk: {
                 self.windows[runtime_index].source = try self.copySource(runtime_index, source);
-            } else {
+                break :blk runtime_index;
+            } else blk: {
                 const runtime_index = try self.reserveWindow(window.id, window.label, window.resolvedTitle(app_info.app_name), source);
                 self.windows[runtime_index].info.frame = window.default_frame;
                 self.windows[runtime_index].main_frame = geometry.RectF.init(0, 0, window.default_frame.width, window.default_frame.height);
-            }
+                break :blk runtime_index;
+            };
             if (index > 0) {
                 _ = try self.options.platform.services.createWindow(window);
             }
-            try self.options.platform.services.loadWindowWebView(window.id, source);
+            try self.options.platform.services.loadWindowWebView(window.id, self.windows[runtime_index].source.?);
             try self.applyMainWebViewState(window.id);
             self.next_window_id = @max(self.next_window_id, window.id + 1);
         }
@@ -831,7 +834,7 @@ pub const Runtime = struct {
             return;
         }
 
-        const source = try app.webViewSource();
+        const source = try self.copyLoadedSource(try app.webViewSource());
         self.loaded_source = source;
 
         try self.loadStartupSceneWindow(scene.windows[0], source);
@@ -876,7 +879,7 @@ pub const Runtime = struct {
         }
         self.next_window_id = @max(self.next_window_id, window_id + 1);
 
-        try self.options.platform.services.loadWindowWebView(window_id, source);
+        try self.options.platform.services.loadWindowWebView(window_id, self.windows[runtime_index].source.?);
         try self.applyMainWebViewState(window_id);
         try self.createShellViews(window_id, shell_window.views, self.shellBoundsForWindow(window_id));
     }
@@ -896,13 +899,13 @@ pub const Runtime = struct {
     }
 
     fn loadWebView(self: *Runtime, app: App) anyerror!void {
-        const source = try app.webViewSource();
+        const source = try self.copyLoadedSource(try app.webViewSource());
         self.loaded_source = source;
         try self.options.platform.services.loadWindowWebView(1, source);
     }
 
     fn reloadWindows(self: *Runtime, app: App) anyerror!void {
-        const source = try app.webViewSource();
+        const source = try self.copyLoadedSource(try app.webViewSource());
         self.loaded_source = source;
         if (self.window_count == 0) {
             try self.options.platform.services.loadWindowWebView(1, source);
@@ -1076,11 +1079,11 @@ pub const Runtime = struct {
     }
 
     fn copySource(self: *Runtime, index: usize, source: platform.WebViewSource) !platform.WebViewSource {
-        if (source.bytes.len > self.windows[index].source_storage.len) return error.WindowSourceTooLarge;
-        var copied = source;
-        @memcpy(self.windows[index].source_storage[0..source.bytes.len], source.bytes);
-        copied.bytes = self.windows[index].source_storage[0..source.bytes.len];
-        return copied;
+        return copySourceInto(&self.windows[index].source_storage, source);
+    }
+
+    fn copyLoadedSource(self: *Runtime, source: platform.WebViewSource) !platform.WebViewSource {
+        return copySourceInto(&self.loaded_source_storage, source);
     }
 
     fn applyNativeInfo(self: *Runtime, index: usize, native_info: platform.WindowInfo) void {
@@ -2533,8 +2536,35 @@ const RuntimeWindow = struct {
     label_storage: [platform.max_window_label_bytes]u8 = undefined,
     title_storage: [platform.max_window_title_bytes]u8 = undefined,
     main_parent_storage: [platform.max_view_label_bytes]u8 = undefined,
-    source_storage: [platform.max_window_source_bytes]u8 = undefined,
+    source_storage: RuntimeSourceStorage = .{},
 };
+
+const RuntimeSourceStorage = struct {
+    bytes: [platform.max_window_source_bytes]u8 = undefined,
+    asset_root_path: [platform.max_window_source_bytes]u8 = undefined,
+    asset_entry: [platform.max_window_source_bytes]u8 = undefined,
+    asset_origin: [platform.max_window_source_bytes]u8 = undefined,
+};
+
+fn copySourceInto(storage: *RuntimeSourceStorage, source: platform.WebViewSource) !platform.WebViewSource {
+    var copied = source;
+    copied.bytes = try copyWindowSourceField(&storage.bytes, source.bytes);
+    if (source.asset_options) |assets| {
+        copied.asset_options = .{
+            .root_path = try copyWindowSourceField(&storage.asset_root_path, assets.root_path),
+            .entry = try copyWindowSourceField(&storage.asset_entry, assets.entry),
+            .origin = try copyWindowSourceField(&storage.asset_origin, assets.origin),
+            .spa_fallback = assets.spa_fallback,
+        };
+    }
+    return copied;
+}
+
+fn copyWindowSourceField(buffer: []u8, value: []const u8) ![]const u8 {
+    if (value.len > buffer.len) return error.WindowSourceTooLarge;
+    @memcpy(buffer[0..value.len], value);
+    return buffer[0..value.len];
+}
 
 const RuntimeWebView = struct {
     id: platform.ViewId = 0,
@@ -4982,6 +5012,51 @@ test "runtime rejects oversized webview source" {
     var app_state: TestApp = .{};
 
     try std.testing.expectError(error.WindowSourceTooLarge, harness.start(app_state.app()));
+}
+
+test "runtime keeps asset source fields owned for window reloads" {
+    const TestApp = struct {
+        root_path: [8]u8 = "dist-one".*,
+        entry: [10]u8 = "index.html".*,
+        origin: [13]u8 = "zero://assets".*,
+
+        fn source(context: *anyopaque) anyerror!platform.WebViewSource {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            return platform.WebViewSource.assets(.{
+                .root_path = self.root_path[0..],
+                .entry = self.entry[0..],
+                .origin = self.origin[0..],
+                .spa_fallback = false,
+            });
+        }
+
+        fn app(self: *@This()) App {
+            return .{
+                .context = self,
+                .name = "asset-source",
+                .source_fn = source,
+            };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    @memcpy(app_state.root_path[0..], "dist-two");
+    @memcpy(app_state.entry[0..], "other.html");
+    @memcpy(app_state.origin[0..], "zero://mutant");
+    try harness.runtime.reloadWindows(app_state.app());
+
+    const loaded = harness.null_platform.loaded_source.?;
+    try std.testing.expectEqual(platform.WebViewSourceKind.assets, loaded.kind);
+    try std.testing.expectEqualStrings("zero://assets", loaded.bytes);
+    const assets = loaded.asset_options.?;
+    try std.testing.expectEqualStrings("dist-one", assets.root_path);
+    try std.testing.expectEqualStrings("index.html", assets.entry);
+    try std.testing.expectEqualStrings("zero://assets", assets.origin);
+    try std.testing.expect(!assets.spa_fallback);
 }
 
 test "extension registry receives runtime lifecycle and command hooks" {

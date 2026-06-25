@@ -264,6 +264,42 @@ OS commands are **always default-deny** and require an explicit `builtin_bridge`
 
 Credential commands are **always default-deny** and require an explicit `builtin_bridge` policy. The macOS system WebView and macOS Chromium hosts store secrets in Keychain. Other platform hosts return `invalid_request` with the standard unsupported-service message until implemented.
 
+## Clipboard Commands
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Required permission</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>zero-native.clipboard.readText</code></td>
+      <td><code>clipboard</code></td>
+      <td>Read <code>text/plain</code> from the system clipboard</td>
+    </tr>
+    <tr>
+      <td><code>zero-native.clipboard.writeText</code></td>
+      <td><code>clipboard</code></td>
+      <td>Write <code>text/plain</code> to the system clipboard</td>
+    </tr>
+    <tr>
+      <td><code>zero-native.clipboard.read</code></td>
+      <td><code>clipboard</code></td>
+      <td>Read clipboard data by MIME type and return <code>{'{ mimeType, data }'}</code></td>
+    </tr>
+    <tr>
+      <td><code>zero-native.clipboard.write</code></td>
+      <td><code>clipboard</code></td>
+      <td>Write clipboard data by MIME type</td>
+    </tr>
+  </tbody>
+</table>
+
+Clipboard commands are **always default-deny** and require an explicit `builtin_bridge` policy. All desktop hosts support <code>text/plain</code> through the existing text clipboard path. macOS system WebView and macOS Chromium also support <code>text/html</code>, <code>text/rtf</code>, and <code>application/rtf</code>.
+
 ## Enabling builtin commands
 
 ```zig
@@ -271,6 +307,7 @@ const app_permissions = [_][]const u8{
     zero_native.security.permission_window,
     zero_native.security.permission_network,
     zero_native.security.permission_filesystem,
+    zero_native.security.permission_clipboard,
     zero_native.security.permission_notifications,
     zero_native.security.permission_credentials,
 };
@@ -312,6 +349,10 @@ const app_permissions = [_][]const u8{
         .{ .name = "zero-native.os.revealPath", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.addRecentDocument", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.clearRecentDocuments", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.writeText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.read", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.write", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.set", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.delete", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
@@ -383,6 +424,14 @@ await window.zero.os.showNotification({
 await window.zero.os.revealPath("/Users/me/Downloads/report.pdf");
 await window.zero.os.addRecentDocument("/Users/me/Downloads/report.pdf");
 await window.zero.os.clearRecentDocuments();
+
+await window.zero.clipboard.writeText("Copied from zero-native");
+const text = await window.zero.clipboard.readText();
+await window.zero.clipboard.write({
+  mimeType: "text/html",
+  data: "<strong>Copied from zero-native</strong>",
+});
+const html = await window.zero.clipboard.read({ mimeType: "text/html" });
 
 await window.zero.credentials.set({
   service: "com.example.app",

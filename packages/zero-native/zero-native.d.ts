@@ -307,6 +307,20 @@ export interface ZeroNativeNotificationOptions {
   body?: string;
 }
 
+export interface ZeroNativeClipboardReadOptions {
+  mimeType?: string;
+}
+
+export interface ZeroNativeClipboardWriteOptions {
+  mimeType?: string;
+  data: string;
+}
+
+export interface ZeroNativeClipboardData {
+  mimeType: string;
+  data: string;
+}
+
 export interface ZeroNativeCredentialKey {
   service: string;
   account: string;
@@ -358,6 +372,12 @@ export interface ZeroNativeApi {
     openFile(options?: ZeroNativeOpenFileOptions): Promise<string[] | null>;
     saveFile(options?: ZeroNativeSaveFileOptions): Promise<string | null>;
     showMessage(options?: ZeroNativeMessageDialogOptions): Promise<"primary" | "secondary" | "tertiary">;
+  };
+  clipboard: {
+    readText(): Promise<string>;
+    writeText(value: string | { text: string }): Promise<boolean>;
+    read(options?: ZeroNativeClipboardReadOptions): Promise<ZeroNativeClipboardData>;
+    write(options: string | ZeroNativeClipboardWriteOptions): Promise<boolean>;
   };
   os: {
     openUrl(value: string | ZeroNativeOpenUrlOptions): Promise<boolean>;

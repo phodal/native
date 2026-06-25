@@ -430,6 +430,24 @@ pub const Runtime = struct {
         try self.options.platform.services.focusView(window_id, label);
     }
 
+    pub fn readClipboard(self: *Runtime, buffer: []u8) anyerror![]const u8 {
+        return self.readClipboardData("text/plain", buffer);
+    }
+
+    pub fn writeClipboard(self: *Runtime, text: []const u8) anyerror!void {
+        try self.writeClipboardData(.{ .mime_type = "text/plain", .bytes = text });
+    }
+
+    pub fn readClipboardData(self: *Runtime, mime_type: []const u8, buffer: []u8) anyerror![]const u8 {
+        try validateClipboardMimeType(mime_type);
+        return self.options.platform.services.readClipboardData(mime_type, buffer);
+    }
+
+    pub fn writeClipboardData(self: *Runtime, data: platform.ClipboardData) anyerror!void {
+        try validateClipboardData(data);
+        try self.options.platform.services.writeClipboardData(data);
+    }
+
     pub fn openExternalUrl(self: *Runtime, url: []const u8) anyerror!void {
         try self.validateExternalUrl(url);
         try self.options.platform.services.openExternalUrl(url);
@@ -973,8 +991,9 @@ pub const Runtime = struct {
         const is_webview = std.mem.startsWith(u8, request.command, "zero-native.webview.");
         const is_dialog = std.mem.startsWith(u8, request.command, "zero-native.dialog.");
         const is_os = std.mem.startsWith(u8, request.command, "zero-native.os.");
+        const is_clipboard = std.mem.startsWith(u8, request.command, "zero-native.clipboard.");
         const is_credentials = std.mem.startsWith(u8, request.command, "zero-native.credentials.");
-        if (!is_command and !is_window and !is_view and !is_webview and !is_dialog and !is_os and !is_credentials) return false;
+        if (!is_command and !is_window and !is_view and !is_webview and !is_dialog and !is_os and !is_clipboard and !is_credentials) return false;
 
         var response_buffer: [bridge.max_response_bytes]u8 = undefined;
         var result_buffer: [bridge.max_result_bytes]u8 = undefined;
@@ -989,6 +1008,8 @@ pub const Runtime = struct {
                 "Command API is not permitted"
             else if (is_os)
                 "OS API is not permitted"
+            else if (is_clipboard)
+                "Clipboard API is not permitted"
             else if (is_credentials)
                 "Credentials API is not permitted"
             else
@@ -1008,6 +1029,8 @@ pub const Runtime = struct {
             self.dispatchWebViewBridgeCommand(request, message.window_id, &result_buffer, &response_buffer)
         else if (is_dialog)
             self.dispatchDialogBridgeCommand(request, &result_buffer, &response_buffer)
+        else if (is_clipboard)
+            self.dispatchClipboardBridgeCommand(request, &result_buffer, &response_buffer)
         else if (is_credentials)
             self.dispatchCredentialBridgeCommand(request, &result_buffer, &response_buffer)
         else
@@ -1176,6 +1199,58 @@ pub const Runtime = struct {
         else
             return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown credentials command");
         return bridge.writeSuccessResponse(response_buffer, request.id, result);
+    }
+
+    fn dispatchClipboardBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
+        const result = if (std.mem.eql(u8, request.command, "zero-native.clipboard.readText"))
+            self.readClipboardTextFromJson(result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.writeText"))
+            self.writeClipboardTextFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.read"))
+            self.readClipboardDataFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.write"))
+            self.writeClipboardDataFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else
+            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown clipboard command");
+        return bridge.writeSuccessResponse(response_buffer, request.id, result);
+    }
+
+    fn readClipboardTextFromJson(self: *Runtime, output: []u8) ![]const u8 {
+        var value_buffer: [bridge.max_result_bytes]u8 = undefined;
+        const value = try self.readClipboard(&value_buffer);
+        var writer = std.Io.Writer.fixed(output);
+        try json.writeString(&writer, value);
+        return writer.buffered();
+    }
+
+    fn writeClipboardTextFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
+        var storage = json.StringStorage.init(output);
+        const text = jsonStringField(payload, "text", &storage) orelse jsonStringField(payload, "data", &storage) orelse jsonStringField(payload, "value", &storage) orelse return error.InvalidClipboardOptions;
+        try self.writeClipboard(text);
+        return writeTrueJson(output);
+    }
+
+    fn readClipboardDataFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
+        var mime_storage_buffer: [platform.max_clipboard_mime_type_bytes]u8 = undefined;
+        var storage = json.StringStorage.init(&mime_storage_buffer);
+        const mime_type = jsonStringField(payload, "mimeType", &storage) orelse jsonStringField(payload, "type", &storage) orelse "text/plain";
+        var value_buffer: [bridge.max_result_bytes]u8 = undefined;
+        const value = try self.readClipboardData(mime_type, &value_buffer);
+        var writer = std.Io.Writer.fixed(output);
+        try writer.writeAll("{\"mimeType\":");
+        try json.writeString(&writer, mime_type);
+        try writer.writeAll(",\"data\":");
+        try json.writeString(&writer, value);
+        try writer.writeByte('}');
+        return writer.buffered();
+    }
+
+    fn writeClipboardDataFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
+        var storage = json.StringStorage.init(output);
+        const mime_type = jsonStringField(payload, "mimeType", &storage) orelse jsonStringField(payload, "type", &storage) orelse "text/plain";
+        const data = jsonStringField(payload, "data", &storage) orelse jsonStringField(payload, "text", &storage) orelse jsonStringField(payload, "value", &storage) orelse return error.InvalidClipboardOptions;
+        try self.writeClipboardData(.{ .mime_type = mime_type, .bytes = data });
+        return writeTrueJson(output);
     }
 
     fn setCredentialFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
@@ -2450,6 +2525,8 @@ fn builtinBridgeErrorMessage(err: anyerror) []const u8 {
         error.RecentDocumentPathTooLarge => "Recent document path is too large",
         error.InvalidNotificationOptions => "Notification options are invalid",
         error.NotificationFieldTooLarge => "Notification field is too large",
+        error.InvalidClipboardOptions => "Clipboard options are invalid",
+        error.ClipboardFieldTooLarge => "Clipboard field is too large",
         error.InvalidCredentialOptions => "Credential options are invalid",
         error.CredentialFieldTooLarge => "Credential field is too large",
         error.CredentialNotFound => "Credential was not found",
@@ -2509,6 +2586,8 @@ fn builtinBridgeErrorCode(err: anyerror) bridge.ErrorCode {
         error.RecentDocumentPathTooLarge,
         error.InvalidNotificationOptions,
         error.NotificationFieldTooLarge,
+        error.InvalidClipboardOptions,
+        error.ClipboardFieldTooLarge,
         error.InvalidCredentialOptions,
         error.CredentialFieldTooLarge,
         => .invalid_request,
@@ -2550,6 +2629,22 @@ fn validateNotificationOptions(options: platform.NotificationOptions) !void {
     try validateNotificationField(options.title, platform.max_notification_title_bytes);
     try validateNotificationField(options.subtitle, platform.max_notification_subtitle_bytes);
     try validateNotificationField(options.body, platform.max_notification_body_bytes);
+}
+
+fn validateClipboardData(data: platform.ClipboardData) !void {
+    try validateClipboardMimeType(data.mime_type);
+    if (data.bytes.len > platform.max_clipboard_data_bytes) return error.ClipboardFieldTooLarge;
+}
+
+fn validateClipboardMimeType(mime_type: []const u8) !void {
+    if (mime_type.len == 0) return error.InvalidClipboardOptions;
+    if (mime_type.len > platform.max_clipboard_mime_type_bytes) return error.ClipboardFieldTooLarge;
+    for (mime_type) |ch| {
+        if (ch == 0 or ch == '/' or ch == '\\') {
+            if (ch != '/') return error.InvalidClipboardOptions;
+        }
+        if (ch <= 0x20 or ch == 0x7f) return error.InvalidClipboardOptions;
+    }
 }
 
 fn validateCredential(credential: platform.Credential) !void {
@@ -4322,6 +4417,16 @@ test "runtime validates native OS actions before platform dispatch" {
     try harness.runtime.clearRecentDocuments();
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.recentDocumentsClearedCount());
 
+    var clipboard_buffer: [128]u8 = undefined;
+    try std.testing.expectError(error.InvalidClipboardOptions, harness.runtime.readClipboardData("", &clipboard_buffer));
+    try std.testing.expectError(error.InvalidClipboardOptions, harness.runtime.writeClipboardData(.{ .mime_type = "", .bytes = "text" }));
+    try harness.runtime.writeClipboard("plain text");
+    try std.testing.expectEqualStrings("plain text", try harness.runtime.readClipboard(&clipboard_buffer));
+    try std.testing.expectEqualStrings("text/plain", harness.null_platform.lastClipboardMimeType());
+    try harness.runtime.writeClipboardData(.{ .mime_type = "text/html", .bytes = "<strong>bold</strong>" });
+    try std.testing.expectEqualStrings("text/html", harness.null_platform.lastClipboardMimeType());
+    try std.testing.expectEqualStrings("<strong>bold</strong>", try harness.runtime.readClipboardData("text/html", &clipboard_buffer));
+
     try std.testing.expectError(error.InvalidCredentialOptions, harness.runtime.setCredential(.{ .service = "", .account = "alice", .secret = "secret-token" }));
     try std.testing.expectError(error.InvalidCredentialOptions, harness.runtime.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "" }));
     try harness.runtime.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "secret-token" });
@@ -4409,6 +4514,63 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqual(@as(usize, 1), allowed.null_platform.recentDocumentsClearedCount());
+}
+
+test "runtime gates built-in clipboard bridge commands through explicit policy" {
+    var app_state: u8 = 0;
+    const app = App{ .context = &app_state, .name = "clipboard-bridge", .source = platform.WebViewSource.html("<p>Clipboard</p>") };
+
+    var denied: TestHarness() = undefined;
+    denied.init(.{});
+    try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"write\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
+        .origin = "zero://inline",
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "Clipboard API is not permitted") != null);
+    try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
+
+    const grants = [_][]const u8{security.permission_clipboard};
+    const clipboard_permission = [_][]const u8{security.permission_clipboard};
+    const origins = [_][]const u8{"zero://inline"};
+    const policies = [_]bridge.CommandPolicy{
+        .{ .name = "zero-native.clipboard.readText", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "zero-native.clipboard.writeText", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "zero-native.clipboard.read", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "zero-native.clipboard.write", .permissions = &clipboard_permission, .origins = &origins },
+    };
+
+    var allowed: TestHarness() = undefined;
+    allowed.init(.{});
+    allowed.runtime.options.security.permissions = &grants;
+    allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
+
+    try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"write-text\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
+        .origin = "zero://inline",
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
+    try std.testing.expectEqualStrings("text/plain", allowed.null_platform.lastClipboardMimeType());
+    try std.testing.expectEqualStrings("plain text", allowed.null_platform.lastClipboardData());
+
+    try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"read-text\",\"command\":\"zero-native.clipboard.readText\",\"payload\":{}}",
+        .origin = "zero://inline",
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"result\":\"plain text\"") != null);
+
+    try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"write-html\",\"command\":\"zero-native.clipboard.write\",\"payload\":{\"mimeType\":\"text/html\",\"data\":\"<strong>bold</strong>\"}}",
+        .origin = "zero://inline",
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
+    try std.testing.expectEqualStrings("text/html", allowed.null_platform.lastClipboardMimeType());
+
+    try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
+        .bytes = "{\"id\":\"read-html\",\"command\":\"zero-native.clipboard.read\",\"payload\":{\"mimeType\":\"text/html\"}}",
+        .origin = "zero://inline",
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"mimeType\":\"text/html\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"data\":\"<strong>bold</strong>\"") != null);
 }
 
 test "runtime gates built-in credential bridge commands through explicit policy" {

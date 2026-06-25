@@ -433,6 +433,7 @@ static const wchar_t *zeroNativeBridgeScript() {
 	}
 	function selector(value){return typeof value==='number'?{id:value}:{label:String(value)};}
 	function ensureString(value,name){if(typeof value!=='string'||value.length===0){throw new TypeError(name+' must be a non-empty string');}return value;}
+	function ensureText(value,name){if(typeof value!=='string'){throw new TypeError(name+' must be a string');}return value;}
 	function ensureNumber(value,name){if(typeof value!=='number'||!isFinite(value)){throw new TypeError(name+' must be a finite number');}return value;}
 	function commandPayload(value){if(typeof value==='string'){return {name:ensureString(value,'command')};}value=value||{};var name=value.name!=null?value.name:value.id;return {name:ensureString(name,'command')};}
 	function validateWebViewSelector(options){if(options.label!=null){ensureString(options.label,'label');}if(options.windowId!=null&&(typeof options.windowId!=='number'||!isFinite(options.windowId)||options.windowId<0||Math.floor(options.windowId)!==options.windowId)){throw new TypeError('windowId must be a non-negative integer');}}
@@ -464,6 +465,14 @@ static const wchar_t *zeroNativeBridgeScript() {
 	openFile:function(options){return invoke('zero-native.dialog.openFile',options||{});},
 	saveFile:function(options){return invoke('zero-native.dialog.saveFile',options||{});},
 	showMessage:function(options){return invoke('zero-native.dialog.showMessage',options||{});}
+	});
+	function clipboardReadPayload(value){value=value||{};return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType')};}
+	function clipboardWritePayload(value){if(typeof value==='string'){return {mimeType:'text/plain',data:value};}value=value||{};var data=value.data!=null?value.data:(value.text!=null?value.text:value.value);return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType'),data:ensureText(data,'data')};}
+	var clipboard=Object.freeze({
+	readText:function(){return invoke('zero-native.clipboard.readText',{});},
+	writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('zero-native.clipboard.writeText',{text:ensureText(text,'text')});},
+	read:function(value){return invoke('zero-native.clipboard.read',clipboardReadPayload(value));},
+	write:function(value){return invoke('zero-native.clipboard.write',clipboardWritePayload(value));}
 	});
 	var os=Object.freeze({
 	openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('zero-native.os.openUrl',{url:ensureString(options.url,'url')});},
@@ -499,7 +508,7 @@ static const wchar_t *zeroNativeBridgeScript() {
 	focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},
 	close:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.close',{label:options.label,windowId:options.windowId});}
 	});
-	try{Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,os:os,credentials:credentials,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});}catch(error){}
+	try{Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});}catch(error){}
 	})();
 	)ZN";
 }

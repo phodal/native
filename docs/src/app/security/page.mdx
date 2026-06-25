@@ -131,11 +131,11 @@ Prefer exact origins over `"*"`. Use `"*"` only for local development or command
 
 ## Builtin bridge policy
 
-zero-native provides built-in commands for app command routing (`zero-native.command.*`), windows (`zero-native.window.*`), generic native views (`zero-native.view.*`), layered WebViews (`zero-native.webview.*`), dialogs (`zero-native.dialog.*`), selected OS capabilities (`zero-native.os.*`), and credential storage (`zero-native.credentials.*`). These are controlled separately from app-defined commands via the `builtin_bridge` field in `RuntimeOptions`.
+zero-native provides built-in commands for app command routing (`zero-native.command.*`), windows (`zero-native.window.*`), generic native views (`zero-native.view.*`), layered WebViews (`zero-native.webview.*`), dialogs (`zero-native.dialog.*`), selected OS capabilities (`zero-native.os.*`), clipboard access (`zero-native.clipboard.*`), and credential storage (`zero-native.credentials.*`). These are controlled separately from app-defined commands via the `builtin_bridge` field in `RuntimeOptions`.
 
 `js_window_api` exposes the JavaScript command, window, view, and WebView helpers, but it does not bypass security. Command routing (`zero-native.command.invoke`), window commands (`zero-native.window.list`, `create`, `focus`, `close`), view commands (`zero-native.view.create`, `list`, `update`, `setFrame`, `setVisible`, `focus`, `close`), and WebView commands (`zero-native.webview.create`, `list`, `setFrame`, `navigate`, `setZoom`, `setLayer`, `close`) must come from an allowed origin and must have the `window` permission when runtime permissions are configured. View and WebView commands can only target the window that sent the bridge message. WebView URLs must also be allowed by `security.navigation.allowed_origins`, and child WebViews receive `window.zero` only when created with `bridge: true`.
 
-For broader control, use an explicit `builtin_bridge` policy. When you choose this path, list every built-in command your app calls. Dialog commands (`zero-native.dialog.openFile`, `saveFile`, `showMessage`), OS commands (`zero-native.os.openUrl`, `showNotification`, `revealPath`, `addRecentDocument`, `clearRecentDocuments`), and credential commands (`zero-native.credentials.set`, `get`, `delete`) are **always default-deny** and require an explicit `builtin_bridge` policy with the command listed. `zero-native.os.openUrl` also requires `security.navigation.external_links` to allow the target URL:
+For broader control, use an explicit `builtin_bridge` policy. When you choose this path, list every built-in command your app calls. Dialog commands (`zero-native.dialog.openFile`, `saveFile`, `showMessage`), OS commands (`zero-native.os.openUrl`, `showNotification`, `revealPath`, `addRecentDocument`, `clearRecentDocuments`), clipboard commands (`zero-native.clipboard.readText`, `writeText`, `read`, `write`), and credential commands (`zero-native.credentials.set`, `get`, `delete`) are **always default-deny** and require an explicit `builtin_bridge` policy with the command listed. `zero-native.os.openUrl` also requires `security.navigation.external_links` to allow the target URL:
 
 ```zig
 .builtin_bridge = .{
@@ -164,6 +164,10 @@ For broader control, use an explicit `builtin_bridge` policy. When you choose th
         .{ .name = "zero-native.os.revealPath", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.addRecentDocument", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.clearRecentDocuments", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.writeText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.read", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.write", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.set", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.delete", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },

@@ -44,6 +44,13 @@ zero-native capabilities are native OS services and app events exposed through `
       <td>macOS system WebView and macOS Chromium</td>
     </tr>
     <tr>
+      <td>Clipboard</td>
+      <td><code>runtime.readClipboard()</code> / <code>runtime.writeClipboard(text)</code> / <code>runtime.readClipboardData(mimeType)</code> / <code>runtime.writeClipboardData(data)</code></td>
+      <td><code>zero-native.clipboard.readText</code> / <code>zero-native.clipboard.writeText</code> / <code>zero-native.clipboard.read</code> / <code>zero-native.clipboard.write</code></td>
+      <td><code>clipboard</code></td>
+      <td><code>text/plain</code> on desktop hosts; <code>text/html</code> and RTF on macOS system WebView and macOS Chromium</td>
+    </tr>
+    <tr>
       <td>Credential store</td>
       <td><code>runtime.setCredential(options)</code> / <code>runtime.getCredential(key)</code> / <code>runtime.deleteCredential(key)</code></td>
       <td><code>zero-native.credentials.set</code> / <code>zero-native.credentials.get</code> / <code>zero-native.credentials.delete</code></td>
@@ -82,6 +89,10 @@ OS bridge commands are default-deny. Add explicit `builtin_bridge` entries for e
         .{ .name = "zero-native.os.revealPath", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.addRecentDocument", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.clearRecentDocuments", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.writeText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.read", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.clipboard.write", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.set", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.credentials.delete", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
@@ -114,6 +125,14 @@ await window.zero.os.showNotification({
 await window.zero.os.revealPath("/Users/me/Downloads/report.pdf");
 await window.zero.os.addRecentDocument("/Users/me/Downloads/report.pdf");
 await window.zero.os.clearRecentDocuments();
+
+await window.zero.clipboard.writeText("Copied from zero-native");
+const text = await window.zero.clipboard.readText();
+await window.zero.clipboard.write({
+  mimeType: "text/html",
+  data: "<strong>Copied from zero-native</strong>",
+});
+const html = await window.zero.clipboard.read({ mimeType: "text/html" });
 
 await window.zero.credentials.set({
   service: "com.example.app",

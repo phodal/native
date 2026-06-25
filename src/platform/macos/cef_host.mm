@@ -60,6 +60,14 @@ static NSString *ZeroNativeStringFromBytes(const char *bytes, size_t len) {
     return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
 }
 
+static NSString *ZeroNativePasteboardTypeForMime(const char *mime_type, size_t mime_type_len) {
+    NSString *mime = ZeroNativeStringFromBytes(mime_type, mime_type_len).lowercaseString;
+    if ([mime isEqualToString:@"text"] || [mime isEqualToString:@"text/plain"]) return NSPasteboardTypeString;
+    if ([mime isEqualToString:@"text/html"]) return NSPasteboardTypeHTML;
+    if ([mime isEqualToString:@"text/rtf"] || [mime isEqualToString:@"application/rtf"]) return NSPasteboardTypeRTF;
+    return nil;
+}
+
 static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSString *account) {
     return [@{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
@@ -326,6 +334,7 @@ static const char *ZeroNativeCefBridgeScript() {
         "}"
         "function selector(value){return typeof value==='number'?{id:value}:{label:String(value)};}"
         "function ensureString(value,name){if(typeof value!=='string'||value.length===0){throw new TypeError(name+' must be a non-empty string');}return value;}"
+        "function ensureText(value,name){if(typeof value!=='string'){throw new TypeError(name+' must be a string');}return value;}"
         "function ensureNumber(value,name){if(typeof value!=='number'||!isFinite(value)){throw new TypeError(name+' must be a finite number');}return value;}"
         "function commandPayload(value){if(typeof value==='string'){return {name:ensureString(value,'command')};}value=value||{};var name=value.name!=null?value.name:value.id;return {name:ensureString(name,'command')};}"
         "function validateWebViewSelector(options){if(options.label!=null){ensureString(options.label,'label');}if(options.windowId!=null&&(typeof options.windowId!=='number'||!isFinite(options.windowId)||options.windowId<0||Math.floor(options.windowId)!==options.windowId)){throw new TypeError('windowId must be a non-negative integer');}}"
@@ -357,6 +366,14 @@ static const char *ZeroNativeCefBridgeScript() {
         "openFile:function(options){return invoke('zero-native.dialog.openFile',options||{});},"
         "saveFile:function(options){return invoke('zero-native.dialog.saveFile',options||{});},"
         "showMessage:function(options){return invoke('zero-native.dialog.showMessage',options||{});}"
+        "});"
+        "function clipboardReadPayload(value){value=value||{};return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType')};}"
+        "function clipboardWritePayload(value){if(typeof value==='string'){return {mimeType:'text/plain',data:value};}value=value||{};var data=value.data!=null?value.data:(value.text!=null?value.text:value.value);return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType'),data:ensureText(data,'data')};}"
+        "var clipboard=Object.freeze({"
+        "readText:function(){return invoke('zero-native.clipboard.readText',{});},"
+        "writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('zero-native.clipboard.writeText',{text:ensureText(text,'text')});},"
+        "read:function(value){return invoke('zero-native.clipboard.read',clipboardReadPayload(value));},"
+        "write:function(value){return invoke('zero-native.clipboard.write',clipboardWritePayload(value));}"
         "});"
         "var os=Object.freeze({"
         "openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('zero-native.os.openUrl',{url:ensureString(options.url,'url')});},"
@@ -392,7 +409,7 @@ static const char *ZeroNativeCefBridgeScript() {
         "focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},"
         "close:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.close',{label:options.label,windowId:options.windowId});}"
         "});"
-        "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,os:os,credentials:credentials,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});"
+        "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});"
         "})();";
 }
 
@@ -1809,20 +1826,43 @@ int zero_native_appkit_close_webview(zero_native_appkit_host_t *host, uint64_t w
 }
 
 size_t zero_native_appkit_clipboard_read(zero_native_appkit_host_t *host, char *buffer, size_t buffer_len) {
+    return zero_native_appkit_clipboard_read_data(host, "text/plain", strlen("text/plain"), buffer, buffer_len);
+}
+
+void zero_native_appkit_clipboard_write(zero_native_appkit_host_t *host, const char *text, size_t text_len) {
+    (void)zero_native_appkit_clipboard_write_data(host, "text/plain", strlen("text/plain"), text, text_len);
+}
+
+size_t zero_native_appkit_clipboard_read_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len) {
     (void)host;
-    NSString *value = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString] ?: @"";
-    NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
-    size_t count = MIN(buffer_len, data.length);
+    NSString *type = ZeroNativePasteboardTypeForMime(mime_type, mime_type_len);
+    if (!type || !buffer) return 0;
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    NSData *data = nil;
+    if ([type isEqualToString:NSPasteboardTypeString] || [type isEqualToString:NSPasteboardTypeHTML]) {
+        NSString *value = [pasteboard stringForType:type] ?: @"";
+        data = [value dataUsingEncoding:NSUTF8StringEncoding];
+    } else {
+        data = [pasteboard dataForType:type] ?: [NSData data];
+    }
+    if (data.length > buffer_len) return data.length;
+    size_t count = data.length;
     memcpy(buffer, data.bytes, count);
     return count;
 }
 
-void zero_native_appkit_clipboard_write(zero_native_appkit_host_t *host, const char *text, size_t text_len) {
+int zero_native_appkit_clipboard_write_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len) {
     (void)host;
-    NSString *value = [[NSString alloc] initWithBytes:text length:text_len encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *type = ZeroNativePasteboardTypeForMime(mime_type, mime_type_len);
+    if (!type || (!bytes && bytes_len > 0)) return 0;
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
-    [pasteboard setString:value forType:NSPasteboardTypeString];
+    if ([type isEqualToString:NSPasteboardTypeString] || [type isEqualToString:NSPasteboardTypeHTML]) {
+        NSString *value = [[NSString alloc] initWithBytes:bytes length:bytes_len encoding:NSUTF8StringEncoding] ?: @"";
+        return [pasteboard setString:value forType:type] ? 1 : 0;
+    }
+    NSData *data = [NSData dataWithBytes:bytes length:bytes_len];
+    return [pasteboard setData:data forType:type] ? 1 : 0;
 }
 
 int zero_native_appkit_show_notification(zero_native_appkit_host_t *host, const char *title, size_t title_len, const char *subtitle, size_t subtitle_len, const char *body, size_t body_len) {

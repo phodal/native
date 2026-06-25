@@ -47,6 +47,8 @@ pub const Error = error{
     RecentDocumentPathTooLarge,
     InvalidNotificationOptions,
     NotificationFieldTooLarge,
+    InvalidClipboardOptions,
+    ClipboardFieldTooLarge,
     InvalidCredentialOptions,
     CredentialFieldTooLarge,
     CredentialNotFound,
@@ -102,6 +104,8 @@ pub const max_recent_document_path_bytes: usize = 4096;
 pub const max_notification_title_bytes: usize = 128;
 pub const max_notification_subtitle_bytes: usize = 128;
 pub const max_notification_body_bytes: usize = 1024;
+pub const max_clipboard_mime_type_bytes: usize = 128;
+pub const max_clipboard_data_bytes: usize = 65536;
 pub const max_credential_service_bytes: usize = 128;
 pub const max_credential_account_bytes: usize = 256;
 pub const max_credential_secret_bytes: usize = 4096;
@@ -542,6 +546,11 @@ pub const MenuCommandEvent = struct {
     window_id: WindowId = 1,
 };
 
+pub const ClipboardData = struct {
+    mime_type: []const u8 = "text/plain",
+    bytes: []const u8,
+};
+
 pub const Event = union(enum) {
     app_start,
     app_activated,
@@ -582,6 +591,8 @@ pub const PlatformServices = struct {
     context: ?*anyopaque = null,
     read_clipboard_fn: ?*const fn (context: ?*anyopaque, buffer: []u8) anyerror![]const u8 = null,
     write_clipboard_fn: ?*const fn (context: ?*anyopaque, text: []const u8) anyerror!void = null,
+    read_clipboard_data_fn: ?*const fn (context: ?*anyopaque, mime_type: []const u8, buffer: []u8) anyerror![]const u8 = null,
+    write_clipboard_data_fn: ?*const fn (context: ?*anyopaque, data: ClipboardData) anyerror!void = null,
     load_webview_fn: ?*const fn (context: ?*anyopaque, source: WebViewSource) anyerror!void = null,
     load_window_webview_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, source: WebViewSource) anyerror!void = null,
     complete_bridge_fn: ?*const fn (context: ?*anyopaque, response: []const u8) anyerror!void = null,
@@ -629,6 +640,18 @@ pub const PlatformServices = struct {
     pub fn writeClipboard(self: PlatformServices, text: []const u8) anyerror!void {
         const write_fn = self.write_clipboard_fn orelse return error.UnsupportedService;
         return write_fn(self.context, text);
+    }
+
+    pub fn readClipboardData(self: PlatformServices, mime_type: []const u8, buffer: []u8) anyerror![]const u8 {
+        if (self.read_clipboard_data_fn) |read_fn| return read_fn(self.context, mime_type, buffer);
+        if (isPlainTextMime(mime_type)) return self.readClipboard(buffer);
+        return error.UnsupportedService;
+    }
+
+    pub fn writeClipboardData(self: PlatformServices, data: ClipboardData) anyerror!void {
+        if (self.write_clipboard_data_fn) |write_fn| return write_fn(self.context, data);
+        if (isPlainTextMime(data.mime_type)) return self.writeClipboard(data.bytes);
+        return error.UnsupportedService;
     }
 
     pub fn loadWebView(self: PlatformServices, source: WebViewSource) anyerror!void {
@@ -900,6 +923,11 @@ pub const NullPlatform = struct {
     notification_body: [max_notification_body_bytes]u8 = undefined,
     notification_body_len: usize = 0,
     notification_count: usize = 0,
+    clipboard_mime_type: [max_clipboard_mime_type_bytes]u8 = undefined,
+    clipboard_mime_type_len: usize = 0,
+    clipboard_data: [max_clipboard_data_bytes]u8 = undefined,
+    clipboard_data_len: usize = 0,
+    clipboard_write_count: usize = 0,
     credential_service: [max_credential_service_bytes]u8 = undefined,
     credential_service_len: usize = 0,
     credential_account: [max_credential_account_bytes]u8 = undefined,
@@ -935,6 +963,10 @@ pub const NullPlatform = struct {
             .run_fn = run,
             .services = .{
                 .context = self,
+                .read_clipboard_fn = readClipboard,
+                .write_clipboard_fn = writeClipboard,
+                .read_clipboard_data_fn = readClipboardData,
+                .write_clipboard_data_fn = writeClipboardData,
                 .load_webview_fn = loadWebView,
                 .load_window_webview_fn = loadWindowWebView,
                 .complete_bridge_fn = completeBridge,
@@ -1007,6 +1039,29 @@ pub const NullPlatform = struct {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         self.loaded_source = source;
         self.window_sources[0] = source;
+    }
+
+    fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
+        return readClipboardData(context, "text/plain", buffer);
+    }
+
+    fn writeClipboard(context: ?*anyopaque, text: []const u8) anyerror!void {
+        try writeClipboardData(context, .{ .mime_type = "text/plain", .bytes = text });
+    }
+
+    fn readClipboardData(context: ?*anyopaque, mime_type: []const u8, buffer: []u8) anyerror![]const u8 {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (!std.mem.eql(u8, mime_type, self.lastClipboardMimeType())) return error.UnsupportedService;
+        return try copyInto(buffer, self.lastClipboardData());
+    }
+
+    fn writeClipboardData(context: ?*anyopaque, data: ClipboardData) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        self.clipboard_mime_type = undefined;
+        self.clipboard_data = undefined;
+        self.clipboard_mime_type_len = (try copyInto(&self.clipboard_mime_type, data.mime_type)).len;
+        self.clipboard_data_len = (try copyInto(&self.clipboard_data, data.bytes)).len;
+        self.clipboard_write_count += 1;
     }
 
     fn loadWindowWebView(context: ?*anyopaque, window_id: WindowId, source: WebViewSource) anyerror!void {
@@ -1494,6 +1549,18 @@ pub const NullPlatform = struct {
         return self.notification_count;
     }
 
+    pub fn lastClipboardMimeType(self: *const NullPlatform) []const u8 {
+        return self.clipboard_mime_type[0..self.clipboard_mime_type_len];
+    }
+
+    pub fn lastClipboardData(self: *const NullPlatform) []const u8 {
+        return self.clipboard_data[0..self.clipboard_data_len];
+    }
+
+    pub fn clipboardWriteCount(self: *const NullPlatform) usize {
+        return self.clipboard_write_count;
+    }
+
     pub fn lastCredentialService(self: *const NullPlatform) []const u8 {
         return self.credential_service[0..self.credential_service_len];
     }
@@ -1577,6 +1644,10 @@ fn copyInto(buffer: []u8, value: []const u8) ![]const u8 {
     return buffer[0..value.len];
 }
 
+fn isPlainTextMime(mime_type: []const u8) bool {
+    return std.mem.eql(u8, mime_type, "text/plain") or std.mem.eql(u8, mime_type, "text");
+}
+
 fn isValidWebViewFrame(frame: geometry.RectF) bool {
     return frame.x >= 0 and frame.y >= 0 and frame.width > 0 and frame.height > 0;
 }
@@ -1643,6 +1714,7 @@ test "null platform records OS actions" {
     try services.openExternalUrl("https://example.com/docs");
     try services.revealPath("/tmp/example.txt");
     try services.addRecentDocument("/tmp/recent.txt");
+    try services.writeClipboard("plain text");
     try services.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "secret-token" });
 
     try std.testing.expectEqual(@as(usize, 1), null_platform.notificationCount());
@@ -1652,6 +1724,18 @@ test "null platform records OS actions" {
     try std.testing.expectEqualStrings("https://example.com/docs", null_platform.lastExternalUrl());
     try std.testing.expectEqualStrings("/tmp/example.txt", null_platform.lastRevealedPath());
     try std.testing.expectEqualStrings("/tmp/recent.txt", null_platform.lastRecentDocumentPath());
+    try std.testing.expectEqual(@as(usize, 1), null_platform.clipboardWriteCount());
+    try std.testing.expectEqualStrings("text/plain", null_platform.lastClipboardMimeType());
+    try std.testing.expectEqualStrings("plain text", null_platform.lastClipboardData());
+    var clipboard_buffer: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("plain text", try services.readClipboard(&clipboard_buffer));
+
+    try services.writeClipboardData(.{ .mime_type = "text/html", .bytes = "<strong>bold</strong>" });
+    try std.testing.expectEqual(@as(usize, 2), null_platform.clipboardWriteCount());
+    try std.testing.expectEqualStrings("text/html", null_platform.lastClipboardMimeType());
+    try std.testing.expectEqualStrings("<strong>bold</strong>", try services.readClipboardData("text/html", &clipboard_buffer));
+    try std.testing.expectError(error.UnsupportedService, services.readClipboardData("text/plain", &clipboard_buffer));
+
     try std.testing.expectEqual(@as(usize, 1), null_platform.credentialSetCount());
     try std.testing.expectEqualStrings("dev.zero-native.test", null_platform.lastCredentialService());
     try std.testing.expectEqualStrings("alice", null_platform.lastCredentialAccount());
@@ -1757,6 +1841,10 @@ test "OS actions require backend support" {
     try std.testing.expectError(error.UnsupportedService, services.addRecentDocument("/tmp/example.txt"));
     try std.testing.expectError(error.UnsupportedService, services.clearRecentDocuments());
     var buffer: [32]u8 = undefined;
+    try std.testing.expectError(error.UnsupportedService, services.readClipboard(&buffer));
+    try std.testing.expectError(error.UnsupportedService, services.writeClipboard("plain"));
+    try std.testing.expectError(error.UnsupportedService, services.readClipboardData("text/html", &buffer));
+    try std.testing.expectError(error.UnsupportedService, services.writeClipboardData(.{ .mime_type = "text/html", .bytes = "<b>x</b>" }));
     try std.testing.expectError(error.UnsupportedService, services.setCredential(.{ .service = "service", .account = "account", .secret = "secret" }));
     try std.testing.expectError(error.UnsupportedService, services.getCredential(.{ .service = "service", .account = "account" }, &buffer));
     try std.testing.expectError(error.UnsupportedService, services.deleteCredential(.{ .service = "service", .account = "account" }));

@@ -8,6 +8,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "refresh", .kind = .button, .parent = "toolbar", .text = "Refresh", .command = "app.refresh" },
     .{ .label = "search", .kind = .search_field, .parent = "toolbar", .text = "Search" },
     .{ .label = "live", .kind = .checkbox, .parent = "toolbar", .text = "Live" },
+    .{ .label = "view-mode", .kind = .segmented_control, .parent = "toolbar", .text = "List|Grid" },
     .{ .label = "syncing", .kind = .progress_indicator, .parent = "toolbar", .role = "Syncing" },
     .{ .label = "main", .kind = .webview, .url = "zero://inline", .fill = true },
 };
@@ -39,6 +40,7 @@ fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
 | `button` | Dispatches `command` through `Event.command` |
 | `checkbox` | Native checkbox control |
 | `toggle` | Native binary toggle button |
+| `segmented_control` | Native segmented choice control; use pipe-delimited `text`, such as `List|Grid` |
 | `text_field` | Native editable text field |
 | `search_field` | Native search input |
 | `label` | Native static text |

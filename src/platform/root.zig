@@ -374,6 +374,7 @@ pub const ViewKind = enum {
     button,
     checkbox,
     toggle,
+    segmented_control,
     text_field,
     search_field,
     label,

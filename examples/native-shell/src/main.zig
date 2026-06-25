@@ -146,6 +146,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "refresh-button", .kind = .button, .parent = "toolbar", .x = 12, .y = 10, .width = 88, .height = 30, .layer = 21, .text = "Refresh", .command = "app.refresh" },
     .{ .label = "palette-button", .kind = .button, .parent = "toolbar", .x = 108, .y = 10, .width = 132, .height = 30, .layer = 21, .text = "Command" },
     .{ .label = "sync-indicator", .kind = .progress_indicator, .parent = "toolbar", .x = 252, .y = 13, .width = 24, .height = 24, .layer = 21, .role = "Syncing" },
+    .{ .label = "view-mode", .kind = .segmented_control, .parent = "toolbar", .x = 288, .y = 10, .width = 168, .height = 30, .layer = 21, .text = "List|Grid", .command = "app.view.mode" },
     .{ .label = "title-search", .kind = .titlebar_accessory, .x = 780, .y = 8, .width = 300, .height = 36, .layer = 21, .role = "Search" },
     .{ .label = "surface-search", .kind = .search_field, .parent = "title-search", .x = 0, .y = 3, .width = 280, .height = 28, .layer = 22, .text = "Search native surfaces" },
     .{ .label = "sidebar", .kind = .sidebar, .edge = .left, .width = sidebar_width, .layer = 10, .role = "Sidebar" },
@@ -234,6 +235,7 @@ test "native shell starts with native chrome views" {
     var views_buffer: [16]zero_native.ViewInfo = undefined;
     const views = harness.runtime.listViews(1, &views_buffer);
     try std.testing.expect(containsView(views, "toolbar", .toolbar));
+    try std.testing.expect(containsView(views, "view-mode", .segmented_control));
     try std.testing.expect(containsView(views, "surface-search", .search_field));
     try std.testing.expect(containsView(views, "sidebar", .sidebar));
     try std.testing.expect(containsView(views, "sidebar-live", .checkbox));

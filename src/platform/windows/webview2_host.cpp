@@ -73,6 +73,7 @@ constexpr int kViewGpuSurface = 12;
 constexpr int kViewCheckbox = 13;
 constexpr int kViewToggle = 14;
 constexpr int kViewProgressIndicator = 15;
+constexpr int kViewSegmentedControl = 16;
 
 struct WindowsEvent {
     int kind;
@@ -935,6 +936,7 @@ static bool isSupportedNativeViewKind(int kind) {
         kind == kViewButton ||
         kind == kViewCheckbox ||
         kind == kViewToggle ||
+        kind == kViewSegmentedControl ||
         kind == kViewTextField ||
         kind == kViewSearchField ||
         kind == kViewLabel ||
@@ -945,6 +947,39 @@ static std::string nativeViewDisplayText(const NativeView &view) {
     if (!view.text.empty()) return view.text;
     if (!view.role.empty()) return view.role;
     return view.label;
+}
+
+static std::vector<std::string> segmentedLabels(const std::string &text) {
+    std::vector<std::string> labels;
+    const std::string source = text.empty() ? "One|Two" : text;
+    size_t start = 0;
+    while (start <= source.size()) {
+        size_t end = source.find('|', start);
+        if (end == std::string::npos) end = source.size();
+        size_t first = start;
+        while (first < end && std::isspace(static_cast<unsigned char>(source[first]))) first++;
+        size_t last = end;
+        while (last > first && std::isspace(static_cast<unsigned char>(source[last - 1]))) last--;
+        if (last > first) labels.push_back(source.substr(first, last - first));
+        if (end == source.size()) break;
+        start = end + 1;
+    }
+    if (labels.empty()) labels.push_back("Segment");
+    return labels;
+}
+
+static void applySegmentedControlText(HWND hwnd, const std::string &text) {
+    if (!hwnd) return;
+    TabCtrl_DeleteAllItems(hwnd);
+    std::vector<std::string> labels = segmentedLabels(text);
+    for (size_t index = 0; index < labels.size(); index++) {
+        std::wstring wide = widen(labels[index]);
+        TCITEMW item = {};
+        item.mask = TCIF_TEXT;
+        item.pszText = const_cast<LPWSTR>(wide.c_str());
+        TabCtrl_InsertItem(hwnd, static_cast<int>(index), &item);
+    }
+    TabCtrl_SetCurSel(hwnd, 0);
 }
 
 static POINT nativeViewAbsoluteOrigin(Host *host, const NativeView &view) {
@@ -967,6 +1002,9 @@ static void applyNativeViewText(NativeView &view, const std::string &text) {
         case kViewTextField:
         case kViewSearchField:
             SendMessageW(view.hwnd, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(wide.c_str()));
+            break;
+        case kViewSegmentedControl:
+            applySegmentedControlText(view.hwnd, text);
             break;
         case kViewProgressIndicator:
         case kViewSpacer:
@@ -1023,13 +1061,14 @@ static void reorderWindowChildren(Host *host, uint64_t window_id) {
     }
 }
 
-static bool emitNativeCommandForHwnd(Host *host, HWND hwnd, WORD notification_code) {
+static bool emitNativeCommandForHwnd(Host *host, HWND hwnd, UINT notification_code) {
     if (!host || !host->callback || !hwnd) return false;
     for (auto &entry : host->native_views) {
         NativeView &view = entry.second;
         if (view.hwnd != hwnd || view.command.empty()) continue;
         const bool button_like = view.kind == kViewButton || view.kind == kViewCheckbox || view.kind == kViewToggle;
-        if (!button_like || notification_code != BN_CLICKED) return false;
+        const bool segmented = view.kind == kViewSegmentedControl;
+        if ((button_like && notification_code != BN_CLICKED) || (segmented && notification_code != TCN_SELCHANGE) || (!button_like && !segmented)) return false;
         WindowsEvent event = {};
         event.kind = kNativeCommand;
         event.window_id = view.window_id;
@@ -1418,6 +1457,12 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                 if (lparam == 0 && emitMenuCommandForId(host, hwnd, LOWORD(wparam))) return 0;
             }
             break;
+        case WM_NOTIFY:
+            if (host && lparam != 0) {
+                NMHDR *header = reinterpret_cast<NMHDR *>(lparam);
+                if (header && emitNativeCommandForHwnd(host, header->hwndFrom, header->code)) return 0;
+            }
+            break;
         case WM_ACTIVATEAPP:
             if (host) {
                 bool active = wparam != FALSE;
@@ -1540,7 +1585,7 @@ Host *zero_native_windows_create(const char *app_name, size_t app_name_len, cons
     (void)restore_frame;
     INITCOMMONCONTROLSEX controls = {};
     controls.dwSize = sizeof(controls);
-    controls.dwICC = ICC_PROGRESS_CLASS;
+    controls.dwICC = ICC_PROGRESS_CLASS | ICC_TAB_CLASSES;
     InitCommonControlsEx(&controls);
 
     Host *host = new Host();
@@ -1844,6 +1889,11 @@ int zero_native_windows_create_view(Host *host, uint64_t window_id, const char *
         case kViewToggle:
             class_name = L"BUTTON";
             style |= BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP;
+            break;
+        case kViewSegmentedControl:
+            class_name = WC_TABCONTROLW;
+            style |= TCS_BUTTONS | TCS_FIXEDWIDTH | WS_TABSTOP;
+            wide_text.clear();
             break;
         case kViewTextField:
         case kViewSearchField:

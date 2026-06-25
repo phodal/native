@@ -130,6 +130,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (NSView *)nativeParentViewForWindow:(uint64_t)windowId parent:(NSString *)parent;
 - (NSView *)makeNativeViewWithKind:(NSInteger)kind label:(NSString *)label role:(NSString *)role text:(NSString *)text;
 - (void)applyNativeViewState:(NSView *)view enabled:(BOOL)enabled role:(NSString *)role text:(NSString *)text;
+- (void)applySegmentedControl:(NSSegmentedControl *)control text:(NSString *)text;
 - (void)configureNativeView:(NSView *)view command:(NSString *)command key:(NSString *)key;
 - (void)emitNativeCommandForSender:(id)sender;
 - (BOOL)createNativeViewInWindow:(uint64_t)windowId label:(NSString *)label kind:(NSInteger)kind parent:(NSString *)parent x:(double)x y:(double)y width:(double)width height:(double)height layer:(NSInteger)layer visible:(BOOL)visible enabled:(BOOL)enabled role:(NSString *)role text:(NSString *)text command:(NSString *)command;
@@ -578,6 +579,14 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
             view = toggle;
             break;
         }
+        case ZERO_NATIVE_APPKIT_VIEW_SEGMENTED_CONTROL: {
+            NSSegmentedControl *segmented = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
+            segmented.segmentStyle = NSSegmentStyleTexturedRounded;
+            segmented.trackingMode = NSSegmentSwitchTrackingSelectOne;
+            [self applySegmentedControl:segmented text:(text.length > 0 ? text : @"One|Two")];
+            view = segmented;
+            break;
+        }
         case ZERO_NATIVE_APPKIT_VIEW_PROGRESS_INDICATOR: {
             NSProgressIndicator *indicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
             indicator.style = NSProgressIndicatorSpinningStyle;
@@ -618,12 +627,29 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     return view;
 }
 
+- (void)applySegmentedControl:(NSSegmentedControl *)control text:(NSString *)text {
+    NSArray<NSString *> *rawLabels = [(text.length > 0 ? text : @"One|Two") componentsSeparatedByString:@"|"];
+    NSMutableArray<NSString *> *labels = [NSMutableArray arrayWithCapacity:rawLabels.count];
+    for (NSString *raw in rawLabels) {
+        NSString *label = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (label.length > 0) [labels addObject:label];
+    }
+    if (labels.count == 0) [labels addObject:@"Segment"];
+    control.segmentCount = labels.count;
+    for (NSInteger index = 0; index < (NSInteger)labels.count; index++) {
+        [control setLabel:labels[index] forSegment:index];
+    }
+    if (control.selectedSegment < 0 && labels.count > 0) control.selectedSegment = 0;
+}
+
 - (void)applyNativeViewState:(NSView *)view enabled:(BOOL)enabled role:(NSString *)role text:(NSString *)text {
     if ([view respondsToSelector:@selector(setEnabled:)]) {
         ((void (*)(id, SEL, BOOL))[view methodForSelector:@selector(setEnabled:)])(view, @selector(setEnabled:), enabled);
     }
     if (text) {
-        if ([view isKindOfClass:[NSSearchField class]]) {
+        if ([view isKindOfClass:[NSSegmentedControl class]]) {
+            [self applySegmentedControl:(NSSegmentedControl *)view text:text];
+        } else if ([view isKindOfClass:[NSSearchField class]]) {
             ((NSSearchField *)view).placeholderString = text;
         } else if ([view isKindOfClass:[NSTextField class]]) {
             NSTextField *field = (NSTextField *)view;

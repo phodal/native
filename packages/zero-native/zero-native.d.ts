@@ -142,6 +142,8 @@ export type ZeroNativeViewKind =
   | "button"
   | "checkbox"
   | "toggle"
+  | "segmented_control"
+  | "segmentedControl"
   | "text_field"
   | "textField"
   | "search_field"

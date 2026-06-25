@@ -22,6 +22,7 @@
                     .{ .label = "toolbar", .kind = "toolbar", .edge = "top", .height = 52, .role = "Toolbar" },
                     .{ .label = "refresh-button", .kind = "button", .parent = "toolbar", .text = "Refresh", .command = "app.refresh" },
                     .{ .label = "palette-button", .kind = "button", .parent = "toolbar", .text = "Command" },
+                    .{ .label = "view-mode", .kind = "segmented_control", .parent = "toolbar", .x = 288, .y = 10, .width = 168, .height = 30, .text = "List|Grid", .command = "app.view.mode" },
                     .{ .label = "title-search", .kind = "titlebar_accessory", .edge = "top", .height = 36, .role = "Search" },
                     .{ .label = "surface-search", .kind = "search_field", .parent = "title-search", .x = 0, .y = 3, .width = 280, .height = 28, .text = "Search native surfaces" },
                     .{ .label = "sidebar", .kind = "sidebar", .edge = "left", .width = 240, .role = "Sidebar" },

@@ -36,6 +36,7 @@
 #define ZERO_NATIVE_GTK_VIEW_CHECKBOX 13
 #define ZERO_NATIVE_GTK_VIEW_TOGGLE 14
 #define ZERO_NATIVE_GTK_VIEW_PROGRESS_INDICATOR 15
+#define ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL 16
 
 typedef struct zero_native_gtk_shortcut {
     char *id;
@@ -281,6 +282,7 @@ static int zero_native_is_supported_native_view_kind(int kind) {
         kind == ZERO_NATIVE_GTK_VIEW_BUTTON ||
         kind == ZERO_NATIVE_GTK_VIEW_CHECKBOX ||
         kind == ZERO_NATIVE_GTK_VIEW_TOGGLE ||
+        kind == ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL ||
         kind == ZERO_NATIVE_GTK_VIEW_TEXT_FIELD ||
         kind == ZERO_NATIVE_GTK_VIEW_SEARCH_FIELD ||
         kind == ZERO_NATIVE_GTK_VIEW_LABEL ||
@@ -302,6 +304,46 @@ static zero_native_gtk_native_view_t *zero_native_find_native_view(zero_native_g
     return NULL;
 }
 
+static void zero_native_configure_segmented_widget(GtkWidget *box, const char *text) {
+    if (!GTK_IS_BOX(box)) return;
+    GtkWidget *child = gtk_widget_get_first_child(box);
+    while (child) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+        gtk_box_remove(GTK_BOX(box), child);
+        child = next;
+    }
+
+    const char *source = text && text[0] ? text : "One|Two";
+    const char *start = source;
+    int count = 0;
+    for (const char *cursor = source;; cursor++) {
+        if (*cursor != '|' && *cursor != '\0') continue;
+        size_t len = (size_t)(cursor - start);
+        while (len > 0 && (*start == ' ' || *start == '\t')) {
+            start++;
+            len--;
+        }
+        while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+        if (len > 0) {
+            char *segment = g_strndup(start, len);
+            GtkWidget *button = gtk_toggle_button_new_with_label(segment);
+            gtk_widget_add_css_class(button, "flat");
+            if (count == 0) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), TRUE);
+            gtk_box_append(GTK_BOX(box), button);
+            g_free(segment);
+            count++;
+        }
+        if (*cursor == '\0') break;
+        start = cursor + 1;
+    }
+
+    if (count == 0) {
+        GtkWidget *button = gtk_toggle_button_new_with_label("Segment");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), TRUE);
+        gtk_box_append(GTK_BOX(box), button);
+    }
+}
+
 static GtkWidget *zero_native_make_native_widget(int kind, const char *label, const char *text) {
     const char *display_text = text && text[0] ? text : (label ? label : "");
     switch (kind) {
@@ -319,6 +361,12 @@ static GtkWidget *zero_native_make_native_widget(int kind, const char *label, co
             return gtk_check_button_new_with_label(display_text[0] ? display_text : "Checkbox");
         case ZERO_NATIVE_GTK_VIEW_TOGGLE:
             return gtk_toggle_button_new_with_label(display_text[0] ? display_text : "Toggle");
+        case ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL: {
+            GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_widget_add_css_class(box, "linked");
+            zero_native_configure_segmented_widget(box, display_text[0] ? display_text : "One|Two");
+            return box;
+        }
         case ZERO_NATIVE_GTK_VIEW_TEXT_FIELD: {
             GtkWidget *entry = gtk_entry_new();
             gtk_entry_set_placeholder_text(GTK_ENTRY(entry), display_text);
@@ -373,6 +421,8 @@ static void zero_native_apply_native_view_text(zero_native_gtk_native_view_t *vi
         gtk_label_set_text(GTK_LABEL(widget), text);
     } else if (GTK_IS_ENTRY(widget)) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(widget), text);
+    } else if (GTK_IS_BOX(widget) && view->kind == ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL) {
+        zero_native_configure_segmented_widget(widget, text);
     }
 }
 
@@ -402,6 +452,17 @@ static void zero_native_configure_native_view_action(zero_native_gtk_native_view
     if (view->action_handler != 0) {
         g_signal_handler_disconnect(view->widget, view->action_handler);
         view->action_handler = 0;
+    }
+    if (GTK_IS_BOX(view->widget) && view->kind == ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL) {
+        GtkWidget *child = gtk_widget_get_first_child(view->widget);
+        while (child) {
+            g_signal_handlers_disconnect_by_data(child, view);
+            if (GTK_IS_BUTTON(child)) {
+                if (view->command && view->command[0]) g_signal_connect(child, "clicked", G_CALLBACK(zero_native_emit_native_action), view);
+            }
+            child = gtk_widget_get_next_sibling(child);
+        }
+        return;
     }
     if (!view->command || !view->command[0]) return;
     if (GTK_IS_CHECK_BUTTON(view->widget)) {
@@ -1866,6 +1927,7 @@ int zero_native_gtk_update_view(zero_native_gtk_host_t *host, uint64_t window_id
     int update_text = has_text || (has_role && !view->explicit_text);
     const char *display_text = has_text ? (view->text ? view->text : "") : zero_native_native_display_text(view);
     if (has_visible || has_enabled || update_text) zero_native_apply_native_view_state(view, update_text, display_text);
+    if (update_text && view->kind == ZERO_NATIVE_GTK_VIEW_SEGMENTED_CONTROL) zero_native_configure_native_view_action(view);
     if (has_layer) zero_native_reorder_overlays(win);
     return 1;
 }

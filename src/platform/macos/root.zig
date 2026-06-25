@@ -791,6 +791,7 @@ fn isSupportedNativeViewKind(kind: platform_mod.ViewKind) bool {
         .button,
         .checkbox,
         .toggle,
+        .segmented_control,
         .text_field,
         .search_field,
         .label,
@@ -827,6 +828,7 @@ fn viewKindInt(kind: platform_mod.ViewKind) c_int {
         .checkbox => 13,
         .toggle => 14,
         .progress_indicator => 15,
+        .segmented_control => 16,
     };
 }
 

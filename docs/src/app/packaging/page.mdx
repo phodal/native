@@ -117,6 +117,14 @@ The manifest drives packaging metadata:
       <td>Copied into the app bundle per platform convention</td>
     </tr>
     <tr>
+      <td><code>file_associations</code></td>
+      <td>Document type metadata for macOS, Linux, and Windows registration artifacts</td>
+    </tr>
+    <tr>
+      <td><code>url_schemes</code></td>
+      <td>Custom protocol metadata for macOS, Linux, and Windows registration artifacts</td>
+    </tr>
+    <tr>
       <td><code>platforms</code></td>
       <td>Which platform packages to generate</td>
     </tr>
@@ -134,7 +142,7 @@ The manifest drives packaging metadata:
 - `Contents/Info.plist` -- generated from `app.zon`
 - `Contents/Resources/dist/` -- frontend assets (if configured)
 
-macOS app bundles declare `LSMinimumSystemVersion` as `11.0`.
+macOS app bundles declare `LSMinimumSystemVersion` as `11.0`. File associations and URL schemes are emitted as `CFBundleDocumentTypes` and `CFBundleURLTypes` entries in `Contents/Info.plist`.
 
 See [Code Signing](/packaging/signing) for signing, notarization, and DMG creation.
 
@@ -147,10 +155,13 @@ Linux packaging creates an install tree:
 - `bin/<name>` -- the executable
 - `share/applications/<name>.desktop` -- desktop entry file
 - `share/icons/hicolor/.../<name>.png` -- icons at standard sizes
+- `share/mime/packages/<name>.xml` -- shared MIME metadata when file associations are configured
 
 ```bash
 zero-native package --target linux --manifest app.zon --binary zig-out/bin/MyApp
 ```
+
+Configured file associations and URL schemes are added to the desktop file `MimeType` list. Extension-only associations get generated `application/x-...` MIME types with glob patterns in the shared MIME package.
 
 ## Windows
 
@@ -158,7 +169,7 @@ zero-native package --target linux --manifest app.zon --binary zig-out/bin/MyApp
 zero-native package --target windows --manifest app.zon --binary zig-out/bin/MyApp.exe
 ```
 
-Windows packaging is in early development. The packager copies the binary and assets into a distributable directory structure.
+Windows packaging is in early development. The packager copies the binary and assets into a distributable directory structure. When file associations or URL schemes are configured, the artifact also includes `install/register-file-types.ps1`, which registers the package-local executable under the current user's `HKCU\Software\Classes` registry keys.
 
 ## Frontend assets
 

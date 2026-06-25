@@ -208,7 +208,7 @@ File associations require a `name` and at least one `extensions` or `mime_types`
 
 URL schemes require a lowercase custom `scheme`. Reserved schemes such as `http`, `https`, and `file` are rejected.
 
-`role` defaults to `viewer` and accepts `viewer`, `editor`, `shell`, or `none`. The metadata is parsed and validated today; platform package generation currently treats registration as unsupported until the macOS, Windows, and Linux packagers emit the native Info.plist, registry, and desktop-file entries.
+`role` defaults to `viewer` and accepts `viewer`, `editor`, `shell`, or `none`. Package generation emits this metadata into macOS `Info.plist` document/protocol declarations, Linux desktop and shared MIME metadata, and a Windows per-user registration script.
 
 ## `frontend.dev`
 

@@ -230,9 +230,22 @@ fn createDesktopArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
         const desktop_path = try std.fmt.allocPrint(allocator, "share/applications/{s}.desktop", .{options.metadata.name});
         defer allocator.free(desktop_path);
         try writeFile(dir, io, desktop_path, desktop_entry);
+        if (options.metadata.file_associations.len > 0) {
+            try dir.createDirPath(io, "share/mime/packages");
+            const mime_info = try linuxMimeInfo(allocator, options.metadata);
+            defer allocator.free(mime_info);
+            const mime_path = try std.fmt.allocPrint(allocator, "share/mime/packages/{s}.xml", .{options.metadata.name});
+            defer allocator.free(mime_path);
+            try writeFile(dir, io, mime_path, mime_info);
+        }
         if (options.metadata.icons.len > 0) {
             copyFileToDir(allocator, io, dir, options.metadata.icons[0], "share/icons/app-icon.png") catch {};
         }
+    } else if (options.target == .windows and hasRegistrationMetadata(options.metadata)) {
+        try dir.createDirPath(io, "install");
+        const registry_script = try windowsRegistrationScript(allocator, options.metadata, executable_name);
+        defer allocator.free(registry_script);
+        try writeFile(dir, io, "install/register-file-types.ps1", registry_script);
     }
     if (options.web_engine == .chromium) {
         const cef_platform = cefPlatformForTarget(options.target) orelse return error.UnsupportedWebEngine;
@@ -288,6 +301,10 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
     defer allocator.free(icon);
     const version = try xmlEscapeAlloc(allocator, metadata.version);
     defer allocator.free(version);
+    const document_types = try macosDocumentTypes(allocator, metadata);
+    defer allocator.free(document_types);
+    const url_types = try macosUrlTypes(allocator, metadata);
+    defer allocator.free(url_types);
     return std.fmt.allocPrint(allocator,
         \\<?xml version="1.0" encoding="UTF-8"?>
         \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -311,10 +328,11 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
         \\  <string>{s}</string>
         \\  <key>CFBundleVersion</key>
         \\  <string>{s}</string>
+        \\{s}{s}
         \\</dict>
         \\</plist>
         \\
-    , .{ bundle_id, name, display_name, executable, icon, version, version });
+    , .{ bundle_id, name, display_name, executable, icon, version, version, document_types, url_types });
 }
 
 fn embedHeader() []const u8 {
@@ -742,21 +760,387 @@ fn runSigning(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, options
     }
 }
 
+fn hasRegistrationMetadata(metadata: manifest_tool.Metadata) bool {
+    return metadata.file_associations.len > 0 or metadata.url_schemes.len > 0;
+}
+
+fn appendFmt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), comptime format: []const u8, args: anytype) !void {
+    const text = try std.fmt.allocPrint(allocator, format, args);
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
+}
+
+fn trimExtensionDot(extension: []const u8) []const u8 {
+    if (extension.len > 0 and extension[0] == '.') return extension[1..];
+    return extension;
+}
+
+fn macosDocumentTypes(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    if (metadata.file_associations.len == 0) return allocator.dupe(u8, "");
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\  <key>CFBundleDocumentTypes</key>
+        \\  <array>
+        \\
+    );
+    for (metadata.file_associations) |association| {
+        const name = try xmlEscapeAlloc(allocator, association.name);
+        defer allocator.free(name);
+        try appendFmt(allocator, &out,
+            \\    <dict>
+            \\      <key>CFBundleTypeName</key>
+            \\      <string>{s}</string>
+            \\      <key>CFBundleTypeRole</key>
+            \\      <string>{s}</string>
+            \\
+        , .{ name, macosAssociationRole(association.role) });
+        if (association.icon) |icon_path| {
+            const icon = try xmlEscapeAlloc(allocator, std.fs.path.basename(icon_path));
+            defer allocator.free(icon);
+            try appendFmt(allocator, &out,
+                \\      <key>CFBundleTypeIconFile</key>
+                \\      <string>{s}</string>
+                \\
+            , .{icon});
+        }
+        if (association.extensions.len > 0) {
+            try out.appendSlice(allocator,
+                \\      <key>CFBundleTypeExtensions</key>
+                \\      <array>
+                \\
+            );
+            for (association.extensions) |extension| {
+                const escaped = try xmlEscapeAlloc(allocator, trimExtensionDot(extension));
+                defer allocator.free(escaped);
+                try appendFmt(allocator, &out,
+                    \\        <string>{s}</string>
+                    \\
+                , .{escaped});
+            }
+            try out.appendSlice(allocator,
+                \\      </array>
+                \\
+            );
+        }
+        if (association.mime_types.len > 0) {
+            try out.appendSlice(allocator,
+                \\      <key>CFBundleTypeMIMETypes</key>
+                \\      <array>
+                \\
+            );
+            for (association.mime_types) |mime_type| {
+                const escaped = try xmlEscapeAlloc(allocator, mime_type);
+                defer allocator.free(escaped);
+                try appendFmt(allocator, &out,
+                    \\        <string>{s}</string>
+                    \\
+                , .{escaped});
+            }
+            try out.appendSlice(allocator,
+                \\      </array>
+                \\
+            );
+        }
+        try out.appendSlice(allocator,
+            \\    </dict>
+            \\
+        );
+    }
+    try out.appendSlice(allocator,
+        \\  </array>
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn macosUrlTypes(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    if (metadata.url_schemes.len == 0) return allocator.dupe(u8, "");
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\  <key>CFBundleURLTypes</key>
+        \\  <array>
+        \\
+    );
+    for (metadata.url_schemes) |url_scheme| {
+        const name_value = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ metadata.id, url_scheme.scheme });
+        defer allocator.free(name_value);
+        const name = try xmlEscapeAlloc(allocator, name_value);
+        defer allocator.free(name);
+        const scheme = try xmlEscapeAlloc(allocator, url_scheme.scheme);
+        defer allocator.free(scheme);
+        try appendFmt(allocator, &out,
+            \\    <dict>
+            \\      <key>CFBundleTypeRole</key>
+            \\      <string>{s}</string>
+            \\      <key>CFBundleURLName</key>
+            \\      <string>{s}</string>
+            \\      <key>CFBundleURLSchemes</key>
+            \\      <array>
+            \\        <string>{s}</string>
+            \\      </array>
+            \\    </dict>
+            \\
+        , .{ macosAssociationRole(url_scheme.role), name, scheme });
+    }
+    try out.appendSlice(allocator,
+        \\  </array>
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn macosAssociationRole(role: []const u8) []const u8 {
+    if (std.mem.eql(u8, role, "editor")) return "Editor";
+    if (std.mem.eql(u8, role, "shell")) return "Shell";
+    if (std.mem.eql(u8, role, "none")) return "None";
+    return "Viewer";
+}
+
 fn linuxDesktopEntry(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
     const display_name = try desktopEntryEscapeAlloc(allocator, metadata.displayName());
     defer allocator.free(display_name);
     const executable = try desktopEntryEscapeAlloc(allocator, metadata.name);
     defer allocator.free(executable);
+    const field_code: []const u8 = if (metadata.url_schemes.len > 0) " %U" else if (metadata.file_associations.len > 0) " %F" else "";
+    const mime_line = try linuxDesktopMimeLine(allocator, metadata);
+    defer allocator.free(mime_line);
     return std.fmt.allocPrint(allocator,
         \\[Desktop Entry]
         \\Type=Application
         \\Name={s}
-        \\Exec={s}
+        \\Exec={s}{s}
         \\Icon=app-icon
         \\Categories=Utility;
         \\Comment={s} desktop application
+        \\{s}
         \\
-    , .{ display_name, executable, display_name });
+    , .{ display_name, executable, field_code, display_name, mime_line });
+}
+
+fn linuxDesktopMimeLine(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    if (!hasRegistrationMetadata(metadata)) return allocator.dupe(u8, "");
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "MimeType=");
+    for (metadata.file_associations) |association| {
+        if (association.mime_types.len > 0) {
+            for (association.mime_types) |mime_type| {
+                try out.appendSlice(allocator, mime_type);
+                try out.append(allocator, ';');
+            }
+        } else {
+            const generated = try linuxGeneratedMimeType(allocator, metadata, association);
+            defer allocator.free(generated);
+            try out.appendSlice(allocator, generated);
+            try out.append(allocator, ';');
+        }
+    }
+    for (metadata.url_schemes) |url_scheme| {
+        try appendFmt(allocator, &out, "x-scheme-handler/{s};", .{url_scheme.scheme});
+    }
+    try out.append(allocator, '\n');
+    return out.toOwnedSlice(allocator);
+}
+
+fn linuxMimeInfo(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+        \\
+    );
+    for (metadata.file_associations) |association| {
+        if (association.mime_types.len > 0) {
+            for (association.mime_types) |mime_type| {
+                try appendLinuxMimeType(allocator, &out, association, mime_type);
+            }
+        } else {
+            const generated = try linuxGeneratedMimeType(allocator, metadata, association);
+            defer allocator.free(generated);
+            try appendLinuxMimeType(allocator, &out, association, generated);
+        }
+    }
+    try out.appendSlice(allocator,
+        \\</mime-info>
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendLinuxMimeType(allocator: std.mem.Allocator, out: *std.ArrayList(u8), association: manifest_tool.FileAssociationMetadata, mime_type: []const u8) !void {
+    const escaped_type = try xmlEscapeAlloc(allocator, mime_type);
+    defer allocator.free(escaped_type);
+    const comment = try xmlEscapeAlloc(allocator, association.name);
+    defer allocator.free(comment);
+    try appendFmt(allocator, out,
+        \\  <mime-type type="{s}">
+        \\    <comment>{s}</comment>
+        \\
+    , .{ escaped_type, comment });
+    for (association.extensions) |extension| {
+        const pattern = try std.fmt.allocPrint(allocator, "*.{s}", .{trimExtensionDot(extension)});
+        defer allocator.free(pattern);
+        const escaped_pattern = try xmlEscapeAlloc(allocator, pattern);
+        defer allocator.free(escaped_pattern);
+        try appendFmt(allocator, out,
+            \\    <glob pattern="{s}"/>
+            \\
+        , .{escaped_pattern});
+    }
+    try out.appendSlice(allocator,
+        \\  </mime-type>
+        \\
+    );
+}
+
+fn linuxGeneratedMimeType(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata, association: manifest_tool.FileAssociationMetadata) ![]const u8 {
+    const app = try slugComponentAlloc(allocator, metadata.name);
+    defer allocator.free(app);
+    const name = try slugComponentAlloc(allocator, association.name);
+    defer allocator.free(name);
+    return std.fmt.allocPrint(allocator, "application/x-{s}-{s}", .{ app, name });
+}
+
+fn windowsRegistrationScript(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata, executable_name: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    const executable_subpath = try std.fmt.allocPrint(allocator, "bin\\{s}", .{executable_name});
+    defer allocator.free(executable_subpath);
+    const executable_literal = try powerShellStringAlloc(allocator, executable_subpath);
+    defer allocator.free(executable_literal);
+
+    try appendFmt(allocator, &out,
+        \\$ErrorActionPreference = "Stop"
+        \\$AppRoot = Split-Path -Parent $PSScriptRoot
+        \\$Exe = Join-Path $AppRoot {s}
+        \\$OpenCommand = '"' + $Exe + '" "%1"'
+        \\
+        \\function Set-DefaultValue([string]$Key, [string]$Value) {{
+        \\    & reg.exe add $Key /ve /d $Value /f | Out-Null
+        \\}}
+        \\
+        \\function Set-NamedValue([string]$Key, [string]$Name, [string]$Value) {{
+        \\    & reg.exe add $Key /v $Name /d $Value /f | Out-Null
+        \\}}
+        \\
+    , .{executable_literal});
+
+    for (metadata.file_associations) |association| {
+        const prog_id = try windowsProgId(allocator, metadata, association);
+        defer allocator.free(prog_id);
+        const prog_key = try std.fmt.allocPrint(allocator, "HKCU\\Software\\Classes\\{s}", .{prog_id});
+        defer allocator.free(prog_key);
+        const prog_key_literal = try powerShellStringAlloc(allocator, prog_key);
+        defer allocator.free(prog_key_literal);
+        const prog_id_literal = try powerShellStringAlloc(allocator, prog_id);
+        defer allocator.free(prog_id_literal);
+        const name_literal = try powerShellStringAlloc(allocator, association.name);
+        defer allocator.free(name_literal);
+
+        for (association.extensions) |extension| {
+            const extension_key = try std.fmt.allocPrint(allocator, "HKCU\\Software\\Classes\\.{s}", .{trimExtensionDot(extension)});
+            defer allocator.free(extension_key);
+            const extension_key_literal = try powerShellStringAlloc(allocator, extension_key);
+            defer allocator.free(extension_key_literal);
+            try appendFmt(allocator, &out, "Set-DefaultValue {s} {s}\n", .{ extension_key_literal, prog_id_literal });
+        }
+
+        try appendFmt(allocator, &out,
+            \\Set-DefaultValue {s} {s}
+            \\Set-NamedValue {s} 'FriendlyTypeName' {s}
+            \\Set-DefaultValue '{s}\DefaultIcon' $Exe
+            \\Set-DefaultValue '{s}\shell\open\command' $OpenCommand
+            \\
+        , .{ prog_key_literal, name_literal, prog_key_literal, name_literal, prog_key, prog_key });
+    }
+
+    for (metadata.url_schemes) |url_scheme| {
+        const scheme_key = try std.fmt.allocPrint(allocator, "HKCU\\Software\\Classes\\{s}", .{url_scheme.scheme});
+        defer allocator.free(scheme_key);
+        const scheme_key_literal = try powerShellStringAlloc(allocator, scheme_key);
+        defer allocator.free(scheme_key_literal);
+        const description = try std.fmt.allocPrint(allocator, "URL:{s}", .{url_scheme.scheme});
+        defer allocator.free(description);
+        const description_literal = try powerShellStringAlloc(allocator, description);
+        defer allocator.free(description_literal);
+        try appendFmt(allocator, &out,
+            \\Set-DefaultValue {s} {s}
+            \\Set-NamedValue {s} 'URL Protocol' ''
+            \\Set-DefaultValue '{s}\shell\open\command' $OpenCommand
+            \\
+        , .{ scheme_key_literal, description_literal, scheme_key_literal, scheme_key });
+    }
+
+    try out.appendSlice(allocator, "Write-Host \"Registered file associations and URL schemes for this user.\"\n");
+    return out.toOwnedSlice(allocator);
+}
+
+fn windowsProgId(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata, association: manifest_tool.FileAssociationMetadata) ![]const u8 {
+    const app = try windowsIdentifierComponentAlloc(allocator, metadata.id);
+    defer allocator.free(app);
+    const name = try windowsIdentifierComponentAlloc(allocator, association.name);
+    defer allocator.free(name);
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ app, name });
+}
+
+fn windowsIdentifierComponentAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (value) |ch| {
+        if (isAsciiAlphanumeric(ch) or ch == '.') {
+            try out.append(allocator, ch);
+        }
+    }
+    if (out.items.len == 0) try out.appendSlice(allocator, "App");
+    return out.toOwnedSlice(allocator);
+}
+
+fn powerShellStringAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.append(allocator, '\'');
+    for (value) |ch| {
+        switch (ch) {
+            '\'' => try out.appendSlice(allocator, "''"),
+            0...8, 11...12, 14...0x1f => return error.InvalidName,
+            else => try out.append(allocator, ch),
+        }
+    }
+    try out.append(allocator, '\'');
+    return out.toOwnedSlice(allocator);
+}
+
+fn slugComponentAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var last_dash = false;
+    for (value) |ch| {
+        if (isAsciiAlphanumeric(ch)) {
+            try out.append(allocator, toLowerAscii(ch));
+            last_dash = false;
+        } else if (!last_dash and out.items.len > 0) {
+            try out.append(allocator, '-');
+            last_dash = true;
+        }
+    }
+    if (last_dash) out.items.len -= 1;
+    if (out.items.len == 0) try out.appendSlice(allocator, "item");
+    return out.toOwnedSlice(allocator);
+}
+
+fn isAsciiAlphanumeric(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9');
+}
+
+fn toLowerAscii(ch: u8) u8 {
+    if (ch >= 'A' and ch <= 'Z') return ch + ('a' - 'A');
+    return ch;
 }
 
 fn createArchive(allocator: std.mem.Allocator, io: std.Io, options: PackageOptions) !?[]const u8 {
@@ -832,6 +1216,32 @@ test "linux desktop entry contains app name" {
     try std.testing.expect(std.mem.indexOf(u8, entry, "Exec=demo") != null);
 }
 
+test "linux desktop metadata includes file associations and URL schemes" {
+    const extensions = [_][]const u8{"md"};
+    const associations = [_]manifest_tool.FileAssociationMetadata{.{
+        .name = "Markdown Document",
+        .extensions = &extensions,
+    }};
+    const schemes = [_]manifest_tool.UrlSchemeMetadata{.{ .scheme = "acme-notes" }};
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.app",
+        .name = "demo",
+        .display_name = "Demo App",
+        .version = "1.2.3",
+        .file_associations = &associations,
+        .url_schemes = &schemes,
+    };
+    const entry = try linuxDesktopEntry(std.testing.allocator, metadata);
+    defer std.testing.allocator.free(entry);
+    try std.testing.expect(std.mem.indexOf(u8, entry, "Exec=demo %U") != null);
+    try std.testing.expect(std.mem.indexOf(u8, entry, "MimeType=application/x-demo-markdown-document;x-scheme-handler/acme-notes;") != null);
+
+    const mime_info = try linuxMimeInfo(std.testing.allocator, metadata);
+    defer std.testing.allocator.free(mime_info);
+    try std.testing.expect(std.mem.indexOf(u8, mime_info, "<mime-type type=\"application/x-demo-markdown-document\">") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mime_info, "<glob pattern=\"*.md\"/>") != null);
+}
+
 test "artifact names include metadata target and optimize mode" {
     var buffer: [128]u8 = undefined;
     const metadata: manifest_tool.Metadata = .{ .id = "dev.example.app", .name = "demo", .version = "1.2.3" };
@@ -849,6 +1259,60 @@ test "plist template includes identity executable and version" {
     try std.testing.expect(std.mem.indexOf(u8, plist, "icon.icns") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "LSMinimumSystemVersion") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "11.0") != null);
+}
+
+test "plist template includes document and URL registrations" {
+    const extensions = [_][]const u8{ "md", ".markdown" };
+    const mime_types = [_][]const u8{"text/markdown"};
+    const associations = [_]manifest_tool.FileAssociationMetadata{.{
+        .name = "Markdown Document",
+        .role = "editor",
+        .extensions = &extensions,
+        .mime_types = &mime_types,
+        .icon = "assets/markdown.icns",
+    }};
+    const schemes = [_]manifest_tool.UrlSchemeMetadata{.{ .scheme = "acme-notes" }};
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.app",
+        .name = "demo",
+        .display_name = "Demo App",
+        .version = "1.2.3",
+        .file_associations = &associations,
+        .url_schemes = &schemes,
+    };
+    const plist = try macosInfoPlist(std.testing.allocator, metadata, "demo");
+    defer std.testing.allocator.free(plist);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleDocumentTypes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleTypeRole") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "Editor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "markdown.icns") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>markdown</string>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "text/markdown") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleURLTypes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "acme-notes") != null);
+}
+
+test "windows registration script contains extension and protocol keys" {
+    const extensions = [_][]const u8{"md"};
+    const associations = [_]manifest_tool.FileAssociationMetadata{.{
+        .name = "Markdown Document",
+        .extensions = &extensions,
+    }};
+    const schemes = [_]manifest_tool.UrlSchemeMetadata{.{ .scheme = "acme-notes" }};
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.app",
+        .name = "demo",
+        .version = "1.2.3",
+        .file_associations = &associations,
+        .url_schemes = &schemes,
+    };
+    const script = try windowsRegistrationScript(std.testing.allocator, metadata, "demo.exe");
+    defer std.testing.allocator.free(script);
+    try std.testing.expect(std.mem.indexOf(u8, script, "bin\\demo.exe") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "HKCU\\Software\\Classes\\.md") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "dev.example.app.MarkdownDocument") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "HKCU\\Software\\Classes\\acme-notes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "URL:acme-notes") != null);
 }
 
 test "copying files preserves executable permissions" {

@@ -42,6 +42,7 @@ Install on an emulator or device:
 - `onCreate` loads the JNI library, creates the native shell, then starts the zero-native app.
 - `onResume` and `onPause` forward activation lifecycle with `zero_native_app_activate` and `zero_native_app_deactivate`.
 - `surfaceChanged` forwards size, display density, and the Android `Surface`, then requests a frame.
+- Orientation and screen-size changes stay in the same activity so the embedded runtime is not recreated during rotation.
 - The activity uses `windowSoftInputMode="adjustResize"` so Android owns keyboard avoidance and relayouts the content area.
 - The native Back and Refresh buttons call `nativeCommand` with stable mobile command IDs, update status from `zero_native_app_last_command_count`, and request a frame.
 - The Android system Back action dispatches `mobile.back` through the same command path.

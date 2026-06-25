@@ -103,7 +103,7 @@ Mobile embedding uses the same runtime lifecycle through a thin native host:
     <tr>
       <td>Content size or surface changes</td>
       <td><code>zero_native_app_resize</code>, then <code>zero_native_app_frame</code></td>
-      <td>Swift <code>viewDidLayoutSubviews</code>; Android <code>surfaceChanged</code></td>
+      <td>Swift <code>viewDidLayoutSubviews</code>; Android <code>surfaceChanged</code> with orientation/screen-size changes handled in the same activity</td>
     </tr>
     <tr>
       <td>Touch input</td>

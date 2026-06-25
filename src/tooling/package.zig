@@ -394,7 +394,7 @@ fn androidReadme() []const u8 {
 }
 
 fn androidManifest() []const u8 {
-    return "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:theme=\"@style/AppTheme\"><activity android:name=\".MainActivity\" android:exported=\"true\" android:windowSoftInputMode=\"adjustResize\"><intent-filter><action android:name=\"android.intent.action.MAIN\"/><category android:name=\"android.intent.category.LAUNCHER\"/></intent-filter></activity></application></manifest>\n";
+    return "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:theme=\"@style/AppTheme\"><activity android:name=\".MainActivity\" android:configChanges=\"keyboard|keyboardHidden|orientation|screenSize\" android:exported=\"true\" android:windowSoftInputMode=\"adjustResize\"><intent-filter><action android:name=\"android.intent.action.MAIN\"/><category android:name=\"android.intent.category.LAUNCHER\"/></intent-filter></activity></application></manifest>\n";
 }
 
 fn androidActivity() []const u8 {
@@ -402,6 +402,7 @@ fn androidActivity() []const u8 {
     \\package dev.zero_native
     \\
     \\import android.app.Activity
+    \\import android.content.res.Configuration
     \\import android.os.Bundle
     \\import android.view.MotionEvent
     \\import android.view.SurfaceHolder
@@ -433,6 +434,10 @@ fn androidActivity() []const u8 {
     \\    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { nativeResize(app, width.toFloat(), height.toFloat(), 1f, holder.surface) }
     \\    override fun surfaceCreated(holder: SurfaceHolder) {}
     \\    override fun surfaceDestroyed(holder: SurfaceHolder) { nativeStop(app) }
+    \\    override fun onConfigurationChanged(newConfig: Configuration) {
+    \\        super.onConfigurationChanged(newConfig)
+    \\        if (app != 0L) nativeFrame(app)
+    \\    }
     \\    override fun onTouchEvent(event: MotionEvent): Boolean {
     \\        nativeTouch(app, event.getPointerId(0).toLong(), event.actionMasked, event.x, event.y, event.pressure)
     \\        nativeFrame(app)

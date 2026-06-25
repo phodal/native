@@ -1,6 +1,7 @@
 package dev.zero_native.examples.android
 
 import android.app.Activity
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import android.view.MotionEvent
@@ -134,6 +135,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         nativeStop(nativeApp)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (nativeApp != 0L) {
+            nativeFrame(nativeApp)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

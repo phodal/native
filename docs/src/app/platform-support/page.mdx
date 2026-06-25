@@ -59,7 +59,7 @@ iOS and Android are supported today through embedded host examples rather than t
 | Native header/navigation | UIKit header with Back and Refresh command buttons | Android view header with Back and Refresh command buttons |
 | WebView content area | `WKWebView` workspace | Android `WebView` workspace |
 | Runtime lifecycle | `zero_native_app_create`, `start`, `activate`, `deactivate`, `stop`, and `destroy` from Swift | JNI bridge for `create`, `start`, `activate`, `deactivate`, `stop`, and `destroy` |
-| Resize and orientation | `viewDidLayoutSubviews` forwards WebView size and screen scale | `surfaceChanged` forwards size, density, and `Surface` |
+| Resize and orientation | `viewDidLayoutSubviews` forwards WebView size and screen scale | Orientation/screen-size changes stay in the activity; `surfaceChanged` forwards size, density, and `Surface` |
 | Keyboard avoidance | Keyboard frame notifications adjust the WebView bottom constraint | `windowSoftInputMode="adjustResize"` lets Android relayout the content area |
 | Back/navigation command | Native Back button dispatches `mobile.back` | Native Back button and system Back dispatch `mobile.back` |
 | Touch forwarding | UIKit/WebKit own touch handling for the WebView workspace | `MotionEvent` pointer data is forwarded through `zero_native_app_touch` |

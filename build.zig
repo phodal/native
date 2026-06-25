@@ -179,6 +179,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "list(): Promise<ZeroNativeCommandInfo[]>" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativeCreateWebViewViewOptions" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "Stable runtime view id" },
+        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "update(label: string" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "kind: \"webview\"" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "url: string" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativePlatformFeatureSelector" },
@@ -200,6 +201,13 @@ pub fn build(b: *std.Build) void {
     });
     addFileContainsCheckStep(b, test_step, "test-docs-native-view-contracts", "Verify native surface docs describe view identity", &.{
         .{ .path = "docs/src/app/native-surfaces/page.mdx", .pattern = "ViewInfo.id" },
+        .{ .path = "docs/src/app/native-surfaces/page.mdx", .pattern = "window.zero.views.update(\"status\"" },
+    });
+    addFileContainsCheckStep(b, test_step, "test-js-view-helper-contracts", "Verify injected view helpers support label-first updates", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "update:function(options,patch)" },
+        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "update:function(options,patch)" },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "update:function(options,patch)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "update:function(options,patch)" },
     });
     addFileContainsCheckStep(b, test_step, "test-docs-builtin-bridge-policy", "Verify bridge policy docs include guarded dialog commands", &.{
         .{ .path = "docs/src/app/security/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },

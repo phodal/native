@@ -455,6 +455,7 @@ export interface ZeroNativeApi {
   views: {
     create(options: ZeroNativeCreateViewOptions): Promise<ZeroNativeViewHandle>;
     list(): Promise<ZeroNativeViewInfo[]>;
+    update(label: string, patch: Omit<ZeroNativeUpdateViewOptions, "label" | "windowId">): Promise<ZeroNativeViewHandle>;
     update(options: ZeroNativeUpdateViewOptions): Promise<ZeroNativeViewHandle>;
     setFrame(options: ZeroNativeSetViewFrameOptions): Promise<ZeroNativeViewHandle>;
     setVisible(options: ZeroNativeSetViewVisibleOptions): Promise<ZeroNativeViewHandle>;

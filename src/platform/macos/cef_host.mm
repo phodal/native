@@ -408,7 +408,7 @@ static const char *ZeroNativeCefBridgeScript() {
         "var views=Object.freeze({"
         "create:function(options){return invoke('zero-native.view.create',viewCreatePayload(options)).then(viewHandle);},"
         "list:function(){return invoke('zero-native.view.list',{});},"
-        "update:function(options){return invoke('zero-native.view.update',viewPatchPayload(options)).then(viewHandle);},"
+        "update:function(options,patch){if(typeof options==='string'){return invoke('zero-native.view.update',viewPatchPayload(Object.assign({},patch||{},{label:options}))).then(viewHandle);}return invoke('zero-native.view.update',viewPatchPayload(options)).then(viewHandle);},"
         "setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},"
         "setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},"
         "focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},"

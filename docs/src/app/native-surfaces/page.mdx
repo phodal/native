@@ -60,6 +60,7 @@ Trusted WebView code can use the guarded bridge helpers when `js_window_api` or 
 
 ```js
 const views = await window.zero.views.list();
+await window.zero.views.update("status", { text: "Synced" });
 await window.zero.commands.invoke("app.refresh");
 ```
 

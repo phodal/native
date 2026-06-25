@@ -166,6 +166,8 @@ The optional `shell` block declares native-first windows with explicit view tree
 
 Tooling parses and validates the schema. Runtime code can return the same shape from `App.scene_fn`, materialize a parsed shell window with `runtime.createShellWindow(...)`, or attach a shell view list to an existing window with `runtime.createShellViews(...)`; platform hosts implement view kinds progressively, so unsupported native kinds fail at runtime with an explicit unsupported error until that backend grows support.
 
+When an app uses both `windows` and `shell.windows`, labels must stay unique across both lists. Use `windows` for the simple compatibility path or `shell.windows` for native-first structure; do not define two window entries with the same label.
+
 ```zig
 .shell = .{
     .windows = .{

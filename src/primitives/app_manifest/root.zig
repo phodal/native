@@ -479,10 +479,12 @@ pub fn validateWindows(windows: []const Window) ValidationError!void {
 }
 
 pub fn validateShell(shell: ShellConfig, compatibility_windows: []const Window) ValidationError!void {
-    _ = compatibility_windows;
     if (shell.windows.len > max_shell_windows) return error.InvalidLayout;
     for (shell.windows, 0..) |window, index| {
         try validateShellWindow(window);
+        for (compatibility_windows) |compatibility_window| {
+            if (std.mem.eql(u8, compatibility_window.label, window.label)) return error.DuplicateWindow;
+        }
         for (shell.windows[0..index]) |previous| {
             if (std.mem.eql(u8, previous.label, window.label)) return error.DuplicateWindow;
         }
@@ -1085,6 +1087,14 @@ test "manifest validates shell windows and views" {
         .version = .{ .major = 1, .minor = 0, .patch = 0 },
         .shell = .{ .windows = &shell_windows },
     });
+
+    const compatibility_windows = [_]Window{.{ .label = "main" }};
+    try std.testing.expectError(error.DuplicateWindow, validateManifest(.{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .windows = &compatibility_windows,
+        .shell = .{ .windows = &shell_windows },
+    }));
 
     const duplicate_views = [_]ShellView{
         .{ .label = "content", .kind = .webview, .url = "zero://app/index.html" },

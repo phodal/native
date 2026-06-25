@@ -1279,6 +1279,37 @@ test "manifest parser rejects invalid shell view kind" {
     try std.testing.expectError(error.InvalidViewKind, parseShell(std.testing.allocator, metadata.shell));
 }
 
+test "manifest parser rejects duplicate compatibility and shell window labels" {
+    const metadata = try parseText(std.testing.allocator,
+        \\.{
+        \\  .id = "com.example.app",
+        \\  .name = "example",
+        \\  .version = "1.2.3",
+        \\  .windows = .{
+        \\    .{ .label = "main" },
+        \\  },
+        \\  .shell = .{
+        \\    .windows = .{
+        \\      .{ .label = "main", .views = .{ .{ .label = "content", .kind = "webview", .url = "zero://app/index.html" } } },
+        \\    },
+        \\  },
+        \\}
+    );
+    defer metadata.deinit(std.testing.allocator);
+
+    const windows = try convertWindows(std.testing.allocator, metadata.windows);
+    defer std.testing.allocator.free(windows);
+    const shell = try parseShell(std.testing.allocator, metadata.shell);
+    defer deinitParsedShell(std.testing.allocator, shell);
+
+    try std.testing.expectError(error.DuplicateWindow, app_manifest.validateManifest(.{
+        .identity = .{ .id = metadata.id, .name = metadata.name },
+        .version = try parseVersion(metadata.version),
+        .windows = windows,
+        .shell = shell,
+    }));
+}
+
 test "manifest metadata parser reads frontend config" {
     const metadata = try parseText(std.testing.allocator,
         \\.{

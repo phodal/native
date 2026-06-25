@@ -151,7 +151,7 @@ Tooling parses and validates the schema. Runtime code can return the same shape 
             .height = 760,
             .views = .{
                 .{ .label = "toolbar", .kind = "toolbar", .edge = "top", .height = 44, .role = "toolbar" },
-                .{ .label = "sidebar", .kind = "webview", .url = "zero://app/sidebar.html", .edge = "left", .width = 280 },
+                .{ .label = "sidebar", .kind = "webview", .url = "zero://app/sidebar.html", .edge = "left", .width = 280, .min_width = 220, .max_width = 360 },
                 .{ .label = "content", .kind = "webview", .url = "zero://app/index.html", .fill = true },
                 .{ .label = "status", .kind = "statusbar", .edge = "bottom", .height = 24, .text = "Ready" },
             },
@@ -162,9 +162,9 @@ Tooling parses and validates the schema. Runtime code can return the same shape 
 
 Supported `kind` values are `webview`, `toolbar`, `titlebar_accessory`, `sidebar`, `statusbar`, `split`, `stack`, `button`, `icon_button`, `checkbox`, `toggle`, `segmented_control`, `text_field`, `search_field`, `label`, `spacer`, `gpu_surface`, and `progress_indicator`.
 
-Each view has a required `label` and `kind`. WebView views require `url`. Optional layout fields are `parent`, `edge`, `x`, `y`, `width`, `height`, `fill`, and `layer`. Optional behavior and accessibility metadata are `visible`, `enabled`, `role`, `text`, and `command`.
+Each view has a required `label` and `kind`. WebView views require `url`. Optional layout fields are `parent`, `edge`, `x`, `y`, `width`, `height`, `min_width`, `min_height`, `max_width`, `max_height`, `fill`, and `layer`. Optional behavior and accessibility metadata are `visible`, `enabled`, `role`, `text`, and `command`.
 
-`createShellWindow` and `createShellViews` dock `edge` views against the remaining window content, let one or more `fill` views use the final remaining rectangle, and lay out parented controls such as toolbar buttons with small native defaults when explicit `x`, `y`, `width`, or `height` values are omitted. The runtime keeps the shell view slice as a layout binding and reapplies it when the window is resized, so pass data that lives for the lifetime of the window.
+`createShellWindow` and `createShellViews` dock `edge` views against the remaining window content, let one or more `fill` views use the final remaining rectangle, clamp resolved frames with any min/max size fields, and lay out parented controls such as toolbar buttons with small native defaults when explicit `x`, `y`, `width`, or `height` values are omitted. The runtime keeps the shell view slice as a layout binding and reapplies it when the window is resized, so pass data that lives for the lifetime of the window.
 
 ## `shortcuts`
 

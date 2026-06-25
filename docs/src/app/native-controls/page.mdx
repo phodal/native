@@ -54,6 +54,6 @@ The macOS, Linux, and Windows system-WebView backends support these native kinds
 
 ## Layout
 
-For declarative shell views, use `edge` for docked chrome, `fill = true` for content, and `parent` for controls inside containers. The runtime keeps shell views bound to the window and reapplies their frames on resize.
+For declarative shell views, use `edge` for docked chrome, `fill = true` for content, `parent` for controls inside containers, and min/max size fields when a surface needs resize constraints. The runtime keeps shell views bound to the window and reapplies their frames on resize.
 
 Use `role` for accessibility text. Use `text` for visible labels, button titles, and text/search placeholders when no separate role is needed.

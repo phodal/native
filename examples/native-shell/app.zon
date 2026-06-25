@@ -26,7 +26,7 @@
                     .{ .label = "view-mode", .kind = "segmented_control", .parent = "toolbar", .x = 324, .y = 10, .width = 168, .height = 30, .text = "List|Grid", .command = "app.view.mode" },
                     .{ .label = "title-search", .kind = "titlebar_accessory", .edge = "top", .height = 36, .role = "Search" },
                     .{ .label = "surface-search", .kind = "search_field", .parent = "title-search", .x = 0, .y = 3, .width = 280, .height = 28, .text = "Search native surfaces" },
-                    .{ .label = "sidebar", .kind = "sidebar", .edge = "left", .width = 240, .role = "Sidebar" },
+                    .{ .label = "sidebar", .kind = "sidebar", .edge = "left", .width = 240, .min_width = 200, .max_width = 320, .role = "Sidebar" },
                     .{ .label = "sidebar-live", .kind = "checkbox", .parent = "sidebar", .x = 18, .y = 92, .width = 160, .height = 24, .text = "Live native UI" },
                     .{ .label = "sidebar-mode", .kind = "toggle", .parent = "sidebar", .x = 18, .y = 128, .width = 128, .height = 28, .text = "Focus mode" },
                     .{ .label = "main", .kind = "webview", .url = "zero://inline", .fill = true },

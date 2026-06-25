@@ -262,6 +262,10 @@ pub const ShellView = struct {
     y: ?f32 = null,
     width: ?f32 = null,
     height: ?f32 = null,
+    min_width: ?f32 = null,
+    min_height: ?f32 = null,
+    max_width: ?f32 = null,
+    max_height: ?f32 = null,
     fill: bool = false,
     layer: i32 = 0,
     visible: bool = true,
@@ -435,6 +439,16 @@ fn validateShellViews(views: []const ShellView) ValidationError!void {
         }
         if (view.width) |width| if (width <= 0) return error.InvalidDimension;
         if (view.height) |height| if (height <= 0) return error.InvalidDimension;
+        if (view.min_width) |min_width| if (min_width < 0) return error.InvalidDimension;
+        if (view.min_height) |min_height| if (min_height < 0) return error.InvalidDimension;
+        if (view.max_width) |max_width| if (max_width <= 0) return error.InvalidDimension;
+        if (view.max_height) |max_height| if (max_height <= 0) return error.InvalidDimension;
+        if (view.min_width) |min_width| {
+            if (view.max_width) |max_width| if (min_width > max_width) return error.InvalidDimension;
+        }
+        if (view.min_height) |min_height| {
+            if (view.max_height) |max_height| if (min_height > max_height) return error.InvalidDimension;
+        }
         if (view.role) |role| {
             if (role.len > max_view_role_bytes) return error.InvalidName;
             try validateName(role);
@@ -980,6 +994,14 @@ test "manifest validates shell windows and views" {
         .identity = .{ .id = "com.example.app", .name = "example" },
         .version = .{ .major = 1, .minor = 0, .patch = 0 },
         .shell = .{ .windows = &orphan_window },
+    }));
+
+    const invalid_constraints_views = [_]ShellView{.{ .label = "content", .kind = .webview, .url = "zero://app/index.html", .min_width = 400, .max_width = 320 }};
+    const invalid_constraints_window = [_]ShellWindow{.{ .views = &invalid_constraints_views }};
+    try std.testing.expectError(error.InvalidDimension, validateManifest(.{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .shell = .{ .windows = &invalid_constraints_window },
     }));
 }
 

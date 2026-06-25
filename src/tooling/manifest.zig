@@ -162,6 +162,10 @@ pub const ShellViewMetadata = struct {
     y: ?f32 = null,
     width: ?f32 = null,
     height: ?f32 = null,
+    min_width: ?f32 = null,
+    min_height: ?f32 = null,
+    max_width: ?f32 = null,
+    max_height: ?f32 = null,
     fill: bool = false,
     layer: i32 = 0,
     visible: bool = true,
@@ -298,6 +302,7 @@ pub fn parseText(allocator: std.mem.Allocator, source: []const u8) !Metadata {
     defer arena.deinit();
     const scratch = arena.allocator();
     const source_z = try scratch.dupeZ(u8, source);
+    @setEvalBranchQuota(2000);
     const raw = try std.zon.parse.fromSliceAlloc(RawManifest, scratch, source_z, null, .{});
     return .{
         .id = try allocator.dupe(u8, raw.id),
@@ -436,6 +441,10 @@ fn convertRawShellViews(allocator: std.mem.Allocator, views: []const RawShellVie
             .y = view.y,
             .width = view.width,
             .height = view.height,
+            .min_width = view.min_width,
+            .min_height = view.min_height,
+            .max_width = view.max_width,
+            .max_height = view.max_height,
             .fill = view.fill,
             .layer = view.layer,
             .visible = view.visible,
@@ -604,6 +613,10 @@ fn parseShellViews(allocator: std.mem.Allocator, values: []const ShellViewMetada
             .y = view.y,
             .width = view.width,
             .height = view.height,
+            .min_width = view.min_width,
+            .min_height = view.min_height,
+            .max_width = view.max_width,
+            .max_height = view.max_height,
             .fill = view.fill,
             .layer = view.layer,
             .visible = view.visible,
@@ -963,7 +976,7 @@ test "manifest metadata parser reads shell windows and views" {
         \\        .restore_policy = "center_on_primary",
         \\        .views = .{
         \\          .{ .label = "toolbar", .kind = "toolbar", .edge = "top", .height = 44, .role = "toolbar" },
-        \\          .{ .label = "content", .kind = "webview", .url = "zero://app/index.html", .fill = true },
+        \\          .{ .label = "content", .kind = "webview", .url = "zero://app/index.html", .fill = true, .min_width = 640, .min_height = 400, .max_width = 1440, .max_height = 900 },
         \\          .{ .label = "status", .kind = "statusbar", .edge = "bottom", .height = 24, .text = "Ready" },
         \\          .{ .label = "refresh-icon", .kind = "icon_button", .parent = "toolbar", .text = "R", .command = "app.refresh.icon" },
         \\          .{ .label = "save", .kind = "button", .parent = "toolbar", .text = "Save", .command = "app.save" },
@@ -982,6 +995,10 @@ test "manifest metadata parser reads shell windows and views" {
     try std.testing.expectEqualStrings("toolbar", metadata.shell.windows[0].views[0].kind);
     try std.testing.expectEqualStrings("zero://app/index.html", metadata.shell.windows[0].views[1].url.?);
     try std.testing.expect(metadata.shell.windows[0].views[1].fill);
+    try std.testing.expectEqual(@as(?f32, 640), metadata.shell.windows[0].views[1].min_width);
+    try std.testing.expectEqual(@as(?f32, 400), metadata.shell.windows[0].views[1].min_height);
+    try std.testing.expectEqual(@as(?f32, 1440), metadata.shell.windows[0].views[1].max_width);
+    try std.testing.expectEqual(@as(?f32, 900), metadata.shell.windows[0].views[1].max_height);
     try std.testing.expectEqualStrings("icon_button", metadata.shell.windows[0].views[3].kind);
     try std.testing.expectEqualStrings("app.save", metadata.shell.windows[0].views[4].command.?);
     try std.testing.expectEqualStrings("segmented_control", metadata.shell.windows[0].views[5].kind);
@@ -990,6 +1007,10 @@ test "manifest metadata parser reads shell windows and views" {
     const shell = try parseShell(std.testing.allocator, metadata.shell);
     defer deinitParsedShell(std.testing.allocator, shell);
     try std.testing.expectEqual(app_manifest.ViewKind.webview, shell.windows[0].views[1].kind);
+    try std.testing.expectEqual(@as(?f32, 640), shell.windows[0].views[1].min_width);
+    try std.testing.expectEqual(@as(?f32, 400), shell.windows[0].views[1].min_height);
+    try std.testing.expectEqual(@as(?f32, 1440), shell.windows[0].views[1].max_width);
+    try std.testing.expectEqual(@as(?f32, 900), shell.windows[0].views[1].max_height);
     try std.testing.expectEqual(app_manifest.ViewKind.icon_button, shell.windows[0].views[3].kind);
     try std.testing.expectEqual(app_manifest.ViewKind.segmented_control, shell.windows[0].views[5].kind);
     try std.testing.expectEqual(app_manifest.ViewKind.progress_indicator, shell.windows[0].views[6].kind);

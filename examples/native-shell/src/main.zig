@@ -150,7 +150,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "view-mode", .kind = .segmented_control, .parent = "toolbar", .x = 324, .y = 10, .width = 168, .height = 30, .layer = 21, .text = "List|Grid", .command = "app.view.mode" },
     .{ .label = "title-search", .kind = .titlebar_accessory, .x = 780, .y = 8, .width = 300, .height = 36, .layer = 21, .role = "Search" },
     .{ .label = "surface-search", .kind = .search_field, .parent = "title-search", .x = 0, .y = 3, .width = 280, .height = 28, .layer = 22, .text = "Search native surfaces" },
-    .{ .label = "sidebar", .kind = .sidebar, .edge = .left, .width = sidebar_width, .layer = 10, .role = "Sidebar" },
+    .{ .label = "sidebar", .kind = .sidebar, .edge = .left, .width = sidebar_width, .min_width = 200, .max_width = 320, .layer = 10, .role = "Sidebar" },
     .{ .label = "sidebar-title", .kind = .label, .parent = "sidebar", .x = 18, .y = 18, .width = 180, .height = 20, .layer = 11, .text = "Workspace" },
     .{ .label = "sidebar-item", .kind = .label, .parent = "sidebar", .x = 18, .y = 52, .width = 180, .height = 20, .layer = 11, .text = "Native chrome" },
     .{ .label = "sidebar-live", .kind = .checkbox, .parent = "sidebar", .x = 18, .y = 92, .width = 160, .height = 24, .layer = 11, .text = "Live native UI" },

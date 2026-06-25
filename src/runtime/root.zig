@@ -2307,8 +2307,8 @@ const ShellLayout = struct {
     fn parentedFrame(self: *ShellLayout, view: app_manifest.ShellView) !geometry.RectF {
         const parent_label = view.parent orelse return error.InvalidViewOptions;
         const parent = self.findView(parent_label) orelse return error.InvalidViewOptions;
-        const width = view.width orelse defaultShellViewWidth(view.kind);
-        const height = view.height orelse defaultShellViewHeight(view.kind, parent.frame.height);
+        const width = constrainedShellWidth(view, view.width orelse defaultShellViewWidth(view.kind));
+        const height = constrainedShellHeight(view, view.height orelse defaultShellViewHeight(view.kind, parent.frame.height));
         const cursor = self.parentCursor(parent_label);
         const x = view.x orelse cursor.x;
         const y = view.y orelse centeredOffset(parent.frame.height, height);
@@ -2317,11 +2317,13 @@ const ShellLayout = struct {
     }
 
     fn fillFrame(self: *ShellLayout, view: app_manifest.ShellView) geometry.RectF {
+        const width = constrainedShellWidth(view, view.width orelse self.fill_rect.width);
+        const height = constrainedShellHeight(view, view.height orelse self.fill_rect.height);
         return geometry.RectF.init(
             view.x orelse self.fill_rect.x,
             view.y orelse self.fill_rect.y,
-            view.width orelse self.fill_rect.width,
-            view.height orelse self.fill_rect.height,
+            width,
+            height,
         );
     }
 
@@ -2407,30 +2409,48 @@ fn explicitShellFrame(view: app_manifest.ShellView) geometry.RectF {
     return geometry.RectF.init(
         view.x orelse 0,
         view.y orelse 0,
-        view.width orelse defaultShellViewWidth(view.kind),
-        view.height orelse defaultShellViewHeight(view.kind, 0),
+        constrainedShellWidth(view, view.width orelse defaultShellViewWidth(view.kind)),
+        constrainedShellHeight(view, view.height orelse defaultShellViewHeight(view.kind, 0)),
     );
 }
 
 fn dockedShellFrame(remaining: geometry.RectF, view: app_manifest.ShellView, edge: app_manifest.ShellEdge) geometry.RectF {
     return switch (edge) {
         .top => frame: {
-            const height = view.height orelse defaultDockHeight(view.kind);
-            break :frame geometry.RectF.init(remaining.x, remaining.y, view.width orelse remaining.width, height);
+            const width = constrainedShellWidth(view, view.width orelse remaining.width);
+            const height = constrainedShellHeight(view, view.height orelse defaultDockHeight(view.kind));
+            break :frame geometry.RectF.init(remaining.x, remaining.y, width, height);
         },
         .bottom => frame: {
-            const height = view.height orelse defaultDockHeight(view.kind);
-            break :frame geometry.RectF.init(remaining.x, remaining.y + @max(remaining.height - height, 0), view.width orelse remaining.width, height);
+            const width = constrainedShellWidth(view, view.width orelse remaining.width);
+            const height = constrainedShellHeight(view, view.height orelse defaultDockHeight(view.kind));
+            break :frame geometry.RectF.init(remaining.x, remaining.y + @max(remaining.height - height, 0), width, height);
         },
         .left => frame: {
-            const width = view.width orelse defaultDockWidth(view.kind);
-            break :frame geometry.RectF.init(remaining.x, remaining.y, width, view.height orelse remaining.height);
+            const width = constrainedShellWidth(view, view.width orelse defaultDockWidth(view.kind));
+            const height = constrainedShellHeight(view, view.height orelse remaining.height);
+            break :frame geometry.RectF.init(remaining.x, remaining.y, width, height);
         },
         .right => frame: {
-            const width = view.width orelse defaultDockWidth(view.kind);
-            break :frame geometry.RectF.init(remaining.x + @max(remaining.width - width, 0), remaining.y, width, view.height orelse remaining.height);
+            const width = constrainedShellWidth(view, view.width orelse defaultDockWidth(view.kind));
+            const height = constrainedShellHeight(view, view.height orelse remaining.height);
+            break :frame geometry.RectF.init(remaining.x + @max(remaining.width - width, 0), remaining.y, width, height);
         },
     };
+}
+
+fn constrainedShellWidth(view: app_manifest.ShellView, width: f32) f32 {
+    var result = width;
+    if (view.min_width) |min_width| result = @max(result, min_width);
+    if (view.max_width) |max_width| result = @min(result, max_width);
+    return result;
+}
+
+fn constrainedShellHeight(view: app_manifest.ShellView, height: f32) f32 {
+    var result = height;
+    if (view.min_height) |min_height| result = @max(result, min_height);
+    if (view.max_height) |max_height| result = @min(result, max_height);
+    return result;
 }
 
 fn consumeShellRect(remaining: *geometry.RectF, edge: app_manifest.ShellEdge, frame: geometry.RectF) void {
@@ -3468,6 +3488,46 @@ test "runtime relayouts shell views attached to startup window" {
     try std.testing.expectEqual(@as(f32, 470), statusbar.frame.y);
     try std.testing.expectEqual(@as(f32, 900), main.frame.width);
     try std.testing.expectEqual(@as(f32, 420), main.frame.height);
+}
+
+test "runtime clamps shell view layout constraints" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-constraints", .source = platform.WebViewSource.html("<h1>Constraints</h1>") };
+        }
+    };
+
+    const shell_views = [_]app_manifest.ShellView{
+        .{ .label = "toolbar-button", .kind = .button, .parent = "toolbar", .width = 12, .height = 80, .min_width = 32, .max_height = 30, .text = "Go" },
+        .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 20, .min_height = 44 },
+        .{ .label = "sidebar", .kind = .sidebar, .edge = .left, .width = 500, .max_width = 280 },
+        .{ .label = "content", .kind = .webview, .url = "zero://inline", .fill = true, .max_width = 480, .max_height = 360 },
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{ .id = 1, .size = geometry.SizeF.init(800, 600) });
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+    try harness.runtime.createShellViews(1, &shell_views, geometry.RectF.init(0, 0, 800, 600));
+
+    var views_buffer: [5]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    const toolbar = testViewByLabel(views, "toolbar").?;
+    const button = testViewByLabel(views, "toolbar-button").?;
+    const sidebar = testViewByLabel(views, "sidebar").?;
+    const content = testViewByLabel(views, "content").?;
+
+    try std.testing.expectEqual(@as(f32, 44), toolbar.frame.height);
+    try std.testing.expectEqual(@as(f32, 32), button.frame.width);
+    try std.testing.expectEqual(@as(f32, 30), button.frame.height);
+    try std.testing.expectEqual(@as(f32, 7), button.frame.y);
+    try std.testing.expectEqual(@as(f32, 280), sidebar.frame.width);
+    try std.testing.expectEqual(@as(f32, 44), sidebar.frame.y);
+    try std.testing.expectEqual(@as(f32, 556), sidebar.frame.height);
+    try std.testing.expectEqual(@as(f32, 280), content.frame.x);
+    try std.testing.expectEqual(@as(f32, 44), content.frame.y);
+    try std.testing.expectEqual(@as(f32, 480), content.frame.width);
+    try std.testing.expectEqual(@as(f32, 360), content.frame.height);
 }
 
 test "runtime loads scene hook as native shell startup" {

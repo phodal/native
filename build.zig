@@ -271,6 +271,12 @@ pub fn build(b: *std.Build) void {
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".id = \"mobile.back\"" },
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".id = \"mobile.refresh\"" },
     });
+    addFileContainsCheckStep(b, mobile_examples_step, "test-example-mobile-host-commands", "Verify mobile host command metadata values", &.{
+        .{ .path = "examples/ios/app.zon", .pattern = ".id = \"mobile.back\"" },
+        .{ .path = "examples/ios/app.zon", .pattern = ".id = \"mobile.refresh\"" },
+        .{ .path = "examples/android/app.zon", .pattern = ".id = \"mobile.back\"" },
+        .{ .path = "examples/android/app.zon", .pattern = ".id = \"mobile.refresh\"" },
+    });
 
     const examples_step = b.step("test-examples", "Run all example tests and layout checks");
     examples_step.dependOn(frontend_examples_step);

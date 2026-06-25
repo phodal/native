@@ -6,5 +6,9 @@
     .platforms = .{ "android" },
     .permissions = .{},
     .capabilities = .{ "webview", "native_views", "native_module" },
+    .commands = .{
+        .{ .id = "mobile.back", .title = "Back" },
+        .{ .id = "mobile.refresh", .title = "Refresh" },
+    },
     .web_engine = "system",
 }

@@ -84,6 +84,7 @@ pub const PlatformFeature = enum {
     credentials,
     file_drops,
     app_activation_events,
+    gpu_surfaces,
 };
 
 pub const WebViewSourceKind = enum {
@@ -962,6 +963,7 @@ fn defaultSupportsFeature(services: PlatformServices, feature: PlatformFeature) 
         .credentials => services.set_credential_fn != null and services.get_credential_fn != null and services.delete_credential_fn != null,
         .file_drops => false,
         .app_activation_events => false,
+        .gpu_surfaces => false,
     };
 }
 
@@ -1131,6 +1133,7 @@ pub const NullPlatform = struct {
             .file_drops,
             .app_activation_events,
             => true,
+            .gpu_surfaces => false,
             .tray => self.web_engine == .system,
         };
     }
@@ -1277,6 +1280,7 @@ pub const NullPlatform = struct {
     fn createView(context: ?*anyopaque, options: ViewOptions) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         if (options.kind == .webview) return createWebView(context, options.webViewOptions());
+        if (options.kind == .gpu_surface) return error.UnsupportedViewKind;
         try self.validateViewOptions(options);
         if (self.findViewIndex(options.window_id, options.label) != null) return error.DuplicateViewLabel;
         if (self.view_count >= max_views) return error.ViewLimitReached;

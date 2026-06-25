@@ -56,7 +56,7 @@ iOS and Android are supported today through embedded host examples rather than t
 
 The desktop `ShellView` tree is not yet mapped to UIKit or Android `ViewGroup`, so generic native view commands should be treated as desktop APIs for now. Mobile hosts own safe areas, orientation, keyboard avoidance, back gestures, and platform lifecycle integration.
 
-`gpu_surface` is reserved for future custom drawing regions. Current hosts report unsupported operations for that view kind.
+`gpu_surface` is reserved for future custom drawing regions. Current hosts report unsupported operations for that view kind and `runtime.supports(.gpu_surfaces)` / `window.zero.platform.supports("gpuSurfaces")` return `false`.
 
 ## Related Docs
 

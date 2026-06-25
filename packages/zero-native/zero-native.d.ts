@@ -283,7 +283,9 @@ export type ZeroNativePlatformFeature =
   | "file_drops"
   | "fileDrops"
   | "app_activation_events"
-  | "appActivationEvents";
+  | "appActivationEvents"
+  | "gpu_surfaces"
+  | "gpuSurfaces";
 
 export type ZeroNativePlatformFeatureSelector =
   | { feature: ZeroNativePlatformFeature; name?: never }

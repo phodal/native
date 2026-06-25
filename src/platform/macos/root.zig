@@ -270,6 +270,7 @@ pub const MacPlatform = struct {
             .menus,
             .file_drops,
             => self.web_engine == .system,
+            .gpu_surfaces => false,
         };
     }
 

@@ -3183,6 +3183,7 @@ fn platformFeatureFromString(value: []const u8) ?platform.PlatformFeature {
     if (std.mem.eql(u8, value, "recentDocuments")) return .recent_documents;
     if (std.mem.eql(u8, value, "fileDrops")) return .file_drops;
     if (std.mem.eql(u8, value, "appActivationEvents")) return .app_activation_events;
+    if (std.mem.eql(u8, value, "gpuSurfaces")) return .gpu_surfaces;
     return null;
 }
 
@@ -3514,6 +3515,31 @@ test "runtime createView routes webview kind through WebView backend" {
 
     try harness.runtime.closeView(1, "preview");
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.webview_count);
+}
+
+test "runtime rejects reserved GPU surface view kind until a backend supports it" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-surface", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    try std.testing.expectError(error.UnsupportedViewKind, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    }));
+
+    var views_buffer: [2]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), views.len);
+    try std.testing.expectEqualStrings("main", views[0].label);
 }
 
 test "runtime materializes manifest shell windows into laid out views" {
@@ -4558,6 +4584,7 @@ test "runtime handles built-in JavaScript platform support commands" {
     try harness.start(app_state.app());
 
     try std.testing.expect(harness.runtime.supports(.native_views));
+    try std.testing.expect(!harness.runtime.supports(.gpu_surfaces));
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = "{\"id\":\"1\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"native_views\"}}",
@@ -4566,6 +4593,13 @@ test "runtime handles built-in JavaScript platform support commands" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"gpu\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"gpuSurfaces\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":false") != null);
 
     var chromium_platform = platform.NullPlatform.initWithEngine(.{}, .chromium);
     harness.runtime.options.platform = chromium_platform.platform();

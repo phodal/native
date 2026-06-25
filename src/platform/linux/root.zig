@@ -266,6 +266,7 @@ pub const LinuxPlatform = struct {
             .file_drops,
             .app_activation_events,
             => self.web_engine == .system,
+            .gpu_surfaces => false,
             .tray => false,
         };
     }

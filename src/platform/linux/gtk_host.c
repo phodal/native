@@ -787,6 +787,8 @@ static const char *zero_native_bridge_script(void) {
         "setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},"
         "setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},"
         "focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},"
+        "focusNext:function(options){options=options||{};return invoke('zero-native.view.focusNext',{windowId:options.windowId}).then(viewHandle);},"
+        "focusPrevious:function(options){options=options||{};return invoke('zero-native.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},"
         "close:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.close',{label:options.label,windowId:options.windowId});}"
         "});"
         "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,platform:platform,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});"
@@ -1971,6 +1973,23 @@ int zero_native_gtk_set_view_visible(zero_native_gtk_host_t *host, uint64_t wind
 int zero_native_gtk_focus_view(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
     zero_native_gtk_window_t *win = zero_native_find_window(host, window_id);
     char *label_copy = label_len > 0 ? zero_native_strndup(label, label_len) : NULL;
+    if (!win) {
+        free(label_copy);
+        return 0;
+    }
+    if (label_copy && strcmp(label_copy, "main") == 0) {
+        GtkWidget *widget = win->web_view ? GTK_WIDGET(win->web_view) : NULL;
+        free(label_copy);
+        if (!widget || !gtk_widget_get_visible(widget) || !gtk_widget_get_sensitive(widget)) return 0;
+        return gtk_widget_grab_focus(widget) ? 1 : 0;
+    }
+    zero_native_gtk_webview_t *webview = zero_native_find_webview(win, label_copy);
+    if (webview && webview->web_view) {
+        GtkWidget *widget = GTK_WIDGET(webview->web_view);
+        free(label_copy);
+        if (!gtk_widget_get_visible(widget) || !gtk_widget_get_sensitive(widget)) return 0;
+        return gtk_widget_grab_focus(widget) ? 1 : 0;
+    }
     zero_native_gtk_native_view_t *view = zero_native_find_native_view(win, label_copy);
     free(label_copy);
     if (!view || !view->widget || !gtk_widget_get_visible(view->widget) || !gtk_widget_get_sensitive(view->widget)) return 0;

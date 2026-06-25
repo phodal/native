@@ -1260,6 +1260,8 @@ static const wchar_t *zeroNativeBridgeScript() {
 	setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},
 	setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},
 	focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},
+	focusNext:function(options){options=options||{};return invoke('zero-native.view.focusNext',{windowId:options.windowId}).then(viewHandle);},
+	focusPrevious:function(options){options=options||{};return invoke('zero-native.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},
 	close:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.close',{label:options.label,windowId:options.windowId});}
 	});
 	try{Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,platform:platform,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});}catch(error){}
@@ -1995,7 +1997,19 @@ int zero_native_windows_set_view_visible(Host *host, uint64_t window_id, const c
 
 int zero_native_windows_focus_view(Host *host, uint64_t window_id, const char *label, size_t label_len) {
     if (!host || label_len == 0) return 0;
-    auto found = host->native_views.find(nativeViewKey(window_id, slice(label, label_len)));
+    std::string label_string = slice(label, label_len);
+    if (label_string == "main") {
+        auto window = host->windows.find(window_id);
+        if (window == host->windows.end() || !window->second.hwnd) return 0;
+        SetFocus(window->second.hwnd);
+        return GetFocus() == window->second.hwnd ? 1 : 0;
+    }
+    auto webview = host->webviews.find(webViewKey(window_id, label_string));
+    if (webview != host->webviews.end() && webview->second.hwnd) {
+        SetFocus(webview->second.hwnd);
+        return GetFocus() == webview->second.hwnd ? 1 : 0;
+    }
+    auto found = host->native_views.find(nativeViewKey(window_id, label_string));
     if (found == host->native_views.end() || !found->second.hwnd || !found->second.visible || !found->second.enabled) return 0;
     SetFocus(found->second.hwnd);
     return GetFocus() == found->second.hwnd ? 1 : 0;

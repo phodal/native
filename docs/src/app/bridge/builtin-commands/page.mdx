@@ -129,6 +129,11 @@ Window commands are available through `window.zero.windows.*` when `js_window_ap
       <td>Focus a view when the backend supports native focus for that kind</td>
     </tr>
     <tr>
+      <td><code>zero-native.view.focusNext</code> / <code>zero-native.view.focusPrevious</code></td>
+      <td><code>view</code></td>
+      <td>Move focus through visible, enabled native controls and WebView-backed views</td>
+    </tr>
+    <tr>
       <td><code>zero-native.view.close</code></td>
       <td><code>view</code></td>
       <td>Close a generic view or child WebView</td>
@@ -369,6 +374,8 @@ const app_permissions = [_][]const u8{
         .{ .name = "zero-native.view.setFrame", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.view.setVisible", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.view.focus", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.focusNext", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.focusPrevious", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.view.close", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },

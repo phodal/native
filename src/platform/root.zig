@@ -1342,6 +1342,15 @@ pub const NullPlatform = struct {
 
     fn focusView(context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (std.mem.eql(u8, label, "main")) {
+            if (self.findWindowIndex(window_id)) |window_index| {
+                if (!self.windows[window_index].open) return error.WindowNotFound;
+            } else if (window_id != 1) {
+                return error.WindowNotFound;
+            }
+            return;
+        }
+        if (self.findWebViewIndex(window_id, label) != null) return;
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (!self.views[index].enabled or !self.views[index].visible) return error.UnsupportedViewFocus;
     }

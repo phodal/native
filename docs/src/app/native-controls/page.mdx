@@ -63,4 +63,4 @@ For declarative shell views, use `edge` for docked chrome, `fill = true` for con
 
 Use `accessibility_label` for the announced control name when it should differ from visible text. Use `role` for semantic/fallback accessibility text. Use `text` for visible labels, button titles, and text/search placeholders.
 
-`ViewInfo.focused` reports the last successfully focused view in a window. Automation snapshots include the same focus state for native controls and WebView-backed views.
+`ViewInfo.focused` reports the last successfully focused view in a window. Use `runtime.focusNextView(...)`, `runtime.focusPreviousView(...)`, or `window.zero.views.focusNext()` / `focusPrevious()` to move through visible, enabled native controls and WebView-backed views in stable view order. Automation snapshots include the same focus state for native controls and WebView-backed views.

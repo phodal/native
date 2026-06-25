@@ -801,10 +801,22 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (BOOL)focusNativeViewInWindow:(uint64_t)windowId label:(NSString *)label {
+    NSWindow *window = self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
+    if (!window) return NO;
+    if ([label isEqualToString:@"main"]) {
+        WKWebView *webView = [self webViewForWindowId:windowId];
+        if (!webView || webView.hidden) return NO;
+        [window makeKeyAndOrderFront:nil];
+        return [window makeFirstResponder:webView];
+    }
+    WKWebView *webView = self.childWebViews[[self webViewKeyForWindow:windowId label:label]];
+    if (webView && !webView.hidden) {
+        [window makeKeyAndOrderFront:nil];
+        return [window makeFirstResponder:webView];
+    }
     NSView *view = self.nativeViews[[self nativeViewKeyForWindow:windowId label:label]];
     if (!view || view.hidden) return NO;
-    NSWindow *window = view.window ?: self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
-    if (!window) return NO;
+    window = view.window ?: window;
     return [window makeFirstResponder:view];
 }
 
@@ -1262,6 +1274,8 @@ static NSString *ZeroNativeAppKitBridgeScript(void) {
         "setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},"
         "setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},"
         "focus:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.focus',{label:options.label,windowId:options.windowId}).then(viewHandle);},"
+        "focusNext:function(options){options=options||{};return invoke('zero-native.view.focusNext',{windowId:options.windowId}).then(viewHandle);},"
+        "focusPrevious:function(options){options=options||{};return invoke('zero-native.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},"
         "close:function(options){options=options||{};validateViewSelector(options);return invoke('zero-native.view.close',{label:options.label,windowId:options.windowId});}"
         "});"
         "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,platform:platform,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});"

@@ -457,6 +457,14 @@ pub const Runtime = struct {
         self.invalidateFor(.command, null);
     }
 
+    pub fn focusNextView(self: *Runtime, window_id: platform.WindowId) anyerror!platform.ViewInfo {
+        return self.focusAdjacentView(window_id, .next);
+    }
+
+    pub fn focusPreviousView(self: *Runtime, window_id: platform.WindowId) anyerror!platform.ViewInfo {
+        return self.focusAdjacentView(window_id, .previous);
+    }
+
     pub fn readClipboard(self: *Runtime, buffer: []u8) anyerror![]const u8 {
         return self.readClipboardData("text/plain", buffer);
     }
@@ -1327,6 +1335,10 @@ pub const Runtime = struct {
             self.setViewVisibleFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
         else if (std.mem.eql(u8, request.command, "zero-native.view.focus"))
             self.focusViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else if (std.mem.eql(u8, request.command, "zero-native.view.focusNext"))
+            self.focusNextViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
+        else if (std.mem.eql(u8, request.command, "zero-native.view.focusPrevious"))
+            self.focusPreviousViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
         else if (std.mem.eql(u8, request.command, "zero-native.view.close"))
             self.closeViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
         else
@@ -1718,6 +1730,18 @@ pub const Runtime = struct {
             if (std.mem.eql(u8, view.label, label)) return writeViewJson(view, output);
         }
         return error.ViewNotFound;
+    }
+
+    fn focusNextViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
+        const window_id = try viewWindowIdFromJson(payload, source_window_id);
+        const info = try self.focusNextView(window_id);
+        return writeViewJson(info, output);
+    }
+
+    fn focusPreviousViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
+        const window_id = try viewWindowIdFromJson(payload, source_window_id);
+        const info = try self.focusPreviousView(window_id);
+        return writeViewJson(info, output);
     }
 
     fn closeViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
@@ -2113,6 +2137,34 @@ pub const Runtime = struct {
         }
     }
 
+    fn focusAdjacentView(self: *Runtime, window_id: platform.WindowId, direction: FocusTraversalDirection) anyerror!platform.ViewInfo {
+        try self.validateViewParent(window_id);
+
+        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
+        const views = self.listViews(window_id, &views_buffer);
+        var focusable: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
+        var focusable_count: usize = 0;
+        var focused_index: ?usize = null;
+        for (views) |view| {
+            if (!isFocusableViewInfo(view)) continue;
+            if (view.focused) focused_index = focusable_count;
+            focusable[focusable_count] = view;
+            focusable_count += 1;
+        }
+        if (focusable_count == 0) return error.UnsupportedViewFocus;
+
+        const target_index = switch (direction) {
+            .next => if (focused_index) |index| (index + 1) % focusable_count else 0,
+            .previous => if (focused_index) |index| if (index == 0) focusable_count - 1 else index - 1 else focusable_count - 1,
+        };
+        const target = focusable[target_index];
+        try self.focusView(window_id, target.label);
+
+        var focused = target;
+        focused.focused = true;
+        return focused;
+    }
+
     fn storeTrayItems(self: *Runtime, items: []const platform.TrayMenuItem) !void {
         self.tray_item_count = 0;
         for (items, 0..) |item, index| {
@@ -2288,6 +2340,11 @@ const RuntimeShellLayout = struct {
 const ShellApplyMode = enum {
     create,
     update,
+};
+
+const FocusTraversalDirection = enum {
+    next,
+    previous,
 };
 
 const RuntimeView = struct {
@@ -3246,6 +3303,10 @@ fn isMainWebViewLabel(label: []const u8) bool {
     return std.mem.eql(u8, label, "main");
 }
 
+fn isFocusableViewInfo(view: platform.ViewInfo) bool {
+    return view.open and view.visible and view.enabled;
+}
+
 fn validateWebViewLabel(label: []const u8) !void {
     if (label.len == 0) return error.InvalidWebViewOptions;
     if (label.len > platform.max_webview_label_bytes) return error.WebViewLabelTooLarge;
@@ -3454,6 +3515,12 @@ test "runtime exposes startup WebView and native views through generic view API"
     try std.testing.expect(!focused_views[0].focused);
     try std.testing.expect(focused_views[1].focused);
 
+    try harness.runtime.focusView(1, "main");
+    const refocused_views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expect(refocused_views[0].focused);
+    try std.testing.expect(!refocused_views[1].focused);
+
+    try harness.runtime.focusView(1, "toolbar");
     const updated = try harness.runtime.updateView(1, "toolbar", .{
         .frame = geometry.RectF.init(0, 0, 640, 52),
         .visible = false,
@@ -3515,6 +3582,63 @@ test "runtime createView routes webview kind through WebView backend" {
 
     try harness.runtime.closeView(1, "preview");
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.webview_count);
+}
+
+test "runtime traverses focus across WebViews and native controls" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "focus-traversal", .source = platform.WebViewSource.html("<h1>Focus</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "toolbar",
+        .kind = .toolbar,
+        .frame = geometry.RectF.init(0, 0, 640, 44),
+    });
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "disabled-action",
+        .kind = .button,
+        .frame = geometry.RectF.init(8, 8, 120, 28),
+        .enabled = false,
+    });
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "preview",
+        .kind = .webview,
+        .url = "zero://app/preview.html",
+        .frame = geometry.RectF.init(0, 44, 640, 360),
+    });
+
+    const first = try harness.runtime.focusNextView(1);
+    try std.testing.expectEqualStrings("toolbar", first.label);
+    try std.testing.expect(first.focused);
+
+    const second = try harness.runtime.focusNextView(1);
+    try std.testing.expectEqualStrings("preview", second.label);
+
+    const wrapped = try harness.runtime.focusNextView(1);
+    try std.testing.expectEqualStrings("main", wrapped.label);
+
+    const previous = try harness.runtime.focusPreviousView(1);
+    try std.testing.expectEqualStrings("preview", previous.label);
+
+    var views_buffer: [5]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    for (views) |view| {
+        if (std.mem.eql(u8, view.label, "preview")) {
+            try std.testing.expect(view.focused);
+        } else {
+            try std.testing.expect(!view.focused);
+        }
+    }
 }
 
 test "runtime rejects reserved GPU surface view kind until a backend supports it" {
@@ -5026,6 +5150,22 @@ test "runtime handles built-in JavaScript view bridge commands" {
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = "{\"id\":\"3\",\"command\":\"zero-native.view.focus\",\"payload\":{\"label\":\"toolbar\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"label\":\"toolbar\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"3-next\",\"command\":\"zero-native.view.focusNext\",\"payload\":{}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"label\":\"main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"3-prev\",\"command\":\"zero-native.view.focusPrevious\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });

@@ -238,6 +238,10 @@ export interface ZeroNativeViewSelector {
   windowId?: number;
 }
 
+export interface ZeroNativeViewTraversalOptions {
+  windowId?: number;
+}
+
 export interface ZeroNativeViewHandle extends ZeroNativeViewInfo {
   update(patch: Omit<ZeroNativeUpdateViewOptions, "label" | "windowId">): Promise<ZeroNativeViewHandle>;
   setFrame(frame: ZeroNativeRect): Promise<ZeroNativeViewHandle>;
@@ -431,6 +435,8 @@ export interface ZeroNativeApi {
     setFrame(options: ZeroNativeSetViewFrameOptions): Promise<ZeroNativeViewHandle>;
     setVisible(options: ZeroNativeSetViewVisibleOptions): Promise<ZeroNativeViewHandle>;
     focus(options: ZeroNativeViewSelector): Promise<ZeroNativeViewHandle>;
+    focusNext(options?: ZeroNativeViewTraversalOptions): Promise<ZeroNativeViewHandle>;
+    focusPrevious(options?: ZeroNativeViewTraversalOptions): Promise<ZeroNativeViewHandle>;
     close(options: ZeroNativeViewSelector): Promise<ZeroNativeViewInfo>;
   };
   dialogs: {

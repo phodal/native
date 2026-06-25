@@ -25,4 +25,4 @@ try runner.runWithOptions(app.app(), .{
 
 When a user selects a command-backed menu item, the runtime emits `Event.command` with `source = .menu`, the active native `window_id`, and the item command name.
 
-The macOS system-WebView backend applies configured menus by preserving the standard application menu and replacing the hardcoded File/Edit/View menus with the configured menu list. Backends that do not implement native menus return `UnsupportedService` for non-empty menu lists.
+The macOS and Windows system-WebView backends apply configured menus as native app/window menus. Backends that do not implement native menus return `UnsupportedService` for non-empty menu lists.

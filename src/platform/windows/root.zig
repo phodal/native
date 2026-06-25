@@ -24,6 +24,7 @@ const WindowsEventKind = enum(c_int) {
     app_activated = 7,
     app_deactivated = 8,
     files_dropped = 9,
+    menu_command = 10,
 };
 
 const WindowsEvent = extern struct {
@@ -74,6 +75,7 @@ extern fn zero_native_windows_bridge_respond_window(host: *WindowsHost, window_i
 extern fn zero_native_windows_bridge_respond_webview(host: *WindowsHost, window_id: u64, webview_label: [*]const u8, webview_label_len: usize, response: [*]const u8, response_len: usize) void;
 extern fn zero_native_windows_emit_window_event(host: *WindowsHost, window_id: u64, name: [*]const u8, name_len: usize, detail_json: [*]const u8, detail_json_len: usize) void;
 extern fn zero_native_windows_set_security_policy(host: *WindowsHost, allowed_origins: [*]const u8, allowed_origins_len: usize, external_urls: [*]const u8, external_urls_len: usize, external_action: c_int) void;
+extern fn zero_native_windows_set_menus(host: *WindowsHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
 extern fn zero_native_windows_set_shortcuts(host: *WindowsHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
 extern fn zero_native_windows_create_window(host: *WindowsHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) c_int;
 extern fn zero_native_windows_focus_window(host: *WindowsHost, window_id: u64) c_int;
@@ -225,6 +227,7 @@ pub const WindowsPlatform = struct {
                 .get_credential_fn = getCredential,
                 .delete_credential_fn = deleteCredential,
                 .configure_security_policy_fn = configureSecurityPolicy,
+                .configure_menus_fn = configureMenus,
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
             },
@@ -318,6 +321,10 @@ fn windowsCallback(context: ?*anyopaque, event: *const WindowsEvent) callconv(.c
             .name = event.command_name[0..event.command_name_len],
             .window_id = event.window_id,
             .view_label = event.view_label[0..event.view_label_len],
+        } }),
+        .menu_command => state.emit(.{ .menu_command = .{
+            .name = event.command_name[0..event.command_name_len],
+            .window_id = event.window_id,
         } }),
     }
 }
@@ -697,6 +704,65 @@ fn configureSecurityPolicy(context: ?*anyopaque, policy: security.Policy) anyerr
         external_urls.ptr,
         external_urls.len,
         @intFromEnum(policy.navigation.external_links.action),
+    );
+}
+
+fn configureMenus(context: ?*anyopaque, menus: []const platform_mod.Menu) anyerror!void {
+    const self: *WindowsPlatform = @ptrCast(@alignCast(context.?));
+    try platform_mod.validateMenus(menus);
+    if (menus.len > 0 and self.web_engine != .system) return error.UnsupportedService;
+
+    var menu_titles: [platform_mod.max_menus][*]const u8 = undefined;
+    var menu_title_lens: [platform_mod.max_menus]usize = undefined;
+    var item_menu_indices: [platform_mod.max_menu_items]u32 = undefined;
+    var item_labels: [platform_mod.max_menu_items][*]const u8 = undefined;
+    var item_label_lens: [platform_mod.max_menu_items]usize = undefined;
+    var item_commands: [platform_mod.max_menu_items][*]const u8 = undefined;
+    var item_command_lens: [platform_mod.max_menu_items]usize = undefined;
+    var item_keys: [platform_mod.max_menu_items][*]const u8 = undefined;
+    var item_key_lens: [platform_mod.max_menu_items]usize = undefined;
+    var item_modifiers: [platform_mod.max_menu_items]u32 = undefined;
+    var item_separators: [platform_mod.max_menu_items]c_int = undefined;
+    var item_enabled: [platform_mod.max_menu_items]c_int = undefined;
+    var item_checked: [platform_mod.max_menu_items]c_int = undefined;
+
+    var item_count: usize = 0;
+    for (menus, 0..) |menu, menu_index| {
+        menu_titles[menu_index] = menu.title.ptr;
+        menu_title_lens[menu_index] = menu.title.len;
+        for (menu.items) |item| {
+            item_menu_indices[item_count] = @intCast(menu_index);
+            item_labels[item_count] = item.label.ptr;
+            item_label_lens[item_count] = item.label.len;
+            item_commands[item_count] = item.command.ptr;
+            item_command_lens[item_count] = item.command.len;
+            item_keys[item_count] = item.key.ptr;
+            item_key_lens[item_count] = item.key.len;
+            item_modifiers[item_count] = shortcutModifierFlags(item.modifiers);
+            item_separators[item_count] = if (item.separator) 1 else 0;
+            item_enabled[item_count] = if (item.enabled) 1 else 0;
+            item_checked[item_count] = if (item.checked) 1 else 0;
+            item_count += 1;
+        }
+    }
+
+    zero_native_windows_set_menus(
+        self.host,
+        menu_titles[0..menus.len].ptr,
+        menu_title_lens[0..menus.len].ptr,
+        menus.len,
+        item_menu_indices[0..item_count].ptr,
+        item_labels[0..item_count].ptr,
+        item_label_lens[0..item_count].ptr,
+        item_commands[0..item_count].ptr,
+        item_command_lens[0..item_count].ptr,
+        item_keys[0..item_count].ptr,
+        item_key_lens[0..item_count].ptr,
+        item_modifiers[0..item_count].ptr,
+        item_separators[0..item_count].ptr,
+        item_enabled[0..item_count].ptr,
+        item_checked[0..item_count].ptr,
+        item_count,
     );
 }
 

@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <map>
 #include <memory>
@@ -41,6 +42,7 @@ enum EventKind {
     kAppActivated = 7,
     kAppDeactivated = 8,
     kFilesDropped = 9,
+    kMenuCommand = 10,
 };
 
 constexpr uint32_t kShortcutModifierPrimary = 1u << 0;
@@ -49,6 +51,7 @@ constexpr uint32_t kShortcutModifierControl = 1u << 2;
 constexpr uint32_t kShortcutModifierOption = 1u << 3;
 constexpr uint32_t kShortcutModifierShift = 1u << 4;
 constexpr size_t kMaxShortcuts = 64;
+constexpr uint32_t kMenuCommandBase = 0x4000;
 
 constexpr int kViewWebView = 0;
 constexpr int kViewToolbar = 1;
@@ -197,6 +200,22 @@ struct Shortcut {
     uint32_t modifiers = 0;
 };
 
+struct MenuItem {
+    std::string label;
+    std::string command;
+    std::string key;
+    uint32_t modifiers = 0;
+    uint32_t command_id = 0;
+    bool separator = false;
+    bool enabled = true;
+    bool checked = false;
+};
+
+struct Menu {
+    std::string title;
+    std::vector<MenuItem> items;
+};
+
 struct HostLifetime {
     std::recursive_mutex mutex;
     bool alive = true;
@@ -220,6 +239,8 @@ struct Host {
     std::vector<std::string> allowed_origins;
     std::vector<std::string> allowed_external_urls;
     std::vector<Shortcut> shortcuts;
+    std::vector<Menu> menus;
+    std::map<uint32_t, std::string> menu_commands;
     int external_link_action = 0;
     bool app_active = false;
     bool notification_icon_added = false;
@@ -575,6 +596,94 @@ static const Window *windowForHwnd(Host *host, HWND hwnd) {
         if (entry.second.hwnd == hwnd) return &entry.second;
     }
     return nullptr;
+}
+
+static std::string shortcutKeyLabel(const std::string &key) {
+    if (key.size() == 1) {
+        char ch = key[0];
+        return std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+    }
+    if (key == "escape") return "Esc";
+    if (key == "enter") return "Enter";
+    if (key == "tab") return "Tab";
+    if (key == "space") return "Space";
+    if (key == "backspace") return "Backspace";
+    if (key == "arrowleft") return "Left";
+    if (key == "arrowright") return "Right";
+    if (key == "arrowup") return "Up";
+    if (key == "arrowdown") return "Down";
+    return key;
+}
+
+static std::string menuShortcutSuffix(const MenuItem &item) {
+    if (item.key.empty()) return std::string();
+    std::string suffix = "\t";
+    bool has_prefix = false;
+    auto append = [&](const char *value) {
+        if (has_prefix) suffix += "+";
+        suffix += value;
+        has_prefix = true;
+    };
+    if ((item.modifiers & kShortcutModifierPrimary) != 0 || (item.modifiers & kShortcutModifierControl) != 0) append("Ctrl");
+    if ((item.modifiers & kShortcutModifierCommand) != 0) append("Win");
+    if ((item.modifiers & kShortcutModifierOption) != 0) append("Alt");
+    if ((item.modifiers & kShortcutModifierShift) != 0) append("Shift");
+    if (has_prefix) suffix += "+";
+    suffix += shortcutKeyLabel(item.key);
+    return suffix;
+}
+
+static HMENU buildMenuBar(Host *host) {
+    if (!host || host->menus.empty()) return nullptr;
+    HMENU menu_bar = CreateMenu();
+    if (!menu_bar) return nullptr;
+
+    for (const Menu &menu : host->menus) {
+        HMENU popup = CreatePopupMenu();
+        if (!popup) {
+            DestroyMenu(menu_bar);
+            return nullptr;
+        }
+        for (const MenuItem &item : menu.items) {
+            if (item.separator) {
+                AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+                continue;
+            }
+            UINT flags = MF_STRING;
+            if (!item.enabled) flags |= MF_GRAYED;
+            if (item.checked) flags |= MF_CHECKED;
+            std::wstring label = widen(item.label + menuShortcutSuffix(item));
+            AppendMenuW(popup, flags, item.command_id, label.c_str());
+        }
+        std::wstring title = widen(menu.title);
+        AppendMenuW(menu_bar, MF_POPUP, reinterpret_cast<UINT_PTR>(popup), title.c_str());
+    }
+
+    return menu_bar;
+}
+
+static void applyMenusToWindow(Host *host, Window &window) {
+    if (!host || !window.hwnd) return;
+    HMENU old_menu = GetMenu(window.hwnd);
+    HMENU new_menu = buildMenuBar(host);
+    SetMenu(window.hwnd, new_menu);
+    DrawMenuBar(window.hwnd);
+    if (old_menu) DestroyMenu(old_menu);
+}
+
+static bool emitMenuCommandForId(Host *host, HWND hwnd, uint32_t command_id) {
+    if (!host || !host->callback) return false;
+    auto found = host->menu_commands.find(command_id);
+    if (found == host->menu_commands.end()) return false;
+    const Window *window = windowForHwnd(host, hwnd);
+    if (!window) return false;
+    WindowsEvent event = {};
+    event.kind = kMenuCommand;
+    event.window_id = window->id;
+    event.command_name = found->second.c_str();
+    event.command_name_len = found->second.size();
+    host->callback(host->callback_context, &event);
+    return true;
 }
 
 static bool emitShortcutForWindow(Host *host, const Window *window, WPARAM wparam) {
@@ -1123,7 +1232,10 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
             if (host && emitShortcutForHwnd(host, hwnd, wparam)) return 0;
             break;
         case WM_COMMAND:
-            if (host && lparam != 0 && emitNativeCommandForHwnd(host, reinterpret_cast<HWND>(lparam), HIWORD(wparam))) return 0;
+            if (host) {
+                if (lparam != 0 && emitNativeCommandForHwnd(host, reinterpret_cast<HWND>(lparam), HIWORD(wparam))) return 0;
+                if (lparam == 0 && emitMenuCommandForId(host, hwnd, LOWORD(wparam))) return 0;
+            }
             break;
         case WM_ACTIVATEAPP:
             if (host) {
@@ -1227,6 +1339,7 @@ static bool createNativeWindow(Host *host, Window &window) {
     if (!hwnd) return false;
     DragAcceptFiles(hwnd, TRUE);
     window.hwnd = hwnd;
+    applyMenusToWindow(host, window);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
     SetTimer(hwnd, 1, 16, nullptr);
@@ -1390,6 +1503,47 @@ void zero_native_windows_set_security_policy(Host *host, const char *allowed_ori
     host->allowed_origins = parseNewlineList(allowed_origins, allowed_origins_len);
     host->allowed_external_urls = parseNewlineList(external_urls, external_urls_len);
     host->external_link_action = external_action;
+}
+
+void zero_native_windows_set_menus(Host *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count) {
+    if (!host) return;
+    host->menus.clear();
+    host->menu_commands.clear();
+
+    if (menu_count > 0 && (!menu_titles || !menu_title_lens)) return;
+    host->menus.reserve(menu_count);
+    for (size_t index = 0; index < menu_count; ++index) {
+        Menu menu;
+        menu.title = slice(menu_titles[index], menu_title_lens[index]);
+        host->menus.push_back(menu);
+    }
+
+    if (item_count > 0 && (!item_menu_indices || !item_labels || !item_label_lens || !item_commands || !item_command_lens || !item_keys || !item_key_lens || !item_modifiers || !item_separators || !item_enabled || !item_checked)) return;
+    uint32_t next_command_id = kMenuCommandBase;
+    for (size_t index = 0; index < item_count; ++index) {
+        uint32_t menu_index = item_menu_indices[index];
+        if (menu_index >= host->menus.size()) continue;
+        MenuItem item;
+        item.label = slice(item_labels[index], item_label_lens[index]);
+        item.command = slice(item_commands[index], item_command_lens[index]);
+        item.key = slice(item_keys[index], item_key_lens[index]);
+        for (char &ch : item.key) {
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        }
+        item.modifiers = item_modifiers[index];
+        item.separator = item_separators[index] != 0;
+        item.enabled = item_enabled[index] != 0;
+        item.checked = item_checked[index] != 0;
+        if (!item.separator && !item.command.empty()) {
+            item.command_id = next_command_id++;
+            host->menu_commands[item.command_id] = item.command;
+        }
+        host->menus[menu_index].items.push_back(item);
+    }
+
+    for (auto &entry : host->windows) {
+        if (entry.second.hwnd) applyMenusToWindow(host, entry.second);
+    }
 }
 
 void zero_native_windows_set_shortcuts(Host *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count) {

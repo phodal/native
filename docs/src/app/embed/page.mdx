@@ -92,8 +92,13 @@ Mobile embedding uses the same runtime lifecycle through a thin native host:
   <tbody>
     <tr>
       <td>View/controller creation</td>
-      <td><code>zero_native_app_create</code>, then <code>zero_native_app_start</code></td>
+      <td><code>zero_native_app_create</code>, configure packaged assets if needed, then <code>zero_native_app_start</code></td>
       <td>Swift <code>viewDidLoad</code>; Android <code>onCreate</code></td>
+    </tr>
+    <tr>
+      <td>Packaged asset source</td>
+      <td><code>zero_native_app_set_asset_root</code> and <code>zero_native_app_set_asset_entry</code> before startup</td>
+      <td>Generated package hosts point the runtime at the bundled asset root and manifest frontend entry</td>
     </tr>
     <tr>
       <td>App activation lifecycle</td>

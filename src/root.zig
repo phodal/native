@@ -125,6 +125,10 @@ pub export fn zero_native_app_set_asset_root(app: ?*anyopaque, path: [*]const u8
     embed.zero_native_app_set_asset_root(app, path, len);
 }
 
+pub export fn zero_native_app_set_asset_entry(app: ?*anyopaque, path: [*]const u8, len: usize) void {
+    embed.zero_native_app_set_asset_entry(app, path, len);
+}
+
 pub export fn zero_native_app_last_command_count(app: ?*anyopaque) usize {
     return embed.zero_native_app_last_command_count(app);
 }

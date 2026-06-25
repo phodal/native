@@ -294,6 +294,7 @@ pub const Runtime = struct {
 
     pub fn createShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF) anyerror!void {
         if (views.len > app_manifest.max_shell_views_per_window) return error.ViewLimitReached;
+        try self.validateShellViewCreatePlan(window_id, views);
         try self.applyShellViews(window_id, views, bounds, .create);
         try self.bindShellViews(window_id, views);
     }
@@ -301,6 +302,30 @@ pub const Runtime = struct {
     pub fn relayoutShellViews(self: *Runtime, window_id: platform.WindowId) anyerror!void {
         const binding = self.shellLayoutForWindow(window_id) orelse return;
         try self.applyShellViews(window_id, binding.viewSlice(), self.shellBoundsForWindow(window_id), .update);
+    }
+
+    fn validateShellViewCreatePlan(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) anyerror!void {
+        try self.validateViewParent(window_id);
+
+        var native_view_count: usize = 0;
+        var child_webview_count: usize = 0;
+        for (views, 0..) |view, index| {
+            for (views[0..index]) |previous| {
+                if (std.mem.eql(u8, previous.label, view.label)) return error.DuplicateViewLabel;
+            }
+
+            if (view.kind == .webview and isMainWebViewLabel(view.label)) continue;
+            if (self.viewLabelExists(window_id, view.label)) return error.DuplicateViewLabel;
+
+            if (view.kind == .webview) {
+                child_webview_count += 1;
+            } else {
+                native_view_count += 1;
+            }
+        }
+
+        if (native_view_count > platform.max_views - self.view_count) return error.ViewLimitReached;
+        if (child_webview_count > platform.max_webviews - self.webview_count) return error.WebViewLimitReached;
     }
 
     fn applyShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF, mode: ShellApplyMode) anyerror!void {
@@ -4137,6 +4162,38 @@ test "runtime rejects reserved GPU surface view kind until a backend supports it
         .kind = .gpu_surface,
         .frame = geometry.RectF.init(0, 0, 320, 240),
     }));
+
+    var views_buffer: [2]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), views.len);
+    try std.testing.expectEqualStrings("main", views[0].label);
+}
+
+test "runtime rejects oversized shell before creating partial views" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-too-large", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    var labels: [platform.max_views + 1][16]u8 = undefined;
+    var shell_views: [platform.max_views + 1]app_manifest.ShellView = undefined;
+    for (&shell_views, 0..) |*view, index| {
+        const label = try std.fmt.bufPrint(&labels[index], "button-{d}", .{index});
+        view.* = .{
+            .label = label,
+            .kind = .button,
+            .width = 80,
+            .height = 24,
+        };
+    }
+
+    try std.testing.expectError(error.ViewLimitReached, harness.runtime.createShellViews(1, &shell_views, geometry.RectF.init(0, 0, 800, 600)));
 
     var views_buffer: [2]platform.ViewInfo = undefined;
     const views = harness.runtime.listViews(1, &views_buffer);

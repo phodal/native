@@ -154,6 +154,7 @@ pub fn createMacosApp(allocator: std.mem.Allocator, io: std.Io, options: Package
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
     try copyMacosIcon(allocator, io, package_dir, options);
+    try copyMacosDocumentIcons(allocator, io, package_dir, options.metadata);
     try writeReport(allocator, package_dir, io, "Contents/Resources/package-manifest.zon", options, executable_name, bundle_stats.asset_count);
     if (options.web_engine == .chromium) {
         try cef.ensureLayout(io, options.cef_dir);
@@ -385,6 +386,7 @@ fn embedHeader() []const u8 {
     \\void zero_native_app_command(void *app, const char *name, uintptr_t len);
     \\void zero_native_app_frame(void *app);
     \\void zero_native_app_set_asset_root(void *app, const char *path, uintptr_t len);
+    \\void zero_native_app_set_asset_entry(void *app, const char *path, uintptr_t len);
     \\uintptr_t zero_native_app_last_command_count(void *app);
     \\const char *zero_native_app_last_command_name(void *app);
     \\const char *zero_native_app_last_error_name(void *app);
@@ -634,6 +636,9 @@ fn iosViewController() []const u8 {
     \\        let path = rootURL.path
     \\        path.withCString { pointer in
     \\            zero_native_app_set_asset_root(nativeApp, pointer, UInt(path.utf8.count))
+    \\        }
+    \\        ZeroNativeShellConfig.assetEntryPath.withCString { pointer in
+    \\            zero_native_app_set_asset_entry(nativeApp, pointer, UInt(ZeroNativeShellConfig.assetEntryPath.utf8.count))
     \\        }
     \\    }
     \\
@@ -1035,6 +1040,7 @@ fn androidActivity() []const u8 {
     \\
     \\        nativeApp = nativeCreate()
     \\        nativeSetAssetRoot(nativeApp, packagedAssetRoot())
+    \\        nativeSetAssetEntry(nativeApp, ZeroNativeShellConfig.assetEntryPath)
     \\        nativeStart(nativeApp)
     \\    }
     \\
@@ -1132,6 +1138,7 @@ fn androidActivity() []const u8 {
     \\    external fun nativeDeactivate(app: Long)
     \\    external fun nativeStop(app: Long)
     \\    external fun nativeSetAssetRoot(app: Long, path: String)
+    \\    external fun nativeSetAssetEntry(app: Long, path: String)
     \\    external fun nativeResize(app: Long, width: Float, height: Float, scale: Float, surface: Any)
     \\    external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
     \\    external fun nativeCommand(app: Long, command: String): Int
@@ -1167,6 +1174,7 @@ fn androidJni() []const u8 {
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeDeactivate(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_deactivate((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeStop(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_stop((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetRoot(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_root((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
+    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetEntry(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_entry((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeResize(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface) { (void)env; (void)self; zero_native_app_resize((void*)app, w, h, scale, surface); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeTouch(JNIEnv *env, jobject self, jlong app, jlong id, jint phase, jfloat x, jfloat y, jfloat pressure) { (void)env; (void)self; zero_native_app_touch((void*)app, (uint64_t)id, phase, x, y, pressure); }
     \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; zero_native_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)zero_native_app_last_command_count((void*)app); }
@@ -1200,12 +1208,24 @@ fn copyMacosIcon(allocator: std.mem.Allocator, io: std.Io, package_dir: std.Io.D
         try writeFile(package_dir, io, "Contents/Resources/AppIcon.icns", "placeholder: replace with a real macOS .icns before distributing\n");
         return;
     }
-    const icon_path = options.metadata.icons[0];
+    try copyMacosResourceIcon(allocator, io, package_dir, options.metadata.icons[0], "configured app icon");
+}
+
+fn copyMacosDocumentIcons(allocator: std.mem.Allocator, io: std.Io, package_dir: std.Io.Dir, metadata: manifest_tool.Metadata) !void {
+    for (metadata.file_associations) |association| {
+        const icon_path = association.icon orelse continue;
+        try copyMacosResourceIcon(allocator, io, package_dir, icon_path, "configured document icon");
+    }
+}
+
+fn copyMacosResourceIcon(allocator: std.mem.Allocator, io: std.Io, package_dir: std.Io.Dir, icon_path: []const u8, missing_label: []const u8) !void {
     const dest = try std.fmt.allocPrint(allocator, "Contents/Resources/{s}", .{std.fs.path.basename(icon_path)});
     defer allocator.free(dest);
     const icon_bytes = readPath(allocator, io, icon_path) catch |err| switch (err) {
         error.FileNotFound => {
-            try writeFile(package_dir, io, dest, "placeholder: configured app icon was not found; replace with a real macOS .icns before distributing\n");
+            const placeholder = try std.fmt.allocPrint(allocator, "placeholder: {s} was not found; replace with a real macOS .icns before distributing\n", .{missing_label});
+            defer allocator.free(placeholder);
+            try writeFile(package_dir, io, dest, placeholder);
             return;
         },
         else => return err,
@@ -1944,6 +1964,7 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZeroNativeShellConfig.primaryCommand") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_command") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_entry") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZeroNativeShellConfig.assetEntryPath") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "webView.loadFileURL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "appendingPathComponent(\"Resources\"") != null);
@@ -1969,6 +1990,7 @@ test "mobile package templates include native command shells" {
     const android_jni = androidJni();
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "#include <stdint.h>") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_entry") != null);
 }
 
 test "android shell config escapes Kotlin string interpolation" {
@@ -2083,6 +2105,9 @@ test "mobile package artifacts use manifest identity metadata" {
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let secondaryButtonTitle = \"Sync Now\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetRootSubdirectory = \"dist\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetEntryPath = \"main.html\"") != null);
+    const ios_controller = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/zero-nativeHost/ZeroNativeHostViewController.swift");
+    defer std.testing.allocator.free(ios_controller);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_entry") != null);
 
     const android_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/zero_native/ZeroNativeShellConfig.kt");
     defer std.testing.allocator.free(android_shell_config);
@@ -2092,6 +2117,9 @@ test "mobile package artifacts use manifest identity metadata" {
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val secondaryCommand = \"mobile.sync\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val assetRootSubdirectory = \"dist\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val assetEntryPath = \"main.html\"") != null);
+    const android_activity = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/zero_native/MainActivity.kt");
+    defer std.testing.allocator.free(android_activity);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeSetAssetEntry(nativeApp, ZeroNativeShellConfig.assetEntryPath)") != null);
 
     const ios_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Resources/dist/main.html");
     defer std.testing.allocator.free(ios_asset);
@@ -2184,6 +2212,38 @@ test "plist template includes document and URL registrations" {
     try std.testing.expect(std.mem.indexOf(u8, plist, "text/markdown") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleURLTypes") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "acme-notes") != null);
+}
+
+test "macOS package copies document type icons into resources" {
+    var cwd = std.Io.Dir.cwd();
+    try cwd.deleteTree(std.testing.io, ".zig-cache/test-package-doc-icons");
+    defer cwd.deleteTree(std.testing.io, ".zig-cache/test-package-doc-icons") catch {};
+    try cwd.createDirPath(std.testing.io, ".zig-cache/test-package-doc-icons/assets");
+    try cwd.createDirPath(std.testing.io, ".zig-cache/test-package-doc-icons/doc-icons");
+    try cwd.writeFile(std.testing.io, .{ .sub_path = ".zig-cache/test-package-doc-icons/doc-icons/markdown.icns", .data = "icnsdoc-icon" });
+
+    const extensions = [_][]const u8{"md"};
+    const associations = [_]manifest_tool.FileAssociationMetadata{.{
+        .name = "Markdown Document",
+        .extensions = &extensions,
+        .icon = ".zig-cache/test-package-doc-icons/doc-icons/markdown.icns",
+    }};
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.app",
+        .name = "demo",
+        .version = "1.2.3",
+        .file_associations = &associations,
+    };
+
+    _ = try createMacosApp(std.testing.allocator, std.testing.io, .{
+        .metadata = metadata,
+        .output_path = ".zig-cache/test-package-doc-icons/Demo.app",
+        .assets_dir = ".zig-cache/test-package-doc-icons/assets",
+    });
+
+    const copied = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-doc-icons/Demo.app/Contents/Resources/markdown.icns");
+    defer std.testing.allocator.free(copied);
+    try std.testing.expectEqualStrings("icnsdoc-icon", copied);
 }
 
 test "windows registration script contains extension and protocol keys" {

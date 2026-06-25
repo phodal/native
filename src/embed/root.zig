@@ -4,6 +4,7 @@ const platform = @import("../platform/root.zig");
 
 const max_mobile_command_name_bytes: usize = 128;
 const max_mobile_asset_root_bytes: usize = platform.max_webview_url_bytes;
+const max_mobile_asset_entry_bytes: usize = platform.max_window_source_bytes;
 
 pub const EmbeddedApp = struct {
     app: runtime.App,
@@ -59,6 +60,8 @@ const MobileHostApp = struct {
     command_count: usize = 0,
     asset_root: [max_mobile_asset_root_bytes]u8 = undefined,
     asset_root_len: usize = 0,
+    asset_entry: [max_mobile_asset_entry_bytes]u8 = undefined,
+    asset_entry_len: usize = 0,
     last_command_name: [max_mobile_command_name_bytes + 1]u8 = [_]u8{0} ** (max_mobile_command_name_bytes + 1),
 
     fn create() !*MobileHostApp {
@@ -71,6 +74,8 @@ const MobileHostApp = struct {
         self.command_count = 0;
         self.asset_root = undefined;
         self.asset_root_len = 0;
+        self.asset_entry = undefined;
+        self.asset_entry_len = 0;
         self.last_command_name = [_]u8{0} ** (max_mobile_command_name_bytes + 1);
         self.embedded = EmbeddedApp.init(.{
             .context = self,
@@ -85,7 +90,7 @@ const MobileHostApp = struct {
         if (self.asset_root_len > 0) {
             return platform.WebViewSource.assets(.{
                 .root_path = self.asset_root[0..self.asset_root_len],
-                .entry = "index.html",
+                .entry = if (self.asset_entry_len > 0) self.asset_entry[0..self.asset_entry_len] else "index.html",
                 .origin = "zero://app",
                 .spa_fallback = true,
             });
@@ -219,6 +224,22 @@ pub fn zero_native_app_set_asset_root(app: ?*anyopaque, path: [*]const u8, len: 
     self.last_error = null;
 }
 
+pub fn zero_native_app_set_asset_entry(app: ?*anyopaque, path: [*]const u8, len: usize) void {
+    const self = mobileApp(app) orelse return;
+    if (len > self.asset_entry.len) {
+        recordError(self, error.WindowSourceTooLarge);
+        return;
+    }
+    if (len == 0) {
+        self.asset_entry_len = 0;
+        self.last_error = null;
+        return;
+    }
+    @memcpy(self.asset_entry[0..len], path[0..len]);
+    self.asset_entry_len = len;
+    self.last_error = null;
+}
+
 pub fn zero_native_app_last_command_count(app: ?*anyopaque) usize {
     const self = mobileApp(app) orelse return 0;
     return self.command_count;
@@ -264,6 +285,25 @@ test "mobile C ABI can load packaged asset source" {
     try std.testing.expectEqualStrings(asset_root, source.asset_options.?.root_path);
     try std.testing.expectEqualStrings("index.html", source.asset_options.?.entry);
     try std.testing.expect(source.asset_options.?.spa_fallback);
+    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+}
+
+test "mobile C ABI can load custom packaged asset entry" {
+    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer zero_native_app_destroy(app);
+
+    const asset_root = "/tmp/zero-native-mobile-assets";
+    const asset_entry = "main.html";
+    zero_native_app_set_asset_root(app, asset_root, asset_root.len);
+    zero_native_app_set_asset_entry(app, asset_entry, asset_entry.len);
+    zero_native_app_start(app);
+
+    const self = mobileApp(app).?;
+    const source = self.null_platform.loaded_source.?;
+    try std.testing.expectEqual(platform.WebViewSourceKind.assets, source.kind);
+    try std.testing.expect(source.asset_options != null);
+    try std.testing.expectEqualStrings(asset_root, source.asset_options.?.root_path);
+    try std.testing.expectEqualStrings(asset_entry, source.asset_options.?.entry);
     try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
 }
 

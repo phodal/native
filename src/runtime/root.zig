@@ -404,6 +404,9 @@ pub const Runtime = struct {
         if (patch.text) |text| self.views[index].text = try copyInto(&self.views[index].text_storage, text);
         if (patch.command) |command| self.views[index].command = try copyInto(&self.views[index].command_storage, command);
         self.invalidateFor(.command, patch.frame);
+        if (self.views[index].focused and !isFocusableViewInfo(self.views[index].info())) {
+            self.ensureFocusableViewFocused(window_id);
+        }
         return self.views[index].info();
     }
 
@@ -413,15 +416,19 @@ pub const Runtime = struct {
         if (isMainWebViewLabel(label)) return error.InvalidViewOptions;
 
         if (self.findWebViewIndex(window_id, label)) |webview_index| {
+            const was_focused = self.webviews[webview_index].focused;
             try self.options.platform.services.closeWebView(window_id, label);
             self.removeWebViewAt(webview_index);
+            if (was_focused) self.ensureFocusableViewFocused(window_id);
             self.invalidateFor(.command, null);
             return;
         }
 
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        const was_focused = self.views[index].focused;
         try self.options.platform.services.closeView(window_id, label);
         self.removeViewAt(index);
+        if (was_focused) self.ensureFocusableViewFocused(window_id);
         self.invalidateFor(.command, null);
     }
 
@@ -1811,6 +1818,7 @@ pub const Runtime = struct {
             if (std.mem.eql(u8, view.label, label)) {
                 var closed = view;
                 closed.open = false;
+                closed.focused = false;
                 const result = try writeViewJson(closed, output);
                 try self.closeView(window_id, label);
                 return result;
@@ -1959,9 +1967,12 @@ pub const Runtime = struct {
         const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
         var closed_info = self.webviews[webview_index];
         closed_info.open = false;
+        closed_info.focused = false;
         const result = try writeWebViewJson(closed_info, output);
         try self.options.platform.services.closeWebView(window_id, label);
+        const was_focused = self.webviews[webview_index].focused;
         self.removeWebViewAt(webview_index);
+        if (was_focused) self.ensureFocusableViewFocused(window_id);
         return result;
     }
 
@@ -2198,6 +2209,36 @@ pub const Runtime = struct {
         }
         for (self.webviews[0..self.webview_count]) |*webview| {
             if (webview.window_id == window_id) webview.focused = std.mem.eql(u8, webview.label, label);
+        }
+    }
+
+    fn clearFocusedView(self: *Runtime, window_id: platform.WindowId) void {
+        if (self.findWindowIndexById(window_id)) |window_index| {
+            self.windows[window_index].main_focused = false;
+        }
+        for (self.views[0..self.view_count]) |*view| {
+            if (view.window_id == window_id) view.focused = false;
+        }
+        for (self.webviews[0..self.webview_count]) |*webview| {
+            if (webview.window_id == window_id) webview.focused = false;
+        }
+    }
+
+    fn ensureFocusableViewFocused(self: *Runtime, window_id: platform.WindowId) void {
+        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
+        const views = self.listViews(window_id, &views_buffer);
+        var first_focusable: ?[]const u8 = null;
+        for (views) |view| {
+            if (!isFocusableViewInfo(view)) continue;
+            if (first_focusable == null) first_focusable = view.label;
+            if (view.focused) return;
+        }
+        if (first_focusable) |label| {
+            self.focusView(window_id, label) catch {
+                self.clearFocusedView(window_id);
+            };
+        } else {
+            self.clearFocusedView(window_id);
         }
     }
 
@@ -3679,15 +3720,47 @@ test "runtime exposes startup WebView and native views through generic view API"
     try std.testing.expectEqual(@as(f32, 52), updated.frame.height);
     try std.testing.expectEqual(toolbar.id, updated.id);
     try std.testing.expect(!updated.visible);
-    try std.testing.expect(updated.focused);
+    try std.testing.expect(!updated.focused);
     try std.testing.expectEqualStrings("Primary actions toolbar", updated.accessibility_label);
     try std.testing.expectEqualStrings("Actions", updated.text);
     try std.testing.expectEqualStrings("app.toolbar.updated", updated.command);
+
+    const repaired_views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expect(testViewByLabel(repaired_views, "main").?.focused);
+    try std.testing.expect(!testViewByLabel(repaired_views, "toolbar").?.focused);
 
     try harness.runtime.closeView(1, "toolbar");
     const remaining = harness.runtime.listViews(1, &views_buffer);
     try std.testing.expectEqual(@as(usize, 1), remaining.len);
     try std.testing.expectEqualStrings("main", remaining[0].label);
+    try std.testing.expect(remaining[0].focused);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "action",
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 0, 96, 32),
+    });
+    try harness.runtime.focusView(1, "action");
+    const disabled = try harness.runtime.updateView(1, "action", .{ .enabled = false });
+    try std.testing.expect(!disabled.focused);
+    var repaired_disabled_views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expect(testViewByLabel(repaired_disabled_views, "main").?.focused);
+    try std.testing.expect(!testViewByLabel(repaired_disabled_views, "action").?.focused);
+    try harness.runtime.closeView(1, "action");
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "status",
+        .kind = .statusbar,
+        .frame = geometry.RectF.init(0, 320, 640, 32),
+    });
+    try harness.runtime.focusView(1, "status");
+    try harness.runtime.closeView(1, "status");
+    repaired_disabled_views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), repaired_disabled_views.len);
+    try std.testing.expectEqualStrings("main", repaired_disabled_views[0].label);
+    try std.testing.expect(repaired_disabled_views[0].focused);
 }
 
 test "runtime createView routes webview kind through WebView backend" {
@@ -3732,8 +3805,13 @@ test "runtime createView routes webview kind through WebView backend" {
     try std.testing.expectEqualStrings("preview", views[1].label);
     try std.testing.expectEqual(preview.id, views[1].id);
 
+    try harness.runtime.focusView(1, "preview");
     try harness.runtime.closeView(1, "preview");
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.webview_count);
+    const remaining = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), remaining.len);
+    try std.testing.expectEqualStrings("main", remaining[0].label);
+    try std.testing.expect(remaining[0].focused);
 }
 
 test "runtime traverses focus across WebViews and native controls" {
@@ -5578,6 +5656,15 @@ test "runtime handles built-in JavaScript view bridge commands" {
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"visible\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":false") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"5-list\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"label\":\"main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = "{\"id\":\"6\",\"command\":\"zero-native.view.update\",\"payload\":{\"label\":\"toolbar\",\"visible\":true,\"enabled\":false,\"role\":\"banner\",\"accessibilityLabel\":\"Primary actions\",\"text\":\"Actions\",\"command\":\"app.actions\"}}",
@@ -5598,6 +5685,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"open\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":false") != null);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.view_count);
 }
 

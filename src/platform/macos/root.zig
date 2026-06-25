@@ -766,6 +766,7 @@ fn isSupportedNativeViewKind(kind: platform_mod.ViewKind) bool {
         .search_field,
         .label,
         .spacer,
+        .progress_indicator,
         => true,
         .webview,
         .split,
@@ -792,6 +793,7 @@ fn viewKindInt(kind: platform_mod.ViewKind) c_int {
         .gpu_surface => 12,
         .checkbox => 13,
         .toggle => 14,
+        .progress_indicator => 15,
     };
 }
 

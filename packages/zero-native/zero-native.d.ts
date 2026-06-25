@@ -149,7 +149,9 @@ export type ZeroNativeViewKind =
   | "label"
   | "spacer"
   | "gpu_surface"
-  | "gpuSurface";
+  | "gpuSurface"
+  | "progress_indicator"
+  | "progressIndicator";
 
 export interface ZeroNativeViewInfo {
   label: string;

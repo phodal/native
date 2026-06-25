@@ -576,6 +576,14 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
             view = toggle;
             break;
         }
+        case ZERO_NATIVE_APPKIT_VIEW_PROGRESS_INDICATOR: {
+            NSProgressIndicator *indicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+            indicator.style = NSProgressIndicatorSpinningStyle;
+            indicator.indeterminate = YES;
+            [indicator startAnimation:nil];
+            view = indicator;
+            break;
+        }
         case ZERO_NATIVE_APPKIT_VIEW_TEXT_FIELD: {
             NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
             field.stringValue = @"";

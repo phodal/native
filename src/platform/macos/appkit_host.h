@@ -40,6 +40,7 @@ typedef enum {
     ZERO_NATIVE_APPKIT_VIEW_GPU_SURFACE = 12,
     ZERO_NATIVE_APPKIT_VIEW_CHECKBOX = 13,
     ZERO_NATIVE_APPKIT_VIEW_TOGGLE = 14,
+    ZERO_NATIVE_APPKIT_VIEW_PROGRESS_INDICATOR = 15,
 } zero_native_appkit_view_kind_t;
 
 typedef struct {

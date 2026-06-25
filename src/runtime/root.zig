@@ -2259,6 +2259,7 @@ fn shellViewKind(kind: app_manifest.ViewKind) platform.ViewKind {
         .label => .label,
         .spacer => .spacer,
         .gpu_surface => .gpu_surface,
+        .progress_indicator => .progress_indicator,
     };
 }
 
@@ -2332,6 +2333,7 @@ fn defaultShellViewWidth(kind: app_manifest.ViewKind) f32 {
         .button, .checkbox, .toggle => 96,
         .label => 160,
         .spacer => 12,
+        .progress_indicator => 24,
         .text_field, .search_field => 220,
         .sidebar => 240,
         else => 0,
@@ -2343,6 +2345,7 @@ fn defaultShellViewHeight(kind: app_manifest.ViewKind, parent_height: f32) f32 {
         .button, .checkbox, .toggle => 32,
         .label => 24,
         .spacer => @max(parent_height, 1),
+        .progress_indicator => 24,
         .text_field, .search_field => 28,
         .toolbar => 48,
         .titlebar_accessory => 36,
@@ -2742,6 +2745,7 @@ fn viewKindFromString(value: []const u8) ?platform.ViewKind {
     if (std.mem.eql(u8, value, "textField")) return .text_field;
     if (std.mem.eql(u8, value, "searchField")) return .search_field;
     if (std.mem.eql(u8, value, "gpuSurface")) return .gpu_surface;
+    if (std.mem.eql(u8, value, "progressIndicator")) return .progress_indicator;
     return null;
 }
 
@@ -3074,6 +3078,7 @@ test "runtime materializes manifest shell windows into laid out views" {
     const shell_views = [_]app_manifest.ShellView{
         .{ .label = "refresh-button", .kind = .button, .parent = "toolbar", .text = "Refresh", .command = "app.refresh" },
         .{ .label = "toolbar-search", .kind = .search_field, .parent = "toolbar", .text = "Search" },
+        .{ .label = "toolbar-progress", .kind = .progress_indicator, .parent = "toolbar", .role = "Syncing" },
         .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 52, .role = "Toolbar" },
         .{ .label = "sidebar-live", .kind = .checkbox, .parent = "sidebar", .x = 18, .y = 92, .text = "Live" },
         .{ .label = "sidebar-mode", .kind = .toggle, .parent = "sidebar", .x = 18, .y = 128, .text = "Mode" },
@@ -3104,6 +3109,7 @@ test "runtime materializes manifest shell windows into laid out views" {
     const toolbar = testViewByLabel(views, "toolbar").?;
     const refresh = testViewByLabel(views, "refresh-button").?;
     const search = testViewByLabel(views, "toolbar-search").?;
+    const progress = testViewByLabel(views, "toolbar-progress").?;
     const sidebar = testViewByLabel(views, "sidebar").?;
     const checkbox = testViewByLabel(views, "sidebar-live").?;
     const toggle = testViewByLabel(views, "sidebar-mode").?;
@@ -3132,6 +3138,14 @@ test "runtime materializes manifest shell windows into laid out views" {
     try std.testing.expectEqual(@as(f32, 12), search.frame.y);
     try std.testing.expectEqual(@as(f32, 220), search.frame.width);
     try std.testing.expectEqual(@as(f32, 28), search.frame.height);
+
+    try std.testing.expectEqual(platform.ViewKind.progress_indicator, progress.kind);
+    try std.testing.expectEqualStrings("toolbar", progress.parent.?);
+    try std.testing.expectEqualStrings("Syncing", progress.role);
+    try std.testing.expectEqual(@as(f32, 340), progress.frame.x);
+    try std.testing.expectEqual(@as(f32, 14), progress.frame.y);
+    try std.testing.expectEqual(@as(f32, 24), progress.frame.width);
+    try std.testing.expectEqual(@as(f32, 24), progress.frame.height);
 
     try std.testing.expectEqual(platform.ViewKind.sidebar, sidebar.kind);
     try std.testing.expectEqual(@as(f32, 0), sidebar.frame.x);

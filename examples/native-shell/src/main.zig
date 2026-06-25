@@ -145,6 +145,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = toolbar_height, .layer = 20, .role = "Toolbar" },
     .{ .label = "refresh-button", .kind = .button, .parent = "toolbar", .x = 12, .y = 10, .width = 88, .height = 30, .layer = 21, .text = "Refresh", .command = "app.refresh" },
     .{ .label = "palette-button", .kind = .button, .parent = "toolbar", .x = 108, .y = 10, .width = 132, .height = 30, .layer = 21, .text = "Command" },
+    .{ .label = "sync-indicator", .kind = .progress_indicator, .parent = "toolbar", .x = 252, .y = 13, .width = 24, .height = 24, .layer = 21, .role = "Syncing" },
     .{ .label = "title-search", .kind = .titlebar_accessory, .x = 780, .y = 8, .width = 300, .height = 36, .layer = 21, .role = "Search" },
     .{ .label = "surface-search", .kind = .search_field, .parent = "title-search", .x = 0, .y = 3, .width = 280, .height = 28, .layer = 22, .text = "Search native surfaces" },
     .{ .label = "sidebar", .kind = .sidebar, .edge = .left, .width = sidebar_width, .layer = 10, .role = "Sidebar" },

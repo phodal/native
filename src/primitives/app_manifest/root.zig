@@ -241,6 +241,7 @@ pub const ViewKind = enum {
     label,
     spacer,
     gpu_surface,
+    progress_indicator,
 };
 
 pub const ShellEdge = enum {

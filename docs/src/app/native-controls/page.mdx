@@ -8,6 +8,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "refresh", .kind = .button, .parent = "toolbar", .text = "Refresh", .command = "app.refresh" },
     .{ .label = "search", .kind = .search_field, .parent = "toolbar", .text = "Search" },
     .{ .label = "live", .kind = .checkbox, .parent = "toolbar", .text = "Live" },
+    .{ .label = "syncing", .kind = .progress_indicator, .parent = "toolbar", .role = "Syncing" },
     .{ .label = "main", .kind = .webview, .url = "zero://inline", .fill = true },
 };
 
@@ -29,6 +30,7 @@ try runtime.createShellViews(1, &shell_views, zero_native.geometry.RectF.init(0,
 | `search_field` | Native search input |
 | `label` | Native static text |
 | `spacer` | Empty native layout spacer |
+| `progress_indicator` | Native indeterminate progress indicator |
 | `webview` | Compatibility view backed by the WebView backend |
 
 The macOS system-WebView backend supports these native kinds today. Other desktop engines and platforms return explicit unsupported errors until their native hosts implement the same surface.

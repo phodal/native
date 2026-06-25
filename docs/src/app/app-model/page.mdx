@@ -272,7 +272,7 @@ try runtime.run(my_app.app());
       <td><code>js_window_api</code></td>
       <td><code>bool</code></td>
       <td><code>false</code></td>
-      <td>Expose built-in <code>window.zero</code> helper namespaces for trusted app chrome. Window, view, and WebView helpers require origin and <code>window</code> checks; dialog, OS, clipboard, and credential helpers still require explicit <code>builtin_bridge</code> policy.</td>
+      <td>Expose built-in <code>window.zero</code> helper namespaces for trusted app chrome. Command helpers require origin and <code>command</code> checks, view helpers require origin and <code>view</code> checks, and window, WebView, and platform helpers require origin and <code>window</code> checks. Dialog, OS, clipboard, and credential helpers still require explicit <code>builtin_bridge</code> policy.</td>
     </tr>
   </tbody>
 </table>

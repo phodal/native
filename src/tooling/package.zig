@@ -188,9 +188,10 @@ pub fn createAndroidSkeleton(io: std.Io, output_path: []const u8) !PackageStats 
     try dir.createDirPath(io, "app/src/main/cpp");
     try writeFile(dir, io, "README.md", androidReadme());
     try writeFile(dir, io, "settings.gradle", "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }\nrootProject.name = 'zero-nativeHost'\ninclude ':app'\n");
-    try writeFile(dir, io, "app/build.gradle", "plugins { id 'com.android.application' version '8.5.0' }\n\nandroid { namespace 'dev.zero_native'; compileSdk 35\n    defaultConfig { applicationId 'dev.zero_native'; minSdk 26; targetSdk 35; versionCode 1; versionName '0.1.0' }\n}\n");
+    try writeFile(dir, io, "app/build.gradle", androidBuildGradle());
     try writeFile(dir, io, "app/src/main/AndroidManifest.xml", androidManifest());
     try writeFile(dir, io, "app/src/main/java/dev/zero_native/MainActivity.kt", androidActivity());
+    try writeFile(dir, io, "app/src/main/cpp/CMakeLists.txt", androidCMakeLists());
     try writeFile(dir, io, "app/src/main/cpp/zero_native_jni.c", androidJni());
     try writeFile(dir, io, "app/src/main/cpp/zero_native.h", embedHeader());
     return .{ .path = output_path, .target = .android };
@@ -359,7 +360,7 @@ fn embedHeader() []const u8 {
 }
 
 fn iosReadme() []const u8 {
-    return "iOS zero-native host skeleton. Link libzero-native.a and call the functions in zero-nativeHost/zero_native.h from the view controller.\n";
+    return "iOS zero-native host skeleton. Link Libraries/libzero-native.a and call the functions in zero-nativeHost/zero_native.h from the native UIKit shell.\n";
 }
 
 fn iosInfoPlist() []const u8 {
@@ -377,20 +378,191 @@ fn iosViewController() []const u8 {
     \\import WebKit
     \\
     \\final class ZeroNativeHostViewController: UIViewController {
+    \\    private let headerView = UIView()
+    \\    private let titleLabel = UILabel()
+    \\    private let statusLabel = UILabel()
+    \\    private let backButton = UIButton(type: .system)
+    \\    private let refreshButton = UIButton(type: .system)
     \\    private let webView = WKWebView(frame: .zero)
+    \\    private var webViewBottomConstraint: NSLayoutConstraint?
+    \\    private var nativeApp: UnsafeMutableRawPointer?
+    \\
     \\    override func viewDidLoad() {
     \\        super.viewDidLoad()
-    \\        webView.frame = view.bounds
-    \\        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    \\        view.backgroundColor = .systemBackground
+    \\        configureHeader()
+    \\
+    \\        headerView.translatesAutoresizingMaskIntoConstraints = false
+    \\        webView.translatesAutoresizingMaskIntoConstraints = false
+    \\        view.addSubview(headerView)
     \\        view.addSubview(webView)
+    \\        let bottom = webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+    \\        webViewBottomConstraint = bottom
+    \\        NSLayoutConstraint.activate([
+    \\            headerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+    \\            headerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+    \\            headerView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+    \\            headerView.heightAnchor.constraint(equalToConstant: 92),
+    \\            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+    \\            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+    \\            webView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+    \\            bottom,
+    \\        ])
+    \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+    \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
+    \\
+    \\        nativeApp = zero_native_app_create()
+    \\        if let nativeApp {
+    \\            zero_native_app_start(nativeApp)
+    \\        }
+    \\        webView.loadHTMLString(Self.html, baseURL: nil)
     \\    }
+    \\
+    \\    private func configureHeader() {
+    \\        headerView.backgroundColor = .secondarySystemBackground
+    \\        titleLabel.text = "zero-native"
+    \\        titleLabel.font = .preferredFont(forTextStyle: .title2)
+    \\        titleLabel.adjustsFontForContentSizeCategory = true
+    \\        statusLabel.text = "Native commands ready"
+    \\        statusLabel.font = .preferredFont(forTextStyle: .caption1)
+    \\        statusLabel.textColor = .secondaryLabel
+    \\        backButton.setTitle("Back", for: .normal)
+    \\        backButton.addTarget(self, action: #selector(sendBackCommand), for: .touchUpInside)
+    \\        refreshButton.setTitle("Refresh", for: .normal)
+    \\        refreshButton.addTarget(self, action: #selector(sendRefreshCommand), for: .touchUpInside)
+    \\        [titleLabel, statusLabel, backButton, refreshButton].forEach {
+    \\            $0.translatesAutoresizingMaskIntoConstraints = false
+    \\            headerView.addSubview($0)
+    \\        }
+    \\        NSLayoutConstraint.activate([
+    \\            titleLabel.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 20),
+    \\            titleLabel.topAnchor.constraint(equalTo: headerView.topAnchor, constant: 16),
+    \\            statusLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+    \\            statusLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6),
+    \\            refreshButton.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -20),
+    \\            refreshButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+    \\            backButton.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -12),
+    \\            backButton.centerYAnchor.constraint(equalTo: refreshButton.centerYAnchor),
+    \\        ])
+    \\    }
+    \\
+    \\    @objc private func sendBackCommand() {
+    \\        dispatchNativeCommand("mobile.back")
+    \\    }
+    \\
+    \\    @objc private func sendRefreshCommand() {
+    \\        dispatchNativeCommand("mobile.refresh")
+    \\    }
+    \\
+    \\    private func dispatchNativeCommand(_ command: String) {
+    \\        guard let nativeApp else { return }
+    \\        command.withCString { pointer in
+    \\            zero_native_app_command(nativeApp, pointer, UInt(command.utf8.count))
+    \\        }
+    \\        let count = zero_native_app_last_command_count(nativeApp)
+    \\        let name = String(cString: zero_native_app_last_command_name(nativeApp))
+    \\        statusLabel.text = "\(name) #\(count)"
+    \\        zero_native_app_frame(nativeApp)
+    \\    }
+    \\
+    \\    @objc private func keyboardFrameWillChange(_ notification: Notification) {
+    \\        guard let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
+    \\        let keyboardFrame = view.convert(value.cgRectValue, from: nil)
+    \\        webViewBottomConstraint?.constant = -max(0, view.bounds.maxY - keyboardFrame.minY)
+    \\        view.layoutIfNeeded()
+    \\    }
+    \\
+    \\    @objc private func keyboardWillHide(_ notification: Notification) {
+    \\        _ = notification
+    \\        webViewBottomConstraint?.constant = 0
+    \\        view.layoutIfNeeded()
+    \\    }
+    \\
+    \\    override func viewDidLayoutSubviews() {
+    \\        super.viewDidLayoutSubviews()
+    \\        guard let nativeApp else { return }
+    \\        let scale = Float(view.window?.screen.scale ?? UIScreen.main.scale)
+    \\        zero_native_app_resize(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil)
+    \\        zero_native_app_frame(nativeApp)
+    \\    }
+    \\
+    \\    deinit {
+    \\        NotificationCenter.default.removeObserver(self)
+    \\        guard let nativeApp else { return }
+    \\        zero_native_app_stop(nativeApp)
+    \\        zero_native_app_destroy(nativeApp)
+    \\    }
+    \\
+    \\    private static let html = """
+    \\    <!doctype html>
+    \\    <meta name="viewport" content="width=device-width, initial-scale=1">
+    \\    <body style="margin:0;font-family:-apple-system,system-ui;background:#f7f8fa;color:#171717">
+    \\      <main style="padding:28px 22px;display:grid;gap:16px">
+    \\        <h1 style="margin:0;font-size:30px">Workspace</h1>
+    \\        <p style="margin:0;color:#5f6672;line-height:1.5">This content is rendered by WKWebView while the header remains native UIKit.</p>
+    \\      </main>
+    \\    </body>
+    \\    """
     \\}
     \\
     ;
 }
 
 fn androidReadme() []const u8 {
-    return "Android zero-native host skeleton. Copy libzero-native.a into the NDK build and wire the JNI bridge in app/src/main/cpp.\n";
+    return "Android zero-native host skeleton. Copy libzero-native.a into app/src/main/cpp/lib and build with Android Studio or Gradle.\n";
+}
+
+fn androidBuildGradle() []const u8 {
+    return
+    \\plugins {
+    \\    id "com.android.application" version "8.5.0"
+    \\    id "org.jetbrains.kotlin.android" version "2.0.20"
+    \\}
+    \\
+    \\android {
+    \\    namespace "dev.zero_native"
+    \\    compileSdk 35
+    \\
+    \\    defaultConfig {
+    \\        applicationId "dev.zero_native"
+    \\        minSdk 26
+    \\        targetSdk 35
+    \\        versionCode 1
+    \\        versionName "0.1.0"
+    \\
+    \\        externalNativeBuild {
+    \\            cmake {
+    \\                arguments "-DANDROID_STL=c++_shared"
+    \\            }
+    \\        }
+    \\    }
+    \\
+    \\    externalNativeBuild {
+    \\        cmake {
+    \\            path "src/main/cpp/CMakeLists.txt"
+    \\        }
+    \\    }
+    \\}
+    \\
+    ;
+}
+
+fn androidCMakeLists() []const u8 {
+    return
+    \\cmake_minimum_required(VERSION 3.22.1)
+    \\
+    \\project(zero_native_host C)
+    \\
+    \\add_library(zero-native STATIC IMPORTED)
+    \\set_target_properties(zero-native PROPERTIES
+    \\    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/lib/libzero-native.a"
+    \\)
+    \\
+    \\add_library(zero_native_host SHARED zero_native_jni.c)
+    \\target_include_directories(zero_native_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    \\target_link_libraries(zero_native_host zero-native android log)
+    \\
+    ;
 }
 
 fn androidManifest() []const u8 {
@@ -403,61 +575,154 @@ fn androidActivity() []const u8 {
     \\
     \\import android.app.Activity
     \\import android.content.res.Configuration
+    \\import android.graphics.Color
     \\import android.os.Bundle
     \\import android.view.MotionEvent
     \\import android.view.SurfaceHolder
     \\import android.view.SurfaceView
+    \\import android.webkit.WebView
+    \\import android.widget.Button
+    \\import android.widget.FrameLayout
+    \\import android.widget.LinearLayout
+    \\import android.widget.TextView
     \\
     \\class MainActivity : Activity(), SurfaceHolder.Callback {
-    \\    private var app: Long = 0
+    \\    private var nativeApp: Long = 0
+    \\    private lateinit var statusLabel: TextView
+    \\
     \\    override fun onCreate(savedInstanceState: Bundle?) {
     \\        super.onCreate(savedInstanceState)
+    \\        System.loadLibrary("zero_native_host")
+    \\
     \\        val surface = SurfaceView(this)
     \\        surface.holder.addCallback(this)
-    \\        setContentView(surface)
-    \\        app = nativeCreate()
-    \\        nativeStart(app)
+    \\
+    \\        val header = LinearLayout(this).apply {
+    \\            orientation = LinearLayout.VERTICAL
+    \\            setBackgroundColor(Color.rgb(245, 246, 248))
+    \\            setPadding(32, 28, 32, 24)
+    \\        }
+    \\        val title = TextView(this).apply {
+    \\            text = "zero-native"
+    \\            textSize = 24f
+    \\            setTextColor(Color.rgb(24, 24, 27))
+    \\        }
+    \\        statusLabel = TextView(this).apply {
+    \\            text = "Native commands ready"
+    \\            textSize = 13f
+    \\            setTextColor(Color.rgb(95, 102, 114))
+    \\            setPadding(0, 8, 0, 0)
+    \\        }
+    \\        val actions = LinearLayout(this).apply {
+    \\            orientation = LinearLayout.HORIZONTAL
+    \\            setPadding(0, 12, 0, 0)
+    \\        }
+    \\        val back = Button(this).apply {
+    \\            text = "Back"
+    \\            setOnClickListener { dispatchNativeCommand("mobile.back") }
+    \\        }
+    \\        val refresh = Button(this).apply {
+    \\            text = "Refresh"
+    \\            setOnClickListener { dispatchNativeCommand("mobile.refresh") }
+    \\        }
+    \\        actions.addView(back, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    \\        actions.addView(refresh, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    \\        header.addView(title)
+    \\        header.addView(statusLabel)
+    \\        header.addView(actions)
+    \\
+    \\        val webView = WebView(this).apply {
+    \\            settings.javaScriptEnabled = false
+    \\            loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+    \\        }
+    \\        val content = FrameLayout(this)
+    \\        content.addView(surface, FrameLayout.LayoutParams(
+    \\            FrameLayout.LayoutParams.MATCH_PARENT,
+    \\            FrameLayout.LayoutParams.MATCH_PARENT,
+    \\        ))
+    \\        content.addView(webView, FrameLayout.LayoutParams(
+    \\            FrameLayout.LayoutParams.MATCH_PARENT,
+    \\            FrameLayout.LayoutParams.MATCH_PARENT,
+    \\        ))
+    \\        val root = LinearLayout(this).apply {
+    \\            orientation = LinearLayout.VERTICAL
+    \\            setBackgroundColor(Color.WHITE)
+    \\        }
+    \\        root.addView(header, LinearLayout.LayoutParams(
+    \\            LinearLayout.LayoutParams.MATCH_PARENT,
+    \\            LinearLayout.LayoutParams.WRAP_CONTENT,
+    \\        ))
+    \\        root.addView(content, LinearLayout.LayoutParams(
+    \\            LinearLayout.LayoutParams.MATCH_PARENT,
+    \\            0,
+    \\            1f,
+    \\        ))
+    \\        setContentView(root)
+    \\
+    \\        nativeApp = nativeCreate()
+    \\        nativeStart(nativeApp)
     \\    }
+    \\
     \\    private fun dispatchNativeCommand(command: String) {
-    \\        if (app == 0L) return
-    \\        nativeCommand(app, command)
-    \\        nativeFrame(app)
+    \\        if (nativeApp == 0L) return
+    \\        val count = nativeCommand(nativeApp, command)
+    \\        if (::statusLabel.isInitialized) {
+    \\            statusLabel.text = "Command $count: $command"
+    \\        }
+    \\        nativeFrame(nativeApp)
     \\    }
+    \\
     \\    override fun onResume() {
     \\        super.onResume()
-    \\        if (app != 0L) nativeActivate(app)
+    \\        if (nativeApp != 0L) nativeActivate(nativeApp)
     \\    }
+    \\
     \\    override fun onPause() {
-    \\        if (app != 0L) nativeDeactivate(app)
+    \\        if (nativeApp != 0L) nativeDeactivate(nativeApp)
     \\        super.onPause()
     \\    }
-    \\    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { nativeResize(app, width.toFloat(), height.toFloat(), 1f, holder.surface) }
+    \\
+    \\    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+    \\        if (nativeApp == 0L) return
+    \\        nativeResize(nativeApp, width.toFloat(), height.toFloat(), resources.displayMetrics.density, holder.surface)
+    \\        nativeFrame(nativeApp)
+    \\    }
+    \\
     \\    override fun surfaceCreated(holder: SurfaceHolder) {}
-    \\    override fun surfaceDestroyed(holder: SurfaceHolder) { nativeStop(app) }
+    \\
+    \\    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    \\        if (nativeApp != 0L) nativeStop(nativeApp)
+    \\    }
+    \\
     \\    override fun onConfigurationChanged(newConfig: Configuration) {
     \\        super.onConfigurationChanged(newConfig)
-    \\        if (app != 0L) nativeFrame(app)
+    \\        if (nativeApp != 0L) nativeFrame(nativeApp)
     \\    }
+    \\
     \\    override fun onTouchEvent(event: MotionEvent): Boolean {
-    \\        nativeTouch(app, event.getPointerId(0).toLong(), event.actionMasked, event.x, event.y, event.pressure)
-    \\        nativeFrame(app)
+    \\        if (nativeApp == 0L) return false
+    \\        nativeTouch(nativeApp, event.getPointerId(0).toLong(), event.actionMasked, event.x, event.y, event.pressure)
+    \\        nativeFrame(nativeApp)
     \\        return true
     \\    }
+    \\
     \\    override fun onBackPressed() {
-    \\        if (app != 0L) {
+    \\        if (nativeApp != 0L) {
     \\            dispatchNativeCommand("mobile.back")
     \\            return
     \\        }
     \\        super.onBackPressed()
     \\    }
+    \\
     \\    override fun onDestroy() {
-    \\        if (app != 0L) {
-    \\            nativeStop(app)
-    \\            nativeDestroy(app)
-    \\            app = 0
+    \\        if (nativeApp != 0L) {
+    \\            nativeStop(nativeApp)
+    \\            nativeDestroy(nativeApp)
+    \\            nativeApp = 0
     \\        }
     \\        super.onDestroy()
     \\    }
+    \\
     \\    external fun nativeCreate(): Long
     \\    external fun nativeDestroy(app: Long)
     \\    external fun nativeStart(app: Long)
@@ -468,6 +733,19 @@ fn androidActivity() []const u8 {
     \\    external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
     \\    external fun nativeCommand(app: Long, command: String): Int
     \\    external fun nativeFrame(app: Long)
+    \\
+    \\    companion object {
+    \\        private const val html = """
+    \\            <!doctype html>
+    \\            <meta name="viewport" content="width=device-width, initial-scale=1">
+    \\            <body style="margin:0;font-family:system-ui,sans-serif;background:#f7f8fa;color:#18181b">
+    \\              <main style="padding:28px 22px;display:grid;gap:16px">
+    \\                <h1 style="margin:0;font-size:30px">Workspace</h1>
+    \\                <p style="margin:0;color:#5f6672;line-height:1.5">This content is rendered by Android WebView while the header remains native Android UI.</p>
+    \\              </main>
+    \\            </body>
+    \\        """
+    \\    }
     \\}
     \\
     ;
@@ -476,6 +754,7 @@ fn androidActivity() []const u8 {
 fn androidJni() []const u8 {
     return
     \\#include <jni.h>
+    \\#include <stdint.h>
     \\#include <string.h>
     \\#include "zero_native.h"
     \\JNIEXPORT jlong JNICALL Java_dev_zero_1native_MainActivity_nativeCreate(JNIEnv *env, jobject self) { (void)env; (void)self; return (jlong)zero_native_app_create(); }
@@ -1253,6 +1532,28 @@ test "archive path includes correct suffix per platform" {
     const win_path = try archivePath(std.testing.allocator, .{ .metadata = metadata, .target = .windows, .output_path = "zig-out/package/demo" });
     defer std.testing.allocator.free(win_path);
     try std.testing.expect(std.mem.endsWith(u8, win_path, ".zip"));
+}
+
+test "mobile package templates include native command shells" {
+    const ios_controller = iosViewController();
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "UIButton(type: .system)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "keyboardWillChangeFrameNotification") != null);
+
+    const android_gradle = androidBuildGradle();
+    try std.testing.expect(std.mem.indexOf(u8, android_gradle, "org.jetbrains.kotlin.android") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_gradle, "externalNativeBuild") != null);
+
+    const android_activity = androidActivity();
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "System.loadLibrary(\"zero_native_host\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(\"mobile.refresh\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "WebView(this)") != null);
+
+    const android_cmake = androidCMakeLists();
+    try std.testing.expect(std.mem.indexOf(u8, android_cmake, "add_library(zero_native_host SHARED zero_native_jni.c)") != null);
+
+    const android_jni = androidJni();
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "#include <stdint.h>") != null);
 }
 
 test "linux desktop entry contains app name" {

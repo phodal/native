@@ -18,16 +18,18 @@ const html =
 
 const app_permissions = [_][]const u8{
     zero_native.security.permission_notifications,
+    zero_native.security.permission_dialog,
     zero_native.security.permission_clipboard,
     zero_native.security.permission_credentials,
 };
 const bridge_origins = [_][]const u8{ "zero://inline", "zero://app" };
 const notification_permission = [_][]const u8{zero_native.security.permission_notifications};
+const dialog_permission = [_][]const u8{zero_native.security.permission_dialog};
 const clipboard_permission = [_][]const u8{zero_native.security.permission_clipboard};
 const credential_permission = [_][]const u8{zero_native.security.permission_credentials};
 const builtin_policies = [_]zero_native.BridgeCommandPolicy{
     .{ .name = "zero-native.os.showNotification", .permissions = &notification_permission, .origins = &bridge_origins },
-    .{ .name = "zero-native.dialog.showMessage", .origins = &bridge_origins },
+    .{ .name = "zero-native.dialog.showMessage", .permissions = &dialog_permission, .origins = &bridge_origins },
     .{ .name = "zero-native.clipboard.readText", .permissions = &clipboard_permission, .origins = &bridge_origins },
     .{ .name = "zero-native.clipboard.writeText", .permissions = &clipboard_permission, .origins = &bridge_origins },
     .{ .name = "zero-native.clipboard.read", .permissions = &clipboard_permission, .origins = &bridge_origins },

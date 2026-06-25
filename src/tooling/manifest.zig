@@ -677,6 +677,9 @@ fn parsePermission(value: []const u8) app_manifest.Permission {
     if (std.mem.eql(u8, value, "notifications")) return .notifications;
     if (std.mem.eql(u8, value, "clipboard")) return .clipboard;
     if (std.mem.eql(u8, value, "window")) return .window;
+    if (std.mem.eql(u8, value, "command")) return .command;
+    if (std.mem.eql(u8, value, "view")) return .view;
+    if (std.mem.eql(u8, value, "dialog")) return .dialog;
     if (std.mem.eql(u8, value, "credentials")) return .credentials;
     return .{ .custom = value };
 }

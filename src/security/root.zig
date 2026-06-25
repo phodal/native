@@ -1,6 +1,9 @@
 const std = @import("std");
 
 pub const permission_window = "window";
+pub const permission_command = "command";
+pub const permission_view = "view";
+pub const permission_dialog = "dialog";
 pub const permission_filesystem = "filesystem";
 pub const permission_clipboard = "clipboard";
 pub const permission_network = "network";

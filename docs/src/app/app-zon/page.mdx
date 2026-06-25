@@ -12,12 +12,15 @@ The `app.zon` manifest declares app metadata, permissions, bridge policies, secu
     .version = "0.1.0",
     .icons = .{ "assets/icon.icns", "assets/icon.ico" },
     .platforms = .{ "macos" },
-    .permissions = .{ "window", "clipboard", "credentials" },
+    .permissions = .{ "command", "view", "dialog", "window", "clipboard", "credentials" },
     .capabilities = .{ "webview", "js_bridge", "clipboard", "credentials" },
     .bridge = .{
         .commands = .{
             .{ .name = "native.ping", .origins = .{ "zero://app" } },
             .{ .name = "zero-native.window.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+            .{ .name = "zero-native.command.invoke", .permissions = .{ "command" }, .origins = .{ "zero://app" } },
+            .{ .name = "zero-native.view.list", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+            .{ .name = "zero-native.dialog.showMessage", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
             .{ .name = "zero-native.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
             .{ .name = "zero-native.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         },

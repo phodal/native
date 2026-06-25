@@ -1108,7 +1108,15 @@ pub const Runtime = struct {
 
         var response_buffer: [bridge.max_response_bytes]u8 = undefined;
         var result_buffer: [bridge.max_result_bytes]u8 = undefined;
-        if (!self.allowsBuiltinBridgeCommand(request.command, message.origin, is_command or is_window or is_view or is_webview or is_platform)) {
+        const js_permission: ?[]const u8 = if (is_command)
+            security.permission_command
+        else if (is_view)
+            security.permission_view
+        else if (is_window or is_webview or is_platform)
+            security.permission_window
+        else
+            null;
+        if (!self.allowsBuiltinBridgeCommand(request.command, message.origin, js_permission)) {
             const message_text = if (is_view)
                 "View API is not permitted"
             else if (is_webview)
@@ -1212,14 +1220,16 @@ pub const Runtime = struct {
         try self.emitWindowEvent(drop.window_id, "drop:files", writer.buffered());
     }
 
-    fn allowsBuiltinBridgeCommand(self: *Runtime, command: []const u8, origin: []const u8, uses_window_permission: bool) bool {
+    fn allowsBuiltinBridgeCommand(self: *Runtime, command: []const u8, origin: []const u8, js_permission: ?[]const u8) bool {
         var policy = self.options.builtin_bridge;
         if (self.options.security.permissions.len > 0) policy.permissions = self.options.security.permissions;
         if (policy.enabled) return policy.allows(command, origin);
-        if (!uses_window_permission or !self.options.js_window_api) return false;
+        const permission = js_permission orelse return false;
+        if (!self.options.js_window_api) return false;
         if (!security.allowsOrigin(self.options.security.navigation.allowed_origins, origin)) return false;
         if (self.options.security.permissions.len == 0) return true;
-        return security.hasPermission(self.options.security.permissions, security.permission_window);
+        return security.hasPermission(self.options.security.permissions, permission) or
+            (!std.mem.eql(u8, permission, security.permission_window) and security.hasPermission(self.options.security.permissions, security.permission_window));
     }
 
     fn dispatchCommandBridgeCommand(self: *Runtime, app: App, request: bridge.Request, source_window_id: platform.WindowId, source_view_label: []const u8, result_buffer: []u8, response_buffer: []u8) []const u8 {
@@ -4297,6 +4307,53 @@ test "runtime handles built-in JavaScript command bridge commands" {
     try std.testing.expectEqualStrings("toolbar", app_state.last_view_label);
 }
 
+test "runtime gates JavaScript command API with command permission" {
+    const TestApp = struct {
+        command_count: u32 = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "command-permission", .source = platform.WebViewSource.html("<p>Commands</p>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .command => self.command_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    const command_permission = [_][]const u8{security.permission_command};
+    var allowed: TestHarness() = undefined;
+    allowed.init(.{});
+    allowed.runtime.options.js_window_api = true;
+    allowed.runtime.options.security.permissions = &command_permission;
+    var app_state: TestApp = .{};
+    try allowed.start(app_state.app());
+    try allowed.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"name\":\"app.save\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
+
+    const filesystem_only = [_][]const u8{security.permission_filesystem};
+    var denied: TestHarness() = undefined;
+    denied.init(.{});
+    denied.runtime.options.js_window_api = true;
+    denied.runtime.options.security.permissions = &filesystem_only;
+    try denied.start(app_state.app());
+    try denied.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"denied\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"name\":\"app.open\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
+}
+
 test "runtime handles built-in JavaScript platform support commands" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -4758,6 +4815,41 @@ test "runtime handles built-in JavaScript view bridge commands" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"open\":false") != null);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.view_count);
+}
+
+test "runtime gates JavaScript view API with view permission" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "view-permission", .source = platform.WebViewSource.html("<p>Views</p>") };
+        }
+    };
+
+    const view_permission = [_][]const u8{security.permission_view};
+    var allowed: TestHarness() = undefined;
+    allowed.init(.{});
+    allowed.runtime.options.js_window_api = true;
+    allowed.runtime.options.security.permissions = &view_permission;
+    var app_state: TestApp = .{};
+    try allowed.start(app_state.app());
+    try allowed.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
+
+    const command_permission = [_][]const u8{security.permission_command};
+    var denied: TestHarness() = undefined;
+    denied.init(.{});
+    denied.runtime.options.js_window_api = true;
+    denied.runtime.options.security.permissions = &command_permission;
+    try denied.start(app_state.app());
+    try denied.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"denied\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
 }
 
 test "runtime returns closed webview info before compacting storage" {

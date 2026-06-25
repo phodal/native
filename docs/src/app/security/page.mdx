@@ -7,7 +7,7 @@ zero-native treats the WebView as untrusted by default. App authors opt into nat
 `capabilities` describe broad features an app uses. `permissions` are the runtime grants checked before native commands run.
 
 ```zig
-.permissions = .{ "window", "filesystem" },
+.permissions = .{ "command", "view", "dialog", "window", "filesystem" },
 .capabilities = .{ "webview", "js_bridge" },
 ```
 
@@ -24,6 +24,18 @@ zero-native treats the WebView as untrusted by default. App authors opt into nat
     <tr>
       <td><code>window</code></td>
       <td>Window create/focus/close operations and layered WebView management</td>
+    </tr>
+    <tr>
+      <td><code>command</code></td>
+      <td>App command routing from trusted WebView bridge calls</td>
+    </tr>
+    <tr>
+      <td><code>view</code></td>
+      <td>Generic native view create/list/update/focus/close operations</td>
+    </tr>
+    <tr>
+      <td><code>dialog</code></td>
+      <td>Native file and message dialogs from explicit builtin bridge policies</td>
     </tr>
     <tr>
       <td><code>filesystem</code></td>
@@ -133,7 +145,7 @@ Prefer exact origins over `"*"`. Use `"*"` only for local development or command
 
 zero-native provides built-in commands for app command routing (`zero-native.command.*`), windows (`zero-native.window.*`), generic native views (`zero-native.view.*`), layered WebViews (`zero-native.webview.*`), platform support queries (`zero-native.platform.*`), dialogs (`zero-native.dialog.*`), selected OS capabilities (`zero-native.os.*`), clipboard access (`zero-native.clipboard.*`), and credential storage (`zero-native.credentials.*`). These are controlled separately from app-defined commands via the `builtin_bridge` field in `RuntimeOptions`.
 
-`js_window_api` exposes the JavaScript command, window, view, WebView, and platform support helpers, but it does not bypass security. Command routing (`zero-native.command.invoke`), platform support queries (`zero-native.platform.supports`), window commands (`zero-native.window.list`, `create`, `focus`, `close`), view commands (`zero-native.view.create`, `list`, `update`, `setFrame`, `setVisible`, `focus`, `close`), and WebView commands (`zero-native.webview.create`, `list`, `setFrame`, `navigate`, `setZoom`, `setLayer`, `close`) must come from an allowed origin and must have the `window` permission when runtime permissions are configured. View and WebView commands can only target the window that sent the bridge message. WebView URLs must also be allowed by `security.navigation.allowed_origins`, and child WebViews receive `window.zero` only when created with `bridge: true`.
+`js_window_api` exposes the JavaScript command, window, view, WebView, and platform support helpers, but it does not bypass security. Command routing (`zero-native.command.invoke`) must come from an allowed origin and have the `command` permission when runtime permissions are configured. Generic native view commands (`zero-native.view.create`, `list`, `update`, `setFrame`, `setVisible`, `focus`, `close`) require the `view` permission. Platform support queries, window commands (`zero-native.window.list`, `create`, `focus`, `close`), and WebView commands (`zero-native.webview.create`, `list`, `setFrame`, `navigate`, `setZoom`, `setLayer`, `close`) require the `window` permission. The legacy `window` grant is still accepted for command and view helpers for compatibility. View and WebView commands can only target the window that sent the bridge message. WebView URLs must also be allowed by `security.navigation.allowed_origins`, and child WebViews receive `window.zero` only when created with `bridge: true`.
 
 For broader control, use an explicit `builtin_bridge` policy. When you choose this path, list every built-in command your app calls. Dialog commands (`zero-native.dialog.openFile`, `saveFile`, `showMessage`), OS commands (`zero-native.os.openUrl`, `showNotification`, `revealPath`, `addRecentDocument`, `clearRecentDocuments`), clipboard commands (`zero-native.clipboard.readText`, `writeText`, `read`, `write`), and credential commands (`zero-native.credentials.set`, `get`, `delete`) are **always default-deny** and require an explicit `builtin_bridge` policy with the command listed. `zero-native.os.openUrl` also requires `security.navigation.external_links` to allow the target URL:
 
@@ -141,16 +153,16 @@ For broader control, use an explicit `builtin_bridge` policy. When you choose th
 .builtin_bridge = .{
     .enabled = true,
     .commands = &.{
-        .{ .name = "zero-native.command.invoke", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.command.invoke", .permissions = .{ "command" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.platform.supports", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.window.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.update", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.setFrame", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.setVisible", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.focus", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.close", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.create", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.list", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.update", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.setFrame", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.setVisible", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.focus", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.close", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.setFrame", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
@@ -158,8 +170,8 @@ For broader control, use an explicit `builtin_bridge` policy. When you choose th
         .{ .name = "zero-native.webview.setZoom", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.setLayer", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.close", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.dialog.openFile", .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.dialog.showMessage", .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.dialog.openFile", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.dialog.showMessage", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.openUrl", .permissions = .{ "network" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.showNotification", .permissions = .{ "notifications" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.revealPath", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },
@@ -299,12 +311,12 @@ For dev servers, extend `connect-src` only to the local dev origin and WebSocket
     <tr>
       <td>Builtin bridge (commands, windows, views, and WebViews)</td>
       <td>Denied unless <code>js_window_api</code> or explicit policy allows the helper and origin/permission checks pass</td>
-      <td><code>window</code> permission plus exact allowed origins</td>
+      <td><code>command</code>, <code>view</code>, or <code>window</code> permission plus exact allowed origins</td>
     </tr>
     <tr>
       <td>Builtin bridge (dialogs and OS capabilities)</td>
       <td>Denied</td>
-      <td>Explicit <code>builtin_bridge</code> policy required</td>
+      <td>Explicit <code>builtin_bridge</code> policy with matching permissions required</td>
     </tr>
     <tr>
       <td>Navigation</td>

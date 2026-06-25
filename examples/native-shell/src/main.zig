@@ -125,12 +125,13 @@ const html =
     \\</html>
 ;
 
-const app_permissions = [_][]const u8{zero_native.security.permission_window};
+const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
 const bridge_origins = [_][]const u8{ "zero://inline", "zero://app" };
-const window_permission = [_][]const u8{zero_native.security.permission_window};
+const command_permission = [_][]const u8{zero_native.security.permission_command};
+const view_permission = [_][]const u8{zero_native.security.permission_view};
 const builtin_policies = [_]zero_native.BridgeCommandPolicy{
-    .{ .name = "zero-native.command.invoke", .permissions = &window_permission, .origins = &bridge_origins },
-    .{ .name = "zero-native.view.list", .permissions = &window_permission, .origins = &bridge_origins },
+    .{ .name = "zero-native.command.invoke", .permissions = &command_permission, .origins = &bridge_origins },
+    .{ .name = "zero-native.view.list", .permissions = &view_permission, .origins = &bridge_origins },
 };
 const shortcuts = [_]zero_native.Shortcut{
     .{ .id = "app.refresh", .key = "r", .modifiers = .{ .primary = true } },

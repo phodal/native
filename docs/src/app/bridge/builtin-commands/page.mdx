@@ -15,13 +15,13 @@ zero-native provides built-in bridge commands for app command routing, window ma
   <tbody>
     <tr>
       <td><code>zero-native.command.invoke</code></td>
-      <td><code>window</code></td>
+      <td><code>command</code></td>
       <td>Dispatch an <code>Event.command</code> into the app runtime from the calling WebView</td>
     </tr>
   </tbody>
 </table>
 
-Command routing is available through `window.zero.commands.invoke(...)` when `js_window_api` is `true`. The runtime emits a `CommandEvent` with `source = .bridge`, the calling `window_id`, and the calling view label when the request comes from a named child WebView.
+Command routing is available through `window.zero.commands.invoke(...)` when `js_window_api` is `true`. When runtime permissions are configured, the command helper requires the `command` permission; the legacy `window` permission is still accepted for compatibility. The runtime emits a `CommandEvent` with `source = .bridge`, the calling `window_id`, and the calling view label when the request comes from a named child WebView.
 
 Native controls can also bind a `command` when created with `runtime.createView(...)` or `window.zero.views.create(...)`. On macOS, Linux, and Windows system WebView builds, native button-style controls dispatch the command with the native `window_id` and the originating view label. Controls inside a toolbar report `source = .toolbar`; other native controls report `source = .native_view`.
 
@@ -95,43 +95,43 @@ Window commands are available through `window.zero.windows.*` when `js_window_ap
   <tbody>
     <tr>
       <td><code>zero-native.view.create</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Create a generic native view or WebView-backed view in the calling window</td>
     </tr>
     <tr>
       <td><code>zero-native.view.list</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>List generic views and WebViews in the calling window</td>
     </tr>
     <tr>
       <td><code>zero-native.view.update</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Patch frame, layer, visibility, enabled state, role, text, command, or WebView URL</td>
     </tr>
     <tr>
       <td><code>zero-native.view.setFrame</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Move or resize a view</td>
     </tr>
     <tr>
       <td><code>zero-native.view.setVisible</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Show or hide a view</td>
     </tr>
     <tr>
       <td><code>zero-native.view.focus</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Focus a view when the backend supports native focus for that kind</td>
     </tr>
     <tr>
       <td><code>zero-native.view.close</code></td>
-      <td><code>window</code></td>
+      <td><code>view</code></td>
       <td>Close a generic view or child WebView</td>
     </tr>
   </tbody>
 </table>
 
-View commands are available through `window.zero.views.*` when `js_window_api` is `true`. They use the same origin and `window` permission checks as window and WebView commands, and `windowId` must match the calling window when provided. View responses include frame, layer, visibility, enabled, focus, role, text, command, and open state. `kind: "webview"` routes through the WebView backend. The macOS, Linux, and Windows system-WebView backends support native `toolbar`, `titlebar_accessory`, `sidebar`, `statusbar`, `split`, `stack`, `button`, `icon_button`, `checkbox`, `toggle`, `segmented_control`, `text_field`, `search_field`, `label`, `spacer`, and `progress_indicator` views; Chromium hosts and unsupported native kinds return explicit unsupported-backend errors until implemented.
+View commands are available through `window.zero.views.*` when `js_window_api` is `true`. They use origin checks and the `view` permission when runtime permissions are configured; the legacy `window` permission is still accepted for compatibility. `windowId` must match the calling window when provided. View responses include frame, layer, visibility, enabled, focus, role, text, command, and open state. `kind: "webview"` routes through the WebView backend. The macOS, Linux, and Windows system-WebView backends support native `toolbar`, `titlebar_accessory`, `sidebar`, `statusbar`, `split`, `stack`, `button`, `icon_button`, `checkbox`, `toggle`, `segmented_control`, `text_field`, `search_field`, `label`, `spacer`, and `progress_indicator` views; Chromium hosts and unsupported native kinds return explicit unsupported-backend errors until implemented.
 
 ## WebView Commands
 
@@ -192,20 +192,24 @@ If `windowId` is omitted, the runtime uses the window that sent the bridge messa
   <thead>
     <tr>
       <th>Command</th>
+      <th>Required permission</th>
       <th>Description</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td><code>zero-native.dialog.openFile</code></td>
+      <td><code>dialog</code></td>
       <td>Show a file open dialog</td>
     </tr>
     <tr>
       <td><code>zero-native.dialog.saveFile</code></td>
+      <td><code>dialog</code></td>
       <td>Show a file save dialog</td>
     </tr>
     <tr>
       <td><code>zero-native.dialog.showMessage</code></td>
+      <td><code>dialog</code></td>
       <td>Show a message dialog</td>
     </tr>
   </tbody>
@@ -325,6 +329,9 @@ Clipboard commands are **always default-deny** and require an explicit `builtin_
 
 ```zig
 const app_permissions = [_][]const u8{
+    zero_native.security.permission_command,
+    zero_native.security.permission_view,
+    zero_native.security.permission_dialog,
     zero_native.security.permission_window,
     zero_native.security.permission_network,
     zero_native.security.permission_filesystem,
@@ -347,16 +354,16 @@ const app_permissions = [_][]const u8{
     .enabled = true,
     .commands = &.{
         .{ .name = "zero-native.window.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.command.invoke", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.command.invoke", .permissions = .{ "command" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.platform.supports", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.window.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.update", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.setFrame", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.setVisible", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.focus", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.view.close", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.create", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.list", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.update", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.setFrame", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.setVisible", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.focus", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.view.close", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.list", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.setFrame", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
@@ -364,8 +371,8 @@ const app_permissions = [_][]const u8{
         .{ .name = "zero-native.webview.setZoom", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.setLayer", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.webview.close", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.dialog.openFile", .origins = .{ "zero://app" } },
-        .{ .name = "zero-native.dialog.showMessage", .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.dialog.openFile", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
+        .{ .name = "zero-native.dialog.showMessage", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.openUrl", .permissions = .{ "network" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.showNotification", .permissions = .{ "notifications" }, .origins = .{ "zero://app" } },
         .{ .name = "zero-native.os.revealPath", .permissions = .{ "filesystem" }, .origins = .{ "zero://app" } },

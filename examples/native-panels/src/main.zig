@@ -114,11 +114,11 @@ const html =
     \\</html>
 ;
 
-const app_permissions = [_][]const u8{zero_native.security.permission_window};
+const app_permissions = [_][]const u8{zero_native.security.permission_view};
 const bridge_origins = [_][]const u8{ "zero://inline", "zero://app" };
-const window_permission = [_][]const u8{zero_native.security.permission_window};
+const view_permission = [_][]const u8{zero_native.security.permission_view};
 const builtin_policies = [_]zero_native.BridgeCommandPolicy{
-    .{ .name = "zero-native.view.list", .permissions = &window_permission, .origins = &bridge_origins },
+    .{ .name = "zero-native.view.list", .permissions = &view_permission, .origins = &bridge_origins },
 };
 const shell_views = [_]zero_native.ShellView{
     .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = toolbar_height, .layer = 20, .role = "Toolbar" },

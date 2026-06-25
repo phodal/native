@@ -11,4 +11,4 @@ Android orientation and screen-size changes stay in the same activity so the emb
 
 Use those platform folders when building or running the example.
 
-The shared mobile metadata in `app.zon` records the intended platforms and capabilities for tooling. The runtime view tree is still owned by each native mobile host, so generic desktop `ShellView` declarations are not materialized on iOS or Android yet.
+The shared mobile metadata in `app.zon` records the intended platforms, capabilities, and command IDs for tooling. The runtime view tree is still owned by each native mobile host, so generic desktop `ShellView` declarations are not materialized on iOS or Android yet.

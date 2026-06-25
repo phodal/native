@@ -251,6 +251,12 @@ pub fn build(b: *std.Build) void {
         "examples/mobile-shell/README.md",
         "examples/mobile-shell/app.zon",
     });
+    addFileContainsCheckStep(b, mobile_examples_step, "test-example-mobile-shell-metadata", "Verify shared mobile-shell metadata values", &.{
+        .{ .path = "examples/mobile-shell/app.zon", .pattern = ".platforms = .{ \"ios\", \"android\" }" },
+        .{ .path = "examples/mobile-shell/app.zon", .pattern = ".capabilities = .{ \"webview\", \"native_views\", \"native_module\" }" },
+        .{ .path = "examples/mobile-shell/app.zon", .pattern = ".id = \"mobile.back\"" },
+        .{ .path = "examples/mobile-shell/app.zon", .pattern = ".id = \"mobile.refresh\"" },
+    });
 
     const examples_step = b.step("test-examples", "Run all example tests and layout checks");
     examples_step.dependOn(frontend_examples_step);
@@ -712,6 +718,20 @@ fn addLayoutCheckStep(b: *std.Build, group: *std.Build.Step, name: []const u8, d
     const step = b.step(name, description);
     for (paths) |path| {
         const check = b.addSystemCommand(&.{ "test", "-f", path });
+        step.dependOn(&check.step);
+        group.dependOn(&check.step);
+    }
+}
+
+const FileContainsCheck = struct {
+    path: []const u8,
+    pattern: []const u8,
+};
+
+fn addFileContainsCheckStep(b: *std.Build, group: *std.Build.Step, name: []const u8, description: []const u8, checks: []const FileContainsCheck) void {
+    const step = b.step(name, description);
+    for (checks) |check_value| {
+        const check = b.addSystemCommand(&.{ "rg", "--fixed-strings", "--quiet", check_value.pattern, check_value.path });
         step.dependOn(&check.step);
         group.dependOn(&check.step);
     }

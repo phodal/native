@@ -837,12 +837,13 @@ pub const Runtime = struct {
         const app_info = self.options.platform.app_info;
         const startup_window = app_info.resolvedStartupWindow(0);
         const window_id = startup_window.id;
-        const frame_value = geometry.RectF.init(
+        const manifest_frame = geometry.RectF.init(
             shell_window.x orelse 0,
             shell_window.y orelse 0,
             shell_window.width,
             shell_window.height,
         );
+        const startup_frame = startupWindowFrame(startup_window.default_frame, manifest_frame);
 
         const runtime_index = if (self.findWindowIndexById(window_id)) |index| index else try self.reserveWindow(
             window_id,
@@ -856,16 +857,16 @@ pub const Runtime = struct {
 
         self.windows[runtime_index].info.label = try copyInto(&self.windows[runtime_index].label_storage, shell_window.label);
         self.windows[runtime_index].info.title = try copyInto(&self.windows[runtime_index].title_storage, shell_window.title orelse app_info.resolvedWindowTitle());
-        self.windows[runtime_index].info.frame = frame_value;
+        self.windows[runtime_index].info.frame = startup_frame;
         self.windows[runtime_index].source = try self.copySource(runtime_index, source);
         if (!self.windows[runtime_index].main_frame_set) {
-            self.windows[runtime_index].main_frame = geometry.RectF.init(0, 0, frame_value.width, frame_value.height);
+            self.windows[runtime_index].main_frame = geometry.RectF.init(0, 0, startup_frame.width, startup_frame.height);
         }
         self.next_window_id = @max(self.next_window_id, window_id + 1);
 
         try self.options.platform.services.loadWindowWebView(window_id, source);
         try self.applyMainWebViewState(window_id);
-        try self.createShellViews(window_id, shell_window.views, frame_value);
+        try self.createShellViews(window_id, shell_window.views, self.shellBoundsForWindow(window_id));
     }
 
     fn applyMainWebViewState(self: *Runtime, window_id: platform.WindowId) anyerror!void {
@@ -1102,6 +1103,16 @@ pub const Runtime = struct {
         const index = self.findWindowIndexById(window_id) orelse return geometry.RectF.init(0, 0, 0, 0);
         const frame_value = self.windows[index].info.frame;
         return geometry.RectF.init(0, 0, frame_value.width, frame_value.height);
+    }
+
+    fn startupWindowFrame(native_frame: geometry.RectF, manifest_frame: geometry.RectF) geometry.RectF {
+        const default_frame = (platform.WindowOptions{}).default_frame;
+        if (!rectsEqual(native_frame, default_frame)) return native_frame;
+        return manifest_frame;
+    }
+
+    fn rectsEqual(a: geometry.RectF, b: geometry.RectF) bool {
+        return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
     }
 
     fn bindShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) !void {
@@ -4051,6 +4062,75 @@ test "runtime lays out created shell windows with native returned bounds" {
     try std.testing.expectEqualStrings("statusbar", host.views[2].label);
     try std.testing.expectEqual(@as(f32, 760), host.views[2].frame.y);
     try std.testing.expectEqual(@as(f32, 1200), host.views[2].frame.width);
+}
+
+test "runtime lays out startup shell windows with native configured bounds" {
+    const TestApp = struct {
+        const scene_views = [_]app_manifest.ShellView{
+            .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 50 },
+            .{ .label = "main", .kind = .webview, .url = "zero://app/main.html", .fill = true },
+            .{ .label = "statusbar", .kind = .statusbar, .edge = .bottom, .height = 40 },
+        };
+        const scene_windows = [_]app_manifest.ShellWindow{.{
+            .label = "main",
+            .title = "Startup",
+            .width = 900,
+            .height = 600,
+            .views = &scene_views,
+        }};
+
+        fn scene(context: *anyopaque) anyerror!app_manifest.ShellConfig {
+            _ = context;
+            return .{ .windows = &scene_windows };
+        }
+
+        fn app(self: *@This()) App {
+            return .{
+                .context = self,
+                .name = "startup-native-bounds",
+                .source = platform.WebViewSource.html("<h1>Startup</h1>"),
+                .scene_fn = scene,
+            };
+        }
+    };
+
+    var null_platform = platform.NullPlatform.initWithOptions(
+        .{ .id = 1, .size = geometry.SizeF.init(640, 480), .scale_factor = 1 },
+        .system,
+        .{
+            .app_name = "Startup",
+            .main_window = .{
+                .label = "main",
+                .title = "Startup",
+                .default_frame = geometry.RectF.init(32, 44, 1200, 800),
+            },
+        },
+    );
+    var runtime = Runtime.init(.{ .platform = null_platform.platform() });
+    var app_state: TestApp = .{};
+
+    try runtime.dispatchPlatformEvent(app_state.app(), .app_start);
+
+    var windows_buffer: [1]platform.WindowInfo = undefined;
+    const windows = runtime.listWindows(&windows_buffer);
+    try std.testing.expectEqual(@as(usize, 1), windows.len);
+    try std.testing.expectEqual(@as(f32, 32), windows[0].frame.x);
+    try std.testing.expectEqual(@as(f32, 44), windows[0].frame.y);
+    try std.testing.expectEqual(@as(f32, 1200), windows[0].frame.width);
+    try std.testing.expectEqual(@as(f32, 800), windows[0].frame.height);
+
+    var views_buffer: [4]platform.ViewInfo = undefined;
+    const views = runtime.listViews(1, &views_buffer);
+    const toolbar = testViewByLabel(views, "toolbar").?;
+    const main = testViewByLabel(views, "main").?;
+    const statusbar = testViewByLabel(views, "statusbar").?;
+
+    try std.testing.expectEqual(@as(f32, 1200), toolbar.frame.width);
+    try std.testing.expectEqual(@as(f32, 50), main.frame.y);
+    try std.testing.expectEqual(@as(f32, 1200), main.frame.width);
+    try std.testing.expectEqual(@as(f32, 710), main.frame.height);
+    try std.testing.expectEqual(@as(f32, 760), statusbar.frame.y);
+    try std.testing.expectEqual(@as(f32, 1200), statusbar.frame.width);
 }
 
 test "runtime relayouts shell views attached to startup window" {

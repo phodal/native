@@ -1876,6 +1876,7 @@ pub const Runtime = struct {
         try validateChildWebViewLabel(label);
         try self.validateWebViewUrl(url);
         if (self.findWebViewIndex(window_id, label) != null) return error.DuplicateWebViewLabel;
+        if (self.viewLabelExists(window_id, label)) return error.DuplicateViewLabel;
         if (self.webview_count >= platform.max_webviews) return error.WebViewLimitReached;
         try self.options.platform.services.createWebView(.{
             .window_id = window_id,
@@ -6243,6 +6244,21 @@ test "runtime validates webview bridge commands" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "reserved") != null);
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"native-view\",\"command\":\"zero-native.view.create\",\"payload\":{\"label\":\"native-collision\",\"kind\":\"button\",\"frame\":{\"width\":120,\"height\":32},\"text\":\"Native\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"native-collision\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"native-collision\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "View label already exists") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.webview_count);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = "{\"id\":\"invalid-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"bad-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":1e1000}}",

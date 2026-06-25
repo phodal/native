@@ -1,6 +1,6 @@
 # System Tray
 
-zero-native supports system tray icons with menus. Tray actions dispatch as `CommandEvent` with name `"tray.action"` and source `.tray` in the runtime.
+zero-native supports system tray icons with menus. Tray menu items can dispatch explicit command names with `source = .tray`; items without a command dispatch the compatibility command name `"tray.action"`.
 
 Tray support is currently implemented on macOS and Windows system WebView hosts. Linux returns `UnsupportedService` until a portable status notifier implementation is selected.
 
@@ -55,6 +55,11 @@ Tray support is currently implemented on macOS and Windows system WebView hosts.
       <td><code>""</code></td>
     </tr>
     <tr>
+      <td><code>command</code></td>
+      <td><code>[]const u8</code></td>
+      <td><code>""</code></td>
+    </tr>
+    <tr>
       <td><code>separator</code></td>
       <td><code>bool</code></td>
       <td><code>false</code></td>
@@ -75,17 +80,30 @@ Use the runtime methods from app code:
 - `runtime.updateTrayMenu(items)` -- update menu items without recreating the tray
 - `runtime.removeTray()` -- remove the tray icon
 
-The lower-level `PlatformServices.createTray`, `updateTrayMenu`, and `removeTray` hooks are available for platform adapters. `Runtime` validates tray options before dispatch: non-separator menu items need a label, and menus are capped at 32 items.
+The lower-level `PlatformServices.createTray`, `updateTrayMenu`, and `removeTray` hooks are available for platform adapters. `Runtime` validates tray options before dispatch: non-separator menu items need a label, command-backed items need a unique non-zero `id`, and menus are capped at 32 items.
 
 ## Handling tray actions
 
-When a user clicks a tray menu item, the runtime dispatches a `CommandEvent` with the name `"tray.action"` and source `.tray`. Use your `event_fn` to handle it:
+When a user clicks a tray menu item, the runtime dispatches a `CommandEvent` with source `.tray` and the native `tray_item_id`. Prefer command-backed items when the item represents a known app action:
+
+```zig
+try runtime.createTray(.{
+    .tooltip = "zero-native",
+    .items = &.{
+        .{ .id = 1, .label = "Refresh", .command = "app.refresh" },
+        .{ .separator = true },
+        .{ .id = 2, .label = "Quit", .command = "app.quit" },
+    },
+});
+```
+
+Use your `event_fn` to handle the command:
 
 ```zig
 fn event(context: *anyopaque, runtime: *Runtime, ev: Event) anyerror!void {
     switch (ev) {
         .command => |cmd| {
-            if (std.mem.eql(u8, cmd.name, "tray.action")) {
+            if (std.mem.eql(u8, cmd.name, "app.refresh")) {
                 // Handle tray menu click
             }
         },

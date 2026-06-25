@@ -116,6 +116,7 @@ pub const max_tray_items: usize = 32;
 pub const max_tray_icon_path_bytes: usize = 4096;
 pub const max_tray_tooltip_bytes: usize = 256;
 pub const max_tray_item_label_bytes: usize = 256;
+pub const max_tray_item_command_bytes: usize = 128;
 pub const max_drop_paths_bytes: usize = 8192;
 pub const max_window_event_name_bytes: usize = 64;
 pub const max_window_event_detail_bytes: usize = 8192;
@@ -544,6 +545,7 @@ pub const TrayOptions = struct {
 pub const TrayMenuItem = struct {
     id: TrayItemId = 0,
     label: []const u8 = "",
+    command: []const u8 = "",
     separator: bool = false,
     enabled: bool = true,
 };

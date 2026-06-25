@@ -27,6 +27,7 @@ pub const CommandEvent = struct {
     source: CommandSource = .runtime,
     window_id: platform.WindowId = 0,
     view_label: []const u8 = "",
+    tray_item_id: platform.TrayItemId = 0,
 };
 
 pub const Command = struct {
@@ -135,6 +136,8 @@ pub const Runtime = struct {
     view_count: usize = 0,
     webviews: [platform.max_webviews]RuntimeWebView = undefined,
     webview_count: usize = 0,
+    tray_items: [platform.max_tray_items]RuntimeTrayItem = undefined,
+    tray_item_count: usize = 0,
     shell_layouts: [platform.max_windows]RuntimeShellLayout = undefined,
     shell_layout_count: usize = 0,
     next_window_id: platform.WindowId = 2,
@@ -503,15 +506,18 @@ pub const Runtime = struct {
     pub fn createTray(self: *Runtime, options: platform.TrayOptions) anyerror!void {
         try validateTrayOptions(options);
         try self.options.platform.services.createTray(options);
+        try self.storeTrayItems(options.items);
     }
 
     pub fn updateTrayMenu(self: *Runtime, items: []const platform.TrayMenuItem) anyerror!void {
         try validateTrayMenuItems(items);
         try self.options.platform.services.updateTrayMenu(items);
+        try self.storeTrayItems(items);
     }
 
     pub fn removeTray(self: *Runtime) anyerror!void {
         try self.options.platform.services.removeTray();
+        self.tray_item_count = 0;
     }
 
     pub fn emitWindowEvent(self: *Runtime, window_id: platform.WindowId, name: []const u8, detail_json: []const u8) anyerror!void {
@@ -593,7 +599,11 @@ pub const Runtime = struct {
             .bridge_message => |message| try self.handleBridgeMessage(app, message),
             .tray_action => |item_id| {
                 try self.log("tray.action", "tray item selected", &.{trace.uint("item_id", item_id)});
-                try self.dispatchCommand(app, .{ .name = "tray.action", .source = .tray });
+                try self.dispatchCommand(app, .{
+                    .name = self.trayCommandNameForItem(item_id),
+                    .source = .tray,
+                    .tray_item_id = item_id,
+                });
             },
             .shortcut => |shortcut| {
                 try self.dispatchCommand(app, .{
@@ -1942,6 +1952,22 @@ pub const Runtime = struct {
         return .native_view;
     }
 
+    fn storeTrayItems(self: *Runtime, items: []const platform.TrayMenuItem) !void {
+        self.tray_item_count = 0;
+        for (items, 0..) |item, index| {
+            self.tray_items[index].id = item.id;
+            self.tray_items[index].command = try copyInto(&self.tray_items[index].command_storage, item.command);
+        }
+        self.tray_item_count = items.len;
+    }
+
+    fn trayCommandNameForItem(self: *const Runtime, item_id: platform.TrayItemId) []const u8 {
+        for (self.tray_items[0..self.tray_item_count]) |item| {
+            if (item.id == item_id and item.command.len > 0) return item.command;
+        }
+        return "tray.action";
+    }
+
     fn viewLabelExists(self: *const Runtime, window_id: platform.WindowId, label: []const u8) bool {
         if (isMainWebViewLabel(label) and self.findWindowIndexById(window_id) != null) return true;
         return self.findViewIndex(window_id, label) != null or self.findWebViewIndex(window_id, label) != null;
@@ -2080,6 +2106,12 @@ const RuntimeWebView = struct {
     open: bool = false,
     label_storage: [platform.max_webview_label_bytes]u8 = undefined,
     url_storage: [platform.max_webview_url_bytes]u8 = undefined,
+};
+
+const RuntimeTrayItem = struct {
+    id: platform.TrayItemId = 0,
+    command: []const u8 = "",
+    command_storage: [platform.max_tray_item_command_bytes]u8 = undefined,
 };
 
 const RuntimeShellLayout = struct {
@@ -2461,6 +2493,7 @@ fn writeCommandEventJson(event_value: CommandEvent, output: []u8) ![]const u8 {
     try json.writeString(&writer, @tagName(event_value.source));
     try writer.print(",\"windowId\":{d},\"viewLabel\":", .{event_value.window_id});
     try json.writeString(&writer, event_value.view_label);
+    try writer.print(",\"trayItemId\":{d}", .{event_value.tray_item_id});
     try writer.writeByte('}');
     return writer.buffered();
 }
@@ -2742,8 +2775,18 @@ fn validateTrayOptions(options: platform.TrayOptions) !void {
 
 fn validateTrayMenuItems(items: []const platform.TrayMenuItem) !void {
     if (items.len > platform.max_tray_items) return error.InvalidTrayOptions;
-    for (items) |item| {
+    for (items, 0..) |item, index| {
         try validateTrayField(item.label, platform.max_tray_item_label_bytes);
+        try validateTrayField(item.command, platform.max_tray_item_command_bytes);
+        if (item.id != 0) {
+            for (items[0..index]) |previous| {
+                if (previous.id == item.id) return error.InvalidTrayOptions;
+            }
+        }
+        if (item.command.len > 0) {
+            if (item.separator or item.id == 0) return error.InvalidTrayOptions;
+            try validateCommandName(item.command);
+        }
         if (!item.separator and item.label.len == 0) return error.InvalidTrayOptions;
     }
 }
@@ -3903,6 +3946,60 @@ test "runtime dispatches menu command events" {
     try std.testing.expectEqualStrings("app.refresh", app_state.last_name);
     try std.testing.expectEqual(CommandSource.menu, app_state.last_source);
     try std.testing.expectEqual(@as(platform.WindowId, 1), app_state.last_window_id);
+}
+
+test "runtime dispatches tray item commands" {
+    const TestApp = struct {
+        command_count: u32 = 0,
+        last_name: []const u8 = "",
+        last_source: CommandSource = .runtime,
+        last_tray_item_id: platform.TrayItemId = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "tray-command", .source = platform.WebViewSource.html("<p>Tray</p>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .command => |command| {
+                    self.command_count += 1;
+                    self.last_name = command.name;
+                    self.last_source = command.source;
+                    self.last_tray_item_id = command.tray_item_id;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    try harness.runtime.createTray(.{ .items = &.{
+        .{ .id = 7, .label = "Refresh", .command = "app.refresh" },
+        .{ .id = 8, .label = "Legacy" },
+    } });
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .tray_action = 7 });
+    try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
+    try std.testing.expectEqualStrings("app.refresh", app_state.last_name);
+    try std.testing.expectEqual(CommandSource.tray, app_state.last_source);
+    try std.testing.expectEqual(@as(platform.TrayItemId, 7), app_state.last_tray_item_id);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .tray_action = 8 });
+    try std.testing.expectEqual(@as(u32, 2), app_state.command_count);
+    try std.testing.expectEqualStrings("tray.action", app_state.last_name);
+    try std.testing.expectEqual(@as(platform.TrayItemId, 8), app_state.last_tray_item_id);
+
+    try std.testing.expectError(error.InvalidTrayOptions, harness.runtime.updateTrayMenu(&.{
+        .{ .id = 9, .label = "One", .command = "app.one" },
+        .{ .id = 9, .label = "Two" },
+    }));
+    try std.testing.expectError(error.InvalidTrayOptions, harness.runtime.updateTrayMenu(&.{.{ .label = "Missing id", .command = "app.missing-id" }}));
 }
 
 test "runtime dispatches file drop events to app and window bridge" {

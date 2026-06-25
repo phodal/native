@@ -32,7 +32,7 @@ fn event(context: *anyopaque, runtime: *zero_native.Runtime, event_value: zero_n
 | `.native_view` | Native controls outside toolbar views |
 | `.bridge` | `window.zero.commands.invoke(...)` |
 
-Use `command.name` for the action and `command.source` only when the app genuinely needs source-specific behavior.
+Use `command.name` for the action and `command.source` only when the app genuinely needs source-specific behavior. Tray commands also include `tray_item_id` for apps that still need to distinguish legacy tray items that dispatch `"tray.action"`.
 
 ## Command names
 
@@ -48,7 +48,7 @@ const view_items = [_]zero_native.MenuItem{
 };
 ```
 
-The same command can be bound to a menu item, shortcut, toolbar button, and bridge call. The runtime validates command IDs and rejects empty, oversized, or path-like names.
+The same command can be bound to a menu item, shortcut, toolbar button, tray item, and bridge call. The runtime validates command IDs and rejects empty, oversized, or path-like names.
 
 ## Bridge invocation
 

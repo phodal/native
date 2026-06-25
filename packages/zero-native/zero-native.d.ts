@@ -249,6 +249,8 @@ export interface ZeroNativeCommandEvent {
   source: ZeroNativeCommandSource;
   windowId: number;
   viewLabel: string;
+  /** Native tray item id for tray-sourced commands, otherwise 0. */
+  trayItemId: number;
 }
 
 export interface ZeroNativeCommandSelector {

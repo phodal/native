@@ -433,6 +433,7 @@ pub const Runtime = struct {
         try self.validateViewParent(options.window_id);
         try validateViewOptions(options);
         if (self.viewLabelExists(options.window_id, options.label)) return error.DuplicateViewLabel;
+        try self.validateViewParentLink(options.window_id, options.label, options.parent);
         if (options.kind == .webview) return self.createWebViewView(options);
         if (self.view_count >= platform.max_views) return error.ViewLimitReached;
 
@@ -2289,6 +2290,12 @@ pub const Runtime = struct {
     fn validateViewParent(self: *const Runtime, window_id: platform.WindowId) !void {
         const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
         if (!self.windows[index].info.open) return error.WindowNotFound;
+    }
+
+    fn validateViewParentLink(self: *const Runtime, window_id: platform.WindowId, label: []const u8, parent: ?[]const u8) !void {
+        const parent_label = parent orelse return;
+        if (std.mem.eql(u8, parent_label, label)) return error.InvalidViewOptions;
+        if (!self.viewLabelExists(window_id, parent_label)) return error.ViewNotFound;
     }
 
     fn platformFrameForView(self: *const Runtime, window_id: platform.WindowId, parent: ?[]const u8, base_frame: geometry.RectF) !geometry.RectF {
@@ -4210,6 +4217,55 @@ test "runtime createView routes webview kind through WebView backend" {
     try std.testing.expectEqual(@as(usize, 2), remaining.len);
     try std.testing.expectEqualStrings("main", remaining[0].label);
     try std.testing.expect(remaining[0].focused);
+}
+
+test "runtime rejects invalid native view parents" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "native-view-parents", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    try std.testing.expectError(error.ViewNotFound, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "orphan",
+        .kind = .button,
+        .parent = "missing",
+        .frame = geometry.RectF.init(0, 0, 96, 32),
+    }));
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.view_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.view_count);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "toolbar",
+        .kind = .toolbar,
+        .frame = geometry.RectF.init(0, 0, 640, 44),
+    });
+
+    try std.testing.expectError(error.InvalidViewOptions, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "self",
+        .kind = .stack,
+        .parent = "self",
+        .frame = geometry.RectF.init(0, 0, 120, 80),
+    }));
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.view_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.view_count);
+
+    const action = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "action",
+        .kind = .button,
+        .parent = "toolbar",
+        .frame = geometry.RectF.init(8, 8, 96, 32),
+    });
+    try std.testing.expectEqualStrings("toolbar", action.parent.?);
 }
 
 test "runtime closes native view descendants and logical WebView children with parent" {

@@ -535,8 +535,12 @@ fn validateShellViews(views: []const ShellView) ValidationError!void {
         if (view.command) |command| {
             try validateCommandId(command);
         }
-        if (view.url) |url| try validateViewUrl(url);
-        if (view.kind == .webview and view.url == null) return error.MissingRequiredField;
+        if (view.url) |url| {
+            if (view.kind != .webview) return error.InvalidUrl;
+            try validateViewUrl(url);
+        } else if (view.kind == .webview) {
+            return error.MissingRequiredField;
+        }
     }
     try validateShellViewParentGraph(views);
 }
@@ -1158,6 +1162,14 @@ test "manifest validates shell windows and views" {
         .identity = .{ .id = "com.example.app", .name = "example" },
         .version = .{ .major = 1, .minor = 0, .patch = 0 },
         .shell = .{ .windows = &missing_url_window },
+    }));
+
+    const native_url_views = [_]ShellView{.{ .label = "save", .kind = .button, .url = "zero://app/save.html", .command = "app.save" }};
+    const native_url_window = [_]ShellWindow{.{ .views = &native_url_views }};
+    try std.testing.expectError(error.InvalidUrl, validateManifest(.{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .shell = .{ .windows = &native_url_window },
     }));
 
     const orphan_views = [_]ShellView{.{ .label = "save", .kind = .button, .parent = "missing", .command = "app.save" }};

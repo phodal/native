@@ -1659,6 +1659,11 @@ pub const NullPlatform = struct {
         if (options.command.len > max_view_command_bytes) return error.InvalidCommand;
         if (!isValidViewFrame(options.frame)) return error.InvalidViewOptions;
         if (options.url.len > 0) return error.InvalidViewOptions;
+        if (options.parent) |parent| {
+            if (parent.len == 0 or parent.len > max_view_label_bytes) return error.InvalidViewOptions;
+            if (std.mem.eql(u8, parent, options.label)) return error.InvalidViewOptions;
+            if (!std.mem.eql(u8, parent, "main") and self.findViewIndex(options.window_id, parent) == null and self.findWebViewIndex(options.window_id, parent) == null) return error.ViewNotFound;
+        }
         if (std.mem.eql(u8, options.label, "main")) return error.DuplicateViewLabel;
         if (self.findWebViewIndex(options.window_id, options.label) != null) return error.DuplicateViewLabel;
     }
@@ -2183,6 +2188,39 @@ test "null platform records webview lifecycle" {
     try std.testing.expectEqualStrings("https://example.org", null_platform.webviews[0].url);
     try services.closeWebView(1, "preview");
     try std.testing.expectEqual(@as(usize, 0), null_platform.webview_count);
+}
+
+test "null platform rejects invalid native view parents" {
+    var null_platform = NullPlatform.init(.{});
+    const services = null_platform.platform().services;
+
+    try std.testing.expectError(error.ViewNotFound, services.createView(.{
+        .label = "orphan",
+        .kind = .button,
+        .parent = "missing",
+        .frame = geometry.RectF.init(0, 0, 96, 32),
+    }));
+    try std.testing.expectError(error.InvalidViewOptions, services.createView(.{
+        .label = "self",
+        .kind = .stack,
+        .parent = "self",
+        .frame = geometry.RectF.init(0, 0, 120, 80),
+    }));
+    try std.testing.expectEqual(@as(usize, 0), null_platform.view_count);
+
+    try services.createView(.{
+        .label = "toolbar",
+        .kind = .toolbar,
+        .frame = geometry.RectF.init(0, 0, 640, 44),
+    });
+    try services.createView(.{
+        .label = "action",
+        .kind = .button,
+        .parent = "toolbar",
+        .frame = geometry.RectF.init(8, 8, 96, 32),
+    });
+    try std.testing.expectEqual(@as(usize, 2), null_platform.view_count);
+    try std.testing.expectEqualStrings("toolbar", null_platform.views[1].parent.?);
 }
 
 test "null platform preserves shifted webview storage after close" {

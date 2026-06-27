@@ -1102,9 +1102,7 @@ fn androidActivity() []const u8 {
     \\
     \\    override fun surfaceCreated(holder: SurfaceHolder) {}
     \\
-    \\    override fun surfaceDestroyed(holder: SurfaceHolder) {
-    \\        if (nativeApp != 0L) nativeStop(nativeApp)
-    \\    }
+    \\    override fun surfaceDestroyed(holder: SurfaceHolder) {}
     \\
     \\    override fun onConfigurationChanged(newConfig: Configuration) {
     \\        super.onConfigurationChanged(newConfig)
@@ -2030,6 +2028,8 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "webView.loadUrl(url)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "WebView(this)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "override fun surfaceDestroyed(holder: SurfaceHolder) {}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "surfaceDestroyed(holder: SurfaceHolder) {\n        if (nativeApp != 0L) nativeStop(nativeApp)\n    }") == null);
     try std.testing.expect(std.mem.indexOf(u8, androidDefaultShellConfig(), "const val secondaryCommand = \"mobile.refresh\"") != null);
 
     const android_cmake = androidCMakeLists();

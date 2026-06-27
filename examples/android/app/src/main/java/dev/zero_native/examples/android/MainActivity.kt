@@ -133,9 +133,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        nativeStop(nativeApp)
-    }
+    override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)

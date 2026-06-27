@@ -235,6 +235,64 @@ static void zero_native_clear_window_source(zero_native_gtk_window_t *win) {
     win->spa_fallback = 0;
 }
 
+static int zero_native_strings_equal(const char *a, const char *b) {
+    return a && b && strcmp(a, b) == 0;
+}
+
+static int zero_native_window_uses_public_asset_origin(zero_native_gtk_host_t *host, zero_native_gtk_window_t *current, const char *origin) {
+    if (!origin) return 0;
+    for (int i = 0; i < host->window_count; i++) {
+        zero_native_gtk_window_t *win = &host->windows[i];
+        if (win == current || !win->asset_root || !win->bridge_origin) continue;
+        if (strcmp(win->bridge_origin, origin) == 0) return 1;
+    }
+    return 0;
+}
+
+static char *zero_native_internal_asset_origin(uint64_t window_id) {
+    char buffer[96];
+    int len = snprintf(buffer, sizeof(buffer), "zero://zero-native-window-%llu", (unsigned long long)window_id);
+    if (len <= 0 || (size_t)len >= sizeof(buffer)) return NULL;
+    return zero_native_strndup(buffer, (size_t)len);
+}
+
+static int zero_native_window_allows_asset_origin(zero_native_gtk_window_t *win, const char *origin) {
+    return zero_native_strings_equal(win->asset_origin, origin) || zero_native_strings_equal(win->bridge_origin, origin);
+}
+
+typedef WebKitWebView *(*zero_native_request_get_web_view_fn)(WebKitURISchemeRequest *request);
+
+static zero_native_request_get_web_view_fn zero_native_request_get_web_view(void) {
+    static int resolved = 0;
+    static zero_native_request_get_web_view_fn get_web_view = NULL;
+    if (!resolved) {
+        get_web_view = (zero_native_request_get_web_view_fn)dlsym(RTLD_DEFAULT, "webkit_uri_scheme_request_get_web_view");
+        resolved = 1;
+    }
+    return get_web_view;
+}
+
+static int zero_native_request_web_view_supported(void) {
+    return zero_native_request_get_web_view() != NULL;
+}
+
+static WebKitWebView *zero_native_request_web_view(WebKitURISchemeRequest *request) {
+    zero_native_request_get_web_view_fn get_web_view = zero_native_request_get_web_view();
+    return get_web_view ? get_web_view(request) : NULL;
+}
+
+static zero_native_gtk_window_t *zero_native_window_for_web_view(zero_native_gtk_host_t *host, WebKitWebView *web_view) {
+    if (!web_view) return NULL;
+    for (int i = 0; i < host->window_count; i++) {
+        zero_native_gtk_window_t *win = &host->windows[i];
+        if (win->web_view == web_view) return win;
+        for (int j = 0; j < win->webview_count; j++) {
+            if (win->webviews[j].web_view == web_view) return win;
+        }
+    }
+    return NULL;
+}
+
 static int zero_native_valid_webview_frame(double x, double y, double width, double height) {
     return x >= 0 && y >= 0 && width > 0 && height > 0;
 }
@@ -818,16 +876,37 @@ static const char *zero_native_mime_for_ext(const char *path) {
     return "application/octet-stream";
 }
 
-static zero_native_gtk_window_t *zero_native_window_for_asset_uri(zero_native_gtk_host_t *host, const char *uri) {
+static zero_native_gtk_window_t *zero_native_window_for_asset_uri(zero_native_gtk_host_t *host, const char *uri, WebKitWebView *request_web_view, int request_web_view_supported) {
     char *origin = zero_native_origin_for_uri(uri);
     if (!origin) return NULL;
-    for (int i = 0; i < host->window_count; i++) {
-        zero_native_gtk_window_t *win = &host->windows[i];
-        if (!win->asset_root || !win->asset_origin) continue;
-        if (strcmp(win->asset_origin, origin) == 0) {
+
+    if (request_web_view_supported) {
+        zero_native_gtk_window_t *win = zero_native_window_for_web_view(host, request_web_view);
+        if (win && win->asset_root && zero_native_window_allows_asset_origin(win, origin)) {
             g_free(origin);
             return win;
         }
+        g_free(origin);
+        return NULL;
+    }
+
+    zero_native_gtk_window_t *public_match = NULL;
+    int public_match_count = 0;
+    for (int i = 0; i < host->window_count; i++) {
+        zero_native_gtk_window_t *win = &host->windows[i];
+        if (!win->asset_root) continue;
+        if (zero_native_strings_equal(win->asset_origin, origin)) {
+            g_free(origin);
+            return win;
+        }
+        if (zero_native_strings_equal(win->bridge_origin, origin)) {
+            public_match = win;
+            public_match_count += 1;
+        }
+    }
+    if (public_match_count == 1) {
+        g_free(origin);
+        return public_match;
     }
     g_free(origin);
     return NULL;
@@ -862,7 +941,9 @@ static void zero_native_fail_scheme_request(WebKitURISchemeRequest *request, GQu
 static void zero_native_asset_scheme_request(WebKitURISchemeRequest *request, gpointer data) {
     zero_native_gtk_host_t *host = data;
     const char *uri = webkit_uri_scheme_request_get_uri(request);
-    zero_native_gtk_window_t *win = zero_native_window_for_asset_uri(host, uri);
+    int request_web_view_supported = zero_native_request_web_view_supported();
+    WebKitWebView *request_web_view = request_web_view_supported ? zero_native_request_web_view(request) : NULL;
+    zero_native_gtk_window_t *win = zero_native_window_for_asset_uri(host, uri, request_web_view, request_web_view_supported);
     if (!win || !win->asset_root) {
         zero_native_fail_scheme_request(request, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "No asset root is configured");
         return;
@@ -1306,7 +1387,7 @@ static gboolean on_decide_policy(WebKitWebView *web_view, WebKitPolicyDecision *
     }
 
     char *origin = zero_native_origin_for_uri(uri);
-    int internal_asset = win->asset_origin && strcmp(origin, win->asset_origin) == 0;
+    int internal_asset = origin && zero_native_window_allows_asset_origin(win, origin);
     g_free(origin);
     if (internal_asset || zero_native_policy_list_matches(host->allowed_origins, host->allowed_origins_count, uri)) {
         webkit_policy_decision_use(decision);
@@ -1333,7 +1414,7 @@ static gboolean on_webview_decide_policy(WebKitWebView *web_view, WebKitPolicyDe
         return TRUE;
     }
     char *origin = zero_native_origin_for_uri(uri);
-    int internal_asset = win->asset_origin && strcmp(origin, win->asset_origin) == 0;
+    int internal_asset = origin && zero_native_window_allows_asset_origin(win, origin);
     g_free(origin);
     if (internal_asset || zero_native_policy_list_matches(host->allowed_origins, host->allowed_origins_count, uri)) {
         webkit_policy_decision_use(decision);
@@ -1569,11 +1650,14 @@ void zero_native_gtk_load_window_webview(zero_native_gtk_host_t *host, uint64_t 
     } else if (source_kind == 2) {
         char *root = asset_root_len > 0 ? zero_native_strndup(asset_root, asset_root_len) : zero_native_strndup(".", 1);
         char *entry = asset_entry_len > 0 ? zero_native_strndup(asset_entry, asset_entry_len) : zero_native_strndup("index.html", strlen("index.html"));
-        char *origin = asset_origin_len > 0 ? zero_native_strndup(asset_origin, asset_origin_len) : zero_native_strndup("zero://app", strlen("zero://app"));
-        if (!root || !entry || !origin) {
+        char *public_origin = asset_origin_len > 0 ? zero_native_strndup(asset_origin, asset_origin_len) : zero_native_strndup("zero://app", strlen("zero://app"));
+        int needs_private_origin = public_origin && !zero_native_request_web_view_supported() && zero_native_window_uses_public_asset_origin(host, win, public_origin);
+        char *origin = needs_private_origin ? zero_native_internal_asset_origin(window_id) : (public_origin ? zero_native_strndup(public_origin, strlen(public_origin)) : NULL);
+        if (!root || !entry || !public_origin || !origin) {
             free(root);
             free(entry);
             free(origin);
+            free(public_origin);
             free(src);
             return;
         }
@@ -1581,6 +1665,13 @@ void zero_native_gtk_load_window_webview(zero_native_gtk_host_t *host, uint64_t 
         if (!zero_native_path_is_safe(entry)) {
             free(entry);
             entry = zero_native_strndup("index.html", strlen("index.html"));
+            if (!entry) {
+                free(root);
+                free(origin);
+                free(public_origin);
+                free(src);
+                return;
+            }
         }
         char *canonical_root = g_canonicalize_filename(root, NULL);
         free(root);
@@ -1588,7 +1679,7 @@ void zero_native_gtk_load_window_webview(zero_native_gtk_host_t *host, uint64_t 
         g_free(canonical_root);
         win->asset_entry = entry;
         win->asset_origin = origin;
-        win->bridge_origin = zero_native_strndup(origin, strlen(origin));
+        win->bridge_origin = public_origin;
         win->spa_fallback = spa_fallback != 0;
 
         char *uri = g_strdup_printf("%s/%s", origin, entry);

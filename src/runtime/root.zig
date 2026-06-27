@@ -283,13 +283,18 @@ pub const Runtime = struct {
     pub fn createShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF) anyerror!void {
         if (views.len > app_manifest.max_shell_views_per_window) return error.ViewLimitReached;
         try self.validateShellViewCreatePlan(window_id, views);
-        try self.applyShellViews(window_id, views, bounds, .create);
+
+        var created_labels: [app_manifest.max_shell_views_per_window][]const u8 = undefined;
+        var created_count: usize = 0;
+        errdefer self.rollbackCreatedShellViews(window_id, created_labels[0..created_count]);
+
+        try self.applyShellViews(window_id, views, bounds, .create, &created_labels, &created_count);
         try self.bindShellViews(window_id, views);
     }
 
     pub fn relayoutShellViews(self: *Runtime, window_id: platform.WindowId) anyerror!void {
         const binding = self.shellLayoutForWindow(window_id) orelse return;
-        try self.applyShellViews(window_id, binding.viewSlice(), self.shellBoundsForWindow(window_id), .update);
+        try self.applyShellViews(window_id, binding.viewSlice(), self.shellBoundsForWindow(window_id), .update, null, null);
     }
 
     fn validateShellViewCreatePlan(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) anyerror!void {
@@ -316,7 +321,7 @@ pub const Runtime = struct {
         if (child_webview_count > platform.max_webviews - self.webview_count) return error.WebViewLimitReached;
     }
 
-    fn applyShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF, mode: ShellApplyMode) anyerror!void {
+    fn applyShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF, mode: ShellApplyMode, tracked_labels: ?*[app_manifest.max_shell_views_per_window][]const u8, tracked_count: ?*usize) anyerror!void {
         var layout = ShellLayout.init(bounds, views);
         var created: [app_manifest.max_shell_views_per_window]bool = [_]bool{false} ** app_manifest.max_shell_views_per_window;
         var created_count: usize = 0;
@@ -327,7 +332,14 @@ pub const Runtime = struct {
                 if (view.parent) |parent| {
                     if (layout.findView(parent) == null) continue;
                 }
-                try self.applyShellView(try shellViewOptions(window_id, view, &layout), mode);
+                const did_create = try self.applyShellView(try shellViewOptions(window_id, view, &layout), mode);
+                if (did_create) {
+                    if (tracked_labels) |labels| {
+                        const count = tracked_count.?;
+                        labels[count.*] = view.label;
+                        count.* += 1;
+                    }
+                }
                 created[index] = true;
                 created_count += 1;
                 progressed = true;
@@ -336,7 +348,7 @@ pub const Runtime = struct {
         }
     }
 
-    fn applyShellView(self: *Runtime, options: platform.ViewOptions, mode: ShellApplyMode) anyerror!void {
+    fn applyShellView(self: *Runtime, options: platform.ViewOptions, mode: ShellApplyMode) anyerror!bool {
         switch (mode) {
             .create => {
                 if (options.kind == .webview and isMainWebViewLabel(options.label)) {
@@ -345,9 +357,10 @@ pub const Runtime = struct {
                         .frame = options.frame,
                         .layer = options.layer,
                     });
-                    return;
+                    return false;
                 }
                 _ = try self.createView(options);
+                return true;
             },
             .update => {
                 if (options.kind == .webview and isMainWebViewLabel(options.label)) {
@@ -359,10 +372,19 @@ pub const Runtime = struct {
                 }) catch |err| switch (err) {
                     error.ViewNotFound,
                     error.WebViewNotFound,
-                    => return,
+                    => return false,
                     else => return err,
                 };
+                return false;
             },
+        }
+    }
+
+    fn rollbackCreatedShellViews(self: *Runtime, window_id: platform.WindowId, labels: []const []const u8) void {
+        var index = labels.len;
+        while (index > 0) {
+            index -= 1;
+            self.closeView(window_id, labels[index]) catch {};
         }
     }
 
@@ -4199,6 +4221,36 @@ test "runtime rejects oversized shell before creating partial views" {
     }
 
     try std.testing.expectError(error.ViewLimitReached, harness.runtime.createShellViews(1, &shell_views, geometry.RectF.init(0, 0, 800, 600)));
+
+    var views_buffer: [2]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), views.len);
+    try std.testing.expectEqualStrings("main", views[0].label);
+}
+
+test "runtime rolls back shell views when a later view fails" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-rollback", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    const shell_views = [_]app_manifest.ShellView{
+        .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 44 },
+        .{ .label = "canvas", .kind = .gpu_surface, .width = 320, .height = 240 },
+    };
+
+    try std.testing.expectError(error.UnsupportedViewKind, harness.runtime.createShellViews(1, &shell_views, geometry.RectF.init(0, 0, 800, 600)));
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.view_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.webview_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.shell_layout_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.view_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.webview_count);
 
     var views_buffer: [2]platform.ViewInfo = undefined;
     const views = harness.runtime.listViews(1, &views_buffer);

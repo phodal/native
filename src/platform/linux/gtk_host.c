@@ -145,6 +145,7 @@ struct zero_native_gtk_host {
 
 static void zero_native_emit(zero_native_gtk_host_t *host, zero_native_gtk_event_t event);
 static gboolean zero_native_on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer data);
+static GtkWindow *zero_native_parent_window(zero_native_gtk_host_t *host);
 
 static char *zero_native_strndup(const char *s, size_t len) {
     char *out = malloc(len + 1);

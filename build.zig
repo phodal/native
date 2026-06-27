@@ -184,6 +184,11 @@ pub fn build(b: *std.Build) void {
         .name = "zero-native",
         .root_module = host_cli_mod,
     });
+    const file_contains_checker_mod = module(b, host_target, optimize, "tools/check_file_contains.zig");
+    const file_contains_checker = b.addExecutable(.{
+        .name = "check-file-contains",
+        .root_module = file_contains_checker_mod,
+    });
 
     const platform_arg = switch (selected_platform) {
         .auto => unreachable,
@@ -205,7 +210,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(desktop_tests).step);
     test_step.dependOn(&b.addRunArtifact(automation_protocol_tests).step);
     test_step.dependOn(&b.addRunArtifact(tooling_tests).step);
-    addFileContainsCheckStep(b, test_step, "test-package-types", "Verify package TypeScript platform feature names", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-package-types", "Verify package TypeScript platform feature names", &.{
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativeCommandInfo" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "list(): Promise<ZeroNativeCommandInfo[]>" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativeCreateWebViewViewOptions" },
@@ -228,7 +233,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"gpu_surfaces\"" },
         .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"gpuSurfaces\"" },
     });
-    addFileContainsCheckStep(b, test_step, "test-bridge-view-selector-helpers", "Verify injected view helpers accept string selectors", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-bridge-view-selector-helpers", "Verify injected view helpers accept string selectors", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "viewSelectorPayload(options)" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "viewSelectorPayload(options)" },
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "viewSelectorPayload(options)" },
@@ -242,24 +247,24 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
     });
-    addFileContainsCheckStep(b, test_step, "test-docs-command-contracts", "Verify command docs match native view update contracts", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-command-contracts", "Verify command docs match native view update contracts", &.{
         .{ .path = "docs/src/app/commands/page.mdx", .pattern = ".text = \"Refreshed\"" },
         .{ .path = "docs/src/app/commands/page.mdx", .pattern = "const commands = await window.zero.commands.list();" },
     });
-    addFileContainsCheckStep(b, test_step, "test-docs-native-view-contracts", "Verify native surface docs describe view identity", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-native-view-contracts", "Verify native surface docs describe view identity", &.{
         .{ .path = "docs/src/app/native-surfaces/page.mdx", .pattern = "ViewInfo.id" },
         .{ .path = "docs/src/app/native-surfaces/page.mdx", .pattern = "window.zero.views.update(\"status\"" },
     });
-    addFileContainsCheckStep(b, test_step, "test-docs-shell-manifest-contracts", "Verify app.zon docs describe shell compatibility window labels", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-shell-manifest-contracts", "Verify app.zon docs describe shell compatibility window labels", &.{
         .{ .path = "docs/src/app/app-zon/page.mdx", .pattern = "labels must stay unique across both lists" },
     });
-    addFileContainsCheckStep(b, test_step, "test-js-view-helper-contracts", "Verify injected view helpers support label-first updates", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-js-view-helper-contracts", "Verify injected view helpers support label-first updates", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "update:function(options,patch)" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "update:function(options,patch)" },
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "update:function(options,patch)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "update:function(options,patch)" },
     });
-    addFileContainsCheckStep(b, test_step, "test-windows-packaged-assets-webview2", "Verify Windows packaged assets are served through WebView2 request interception", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-packaged-assets-webview2", "Verify Windows packaged assets are served through WebView2 request interception", &.{
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "constexpr const char *kAssetVirtualOrigin = \"https://zero-native-app.localhost\";" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return virtualAssetEntryUrl(webview.asset_entry);" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "AddWebResourceRequestedFilter(L\"https://zero-native-app.localhost/*\"" },
@@ -267,20 +272,20 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "bridgeOriginForWebViewUrl(source_webview->second, source_url)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "webview.spa_fallback = spa_fallback != 0;" },
     });
-    addFileContainsCheckStep(b, test_step, "test-macos-cef-packaged-assets-webviews", "Verify macOS CEF child WebViews resolve packaged asset URLs before loading", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-macos-cef-packaged-assets-webviews", "Verify macOS CEF child WebViews resolve packaged asset URLs before loading", &.{
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "self.assetRoots = [[NSMutableDictionary alloc] init];" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "resolvedWebViewURLString:(NSString *)url windowId:(uint64_t)windowId" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "CefBrowserHost::CreateBrowser(windowInfo, client.get(), std::string(resolvedURL.UTF8String)" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "self.webviewPendingURLs[[self webViewKeyForWindow:windowId label:label]] = resolvedURL;" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "bridgeOriginForWindowId:window_id_ webViewLabel:labelString sourceURL:sourceURLString" },
     });
-    addFileContainsCheckStep(b, test_step, "test-appkit-native-accessibility-roles", "Verify AppKit native views publish accessibility roles", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-native-accessibility-roles", "Verify AppKit native views publish accessibility roles", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeAccessibilityRoleForNativeViewKind" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSAccessibilityToolbarRole" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSAccessibilityProgressIndicatorRole" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "view.accessibilityRole = ZeroNativeAccessibilityRoleForNativeViewKind(kind)" },
     });
-    addFileContainsCheckStep(b, test_step, "test-docs-builtin-bridge-policy", "Verify bridge policy docs include guarded dialog commands", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-builtin-bridge-policy", "Verify bridge policy docs include guarded dialog commands", &.{
         .{ .path = "docs/src/app/security/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },
         .{ .path = "docs/src/app/bridge/builtin-commands/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },
     });
@@ -328,7 +333,7 @@ pub fn build(b: *std.Build) void {
     addExampleTestStep(b, frontend_examples_step, "test-example-react", "Run React example tests", "examples/react");
     addExampleTestStep(b, frontend_examples_step, "test-example-svelte", "Run Svelte example tests", "examples/svelte");
     addExampleTestStep(b, frontend_examples_step, "test-example-vue", "Run Vue example tests", "examples/vue");
-    addFileContainsCheckStep(b, frontend_examples_step, "test-example-frontend-positioning", "Verify frontend example native shell positioning", &.{
+    addFileContainsCheckStep(b, file_contains_checker, frontend_examples_step, "test-example-frontend-positioning", "Verify frontend example native shell positioning", &.{
         .{ .path = "examples/next/README.md", .pattern = "opens the native app shell with WebView content." },
         .{ .path = "examples/react/README.md", .pattern = "opens the native app shell with WebView content." },
         .{ .path = "examples/svelte/README.md", .pattern = "opens the native app shell with WebView content." },
@@ -340,7 +345,7 @@ pub fn build(b: *std.Build) void {
     addExampleTestStep(b, native_examples_step, "test-example-native-shell", "Run native shell example tests", "examples/native-shell");
     addExampleTestStep(b, native_examples_step, "test-example-native-panels", "Run native panels example tests", "examples/native-panels");
     addExampleTestStep(b, native_examples_step, "test-example-capabilities", "Run capabilities example tests", "examples/capabilities");
-    addFileContainsCheckStep(b, native_examples_step, "test-example-capabilities-events", "Verify capabilities example event bridge names", &.{
+    addFileContainsCheckStep(b, file_contains_checker, native_examples_step, "test-example-capabilities-events", "Verify capabilities example event bridge names", &.{
         .{ .path = "examples/capabilities/src/main.zig", .pattern = "zero-native:drop:files" },
     });
 
@@ -370,7 +375,7 @@ pub fn build(b: *std.Build) void {
         "examples/mobile-shell/README.md",
         "examples/mobile-shell/app.zon",
     });
-    addFileContainsCheckStep(b, mobile_examples_step, "test-example-mobile-shell-metadata", "Verify shared mobile-shell metadata values", &.{
+    addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-shell-metadata", "Verify shared mobile-shell metadata values", &.{
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".platforms = .{ \"ios\", \"android\" }" },
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".capabilities = .{ \"webview\", \"native_views\", \"native_module\" }" },
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".id = \"mobile.back\"" },
@@ -378,7 +383,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".label = \"mobile-header\"" },
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".label = \"workspace\", .kind = \"webview\"" },
     });
-    addFileContainsCheckStep(b, mobile_examples_step, "test-example-mobile-host-commands", "Verify mobile host command metadata values", &.{
+    addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-host-commands", "Verify mobile host command metadata values", &.{
         .{ .path = "examples/ios/app.zon", .pattern = ".id = \"mobile.back\"" },
         .{ .path = "examples/ios/app.zon", .pattern = ".id = \"mobile.refresh\"" },
         .{ .path = "examples/ios/app.zon", .pattern = ".label = \"mobile-header\"" },
@@ -853,10 +858,12 @@ const FileContainsCheck = struct {
     pattern: []const u8,
 };
 
-fn addFileContainsCheckStep(b: *std.Build, group: *std.Build.Step, name: []const u8, description: []const u8, checks: []const FileContainsCheck) void {
+fn addFileContainsCheckStep(b: *std.Build, checker: *std.Build.Step.Compile, group: *std.Build.Step, name: []const u8, description: []const u8, checks: []const FileContainsCheck) void {
     const step = b.step(name, description);
     for (checks) |check_value| {
-        const check = b.addSystemCommand(&.{ "rg", "--fixed-strings", "--quiet", check_value.pattern, check_value.path });
+        const check = b.addRunArtifact(checker);
+        check.addArg(check_value.path);
+        check.addArg(check_value.pattern);
         step.dependOn(&check.step);
         group.dependOn(&check.step);
     }

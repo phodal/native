@@ -51,6 +51,10 @@ const AppKitEvent = extern struct {
     command_name_len: usize,
     view_label: [*]const u8,
     view_label_len: usize,
+    key_text: [*]const u8,
+    key_text_len: usize,
+    input_text: [*]const u8,
+    input_text_len: usize,
     drop_paths: [*]const u8,
     drop_paths_len: usize,
     frame_index: u64,
@@ -396,17 +400,7 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
             .frame = geometry.RectF.init(@floatCast(event.x), @floatCast(event.y), @floatCast(event.width), @floatCast(event.height)),
             .scale_factor = @floatCast(event.scale),
         } }),
-        .gpu_surface_input => state.emit(.{ .gpu_surface_input = .{
-            .window_id = event.window_id,
-            .label = event.view_label[0..event.view_label_len],
-            .kind = gpuSurfaceInputKindFromInt(event.input_kind),
-            .x = @floatCast(event.x),
-            .y = @floatCast(event.y),
-            .button = event.button,
-            .delta_x = @floatCast(event.delta_x),
-            .delta_y = @floatCast(event.delta_y),
-            .modifiers = shortcutModifiersFromFlags(event.shortcut_modifiers),
-        } }),
+        .gpu_surface_input => state.emit(.{ .gpu_surface_input = gpuSurfaceInputEventFromAppKitEvent(event) }),
     }
 }
 
@@ -418,6 +412,22 @@ fn appkitBridgeCallback(context: ?*anyopaque, window_id: u64, webview_label: [*]
         .window_id = window_id,
         .webview_label = webview_label[0..webview_label_len],
     } });
+}
+
+fn gpuSurfaceInputEventFromAppKitEvent(event: *const AppKitEvent) platform_mod.GpuSurfaceInputEvent {
+    return .{
+        .window_id = event.window_id,
+        .label = event.view_label[0..event.view_label_len],
+        .kind = gpuSurfaceInputKindFromInt(event.input_kind),
+        .x = @floatCast(event.x),
+        .y = @floatCast(event.y),
+        .button = event.button,
+        .delta_x = @floatCast(event.delta_x),
+        .delta_y = @floatCast(event.delta_y),
+        .key = event.key_text[0..event.key_text_len],
+        .text = event.input_text[0..event.input_text_len],
+        .modifiers = shortcutModifiersFromFlags(event.shortcut_modifiers),
+    };
 }
 
 fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
@@ -1051,4 +1061,39 @@ fn flattenFilters(filters: []const platform_mod.FileFilter, buffer: []u8) []cons
 
 test "mac platform module exports type" {
     _ = MacPlatform;
+}
+
+test "mac gpu surface input preserves key and text" {
+    const label = "canvas";
+    const key = "enter";
+    const text = "\n";
+    var event = std.mem.zeroes(AppKitEvent);
+    event.window_id = 7;
+    event.view_label = label.ptr;
+    event.view_label_len = label.len;
+    event.input_kind = 5;
+    event.x = 12;
+    event.y = 18;
+    event.button = 1;
+    event.delta_x = -2;
+    event.delta_y = 4;
+    event.key_text = key.ptr;
+    event.key_text_len = key.len;
+    event.input_text = text.ptr;
+    event.input_text_len = text.len;
+    event.shortcut_modifiers = shortcut_modifier_primary | shortcut_modifier_shift;
+
+    const input = gpuSurfaceInputEventFromAppKitEvent(&event);
+    try std.testing.expectEqual(@as(platform_mod.WindowId, 7), input.window_id);
+    try std.testing.expectEqualStrings("canvas", input.label);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.key_down, input.kind);
+    try std.testing.expectEqual(@as(f32, 12), input.x);
+    try std.testing.expectEqual(@as(f32, 18), input.y);
+    try std.testing.expectEqual(@as(i32, 1), input.button);
+    try std.testing.expectEqual(@as(f32, -2), input.delta_x);
+    try std.testing.expectEqual(@as(f32, 4), input.delta_y);
+    try std.testing.expectEqualStrings("enter", input.key);
+    try std.testing.expectEqualStrings("\n", input.text);
+    try std.testing.expect(input.modifiers.primary);
+    try std.testing.expect(input.modifiers.shift);
 }

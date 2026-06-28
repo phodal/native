@@ -3821,6 +3821,8 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
     return .{
         .phase = phase,
         .focused_id = focused_id,
+        .key = input_event.key,
+        .text = input_event.text,
         .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
     };
 }
@@ -6854,6 +6856,8 @@ test "runtime dispatches routed canvas widget pointer events" {
         last_keyboard_target_kind: canvas.WidgetKind = .stack,
         last_route_len: usize = 0,
         last_keyboard_route_len: usize = 0,
+        last_keyboard_key: []const u8 = "",
+        last_keyboard_text: []const u8 = "",
         last_keyboard_shift: bool = false,
         last_keyboard_super: bool = false,
 
@@ -6886,6 +6890,8 @@ test "runtime dispatches routed canvas widget pointer events" {
                     self.last_view_label = keyboard_event.view_label;
                     self.last_keyboard_phase = keyboard_event.keyboard.phase;
                     self.last_keyboard_route_len = keyboard_event.route.len;
+                    self.last_keyboard_key = keyboard_event.keyboard.key;
+                    self.last_keyboard_text = keyboard_event.keyboard.text;
                     self.last_keyboard_shift = keyboard_event.keyboard.modifiers.shift;
                     self.last_keyboard_super = keyboard_event.keyboard.modifiers.super;
                     if (keyboard_event.target) |target| {
@@ -6960,6 +6966,8 @@ test "runtime dispatches routed canvas widget pointer events" {
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
+        .key = "enter",
+        .text = "\n",
         .modifiers = .{ .shift = true, .primary = true },
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
@@ -6969,6 +6977,8 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);
     try std.testing.expectEqual(@as(usize, 3), app_state.last_keyboard_route_len);
+    try std.testing.expectEqualStrings("enter", app_state.last_keyboard_key);
+    try std.testing.expectEqualStrings("\n", app_state.last_keyboard_text);
     try std.testing.expect(app_state.last_keyboard_shift);
     try std.testing.expect(app_state.last_keyboard_super);
 }

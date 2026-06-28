@@ -648,6 +648,11 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     NSPoint point = event ? [self convertPoint:event.locationInWindow fromView:nil] : NSMakePoint(0, 0);
     CGFloat y = self.bounds.size.height - point.y;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
+    BOOL keyEvent = kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN || kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP;
+    NSString *keyText = keyEvent && event ? ZeroNativeShortcutKeyForEvent(event) : @"";
+    NSString *inputText = kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN && event ? (event.characters ?: @"") : @"";
+    const char *keyBytes = keyText.UTF8String ?: "";
+    const char *inputBytes = inputText.UTF8String ?: "";
     [self.host emitEvent:(zero_native_appkit_event_t){
         .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
         .window_id = self.windowId,
@@ -655,6 +660,10 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
         .y = y,
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .key_text = keyBytes,
+        .key_text_len = [keyText lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .input_text = inputBytes,
+        .input_text_len = [inputText lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .shortcut_modifiers = event ? ZeroNativeModifierFlagsForEvent(event) : 0,
         .input_kind = (int)kind,
         .button = (int)button,

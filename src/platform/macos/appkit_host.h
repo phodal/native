@@ -80,6 +80,10 @@ typedef struct {
     size_t command_name_len;
     const char *view_label;
     size_t view_label_len;
+    const char *key_text;
+    size_t key_text_len;
+    const char *input_text;
+    size_t input_text_len;
     const char *drop_paths;
     size_t drop_paths_len;
     uint64_t frame_index;

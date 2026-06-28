@@ -686,6 +686,8 @@ pub const GpuSurfaceInputEvent = struct {
     button: i32 = 0,
     delta_x: f32 = 0,
     delta_y: f32 = 0,
+    key: []const u8 = "",
+    text: []const u8 = "",
     modifiers: ShortcutModifiers = .{},
 };
 

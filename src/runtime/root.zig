@@ -638,6 +638,21 @@ pub const Runtime = struct {
         });
     }
 
+    pub fn presentNextCanvasFramePixels(
+        self: *Runtime,
+        window_id: platform.WindowId,
+        label: []const u8,
+        options: canvas.CanvasFrameOptions,
+        storage: canvas.CanvasFrameStorage,
+        pixels: []u8,
+        scratch: []u8,
+        clear_color: canvas.Color,
+    ) anyerror!canvas.CanvasFrame {
+        const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
+        try self.presentCanvasFramePixels(window_id, label, canvas_frame, pixels, scratch, clear_color);
+        return canvas_frame;
+    }
+
     fn planCanvasFrameForView(self: *Runtime, index: usize, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) anyerror!canvas.CanvasFrame {
         var frame_options = options;
         if (frame_options.surface_size.isEmpty()) {
@@ -4174,16 +4189,16 @@ fn canvasFullRepaintBounds(surface_size: geometry.SizeF, render_bounds: ?geometr
     return render_bounds;
 }
 
-const CanvasPixelSize = struct {
+pub const CanvasPixelSize = struct {
     width: usize,
     height: usize,
     byte_len: usize,
 };
 
-fn canvasFramePixelSize(frame: canvas.CanvasFrame) !CanvasPixelSize {
-    const scale = if (std.math.isFinite(frame.scale) and frame.scale > 0) frame.scale else 1;
-    const width_f = frame.surface_size.width * scale;
-    const height_f = frame.surface_size.height * scale;
+pub fn canvasSurfacePixelSize(surface_size: geometry.SizeF, scale_factor: f32) !CanvasPixelSize {
+    const scale = if (std.math.isFinite(scale_factor) and scale_factor > 0) scale_factor else 1;
+    const width_f = surface_size.width * scale;
+    const height_f = surface_size.height * scale;
     if (!std.math.isFinite(width_f) or !std.math.isFinite(height_f)) return error.InvalidGpuSurfacePixels;
     if (width_f <= 0 or height_f <= 0) return error.InvalidGpuSurfacePixels;
     if (width_f > max_canvas_surface_extent_pixels or height_f > max_canvas_surface_extent_pixels) return error.InvalidGpuSurfacePixels;
@@ -4193,6 +4208,10 @@ fn canvasFramePixelSize(frame: canvas.CanvasFrame) !CanvasPixelSize {
     const pixel_count = std.math.mul(usize, width, height) catch return error.InvalidGpuSurfacePixels;
     const byte_len = std.math.mul(usize, pixel_count, 4) catch return error.InvalidGpuSurfacePixels;
     return .{ .width = width, .height = height, .byte_len = byte_len };
+}
+
+pub fn canvasFramePixelSize(frame: canvas.CanvasFrame) !CanvasPixelSize {
+    return canvasSurfacePixelSize(frame.surface_size, frame.scale);
 }
 
 fn clippedCanvasDirtyBounds(bounds: ?geometry.RectF, surface_size: geometry.SizeF) ?geometry.RectF {
@@ -6292,6 +6311,65 @@ test "runtime next canvas frame applies render override dirty regions" {
     try std.testing.expect(!clean_frame.requiresRender());
     try std.testing.expect(clean_frame.dirty_bounds == null);
     try std.testing.expect(harness.runtime.views[0].canvas_frame_dirty_bounds == null);
+}
+
+test "runtime presents next canvas frame pixels" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-present-next-frame", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 4, 4),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(1, 1, 2, 2),
+        .fill = .{ .color = canvas.Color.rgb8(255, 0, 0) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var render_commands: [1]canvas.RenderCommand = undefined;
+    var render_batches: [1]canvas.RenderBatch = undefined;
+    var resources: [1]canvas.RenderResource = undefined;
+    var resource_cache_entries: [1]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [2]canvas.RenderResourceCacheAction = undefined;
+    var glyphs: [1]canvas.GlyphAtlasEntry = undefined;
+    var changes: [1]canvas.DiffChange = undefined;
+    const frame_storage = canvas.CanvasFrameStorage{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    };
+    var pixels: [8 * 8 * 4]u8 = undefined;
+    var scratch: [8 * 8 * 4]u8 = undefined;
+
+    const frame = try harness.runtime.presentNextCanvasFramePixels(1, "canvas", .{
+        .frame_index = 1,
+        .surface_size = geometry.SizeF.init(4, 4),
+        .scale = 2,
+    }, frame_storage, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0));
+
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_width);
+    try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_height);
+    try std.testing.expectEqual(@as(usize, 8 * 8 * 4), harness.null_platform.gpu_surface_present_byte_len);
 }
 
 test "runtime next canvas frame presents empty canvas once" {

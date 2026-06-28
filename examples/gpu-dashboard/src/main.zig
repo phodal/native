@@ -15,6 +15,7 @@ const canvas_width: f32 = 720;
 const statusbar_height: f32 = 34;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
+const max_dashboard_overrides: usize = 2;
 const refresh_command = "dashboard.refresh";
 const mode_command = "dashboard.mode";
 
@@ -142,6 +143,11 @@ const GpuDashboardApp = struct {
     mode_count: u32 = 0,
     canvas_installed: bool = false,
     reported_planned_frame: bool = false,
+    animation_start_ns: u64 = 0,
+    previous_override_count: usize = 0,
+    render_override_count: usize = 0,
+    previous_overrides: [max_dashboard_overrides]canvas.CanvasRenderOverride = undefined,
+    render_overrides: [max_dashboard_overrides]canvas.CanvasRenderOverride = undefined,
     pixels: ?[]u8 = null,
     scratch: ?[]u8 = null,
     render_commands: [max_dashboard_commands]canvas.RenderCommand = undefined,
@@ -168,6 +174,8 @@ const GpuDashboardApp = struct {
         if (self.scratch) |scratch| std.heap.page_allocator.free(scratch);
         self.pixels = null;
         self.scratch = null;
+        self.previous_override_count = 0;
+        self.render_override_count = 0;
     }
 
     fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
@@ -204,10 +212,7 @@ const GpuDashboardApp = struct {
             return;
         }
 
-        if (frame_event.canvas_frame_requires_render) {
-            const display_list = try runtime.canvasDisplayList(frame_event.window_id, "dashboard-canvas");
-            try self.presentDashboardCanvas(runtime, frame_event, display_list, frame_event.canvas_frame_full_repaint);
-        }
+        _ = try self.presentDashboardCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
 
         if (!self.reported_planned_frame and frame_event.canvas_command_count > 0) {
             self.reported_planned_frame = true;
@@ -227,7 +232,8 @@ const GpuDashboardApp = struct {
         try buildDashboardDisplayList(&builder);
         const display_list = builder.displayList();
         _ = try runtime.setCanvasDisplayList(frame_event.window_id, "dashboard-canvas", display_list);
-        try self.presentDashboardCanvas(runtime, frame_event, display_list, true);
+        self.animation_start_ns = frame_event.timestamp_ns;
+        _ = try self.presentDashboardCanvas(runtime, frame_event, true);
         self.canvas_installed = true;
     }
 
@@ -245,7 +251,9 @@ const GpuDashboardApp = struct {
         const display_list = builder.displayList();
         _ = try runtime.setCanvasDisplayList(command.window_id, "dashboard-canvas", display_list);
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, "dashboard-canvas");
-        try self.presentDashboardCanvas(runtime, gpuFrameEvent(gpu_frame), display_list, true);
+        self.animation_start_ns = gpu_frame.timestamp_ns;
+        self.previous_override_count = 0;
+        _ = try self.presentDashboardCanvas(runtime, gpuFrameEvent(gpu_frame), true);
 
         var status_buffer: [160]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "Dashboard canvas refreshed from {s}. Count {d}.", .{ @tagName(command.source), self.refresh_count });
@@ -259,25 +267,64 @@ const GpuDashboardApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn presentDashboardCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, display_list: canvas.DisplayList, full_repaint: bool) anyerror!void {
+    fn presentDashboardCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!canvas.CanvasFrame {
         const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, window_height - toolbar_height - statusbar_height) else frame_event.size;
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
-        const frame = try display_list.framePlan(null, .{
-            .frame_index = frame_event.frame_index,
-            .timestamp_ns = frame_event.timestamp_ns,
-            .surface_size = surface_size,
-            .scale = scale_factor,
-            .full_repaint = full_repaint,
-        }, self.frameStorage());
-        try self.ensurePixelBuffers(frame);
-        try runtime.presentCanvasFramePixels(
+        try self.ensurePixelBuffers(surface_size, scale_factor);
+        const overrides = try self.sampleRenderOverrides(frame_event.timestamp_ns);
+        const frame = try runtime.presentNextCanvasFramePixels(
             frame_event.window_id,
             "dashboard-canvas",
-            frame,
+            .{
+                .frame_index = frame_event.frame_index,
+                .timestamp_ns = frame_event.timestamp_ns,
+                .surface_size = surface_size,
+                .scale = scale_factor,
+                .full_repaint = full_repaint,
+                .previous_render_overrides = self.previous_overrides[0..self.previous_override_count],
+                .render_overrides = overrides,
+            },
+            self.frameStorage(),
             self.pixels.?,
             self.scratch.?,
             color(246, 248, 252),
         );
+        self.rememberRenderOverrides(overrides);
+        return frame;
+    }
+
+    fn sampleRenderOverrides(self: *@This(), timestamp_ns: u64) anyerror![]const canvas.CanvasRenderOverride {
+        if (self.animation_start_ns == 0) self.animation_start_ns = timestamp_ns;
+        const animations = [_]canvas.CanvasRenderAnimation{
+            .{
+                .id = 16,
+                .start_ns = self.animation_start_ns,
+                .duration_ms = 900,
+                .from_opacity = 0.72,
+                .to_opacity = 1,
+                .from_transform = canvas.Affine.translate(0, -7),
+                .to_transform = canvas.Affine.identity(),
+            },
+            .{
+                .id = 17,
+                .start_ns = self.animation_start_ns,
+                .duration_ms = 900,
+                .from_opacity = 0.72,
+                .to_opacity = 1,
+                .from_transform = canvas.Affine.translate(0, -7),
+                .to_transform = canvas.Affine.identity(),
+            },
+        };
+        const sampled = try canvas.sampleCanvasRenderAnimations(&animations, timestamp_ns, &self.render_overrides);
+        self.render_override_count = sampled.len;
+        return self.render_overrides[0..self.render_override_count];
+    }
+
+    fn rememberRenderOverrides(self: *@This(), overrides: []const canvas.CanvasRenderOverride) void {
+        self.previous_override_count = @min(overrides.len, self.previous_overrides.len);
+        for (overrides[0..self.previous_override_count], 0..) |override, index| {
+            self.previous_overrides[index] = override;
+        }
     }
 
     fn frameStorage(self: *@This()) canvas.CanvasFrameStorage {
@@ -292,15 +339,15 @@ const GpuDashboardApp = struct {
         };
     }
 
-    fn ensurePixelBuffers(self: *@This(), frame: canvas.CanvasFrame) anyerror!void {
-        const byte_len = try dashboardPixelByteLen(frame);
-        if (self.pixels == null or self.pixels.?.len < byte_len) {
+    fn ensurePixelBuffers(self: *@This(), surface_size: geometry.SizeF, scale_factor: f32) anyerror!void {
+        const pixel_size = try zero_native.runtime.canvasSurfacePixelSize(surface_size, scale_factor);
+        if (self.pixels == null or self.pixels.?.len < pixel_size.byte_len) {
             if (self.pixels) |pixels| std.heap.page_allocator.free(pixels);
-            self.pixels = try std.heap.page_allocator.alloc(u8, byte_len);
+            self.pixels = try std.heap.page_allocator.alloc(u8, pixel_size.byte_len);
         }
-        if (self.scratch == null or self.scratch.?.len < byte_len) {
+        if (self.scratch == null or self.scratch.?.len < pixel_size.byte_len) {
             if (self.scratch) |scratch| std.heap.page_allocator.free(scratch);
-            self.scratch = try std.heap.page_allocator.alloc(u8, byte_len);
+            self.scratch = try std.heap.page_allocator.alloc(u8, pixel_size.byte_len);
         }
     }
 };
@@ -374,17 +421,6 @@ fn dashboardFrameStorage(
         .glyph_atlas_entries = glyphs,
         .changes = changes,
     };
-}
-
-fn dashboardPixelByteLen(frame: canvas.CanvasFrame) !usize {
-    const scale = if (std.math.isFinite(frame.scale) and frame.scale > 0) frame.scale else 1;
-    const width_f = frame.surface_size.width * scale;
-    const height_f = frame.surface_size.height * scale;
-    if (!std.math.isFinite(width_f) or !std.math.isFinite(height_f) or width_f <= 0 or height_f <= 0) return error.InvalidGpuSurfacePixels;
-    const width: usize = @intFromFloat(@ceil(width_f));
-    const height: usize = @intFromFloat(@ceil(height_f));
-    const pixel_count = std.math.mul(usize, width, height) catch return error.InvalidGpuSurfacePixels;
-    return std.math.mul(usize, pixel_count, 4) catch return error.InvalidGpuSurfacePixels;
 }
 
 fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFrameEvent {

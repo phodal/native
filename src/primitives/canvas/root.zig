@@ -1398,6 +1398,7 @@ pub const WidgetKind = enum {
     row,
     column,
     grid,
+    data_grid,
     scroll_view,
     list,
     panel,
@@ -1412,6 +1413,8 @@ pub const WidgetKind = enum {
     tooltip,
     menu_item,
     list_item,
+    data_row,
+    data_cell,
     segmented_control,
     checkbox,
     toggle,
@@ -1457,6 +1460,9 @@ pub const WidgetRole = enum {
     menuitem,
     list,
     listitem,
+    row,
+    grid,
+    gridcell,
     tab,
     checkbox,
     switch_control,
@@ -1945,7 +1951,7 @@ fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens
             clip_stack_len -= 1;
         }
         switch (widget.kind) {
-            .stack, .row, .column, .grid, .list => {},
+            .stack, .row, .column, .grid, .data_grid, .list, .data_row => {},
             .scroll_view => {
                 if (clip_stack_len >= clip_stack_depths.len) return error.RenderStackOverflow;
                 try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
@@ -1964,6 +1970,7 @@ fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens
             .tooltip => try emitTooltipWidget(builder, widget, tokens),
             .menu_item => try emitMenuItemWidget(builder, widget, tokens),
             .list_item => try emitListItemWidget(builder, widget, tokens),
+            .data_cell => try emitDataCellWidget(builder, widget, tokens),
             .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
             .checkbox => try emitCheckboxWidget(builder, widget, tokens),
             .toggle => try emitToggleWidget(builder, widget, tokens),
@@ -2665,7 +2672,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
     if (depth >= max_widget_depth) return error.WidgetDepthExceeded;
 
     switch (widget.kind) {
-        .stack, .row, .column, .grid, .list => try emitWidgetChildren(builder, widget.children, tokens, depth),
+        .stack, .row, .column, .grid, .data_grid, .list, .data_row => try emitWidgetChildren(builder, widget.children, tokens, depth),
         .scroll_view => try emitScrollViewWidget(builder, widget, tokens, depth),
         .panel => try emitPanelWidget(builder, widget, tokens, depth),
         .popover => try emitPopoverWidget(builder, widget, tokens, depth),
@@ -2679,6 +2686,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .tooltip => try emitTooltipWidget(builder, widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, widget, tokens),
         .list_item => try emitListItemWidget(builder, widget, tokens),
+        .data_cell => try emitDataCellWidget(builder, widget, tokens),
         .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, widget, tokens),
         .toggle => try emitToggleWidget(builder, widget, tokens),
@@ -3121,6 +3129,34 @@ fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
     });
 }
 
+fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const state_fill = listItemFillColor(tokens, widget.state);
+    try builder.fillRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+        .fill = .{ .color = if (state_fill.a > 0) state_fill else tokens.colors.surface },
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .stroke = .{
+            .fill = .{ .color = tokens.colors.border },
+            .width = tokens.stroke.hairline,
+        },
+    });
+    if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
+    if (widget.text.len > 0) {
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 4),
+            .font_id = tokens.typography.font_id,
+            .size = tokens.typography.body_size,
+            .origin = textOrigin(widget.frame, tokens.typography.body_size, tokens.spacing.md),
+            .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
+            .text = widget.text,
+        });
+    }
+}
+
 fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = widget.state.selected or widget.value >= 0.5;
     const radius = Radius.all(tokens.radius.md);
@@ -3450,6 +3486,11 @@ fn layoutWidgetDepth(
         .row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout.gap),
         .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns),
+        .data_grid => if (widget.layout.virtualized)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+        else
+            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
+        .data_row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout.gap),
         .scroll_view => if (widget.layout.virtualized)
             try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
         else
@@ -3464,7 +3505,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .icon, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
+        .text, .icon, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -3880,6 +3921,8 @@ fn semanticRole(widget: Widget) WidgetRole {
     if (widget.semantics.role != .none) return widget.semantics.role;
     return switch (widget.kind) {
         .stack, .row, .column, .grid, .scroll_view, .panel => .group,
+        .data_grid => .grid,
+        .data_row => .row,
         .popover => .dialog,
         .menu_surface => .menu,
         .list => .list,
@@ -3891,6 +3934,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .tooltip => .tooltip,
         .menu_item => .menuitem,
         .list_item => .listitem,
+        .data_cell => .gridcell,
         .segmented_control => .tab,
         .checkbox => .checkbox,
         .toggle => .switch_control,
@@ -3907,7 +3951,7 @@ fn semanticLabel(widget: Widget) []const u8 {
 fn semanticValue(widget: Widget) ?f32 {
     if (widget.semantics.value) |value| return value;
     return switch (widget.kind) {
-        .list_item, .segmented_control => if (widget.state.selected or widget.value >= 0.5) 1 else 0,
+        .list_item, .data_cell, .segmented_control => if (widget.state.selected or widget.value >= 0.5) 1 else 0,
         .checkbox, .toggle => if (booleanControlSelected(widget)) 1 else 0,
         .slider, .progress => std.math.clamp(widget.value, 0, 1),
         else => null,
@@ -3916,7 +3960,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -3929,8 +3973,8 @@ fn isFocusable(widget: Widget) bool {
 fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
-        .row, .column, .grid, .list, .stack, .tooltip, .icon => false,
-        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon => false,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -5804,6 +5848,104 @@ test "widget grid layout places children in deterministic cells" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     try std.testing.expectEqual(@as(usize, 8), builder.displayList().commandCount());
+}
+
+test "widget data grid exposes rows cells semantics and display list" {
+    const header_cells = [_]Widget{
+        .{ .id = 3, .kind = .data_cell, .text = "Name", .layout = .{ .grow = 1 } },
+        .{ .id = 4, .kind = .data_cell, .text = "Status", .layout = .{ .grow = 1 } },
+    };
+    const deployment_cells = [_]Widget{
+        .{ .id = 6, .kind = .data_cell, .text = "Edge API", .layout = .{ .grow = 1 } },
+        .{ .id = 7, .kind = .data_cell, .text = "Live", .layout = .{ .grow = 1 } },
+    };
+    const rows = [_]Widget{
+        .{ .id = 2, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &header_cells },
+        .{ .id = 5, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &deployment_cells },
+    };
+    const grid = Widget{
+        .id = 1,
+        .kind = .data_grid,
+        .text = "Deployments",
+        .layout = .{ .gap = 2 },
+        .children = &rows,
+    };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(grid, geometry.RectF.init(0, 0, 240, 58), &nodes);
+    try std.testing.expectEqual(@as(usize, 7), layout.nodeCount());
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(0, 0, 240, 58));
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 240, 28));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 0, 120, 28));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(120, 0, 120, 28));
+    try expectLayoutFrame(layout, 5, geometry.RectF.init(0, 30, 240, 28));
+    try expectLayoutFrame(layout, 6, geometry.RectF.init(0, 30, 120, 28));
+    try expectLayoutFrame(layout, 7, geometry.RectF.init(120, 30, 120, 28));
+
+    const hit = layout.hitTest(geometry.PointF.init(8, 38)).?;
+    try std.testing.expectEqual(@as(ObjectId, 6), hit.id);
+    try std.testing.expectEqual(WidgetKind.data_cell, hit.kind);
+
+    var semantics_buffer: [8]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 7), semantics.len);
+    try std.testing.expectEqual(WidgetRole.grid, semantics[0].role);
+    try std.testing.expectEqualStrings("Deployments", semantics[0].label);
+    try std.testing.expect(semantics[0].parent_index == null);
+    try std.testing.expectEqual(WidgetRole.row, semantics[1].role);
+    try std.testing.expectEqual(@as(?usize, 0), semantics[1].parent_index);
+    try std.testing.expectEqual(WidgetRole.gridcell, semantics[2].role);
+    try std.testing.expectEqualStrings("Name", semantics[2].label);
+    try std.testing.expectEqual(@as(?usize, 1), semantics[2].parent_index);
+    try std.testing.expect(semantics[2].focusable);
+    try std.testing.expectEqual(WidgetRole.row, semantics[4].role);
+    try std.testing.expectEqual(@as(?usize, 0), semantics[4].parent_index);
+    try std.testing.expectEqual(WidgetRole.gridcell, semantics[5].role);
+    try std.testing.expectEqualStrings("Edge API", semantics[5].label);
+    try expectRect(geometry.RectF.init(0, 30, 120, 28), semantics[5].bounds);
+
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 12), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rect => |fill| try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 1)), fill.id),
+        else => return error.UnexpectedCommand,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try std.testing.expectEqualStrings("Name", text.text),
+        else => return error.UnexpectedCommand,
+    }
+}
+
+test "widget virtualized data grid lays out visible rows" {
+    const rows = [_]Widget{
+        .{ .id = 2, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },
+        .{ .id = 3, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "One" },
+        .{ .id = 4, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Two" },
+        .{ .id = 5, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Three" },
+    };
+    const grid = Widget{
+        .id = 1,
+        .kind = .data_grid,
+        .value = 25,
+        .layout = .{
+            .gap = 5,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+        },
+        .children = &rows,
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(grid, geometry.RectF.init(0, 0, 160, 45), &nodes);
+    try std.testing.expectEqual(@as(usize, 3), layout.nodeCount());
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(0, 0, 160, 45));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 0, 160, 20));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(0, 25, 160, 20));
+    try std.testing.expect(layout.findById(2) == null);
+    try std.testing.expect(layout.findById(5) == null);
 }
 
 test "widget scroll view offsets children and clips display list" {

@@ -3511,7 +3511,7 @@ fn optionalCanvasTextRangesEqual(a: ?canvas.TextRange, b: ?canvas.TextRange) boo
 
 fn canvasWidgetCommandable(kind: canvas.WidgetKind) bool {
     return switch (kind) {
-        .button, .icon_button, .menu_item, .list_item, .segmented_control, .checkbox, .toggle => true,
+        .button, .icon_button, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle => true,
         else => false,
     };
 }
@@ -4695,6 +4695,9 @@ fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
         .menuitem => "menuitem",
         .list => "list",
         .listitem => "listitem",
+        .row => "row",
+        .grid => "grid",
+        .gridcell => "gridcell",
         .tab => "tab",
         .checkbox => "checkbox",
         .switch_control => "switch",
@@ -7568,6 +7571,69 @@ test "runtime automation snapshot exposes canvas list roles" {
     try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=list name=\"Mailboxes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=listitem name=\"Inbox\"") != null);
+}
+
+test "runtime automation snapshot exposes canvas data grid roles" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-data-grid-semantics", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 320, 180),
+    });
+
+    const header_cells = [_]canvas.Widget{
+        .{ .id = 3, .kind = .data_cell, .text = "Project", .layout = .{ .grow = 1 } },
+        .{ .id = 4, .kind = .data_cell, .text = "Status", .layout = .{ .grow = 1 } },
+    };
+    const row_cells = [_]canvas.Widget{
+        .{ .id = 6, .kind = .data_cell, .text = "Edge API", .layout = .{ .grow = 1 } },
+        .{ .id = 7, .kind = .data_cell, .text = "Live", .layout = .{ .grow = 1 } },
+    };
+    const rows = [_]canvas.Widget{
+        .{ .id = 2, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &header_cells },
+        .{ .id = 5, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &row_cells },
+    };
+    const grid = canvas.Widget{
+        .id = 1,
+        .kind = .data_grid,
+        .text = "Deployments",
+        .layout = .{ .gap = 2 },
+        .children = &rows,
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(grid, geometry.RectF.init(0, 0, 320, 180), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 7), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("grid", snapshot.widgets[0].role);
+    try std.testing.expectEqualStrings("Deployments", snapshot.widgets[0].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 320, 180), snapshot.widgets[0].bounds);
+    try std.testing.expectEqualStrings("row", snapshot.widgets[1].role);
+    try std.testing.expectEqualStrings("gridcell", snapshot.widgets[2].role);
+    try std.testing.expectEqualStrings("Project", snapshot.widgets[2].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 160, 28), snapshot.widgets[2].bounds);
+    try std.testing.expectEqualStrings("gridcell", snapshot.widgets[5].role);
+    try std.testing.expectEqualStrings("Edge API", snapshot.widgets[5].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(20, 60, 160, 28), snapshot.widgets[5].bounds);
+
+    var a11y_buffer: [1024]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=grid name=\"Deployments\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#6 role=gridcell name=\"Edge API\"") != null);
 }
 
 test "runtime automation snapshot exposes canvas icon roles" {

@@ -4029,12 +4029,14 @@ const RuntimeView = struct {
             return;
         }
 
+        const source_semantics = try layout.collectSemantics(&self.widget_semantics_nodes);
+
         self.widget_layout_node_count = 0;
         self.widget_semantics_node_count = 0;
         self.widget_text_len = 0;
 
         for (layout.nodes) |node| {
-            self.widget_layout_nodes[self.widget_layout_node_count] = try self.copyWidgetLayoutNode(node);
+            self.widget_layout_nodes[self.widget_layout_node_count] = try self.copyWidgetLayoutNode(node, source_semantics);
             self.widget_layout_node_count += 1;
         }
 
@@ -4316,12 +4318,18 @@ const RuntimeView = struct {
         self.widget_semantics_node_count = semantics.len;
     }
 
-    fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode) anyerror!canvas.WidgetLayoutNode {
+    fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode, source_semantics: []const canvas.WidgetSemanticsNode) anyerror!canvas.WidgetLayoutNode {
         var copy = node;
         if (node.widget.command.len > 0) try validateCommandName(node.widget.command);
         copy.widget.text = try self.copyWidgetText(node.widget.text);
         copy.widget.command = try self.copyWidgetText(node.widget.command);
         copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
+        if (canvasWidgetSemanticsById(source_semantics, node.widget.id)) |semantic_node| {
+            if (semantic_node.list.present) {
+                copy.widget.semantics.list_item_index = semantic_node.list.item_index;
+                copy.widget.semantics.list_item_count = semantic_node.list.item_count;
+            }
+        }
         copy.widget.children = &.{};
         return copy;
     }
@@ -4986,6 +4994,14 @@ fn canvasWidgetActions(actions: canvas.WidgetActions) automation.snapshot.Widget
         .set_text = actions.set_text,
         .select = actions.select,
     };
+}
+
+fn canvasWidgetSemanticsById(nodes: []const canvas.WidgetSemanticsNode, id: canvas.ObjectId) ?canvas.WidgetSemanticsNode {
+    if (id == 0) return null;
+    for (nodes) |node| {
+        if (node.id == id) return node;
+    }
+    return null;
 }
 
 fn canvasWidgetSemanticParentId(nodes: []const canvas.WidgetSemanticsNode, parent_index: ?usize) ?u64 {
@@ -8260,6 +8276,78 @@ test "runtime automation snapshot exposes canvas list roles" {
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=listitem name=\"Inbox\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#1") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=0,count=2]") != null);
+}
+
+test "runtime preserves virtualized list item semantics" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-virtual-list-semantics", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 160),
+    });
+
+    const rows = [_]canvas.Widget{
+        .{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },
+        .{ .id = 3, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "One" },
+        .{ .id = 4, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Two" },
+        .{ .id = 5, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Three" },
+        .{ .id = 6, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Four" },
+        .{ .id = 7, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Five" },
+        .{ .id = 8, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Six" },
+        .{ .id = 9, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Seven" },
+        .{ .id = 10, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Eight" },
+        .{ .id = 11, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Nine" },
+    };
+    const list = canvas.Widget{
+        .id = 1,
+        .kind = .list,
+        .text = "Mailboxes",
+        .value = 45,
+        .layout = .{
+            .gap = 5,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+            .virtual_overscan = 1,
+        },
+        .children = &rows,
+    };
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(list, geometry.RectF.init(0, 0, 240, 50), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 6), retained.nodeCount());
+    try std.testing.expectEqual(@as(usize, 0), retained.nodes[0].widget.children.len);
+    try std.testing.expectEqual(@as(usize, 0), retained.nodes[3].widget.children.len);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 6), snapshot.widgets.len);
+    try std.testing.expectEqual(@as(u64, 4), snapshot.widgets[3].id);
+    try std.testing.expect(snapshot.widgets[3].list.present);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.widgets[3].list.item_index);
+    try std.testing.expectEqual(@as(u32, 10), snapshot.widgets[3].list.item_count);
+    try std.testing.expectEqual(@as(u64, 6), snapshot.widgets[5].id);
+    try std.testing.expect(snapshot.widgets[5].list.present);
+    try std.testing.expectEqual(@as(u32, 4), snapshot.widgets[5].list.item_index);
+    try std.testing.expectEqual(@as(u32, 10), snapshot.widgets[5].list.item_count);
+
+    var a11y_buffer: [2048]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#4 role=listitem name=\"Two\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=2,count=10]") != null);
 }
 
 test "runtime automation snapshot exposes canvas data grid roles" {

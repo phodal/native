@@ -1501,6 +1501,8 @@ pub const WidgetSemantics = struct {
     role: WidgetRole = .none,
     label: []const u8 = "",
     value: ?f32 = null,
+    list_item_index: ?u32 = null,
+    list_item_count: ?u32 = null,
     actions: WidgetActions = .{},
     hidden: bool = false,
     focusable: bool = false,
@@ -4291,6 +4293,16 @@ fn widgetListSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetListSe
     const list_index = node.parent_index orelse return .{};
     if (list_index >= layout.nodes.len or layout.nodes[list_index].widget.kind != .list) return .{};
 
+    if (node.widget.semantics.list_item_index) |item_index| {
+        if (node.widget.semantics.list_item_count) |item_count| {
+            return .{ .metrics = .{
+                .present = true,
+                .item_index = item_index,
+                .item_count = item_count,
+            } };
+        }
+    }
+
     const list = layout.nodes[list_index].widget;
     const source_count = widgetChildCountByKind(list, .list_item);
     const item_count = if (source_count > 0) source_count else directChildCountByKind(layout, list_index, .list_item);
@@ -4580,6 +4592,8 @@ fn widgetSemanticsEqual(a: WidgetSemantics, b: WidgetSemantics) bool {
     return a.role == b.role and
         std.mem.eql(u8, a.label, b.label) and
         optionalF32Equal(a.value, b.value) and
+        a.list_item_index == b.list_item_index and
+        a.list_item_count == b.list_item_count and
         widgetActionsEqual(a.actions, b.actions) and
         a.hidden == b.hidden and
         a.focusable == b.focusable;

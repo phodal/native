@@ -43,6 +43,13 @@ pub const TextRange = struct {
     end: usize = 0,
 };
 
+pub const WidgetScroll = struct {
+    present: bool = false,
+    offset: f32 = 0,
+    viewport_extent: f32 = 0,
+    content_extent: f32 = 0,
+};
+
 pub const Widget = struct {
     window_id: platform.WindowId = 1,
     view_label: []const u8 = "",
@@ -56,6 +63,7 @@ pub const Widget = struct {
     grid_column_index: ?usize = null,
     grid_row_count: ?usize = null,
     grid_column_count: ?usize = null,
+    scroll: WidgetScroll = .{},
     bounds: geometry.RectF = .{},
     focused: bool = false,
     enabled: bool = true,
@@ -170,6 +178,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
         if (widget.value) |value| try writer.print(" value={d}", .{value});
         try writeWidgetTextValue(widget, writer);
         try writeWidgetGrid(widget, writer);
+        try writeWidgetScroll(widget, writer);
         try writeWidgetState(widget, writer);
         try writeWidgetActions(widget.actions, writer);
         try writeWidgetTextRanges(widget, writer);
@@ -222,6 +231,7 @@ pub fn writeA11yText(input: Input, writer: anytype) !void {
         if (widget.value) |value| try writer.print(" value={d}", .{value});
         try writeWidgetTextValue(widget, writer);
         try writeWidgetGrid(widget, writer);
+        try writeWidgetScroll(widget, writer);
         try writeWidgetState(widget, writer);
         try writeWidgetActions(widget.actions, writer);
         try writeWidgetTextRanges(widget, writer);
@@ -258,6 +268,15 @@ fn writeWidgetGridValue(name: []const u8, value: ?usize, wrote: *bool, writer: a
     if (wrote.*) try writer.writeByte(',');
     try writer.print("{s}={d}", .{ name, unwrapped });
     wrote.* = true;
+}
+
+fn writeWidgetScroll(widget: Widget, writer: anytype) !void {
+    if (!widget.scroll.present) return;
+    try writer.print(" scroll=[offset={d},viewport={d},content={d}]", .{
+        widget.scroll.offset,
+        widget.scroll.viewport_extent,
+        widget.scroll.content_extent,
+    });
 }
 
 fn writeWidgetState(widget: Widget, writer: anytype) !void {
@@ -378,7 +397,7 @@ test "snapshot emits GPU surface frame proof" {
 }
 
 test "snapshot emits widget semantics" {
-    var buffer: [1024]u8 = undefined;
+    var buffer: [2048]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
     const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .role = "canvas" }};
@@ -394,6 +413,12 @@ test "snapshot emits widget semantics" {
         .grid_column_index = 2,
         .grid_row_count = 4,
         .grid_column_count = 5,
+        .scroll = .{
+            .present = true,
+            .offset = 12.0,
+            .viewport_extent = 80.0,
+            .content_extent = 180.0,
+        },
         .bounds = geometry.RectF.init(10, 12, 80, 32),
         .focused = true,
         .hovered = true,
@@ -412,12 +437,13 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "parent=#7") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "text=\"deploy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[hovered,pressed,selected]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "actions=[focus,press]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "selection=4..4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "composition=0..3") != null);
 
-    var a11y_buffer: [1024]u8 = undefined;
+    var a11y_buffer: [2048]u8 = undefined;
     var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
     try writeA11yText(.{
         .windows = &windows,
@@ -429,6 +455,7 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#7") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "text=\"deploy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[hovered,pressed,selected]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,press]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "selection=4..4") != null);

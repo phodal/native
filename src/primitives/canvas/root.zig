@@ -1628,6 +1628,13 @@ pub const WidgetFocusTarget = struct {
     state: WidgetState,
 };
 
+pub const WidgetScrollMetrics = struct {
+    present: bool = false,
+    offset: f32 = 0,
+    viewport_extent: f32 = 0,
+    content_extent: f32 = 0,
+};
+
 pub const WidgetSemanticsNode = struct {
     id: ObjectId,
     role: WidgetRole,
@@ -1638,6 +1645,7 @@ pub const WidgetSemanticsNode = struct {
     grid_column_index: ?usize = null,
     grid_row_count: ?usize = null,
     grid_column_count: ?usize = null,
+    scroll: WidgetScrollMetrics = .{},
     bounds: geometry.RectF,
     state: WidgetState,
     focusable: bool = false,
@@ -4058,20 +4066,28 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
 
         const parent_index = nearestSemanticParent(semantic_stack[0..node.depth]);
         const grid = widgetGridSemantics(layout, node_index);
+        const scroll = widgetScrollSemantics(layout, node_index);
+        var actions = semanticActions(node.widget);
+        if (scroll.scrollable and !node.widget.state.disabled) {
+            actions.focus = true;
+            actions.increment = true;
+            actions.decrement = true;
+        }
         output[len] = .{
             .id = node.widget.id,
             .role = role,
             .label = semanticLabel(node.widget),
-            .value = semanticValue(node.widget),
+            .value = scroll.value orelse semanticValue(node.widget),
             .text_value = semanticTextValue(node.widget),
             .grid_row_index = grid.row_index,
             .grid_column_index = grid.column_index,
             .grid_row_count = grid.row_count,
             .grid_column_count = grid.column_count,
+            .scroll = scroll.metrics,
             .bounds = node.frame,
             .state = node.widget.state,
-            .focusable = node.widget.semantics.focusable or node.widget.semantics.actions.focus or defaultFocusable(node.widget),
-            .actions = semanticActions(node.widget),
+            .focusable = node.widget.semantics.focusable or node.widget.semantics.actions.focus or actions.focus or defaultFocusable(node.widget),
+            .actions = actions,
             .text_selection = widgetTextSelectionRange(node.widget),
             .text_composition = widgetTextCompositionRange(node.widget),
             .parent_index = parent_index,
@@ -4211,6 +4227,66 @@ fn maxDataGridColumnCount(layout: WidgetLayoutTree, grid_index: usize) usize {
     return max_columns;
 }
 
+const WidgetScrollSemantics = struct {
+    metrics: WidgetScrollMetrics = .{},
+    value: ?f32 = null,
+    scrollable: bool = false,
+};
+
+fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetScrollSemantics {
+    if (node_index >= layout.nodes.len) return .{};
+    const node = layout.nodes[node_index];
+    if (node.widget.kind != .scroll_view) return .{};
+
+    const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+    if (viewport.isEmpty()) return .{};
+
+    const content_extent = widgetScrollContentExtent(layout, node_index, viewport);
+    const max_offset = @max(0, content_extent - viewport.height);
+    const offset = std.math.clamp(nonNegative(node.widget.value), 0, max_offset);
+    return .{
+        .metrics = .{
+            .present = true,
+            .offset = offset,
+            .viewport_extent = viewport.height,
+            .content_extent = content_extent,
+        },
+        .value = if (max_offset > 0) offset / max_offset else 0,
+        .scrollable = max_offset > 0,
+    };
+}
+
+fn widgetScrollContentExtent(layout: WidgetLayoutTree, scroll_index: usize, viewport: geometry.RectF) f32 {
+    const scroll_node = layout.nodes[scroll_index];
+    if (scroll_node.widget.layout.virtualized) {
+        return @max(viewport.height, virtualWidgetScrollContentExtent(scroll_node.widget, viewport.height));
+    }
+
+    const scroll_depth = scroll_node.depth;
+    const offset = nonNegative(scroll_node.widget.value);
+    var bottom = viewport.maxY();
+    var index = scroll_index + 1;
+    while (index < layout.nodes.len and layout.nodes[index].depth > scroll_depth) : (index += 1) {
+        bottom = @max(bottom, layout.nodes[index].frame.maxY() + offset);
+    }
+    return @max(0, bottom - viewport.y);
+}
+
+fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {
+    if (widget.children.len == 0) return 0;
+    const item_extent = if (widget.layout.virtual_item_extent > 0)
+        widget.layout.virtual_item_extent
+    else
+        preferredMainExtent(widget.children[0], .vertical);
+    return virtualListRange(.{
+        .item_count = widget.children.len,
+        .item_extent = item_extent,
+        .item_gap = widget.layout.gap,
+        .viewport_extent = viewport_extent,
+        .scroll_offset = widget.value,
+    }).content_extent;
+}
+
 fn semanticActions(widget: Widget) WidgetActions {
     if (widget.state.disabled) return .{};
     var actions = defaultSemanticActions(widget);
@@ -4249,7 +4325,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .scroll_view, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -6318,6 +6394,20 @@ test "widget scroll view offsets children and clips display list" {
     try std.testing.expectEqual(@as(ObjectId, 1), route.target.?.id);
     try std.testing.expectEqual(@as(usize, 1), route.entries.len);
     try std.testing.expectEqual(WidgetEventPhase.target, route.entries[0].phase);
+
+    var semantics_buffer: [4]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 4), semantics.len);
+    try std.testing.expectEqual(WidgetRole.group, semantics[0].role);
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0 / 52.0), semantics[0].value.?, 0.001);
+    try std.testing.expect(semantics[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 20.0), semantics[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 60.0), semantics[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 112.0), semantics[0].scroll.content_extent);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.focus);
+    try std.testing.expect(semantics[0].actions.increment);
+    try std.testing.expect(semantics[0].actions.decrement);
 }
 
 test "scroll state applies wheel deltas kinetic decay and bounds" {

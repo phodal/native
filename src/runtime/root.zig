@@ -1536,6 +1536,12 @@ pub const Runtime = struct {
                     .grid_column_index = node.grid_column_index,
                     .grid_row_count = node.grid_row_count,
                     .grid_column_count = node.grid_column_count,
+                    .scroll = .{
+                        .present = node.scroll.present,
+                        .offset = node.scroll.offset,
+                        .viewport_extent = node.scroll.viewport_extent,
+                        .content_extent = node.scroll.content_extent,
+                    },
                     .bounds = node.bounds.translate(geometry.OffsetF.init(view.frame.x, view.frame.y)),
                     .focused = node.state.focused or (view.focused and node.id == view.canvas_widget_focused_id),
                     .enabled = !node.state.disabled,
@@ -3703,6 +3709,21 @@ fn canvasWidgetSliderKeyboardValue(current: f32, keyboard: canvas.WidgetKeyboard
     return null;
 }
 
+fn canvasWidgetScrollKeyboardDelta(widget: canvas.Widget, keyboard: canvas.WidgetKeyboardEvent) ?f32 {
+    const viewport = widget.frame.inset(widget.layout.padding).normalized();
+    const line_step = @max(24, viewport.height * 0.35);
+    const page_step = @max(line_step, viewport.height * 0.85);
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft") or std.ascii.eqlIgnoreCase(keyboard.key, "arrowup")) {
+        return -line_step;
+    }
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowright") or std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown")) {
+        return line_step;
+    }
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "pageup")) return -page_step;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "pagedown")) return page_step;
+    return null;
+}
+
 fn canvasWidgetGridNavigationDirection(input_event: GpuSurfaceInputEvent) ?canvas.WidgetFocusDirection {
     if (input_event.kind != .key_down) return null;
     if (input_event.modifiers.control or input_event.modifiers.option or input_event.modifiers.command or input_event.modifiers.primary) return null;
@@ -4210,6 +4231,10 @@ const RuntimeView = struct {
                 null,
             .slider => if (canvasWidgetSliderKeyboardValue(widget.value, keyboard)) |next_value|
                 try self.setCanvasWidgetValue(index, next_value)
+            else
+                null,
+            .scroll_view => if (canvasWidgetScrollKeyboardDelta(widget, keyboard)) |delta|
+                try self.applyCanvasWidgetScroll(index, delta)
             else
                 null,
             else => null,
@@ -7288,8 +7313,24 @@ test "runtime wheel input scrolls retained canvas scroll views" {
 
     const snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqual(@as(usize, 4), snapshot.widgets.len);
+    try std.testing.expectEqual(@as(?f32, 0.5), snapshot.widgets[0].value);
+    try std.testing.expect(snapshot.widgets[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 24.0), snapshot.widgets[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 72.0), snapshot.widgets[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 120.0), snapshot.widgets[0].scroll.content_extent);
+    try std.testing.expect(snapshot.widgets[0].actions.focus);
+    try std.testing.expect(snapshot.widgets[0].actions.increment);
+    try std.testing.expect(snapshot.widgets[0].actions.decrement);
     try std.testing.expectEqualDeep(geometry.RectF.init(10, -4, 180, 32), snapshot.widgets[1].bounds);
     try std.testing.expectEqualDeep(geometry.RectF.init(10, 40, 180, 32), snapshot.widgets[2].bounds);
+
+    var a11y_buffer: [2048]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=group") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "value=0.5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "scroll=[offset=24,viewport=72,content=120]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,increment,decrement]") != null);
 
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
     const display_list = try harness.runtime.canvasDisplayList(1, "canvas");
@@ -10215,14 +10256,20 @@ test "runtime dispatches automation canvas widget actions" {
         .frame = geometry.RectF.init(0, 0, 320, 180),
     });
 
+    const scroll_items = [_]canvas.Widget{
+        .{ .id = 8, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Row one" },
+        .{ .id = 9, .kind = .button, .frame = geometry.RectF.init(0, 64, 0, 32), .text = "Row two" },
+        .{ .id = 10, .kind = .button, .frame = geometry.RectF.init(0, 128, 0, 32), .text = "Row three" },
+    };
     const children = [_]canvas.Widget{
         .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 10, 96, 32), .text = "Run", .command = "widget.run" },
         .{ .id = 3, .kind = .checkbox, .frame = geometry.RectF.init(10, 52, 96, 28), .text = "Enabled" },
         .{ .id = 4, .kind = .slider, .frame = geometry.RectF.init(10, 88, 120, 24), .value = 0.5, .semantics = .{ .label = "Amount" } },
         .{ .id = 5, .kind = .text_field, .frame = geometry.RectF.init(10, 122, 150, 32), .text = "Draft" },
         .{ .id = 6, .kind = .list_item, .frame = geometry.RectF.init(170, 10, 120, 32), .text = "Inbox" },
+        .{ .id = 7, .kind = .scroll_view, .frame = geometry.RectF.init(170, 52, 120, 48), .children = &scroll_items },
     };
-    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    var nodes: [12]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 320, 180), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
@@ -10240,6 +10287,14 @@ test "runtime dispatches automation canvas widget actions" {
 
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 6, .action = .select });
     try std.testing.expectEqual(@as(?f32, 1), harness.runtime.views[0].widgetSemantics()[5].value);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 7, .action = .increment });
+    var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 24.0), scrolled_layout.findById(7).?.widget.value);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 7, .action = .decrement });
+    scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0.0), scrolled_layout.findById(7).?.widget.value);
 
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 5, .action = .set_text, .value = "Hello world" });
     try std.testing.expectEqualStrings("Hello world", harness.runtime.views[0].widgetSemantics()[4].label);
@@ -11837,8 +11892,10 @@ test "runtime reports actionable unsupported webview capability errors" {
 test "runtime gates JavaScript window API by origin and configured permission" {
     var app_state: u8 = 0;
     const app = App{ .context = &app_state, .name = "window-api-security", .source = platform.WebViewSource.html("<p>Windows</p>") };
+    const Harness = TestHarness();
 
-    var denied_origin: TestHarness() = undefined;
+    const denied_origin = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(denied_origin);
     denied_origin.init(.{});
     denied_origin.runtime.options.js_window_api = true;
     try denied_origin.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
@@ -11849,7 +11906,8 @@ test "runtime gates JavaScript window API by origin and configured permission" {
     try std.testing.expect(std.mem.indexOf(u8, denied_origin.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
 
     const filesystem_only = [_][]const u8{security.permission_filesystem};
-    var denied_permission: TestHarness() = undefined;
+    const denied_permission = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(denied_permission);
     denied_permission.init(.{});
     denied_permission.runtime.options.js_window_api = true;
     denied_permission.runtime.options.security.permissions = &filesystem_only;
@@ -11861,7 +11919,8 @@ test "runtime gates JavaScript window API by origin and configured permission" {
     try std.testing.expect(std.mem.indexOf(u8, denied_permission.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
 
     const window_permission = [_][]const u8{security.permission_window};
-    var allowed: TestHarness() = undefined;
+    const allowed = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(allowed);
     allowed.init(.{});
     allowed.runtime.options.js_window_api = true;
     allowed.runtime.options.security.permissions = &window_permission;
@@ -11876,8 +11935,10 @@ test "runtime gates JavaScript window API by origin and configured permission" {
 test "runtime gates JavaScript webview API by origin and configured permission" {
     var app_state: u8 = 0;
     const app = App{ .context = &app_state, .name = "webview-api-security", .source = platform.WebViewSource.html("<p>WebViews</p>") };
+    const Harness = TestHarness();
 
-    var denied_origin: TestHarness() = undefined;
+    const denied_origin = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(denied_origin);
     denied_origin.init(.{});
     denied_origin.runtime.options.js_window_api = true;
     try denied_origin.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
@@ -11888,7 +11949,8 @@ test "runtime gates JavaScript webview API by origin and configured permission" 
     try std.testing.expect(std.mem.indexOf(u8, denied_origin.null_platform.lastBridgeResponse(), "WebView API is not permitted") != null);
 
     const filesystem_only = [_][]const u8{security.permission_filesystem};
-    var denied_permission: TestHarness() = undefined;
+    const denied_permission = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(denied_permission);
     denied_permission.init(.{});
     denied_permission.runtime.options.js_window_api = true;
     denied_permission.runtime.options.security.permissions = &filesystem_only;
@@ -11901,7 +11963,8 @@ test "runtime gates JavaScript webview API by origin and configured permission" 
 
     const window_permission = [_][]const u8{security.permission_window};
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com" };
-    var allowed: TestHarness() = undefined;
+    const allowed = try std.testing.allocator.create(Harness);
+    defer std.testing.allocator.destroy(allowed);
     allowed.init(.{});
     allowed.runtime.options.js_window_api = true;
     allowed.runtime.options.security.permissions = &window_permission;

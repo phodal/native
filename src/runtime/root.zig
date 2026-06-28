@@ -561,6 +561,17 @@ pub const Runtime = struct {
         return self.views[index].canvasDisplayList();
     }
 
+    pub fn canvasFramePlan(self: *const Runtime, window_id: platform.WindowId, label: []const u8, previous: ?canvas.DisplayList, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) anyerror!canvas.CanvasFrame {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+
+        var frame_options = options;
+        if (frame_options.surface_size.isEmpty()) frame_options.surface_size = self.views[index].frame.size();
+        return self.views[index].canvasDisplayList().framePlan(previous, frame_options, storage);
+    }
+
     pub fn setCanvasWidgetLayout(self: *Runtime, window_id: platform.WindowId, label: []const u8, layout: canvas.WidgetLayoutTree) anyerror!platform.ViewInfo {
         try self.validateViewParent(window_id);
         try validateViewLabel(label);
@@ -4948,6 +4959,127 @@ test "runtime retains canvas display lists on GPU surface views" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_commands=3") != null);
 }
 
+test "runtime builds canvas frame plans from retained GPU canvas state" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-frame", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    const stops = [_]canvas.GradientStop{
+        .{ .offset = 0, .color = canvas.Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = canvas.Color.rgb8(24, 24, 27) },
+    };
+    const commands = [_]canvas.CanvasCommand{
+        .{ .fill_rounded_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(16, 16, 160, 72),
+            .radius = canvas.Radius.all(12),
+            .fill = .{ .linear_gradient = .{
+                .start = geometry.PointF.init(16, 16),
+                .end = geometry.PointF.init(176, 88),
+                .stops = &stops,
+            } },
+        } },
+        .{ .draw_text = .{
+            .id = 2,
+            .font_id = 5,
+            .size = 14,
+            .origin = geometry.PointF.init(28, 48),
+            .color = canvas.Color.rgb8(15, 23, 42),
+            .text = "OK",
+        } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var render_commands: [4]canvas.RenderCommand = undefined;
+    var resources: [4]canvas.RenderResource = undefined;
+    var glyphs: [4]canvas.GlyphAtlasEntry = undefined;
+    var changes: [4]canvas.DiffChange = undefined;
+    const frame = try harness.runtime.canvasFramePlan(1, "canvas", null, .{
+        .frame_index = 9,
+        .timestamp_ns = 100,
+    }, .{
+        .render_commands = &render_commands,
+        .resources = &resources,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expectEqual(@as(u64, 9), frame.frame_index);
+    try std.testing.expectEqual(@as(u64, 100), frame.timestamp_ns);
+    try std.testing.expectEqualDeep(geometry.SizeF.init(320, 240), frame.surface_size);
+    try std.testing.expect(frame.full_repaint);
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 2), frame.display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.render_plan.commandCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_plan.resourceCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 320, 240), frame.dirty_bounds.?);
+}
+
+test "runtime canvas frame plan computes incremental dirty from previous display list" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-frame-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 320, 240),
+    });
+
+    const previous_commands = [_]canvas.CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 40, 40), .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) } } },
+    };
+    const next_commands = [_]canvas.CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(20, 0, 40, 40), .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) } } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &next_commands });
+
+    var render_commands: [2]canvas.RenderCommand = undefined;
+    var resources: [0]canvas.RenderResource = .{};
+    var glyphs: [0]canvas.GlyphAtlasEntry = .{};
+    var changes: [2]canvas.DiffChange = undefined;
+    const frame = try harness.runtime.canvasFramePlan(1, "canvas", .{ .commands = &previous_commands }, .{}, .{
+        .render_commands = &render_commands,
+        .resources = &resources,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expect(!frame.full_repaint);
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expectEqualDeep(geometry.SizeF.init(320, 240), frame.surface_size);
+    try std.testing.expectEqual(@as(usize, 1), frame.changes.len);
+    try std.testing.expectEqual(canvas.DiffKind.changed, frame.changes[0].kind);
+    try std.testing.expectEqual(@as(?canvas.ObjectId, 1), frame.changes[0].id);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 60, 40), frame.dirty_bounds.?);
+}
+
 test "runtime invalidates canvas display list dirty regions" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -5261,6 +5393,17 @@ test "runtime rejects canvas display lists on non-GPU views" {
     });
 
     try std.testing.expectError(error.InvalidViewOptions, harness.runtime.setCanvasDisplayList(1, "status", .{}));
+
+    var render_commands: [0]canvas.RenderCommand = .{};
+    var resources: [0]canvas.RenderResource = .{};
+    var glyphs: [0]canvas.GlyphAtlasEntry = .{};
+    var changes: [0]canvas.DiffChange = .{};
+    try std.testing.expectError(error.InvalidViewOptions, harness.runtime.canvasFramePlan(1, "status", null, .{}, .{
+        .render_commands = &render_commands,
+        .resources = &resources,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    }));
 }
 
 test "runtime rejects oversized shell before creating partial views" {

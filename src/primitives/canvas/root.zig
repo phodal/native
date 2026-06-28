@@ -6529,6 +6529,73 @@ test "widget tree emits panel button text and progress commands" {
     }
 }
 
+test "widget display list renders through reference surface" {
+    const tokens: DesignTokens = .{};
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(16, 16, 120, 36),
+            .text = "Launch",
+        },
+        .{
+            .id = 3,
+            .kind = .text,
+            .frame = geometry.RectF.init(16, 64, 200, 20),
+            .text = "Frames stay retained",
+        },
+        .{
+            .id = 4,
+            .kind = .progress,
+            .frame = geometry.RectF.init(16, 96, 160, 8),
+            .value = 0.25,
+        },
+    };
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .frame = geometry.RectF.init(0, 0, 240, 128),
+        .children = &children,
+    };
+
+    var layout_nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, root.frame, &layout_nodes);
+
+    var commands: [12]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, tokens);
+
+    var render_commands: [12]RenderCommand = undefined;
+    var render_batches: [12]RenderBatch = undefined;
+    var resources: [8]RenderResource = undefined;
+    var resource_cache_entries: [8]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [8]RenderResourceCacheAction = undefined;
+    var glyphs: [64]GlyphAtlasEntry = undefined;
+    var changes: [0]DiffChange = .{};
+    const frame = try builder.displayList().framePlan(null, .{
+        .surface_size = geometry.SizeF.init(240, 128),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expectEqual(CanvasRenderPassLoadAction.clear, frame.renderPass().loadAction());
+    try std.testing.expectEqual(@as(usize, 9), frame.renderPass().commandCount());
+
+    var pixels: [240 * 128 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(240, 128, &pixels);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 255, 255, 255, 255 }, surface, 220, 20);
+    try expectPixelRgba8(.{ 24, 24, 27, 255 }, surface, 20, 100);
+}
+
 test "widget emitter applies button state tokens" {
     const tokens = DesignTokens{
         .colors = .{

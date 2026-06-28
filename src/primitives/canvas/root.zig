@@ -770,6 +770,115 @@ pub const SpringToken = struct {
     damping: f32 = 28,
 };
 
+pub const ScrollPhysics = struct {
+    wheel_multiplier: f32 = 1,
+    wheel_velocity_scale: f32 = 60,
+    deceleration_per_second: f32 = 0.86,
+    stop_velocity: f32 = 5,
+};
+
+pub const ScrollState = struct {
+    offset: f32 = 0,
+    velocity: f32 = 0,
+    viewport_extent: f32 = 0,
+    content_extent: f32 = 0,
+
+    pub fn maxOffset(self: ScrollState) f32 {
+        return @max(0, nonNegative(self.content_extent) - nonNegative(self.viewport_extent));
+    }
+
+    pub fn clamped(self: ScrollState) ScrollState {
+        var next = self;
+        const clamped_offset = std.math.clamp(nonNegative(next.offset), 0, next.maxOffset());
+        if (clamped_offset != next.offset) next.velocity = 0;
+        next.offset = clamped_offset;
+        return next;
+    }
+
+    pub fn applyWheel(self: ScrollState, delta: f32, physics: ScrollPhysics) ScrollState {
+        var next = self;
+        const scaled_delta = delta * physics.wheel_multiplier;
+        next.offset += scaled_delta;
+        next.velocity = scaled_delta * physics.wheel_velocity_scale;
+        return next.clamped();
+    }
+
+    pub fn stepKinetic(self: ScrollState, dt_ms: f32, physics: ScrollPhysics) ScrollState {
+        var next = self.clamped();
+        if (@abs(next.velocity) <= nonNegative(physics.stop_velocity)) {
+            next.velocity = 0;
+            return next;
+        }
+
+        const dt_seconds = nonNegative(dt_ms) / 1000.0;
+        next.offset += next.velocity * dt_seconds;
+        const decay = std.math.pow(f32, std.math.clamp(physics.deceleration_per_second, 0, 1), dt_seconds);
+        next.velocity *= decay;
+        if (@abs(next.velocity) <= nonNegative(physics.stop_velocity)) next.velocity = 0;
+        return next.clamped();
+    }
+};
+
+pub const VirtualListOptions = struct {
+    item_count: usize = 0,
+    item_extent: f32 = 0,
+    item_gap: f32 = 0,
+    viewport_extent: f32 = 0,
+    scroll_offset: f32 = 0,
+    overscan: usize = 0,
+};
+
+pub const VirtualListRange = struct {
+    start_index: usize = 0,
+    end_index: usize = 0,
+    first_visible_index: usize = 0,
+    last_visible_index: usize = 0,
+    item_extent: f32 = 0,
+    item_gap: f32 = 0,
+    scroll_offset: f32 = 0,
+    content_extent: f32 = 0,
+    before_extent: f32 = 0,
+    after_extent: f32 = 0,
+
+    pub fn itemCount(self: VirtualListRange) usize {
+        return self.end_index - self.start_index;
+    }
+
+    pub fn isEmpty(self: VirtualListRange) bool {
+        return self.start_index >= self.end_index;
+    }
+};
+
+pub fn virtualListRange(options: VirtualListOptions) VirtualListRange {
+    if (options.item_count == 0 or options.item_extent <= 0 or options.viewport_extent <= 0) return .{};
+
+    const item_extent = nonNegative(options.item_extent);
+    const item_gap = nonNegative(options.item_gap);
+    const stride = item_extent + item_gap;
+    const item_count_f = @as(f32, @floatFromInt(options.item_count));
+    const content_extent = item_count_f * item_extent + @max(0, item_count_f - 1) * item_gap;
+    const max_offset = @max(0, content_extent - nonNegative(options.viewport_extent));
+    const offset = std.math.clamp(nonNegative(options.scroll_offset), 0, max_offset);
+
+    const first_visible = @min(options.item_count - 1, floorVirtualIndex(offset / stride));
+    const visible_end = @min(options.item_count, ceilVirtualIndex((offset + nonNegative(options.viewport_extent) + item_gap) / stride));
+    const start_index = if (first_visible > options.overscan) first_visible - options.overscan else 0;
+    const end_index = @min(options.item_count, visible_end + options.overscan);
+
+    return .{
+        .start_index = start_index,
+        .end_index = end_index,
+        .first_visible_index = first_visible,
+        .last_visible_index = if (visible_end > 0) visible_end - 1 else first_visible,
+        .item_extent = item_extent,
+        .item_gap = item_gap,
+        .scroll_offset = offset,
+        .content_extent = content_extent,
+        .before_extent = @as(f32, @floatFromInt(start_index)) * stride,
+        .after_extent = @as(f32, @floatFromInt(options.item_count - end_index)) * stride,
+    };
+}
+
 pub const LayerTokens = struct {
     base: i32 = 0,
     floating: i32 = 100,
@@ -826,6 +935,9 @@ pub const WidgetLayoutStyle = struct {
     gap: f32 = 0,
     grow: f32 = 0,
     columns: usize = 0,
+    virtualized: bool = false,
+    virtual_item_extent: f32 = 0,
+    virtual_overscan: usize = 0,
     min_size: geometry.SizeF = .{},
 };
 
@@ -2473,8 +2585,14 @@ fn layoutWidgetDepth(
         .row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout.gap),
         .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns),
-        .scroll_view => try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value),
-        .list => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
+        .scroll_view => if (widget.layout.virtualized)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+        else
+            try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value),
+        .list => if (widget.layout.virtualized)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+        else
+            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .stack, .panel, .popover => {
             for (widget.children) |child| {
@@ -2596,6 +2714,49 @@ fn layoutScrollChildren(
     const scrolled_content = content.translate(geometry.OffsetF.init(0, -nonNegative(scroll_y)));
     for (children) |child| {
         _ = try layoutWidgetDepth(child, stackChildFrame(scrolled_content, child), parent_index, depth + 1, output, len);
+    }
+}
+
+fn layoutVirtualVerticalChildren(
+    children: []const Widget,
+    content: geometry.RectF,
+    parent_index: usize,
+    depth: usize,
+    output: []WidgetLayoutNode,
+    len: *usize,
+    scroll_y: f32,
+    style: WidgetLayoutStyle,
+) Error!void {
+    if (children.len == 0) return;
+
+    const item_extent = if (style.virtual_item_extent > 0)
+        style.virtual_item_extent
+    else
+        preferredMainExtent(children[0], .vertical);
+    const range = virtualListRange(.{
+        .item_count = children.len,
+        .item_extent = item_extent,
+        .item_gap = style.gap,
+        .viewport_extent = content.height,
+        .scroll_offset = scroll_y,
+        .overscan = style.virtual_overscan,
+    });
+    if (range.isEmpty()) return;
+
+    const stride = range.item_extent + range.item_gap;
+    var index = range.start_index;
+    while (index < range.end_index) : (index += 1) {
+        const child = children[index];
+        const y = content.y + @as(f32, @floatFromInt(index)) * stride - range.scroll_offset + child.frame.y;
+        const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else content.width);
+        const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
+        const child_frame = geometry.RectF.init(
+            content.x + child.frame.x,
+            y,
+            width,
+            height,
+        );
+        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len);
     }
 }
 
@@ -2999,6 +3160,9 @@ fn widgetLayoutStylesEqual(a: WidgetLayoutStyle, b: WidgetLayoutStyle) bool {
         a.gap == b.gap and
         a.grow == b.grow and
         a.columns == b.columns and
+        a.virtualized == b.virtualized and
+        a.virtual_item_extent == b.virtual_item_extent and
+        a.virtual_overscan == b.virtual_overscan and
         sizesEqual(a.min_size, b.min_size);
 }
 
@@ -3237,6 +3401,16 @@ fn estimatedGlyphAdvance(glyph: Glyph, size: f32) f32 {
 
 fn nonNegative(value: f32) f32 {
     return @max(0, value);
+}
+
+fn floorVirtualIndex(value: f32) usize {
+    if (!std.math.isFinite(value) or value <= 0) return 0;
+    return @intFromFloat(@floor(value));
+}
+
+fn ceilVirtualIndex(value: f32) usize {
+    if (!std.math.isFinite(value) or value <= 0) return 0;
+    return @intFromFloat(@ceil(value));
 }
 
 fn nonZeroObjectId(id: ObjectId) ?ObjectId {
@@ -4103,6 +4277,100 @@ test "widget scroll view offsets children and clips display list" {
     try std.testing.expectEqual(@as(ObjectId, 1), route.target.?.id);
     try std.testing.expectEqual(@as(usize, 1), route.entries.len);
     try std.testing.expectEqual(WidgetEventPhase.target, route.entries[0].phase);
+}
+
+test "scroll state applies wheel deltas kinetic decay and bounds" {
+    const physics = ScrollPhysics{
+        .wheel_multiplier = 2,
+        .wheel_velocity_scale = 10,
+        .deceleration_per_second = 0.5,
+        .stop_velocity = 1,
+    };
+    const start = ScrollState{
+        .offset = 10,
+        .viewport_extent = 100,
+        .content_extent = 360,
+    };
+
+    const wheeled = start.applyWheel(30, physics);
+    try std.testing.expectEqual(@as(f32, 70), wheeled.offset);
+    try std.testing.expectEqual(@as(f32, 600), wheeled.velocity);
+
+    const stepped = wheeled.stepKinetic(100, physics);
+    try std.testing.expect(stepped.offset > wheeled.offset);
+    try std.testing.expect(stepped.velocity > 0);
+    try std.testing.expect(stepped.velocity < wheeled.velocity);
+
+    const clamped = wheeled.applyWheel(1000, physics);
+    try std.testing.expectEqual(@as(f32, 260), clamped.offset);
+    try std.testing.expectEqual(@as(f32, 0), clamped.velocity);
+}
+
+test "virtual list range computes visible and overscan windows" {
+    const range = virtualListRange(.{
+        .item_count = 100,
+        .item_extent = 24,
+        .item_gap = 4,
+        .viewport_extent = 70,
+        .scroll_offset = 50,
+        .overscan = 1,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), range.start_index);
+    try std.testing.expectEqual(@as(usize, 6), range.end_index);
+    try std.testing.expectEqual(@as(usize, 1), range.first_visible_index);
+    try std.testing.expectEqual(@as(usize, 4), range.last_visible_index);
+    try std.testing.expectEqual(@as(usize, 6), range.itemCount());
+    try std.testing.expectEqual(@as(f32, 2796), range.content_extent);
+    try std.testing.expectEqual(@as(f32, 2632), range.after_extent);
+
+    const empty = virtualListRange(.{
+        .item_count = 10,
+        .item_extent = 0,
+        .viewport_extent = 100,
+    });
+    try std.testing.expect(empty.isEmpty());
+}
+
+test "widget virtualized scroll view lays out only visible overscan children" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "One" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Two" },
+        .{ .id = 5, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Three" },
+        .{ .id = 6, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Four" },
+        .{ .id = 7, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Five" },
+        .{ .id = 8, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Six" },
+        .{ .id = 9, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Seven" },
+        .{ .id = 10, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Eight" },
+        .{ .id = 11, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Nine" },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 45,
+        .layout = .{
+            .gap = 5,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+            .virtual_overscan = 1,
+        },
+        .children = &children,
+    };
+
+    var nodes: [6]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 50), &nodes);
+    try std.testing.expectEqual(@as(usize, 6), layout.nodeCount());
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(0, 0, 120, 50));
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, -45, 120, 20));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, -20, 120, 20));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(0, 5, 120, 20));
+    try expectLayoutFrame(layout, 5, geometry.RectF.init(0, 30, 120, 20));
+    try expectLayoutFrame(layout, 6, geometry.RectF.init(0, 55, 120, 20));
+    try std.testing.expect(layout.findById(7) == null);
+
+    try std.testing.expectEqual(@as(ObjectId, 4), layout.hitTest(geometry.PointF.init(10, 8)).?.id);
+    try std.testing.expect(layout.hitTest(geometry.PointF.init(10, 56)) == null);
 }
 
 test "widget pointer route includes capture target and bubble phases" {

@@ -648,6 +648,7 @@ pub const WidgetKind = enum {
     row,
     column,
     grid,
+    scroll_view,
     panel,
     text,
     button,
@@ -1052,10 +1053,23 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
 }
 
 pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens) Error!void {
+    var clip_stack_depths: [max_widget_depth]usize = undefined;
+    var clip_stack_len: usize = 0;
+
     for (layout.nodes) |node| {
         const widget = widgetWithFrame(node.widget, node.frame);
+        while (clip_stack_len > 0 and node.depth <= clip_stack_depths[clip_stack_len - 1]) {
+            try builder.popClip();
+            clip_stack_len -= 1;
+        }
         switch (widget.kind) {
             .stack, .row, .column, .grid => {},
+            .scroll_view => {
+                if (clip_stack_len >= clip_stack_depths.len) return error.RenderStackOverflow;
+                try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
+                clip_stack_depths[clip_stack_len] = node.depth;
+                clip_stack_len += 1;
+            },
             .panel => try emitPanelWidgetChrome(builder, widget, tokens),
             .text => try emitTextWidget(builder, widget, tokens),
             .button => try emitButtonWidget(builder, widget, tokens),
@@ -1067,6 +1081,10 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
             .slider => try emitSliderWidget(builder, widget, tokens),
             .progress => try emitProgressWidget(builder, widget, tokens),
         }
+    }
+    while (clip_stack_len > 0) {
+        try builder.popClip();
+        clip_stack_len -= 1;
     }
 }
 
@@ -1627,6 +1645,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
 
     switch (widget.kind) {
         .stack, .row, .column, .grid => try emitWidgetChildren(builder, widget.children, tokens, depth),
+        .scroll_view => try emitScrollViewWidget(builder, widget, tokens, depth),
         .panel => try emitPanelWidget(builder, widget, tokens, depth),
         .text => try emitTextWidget(builder, widget, tokens),
         .button => try emitButtonWidget(builder, widget, tokens),
@@ -1649,6 +1668,12 @@ fn emitWidgetChildren(builder: *Builder, children: []const Widget, tokens: Desig
 fn emitPanelWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     try emitPanelWidgetChrome(builder, widget, tokens);
     try emitWidgetChildren(builder, widget.children, tokens, depth);
+}
+
+fn emitScrollViewWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
+    try emitWidgetChildren(builder, widget.children, tokens, depth);
+    try builder.popClip();
 }
 
 fn emitPanelWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -2054,6 +2079,7 @@ fn layoutWidgetDepth(
         .row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout.gap),
         .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns),
+        .scroll_view => try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value),
         .stack, .panel => {
             for (widget.children) |child| {
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
@@ -2162,6 +2188,21 @@ fn layoutGridChildren(
     }
 }
 
+fn layoutScrollChildren(
+    children: []const Widget,
+    content: geometry.RectF,
+    parent_index: usize,
+    depth: usize,
+    output: []WidgetLayoutNode,
+    len: *usize,
+    scroll_y: f32,
+) Error!void {
+    const scrolled_content = content.translate(geometry.OffsetF.init(0, -nonNegative(scroll_y)));
+    for (children) |child| {
+        _ = try layoutWidgetDepth(child, stackChildFrame(scrolled_content, child), parent_index, depth + 1, output, len);
+    }
+}
+
 fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
     const width = if (child.frame.width > 0) child.frame.width else content.width;
     const height = if (child.frame.height > 0) child.frame.height else content.height;
@@ -2207,6 +2248,7 @@ fn hitTestWidgetLayout(layout: WidgetLayoutTree, point: geometry.PointF) ?Widget
         const node = layout.nodes[index];
         if (!isHitTarget(node.widget)) continue;
         if (!node.frame.normalized().containsPoint(point)) continue;
+        if (!isPointVisibleInWidgetAncestors(layout, index, point)) continue;
         return .{
             .id = node.widget.id,
             .kind = node.widget.kind,
@@ -2217,6 +2259,16 @@ fn hitTestWidgetLayout(layout: WidgetLayoutTree, point: geometry.PointF) ?Widget
         };
     }
     return null;
+}
+
+fn isPointVisibleInWidgetAncestors(layout: WidgetLayoutTree, node_index: usize, point: geometry.PointF) bool {
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |parent_index| {
+        const parent = layout.nodes[parent_index];
+        if (parent.widget.kind == .scroll_view and !parent.frame.normalized().containsPoint(point)) return false;
+        current = parent.parent_index;
+    }
+    return true;
 }
 
 fn routeWidgetPointerEvent(layout: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
@@ -2367,7 +2419,7 @@ fn nearestSemanticParent(stack: []const ?usize) ?usize {
 fn semanticRole(widget: Widget) WidgetRole {
     if (widget.semantics.role != .none) return widget.semantics.role;
     return switch (widget.kind) {
-        .stack, .row, .column, .grid, .panel => .group,
+        .stack, .row, .column, .grid, .scroll_view, .panel => .group,
         .text => .text,
         .button => .button,
         .text_field => .textbox,
@@ -2411,7 +2463,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .stack => false,
-        .panel, .text, .button, .text_field, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+        .scroll_view, .panel, .text, .button, .text_field, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -3415,6 +3467,52 @@ test "widget grid layout places children in deterministic cells" {
     try std.testing.expectEqual(@as(usize, 8), builder.displayList().commandCount());
 }
 
+test "widget scroll view offsets children and clips display list" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 80, 0, 32), .text = "Three" },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 20,
+        .children = &children,
+    };
+
+    var nodes: [5]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 60), &nodes);
+    try std.testing.expectEqual(@as(usize, 4), layout.nodeCount());
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(0, 0, 120, 60));
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, -20, 120, 32));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 24, 120, 32));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(0, 60, 120, 32));
+
+    var commands: [12]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 11), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .push_clip => |clip| try expectRect(geometry.RectF.init(0, 0, 120, 60), clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(display_list.commands[display_list.commands.len - 1] == .pop_clip);
+
+    try std.testing.expectEqual(@as(ObjectId, 2), layout.hitTest(geometry.PointF.init(10, 4)).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTest(geometry.PointF.init(10, 50)).?.id);
+    const blank_hit = layout.hitTest(geometry.PointF.init(10, 58)).?;
+    try std.testing.expectEqual(@as(ObjectId, 1), blank_hit.id);
+    try std.testing.expectEqual(WidgetKind.scroll_view, blank_hit.kind);
+    try std.testing.expect(layout.hitTest(geometry.PointF.init(10, 70)) == null);
+
+    var route_buffer: [2]WidgetEventRouteEntry = undefined;
+    const route = try layout.routePointerEvent(.{ .phase = .wheel, .point = geometry.PointF.init(10, 58), .delta = geometry.OffsetF.init(0, -12) }, &route_buffer);
+    try std.testing.expectEqual(@as(ObjectId, 1), route.target.?.id);
+    try std.testing.expectEqual(@as(usize, 1), route.entries.len);
+    try std.testing.expectEqual(WidgetEventPhase.target, route.entries[0].phase);
+}
+
 test "widget pointer route includes capture target and bubble phases" {
     const row_children = [_]Widget{.{
         .id = 2,
@@ -3831,6 +3929,28 @@ test "widget layout diff marks grid column changes as layout dirty" {
     try std.testing.expect(invalidations[0].layout_dirty);
     try std.testing.expect(invalidations[0].paint_dirty);
     try std.testing.expect(invalidations[0].semantics_dirty);
+}
+
+test "widget layout diff marks scroll offset changes as child layout dirty" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+    };
+    const previous_scroll = Widget{ .id = 1, .kind = .scroll_view, .value = 0, .children = &children };
+    const next_scroll = Widget{ .id = 1, .kind = .scroll_view, .value = 12, .children = &children };
+
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var next_nodes: [2]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(previous_scroll, geometry.RectF.init(0, 0, 120, 60), &previous_nodes);
+    const next = try layoutWidgetTree(next_scroll, geometry.RectF.init(0, 0, 120, 60), &next_nodes);
+
+    var invalidations_buffer: [2]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, next, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 2), invalidations.len);
+    try std.testing.expectEqual(@as(ObjectId, 1), invalidations[0].id);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expectEqual(@as(ObjectId, 2), invalidations[1].id);
+    try std.testing.expect(invalidations[1].layout_dirty);
+    try std.testing.expect(invalidations[1].paint_dirty);
 }
 
 test "widget layout diff reports duplicate ids and output overflow" {

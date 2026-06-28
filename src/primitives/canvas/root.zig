@@ -1555,6 +1555,7 @@ pub const WidgetActions = struct {
     decrement: bool = false,
     set_text: bool = false,
     select: bool = false,
+    drop_files: bool = false,
 
     pub fn isEmpty(self: WidgetActions) bool {
         return !self.focus and
@@ -1563,7 +1564,8 @@ pub const WidgetActions = struct {
             !self.increment and
             !self.decrement and
             !self.set_text and
-            !self.select;
+            !self.select and
+            !self.drop_files;
     }
 };
 
@@ -1657,6 +1659,11 @@ pub const WidgetKeyboardEvent = struct {
     pub fn textEditEvent(self: WidgetKeyboardEvent) ?TextInputEvent {
         return widgetKeyboardTextEditEvent(self);
     }
+};
+
+pub const WidgetFileDropEvent = struct {
+    point: geometry.PointF,
+    paths: []const []const u8 = &.{},
 };
 
 pub const WidgetEventPhase = enum {
@@ -1781,6 +1788,10 @@ pub const WidgetLayoutTree = struct {
 
     pub fn routeKeyboardEvent(self: WidgetLayoutTree, event: WidgetKeyboardEvent, output: []WidgetEventRouteEntry) Error!WidgetKeyboardRoute {
         return routeWidgetKeyboardEvent(self, event, output);
+    }
+
+    pub fn routeFileDropEvent(self: WidgetLayoutTree, event: WidgetFileDropEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+        return routeWidgetFileDropEvent(self, event, output);
     }
 
     pub fn focusTarget(self: WidgetLayoutTree, current_id: ?ObjectId, direction: WidgetFocusDirection) ?WidgetFocusTarget {
@@ -3886,16 +3897,20 @@ fn hitTestWidgetLayout(layout: WidgetLayoutTree, point: geometry.PointF) ?Widget
         if (!isHitTarget(node.widget)) continue;
         if (!node.frame.normalized().containsPoint(point)) continue;
         if (!isPointVisibleInWidgetAncestors(layout, index, point)) continue;
-        return .{
-            .id = node.widget.id,
-            .kind = node.widget.kind,
-            .bounds = node.frame,
-            .depth = node.depth,
-            .index = index,
-            .state = node.widget.state,
-        };
+        return widgetHitFromNode(node, index);
     }
     return null;
+}
+
+fn widgetHitFromNode(node: WidgetLayoutNode, index: usize) WidgetHit {
+    return .{
+        .id = node.widget.id,
+        .kind = node.widget.kind,
+        .bounds = node.frame,
+        .depth = node.depth,
+        .index = index,
+        .state = node.widget.state,
+    };
 }
 
 pub fn cursorForWidgetHit(hit: ?WidgetHit) WidgetCursor {
@@ -3943,6 +3958,26 @@ fn routeWidgetKeyboardEvent(layout: WidgetLayoutTree, event: WidgetKeyboardEvent
     const target = focusTargetFromNode(layout.nodes[target_index], target_index) orelse return .{ .entries = output[0..0] };
     const entries = try routeWidgetEventPath(layout, target.index, output);
     return .{ .target = target, .entries = entries };
+}
+
+fn routeWidgetFileDropEvent(layout: WidgetLayoutTree, event: WidgetFileDropEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+    if (event.paths.len == 0) return .{ .entries = output[0..0] };
+    const target_index = widgetDropTargetIndexAtPoint(layout, event.point) orelse return .{ .entries = output[0..0] };
+    const entries = try routeWidgetEventPath(layout, target_index, output);
+    return .{ .target = widgetHitFromNode(layout.nodes[target_index], target_index), .entries = entries };
+}
+
+fn widgetDropTargetIndexAtPoint(layout: WidgetLayoutTree, point: geometry.PointF) ?usize {
+    var index = layout.nodes.len;
+    while (index > 0) {
+        index -= 1;
+        const node = layout.nodes[index];
+        if (!isDropTarget(node.widget)) continue;
+        if (!node.frame.normalized().containsPoint(point)) continue;
+        if (!isPointVisibleInWidgetAncestors(layout, index, point)) continue;
+        return index;
+    }
+    return null;
 }
 
 fn widgetKeyboardTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
@@ -4462,6 +4497,7 @@ fn semanticActions(widget: Widget) WidgetActions {
     actions.decrement = actions.decrement or widget.semantics.actions.decrement;
     actions.set_text = actions.set_text or widget.semantics.actions.set_text;
     actions.select = actions.select or widget.semantics.actions.select;
+    actions.drop_files = actions.drop_files or widget.semantics.actions.drop_files;
     return actions;
 }
 
@@ -4498,6 +4534,13 @@ fn defaultFocusable(widget: Widget) bool {
 fn isFocusable(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled or widget.semantics.hidden) return false;
     return widget.semantics.focusable or widget.semantics.actions.focus or defaultFocusable(widget);
+}
+
+fn isDropTarget(widget: Widget) bool {
+    return widget.id != 0 and
+        !widget.state.disabled and
+        !widget.semantics.hidden and
+        widget.semantics.actions.drop_files;
 }
 
 fn isHitTarget(widget: Widget) bool {
@@ -4677,7 +4720,8 @@ fn widgetActionsEqual(a: WidgetActions, b: WidgetActions) bool {
         a.increment == b.increment and
         a.decrement == b.decrement and
         a.set_text == b.set_text and
-        a.select == b.select;
+        a.select == b.select and
+        a.drop_files == b.drop_files;
 }
 
 fn glyphAtlasKeysEqual(a: GlyphAtlasKey, b: GlyphAtlasKey) bool {
@@ -6808,6 +6852,101 @@ test "widget pointer route handles no hit and bounded output" {
         .phase = .down,
         .point = geometry.PointF.init(20, 20),
     }, &small_entries));
+}
+
+test "widget file drop route targets explicit drop semantics" {
+    const row_children = [_]Widget{.{
+        .id = 3,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 0, 80, 32),
+        .text = "Upload",
+    }};
+    const root_children = [_]Widget{.{
+        .id = 2,
+        .kind = .row,
+        .frame = geometry.RectF.init(8, 8, 120, 44),
+        .semantics = .{ .actions = .{ .drop_files = true } },
+        .children = &row_children,
+    }};
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .children = &root_children,
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 160, 80), &nodes);
+    const paths = [_][]const u8{"/tmp/image.png"};
+    var route_entries: [3]WidgetEventRouteEntry = undefined;
+    const route = try layout.routeFileDropEvent(.{
+        .point = geometry.PointF.init(20, 20),
+        .paths = &paths,
+    }, &route_entries);
+
+    try std.testing.expect(route.target != null);
+    try std.testing.expectEqual(@as(ObjectId, 2), route.target.?.id);
+    try std.testing.expectEqual(WidgetKind.row, route.target.?.kind);
+    try std.testing.expectEqual(@as(usize, 3), route.entries.len);
+    try expectRouteEntry(route.entries[0], .capture, 1);
+    try expectRouteEntry(route.entries[1], .target, 2);
+    try expectRouteEntry(route.entries[2], .bubble, 1);
+
+    var semantics_buffer: [4]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    for (semantics) |semantic| {
+        if (semantic.id == 2) {
+            try std.testing.expect(semantic.actions.drop_files);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "widget file drop route ignores missing paths disabled and non-drop targets" {
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .children = &.{
+            .{
+                .id = 2,
+                .kind = .panel,
+                .frame = geometry.RectF.init(8, 8, 80, 44),
+                .semantics = .{ .actions = .{ .drop_files = true } },
+                .state = .{ .disabled = true },
+            },
+            .{
+                .id = 3,
+                .kind = .button,
+                .frame = geometry.RectF.init(96, 8, 80, 44),
+                .text = "Plain",
+            },
+        },
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 200, 80), &nodes);
+    const paths = [_][]const u8{"/tmp/report.csv"};
+    var empty_entries: [0]WidgetEventRouteEntry = .{};
+
+    const no_paths = try layout.routeFileDropEvent(.{
+        .point = geometry.PointF.init(20, 20),
+    }, &empty_entries);
+    try std.testing.expect(no_paths.target == null);
+    try std.testing.expectEqual(@as(usize, 0), no_paths.entries.len);
+
+    const disabled = try layout.routeFileDropEvent(.{
+        .point = geometry.PointF.init(20, 20),
+        .paths = &paths,
+    }, &empty_entries);
+    try std.testing.expect(disabled.target == null);
+    try std.testing.expectEqual(@as(usize, 0), disabled.entries.len);
+
+    const plain = try layout.routeFileDropEvent(.{
+        .point = geometry.PointF.init(110, 20),
+        .paths = &paths,
+    }, &empty_entries);
+    try std.testing.expect(plain.target == null);
+    try std.testing.expectEqual(@as(usize, 0), plain.entries.len);
 }
 
 test "widget keyboard route uses focused target and ancestors" {

@@ -78,6 +78,14 @@ pub const CanvasWidgetKeyboardEvent = struct {
     route: []const canvas.WidgetEventRouteEntry = &.{},
 };
 
+pub const CanvasWidgetFileDropEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    drop: canvas.WidgetFileDropEvent,
+    target: ?canvas.WidgetHit = null,
+    route: []const canvas.WidgetEventRouteEntry = &.{},
+};
+
 pub const InvalidationReason = enum {
     startup,
     surface_resize,
@@ -103,6 +111,7 @@ pub const Event = union(enum) {
     gpu_surface_input: GpuSurfaceInputEvent,
     canvas_widget_pointer: CanvasWidgetPointerEvent,
     canvas_widget_keyboard: CanvasWidgetKeyboardEvent,
+    canvas_widget_file_drop: CanvasWidgetFileDropEvent,
 
     pub fn name(self: Event) []const u8 {
         return switch (self) {
@@ -115,6 +124,7 @@ pub const Event = union(enum) {
             .gpu_surface_input => "gpu_surface_input",
             .canvas_widget_pointer => "canvas_widget_pointer",
             .canvas_widget_keyboard => "canvas_widget_keyboard",
+            .canvas_widget_file_drop => "canvas_widget_file_drop",
         };
     }
 };
@@ -889,6 +899,29 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn routeCanvasWidgetFileDrop(self: *const Runtime, drop: platform.FileDropEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetFileDropEvent {
+        try self.validateViewParent(drop.window_id);
+        if (drop.view_label.len == 0 or drop.paths.len == 0) return null;
+        try validateViewLabel(drop.view_label);
+        const point = drop.point orelse return null;
+        const index = self.findViewIndex(drop.window_id, drop.view_label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+
+        const widget_drop = canvas.WidgetFileDropEvent{
+            .point = point,
+            .paths = drop.paths,
+        };
+        const route = try self.views[index].widgetLayoutTree().routeFileDropEvent(widget_drop, output);
+        if (route.target == null) return null;
+        return .{
+            .window_id = drop.window_id,
+            .view_label = self.views[index].label,
+            .drop = widget_drop,
+            .target = route.target,
+            .route = route.entries,
+        };
+    }
+
     fn updateCanvasWidgetFocusFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
         if (pointer_event.pointer.phase != .down) return;
         const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
@@ -1466,6 +1499,16 @@ pub const Runtime = struct {
                 });
             },
             .files_dropped => |drop| {
+                const widget_drop_event = self.routeCanvasWidgetFileDrop(drop, &self.widget_event_route_entries) catch |err| switch (err) {
+                    error.WindowNotFound,
+                    error.ViewNotFound,
+                    error.InvalidViewOptions,
+                    => null,
+                    else => return err,
+                };
+                if (widget_drop_event) |drop_event| {
+                    try self.dispatchEvent(app, .{ .canvas_widget_file_drop = drop_event });
+                }
                 try self.dispatchEvent(app, .{ .files_dropped = drop });
                 self.emitFileDropEvent(drop) catch |err| try self.log("drop.files.emit_failed", @errorName(err), &.{trace.uint("window_id", drop.window_id)});
                 self.invalidateFor(.command, null);
@@ -1500,6 +1543,7 @@ pub const Runtime = struct {
             .gpu_surface_input => {},
             .canvas_widget_pointer => {},
             .canvas_widget_keyboard => {},
+            .canvas_widget_file_drop => {},
             .lifecycle => {},
         }
     }
@@ -2269,7 +2313,15 @@ pub const Runtime = struct {
     fn emitFileDropEvent(self: *Runtime, drop: platform.FileDropEvent) anyerror!void {
         var buffer: [platform.max_window_event_detail_bytes]u8 = undefined;
         var writer = std.Io.Writer.fixed(&buffer);
-        try writer.print("{{\"windowId\":{d},\"paths\":[", .{drop.window_id});
+        try writer.print("{{\"windowId\":{d}", .{drop.window_id});
+        if (drop.view_label.len > 0) {
+            try writer.writeAll(",\"viewLabel\":");
+            try json.writeString(&writer, drop.view_label);
+        }
+        if (drop.point) |point| {
+            try writer.print(",\"x\":{d},\"y\":{d}", .{ point.x, point.y });
+        }
+        try writer.writeAll(",\"paths\":[");
         for (drop.paths, 0..) |path, index| {
             if (index > 0) try writer.writeByte(',');
             try json.writeString(&writer, path);
@@ -5135,6 +5187,7 @@ fn canvasWidgetActions(actions: canvas.WidgetActions) automation.snapshot.Widget
         .decrement = actions.decrement,
         .set_text = actions.set_text,
         .select = actions.select,
+        .drop_files = actions.drop_files,
     };
 }
 
@@ -11735,6 +11788,85 @@ test "runtime dispatches file drop events to app and window bridge" {
     try std.testing.expectEqualStrings("/tmp/two.txt", app_state.last_paths[1]);
     try std.testing.expectEqualStrings("drop:files", harness.null_platform.lastWindowEventName());
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/one\\nname.txt\",\"/tmp/two.txt\"]") != null);
+}
+
+test "runtime routes file drops to retained canvas widget targets" {
+    const TestApp = struct {
+        drop_count: u32 = 0,
+        widget_drop_count: u32 = 0,
+        last_widget_target_id: canvas.ObjectId = 0,
+        last_widget_route_len: usize = 0,
+        last_widget_path_count: usize = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "canvas-widget-file-drop", .source = platform.WebViewSource.html("<p>Drops</p>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_file_drop => |drop| {
+                    self.widget_drop_count += 1;
+                    self.last_widget_target_id = if (drop.target) |target| target.id else 0;
+                    self.last_widget_route_len = drop.route.len;
+                    self.last_widget_path_count = drop.drop.paths.len;
+                },
+                .files_dropped => self.drop_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const drop_children = [_]canvas.Widget{.{
+        .id = 3,
+        .kind = .button,
+        .frame = geometry.RectF.init(8, 8, 80, 32),
+        .text = "Upload",
+    }};
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .row,
+        .frame = geometry.RectF.init(16, 16, 140, 52),
+        .semantics = .{ .actions = .{ .drop_files = true } },
+        .children = &drop_children,
+    }};
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const dropped_paths = [_][]const u8{ "/tmp/card.png", "/tmp/copy.txt" };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .files_dropped = .{
+        .window_id = 1,
+        .view_label = "canvas",
+        .point = geometry.PointF.init(28, 28),
+        .paths = &dropped_paths,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_drop_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.drop_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_widget_target_id);
+    try std.testing.expectEqual(@as(usize, 3), app_state.last_widget_route_len);
+    try std.testing.expectEqual(@as(usize, 2), app_state.last_widget_path_count);
+    try std.testing.expectEqualStrings("drop:files", harness.null_platform.lastWindowEventName());
+    const detail = harness.null_platform.lastWindowEventDetail();
+    try std.testing.expect(std.mem.indexOf(u8, detail, "\"viewLabel\":\"canvas\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "\"x\":28") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "\"paths\":[\"/tmp/card.png\",\"/tmp/copy.txt\"]") != null);
 }
 
 test "runtime handles built-in JavaScript webview bridge commands" {

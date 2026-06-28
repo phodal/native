@@ -672,6 +672,8 @@ pub const MenuCommandEvent = struct {
 
 pub const FileDropEvent = struct {
     window_id: WindowId = 1,
+    view_label: []const u8 = "",
+    point: ?geometry.PointF = null,
     paths: []const []const u8 = &.{},
 };
 

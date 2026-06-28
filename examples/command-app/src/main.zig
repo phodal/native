@@ -180,7 +180,7 @@ const CommandApp = struct {
                     try self.handleCommand(runtime, command);
                 }
             },
-            .shortcut, .files_dropped, .gpu_surface_frame, .gpu_surface_resized, .gpu_surface_input, .canvas_widget_pointer, .canvas_widget_keyboard, .lifecycle => {},
+            .shortcut, .files_dropped, .gpu_surface_frame, .gpu_surface_resized, .gpu_surface_input, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .lifecycle => {},
         }
     }
 

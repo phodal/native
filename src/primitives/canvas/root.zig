@@ -966,6 +966,8 @@ pub const WidgetState = struct {
 
 pub const WidgetRenderState = struct {
     focused_id: ?ObjectId = null,
+    hovered_id: ?ObjectId = null,
+    pressed_id: ?ObjectId = null,
 };
 
 pub const WidgetLayoutStyle = struct {
@@ -3232,6 +3234,12 @@ fn widgetWithRenderState(widget: Widget, state: WidgetRenderState) Widget {
     var copy = widget;
     if (state.focused_id) |focused_id| {
         copy.state.focused = copy.id != 0 and copy.id == focused_id;
+    }
+    if (state.hovered_id) |hovered_id| {
+        copy.state.hovered = copy.id != 0 and copy.id == hovered_id;
+    }
+    if (state.pressed_id) |pressed_id| {
+        copy.state.pressed = copy.id != 0 and copy.id == pressed_id;
     }
     return copy;
 }
@@ -5672,7 +5680,10 @@ test "widget emitter applies button state tokens" {
 
 test "widget layout emission can render runtime focus state" {
     const tokens = DesignTokens{
-        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3) },
+        .colors = .{
+            .accent = Color.rgb8(10, 20, 30),
+            .focus_ring = Color.rgb8(1, 2, 3),
+        },
         .stroke = .{ .focus = 3 },
     };
     const children = [_]Widget{
@@ -5687,7 +5698,7 @@ test "widget layout emission can render runtime focus state" {
             .kind = .button,
             .frame = geometry.RectF.init(0, 40, 100, 32),
             .text = "Stop",
-            .state = .{ .focused = true },
+            .state = .{ .hovered = true, .pressed = true, .focused = true },
         },
     };
 
@@ -5696,10 +5707,14 @@ test "widget layout emission can render runtime focus state" {
 
     var commands: [8]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
-    try layout.emitDisplayListWithState(&builder, tokens, .{ .focused_id = 2 });
+    try layout.emitDisplayListWithState(&builder, tokens, .{ .focused_id = 2, .hovered_id = 2, .pressed_id = 2 });
 
     const display_list = builder.displayList();
     try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
     var saw_runtime_focus = false;
     var saw_stale_focus = false;
     for (display_list.commands) |command| {

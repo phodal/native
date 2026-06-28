@@ -629,9 +629,10 @@ pub const Runtime = struct {
 
         var commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined;
         var builder = canvas.Builder.init(&commands);
-        const focused_id = self.views[index].canvas_widget_focused_id;
         try self.views[index].widgetLayoutTree().emitDisplayListWithState(&builder, tokens, .{
-            .focused_id = if (focused_id == 0) null else focused_id,
+            .focused_id = self.views[index].canvas_widget_focused_id,
+            .hovered_id = self.views[index].canvas_widget_hovered_id,
+            .pressed_id = self.views[index].canvas_widget_pressed_id,
         });
 
         const display_list = builder.displayList();
@@ -711,6 +712,39 @@ pub const Runtime = struct {
 
         if (self.views[index].canvas_widget_focused_id == next_focus_id) return;
         self.views[index].canvas_widget_focused_id = next_focus_id;
+        self.invalidateFor(.state, self.views[index].frame);
+    }
+
+    fn updateCanvasWidgetInteractionFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
+        const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
+        if (self.views[index].kind != .gpu_surface) return;
+
+        const target_id: canvas.ObjectId = if (pointer_event.target) |target| target.id else 0;
+        var next_hovered_id = self.views[index].canvas_widget_hovered_id;
+        var next_pressed_id = self.views[index].canvas_widget_pressed_id;
+
+        switch (pointer_event.pointer.phase) {
+            .hover, .move => next_hovered_id = target_id,
+            .down => {
+                next_hovered_id = target_id;
+                next_pressed_id = target_id;
+            },
+            .up => {
+                next_hovered_id = target_id;
+                next_pressed_id = 0;
+            },
+            .cancel => {
+                next_hovered_id = 0;
+                next_pressed_id = 0;
+            },
+            .wheel => {},
+        }
+
+        if (self.views[index].canvas_widget_hovered_id == next_hovered_id and
+            self.views[index].canvas_widget_pressed_id == next_pressed_id) return;
+
+        self.views[index].canvas_widget_hovered_id = next_hovered_id;
+        self.views[index].canvas_widget_pressed_id = next_pressed_id;
         self.invalidateFor(.state, self.views[index].frame);
     }
 
@@ -1039,6 +1073,7 @@ pub const Runtime = struct {
                     else => return err,
                 };
                 if (widget_pointer_event) |pointer_event| {
+                    self.updateCanvasWidgetInteractionFromPointer(pointer_event);
                     self.updateCanvasWidgetFocusFromPointer(pointer_event);
                     try self.dispatchEvent(app, .{ .canvas_widget_pointer = pointer_event });
                 }
@@ -3237,6 +3272,8 @@ const RuntimeView = struct {
     widget_semantics_node_count: usize = 0,
     widget_revision: u64 = 0,
     canvas_widget_focused_id: canvas.ObjectId = 0,
+    canvas_widget_hovered_id: canvas.ObjectId = 0,
+    canvas_widget_pressed_id: canvas.ObjectId = 0,
     widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
     widget_text_len: usize = 0,
     focused: bool = false,
@@ -3348,6 +3385,12 @@ const RuntimeView = struct {
         self.widget_semantics_node_count = semantics.len;
         if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
             self.canvas_widget_focused_id = 0;
+        }
+        if (self.canvas_widget_hovered_id != 0 and self.widgetLayoutTree().findById(self.canvas_widget_hovered_id) == null) {
+            self.canvas_widget_hovered_id = 0;
+        }
+        if (self.canvas_widget_pressed_id != 0 and self.widgetLayoutTree().findById(self.canvas_widget_pressed_id) == null) {
+            self.canvas_widget_pressed_id = 0;
         }
         self.widget_revision += 1;
     }
@@ -5584,7 +5627,7 @@ test "runtime emits canvas display list from focused widget layout" {
             .kind = .button,
             .frame = geometry.RectF.init(10, 56, 96, 32),
             .text = "Stop",
-            .state = .{ .focused = true },
+            .state = .{ .hovered = true, .pressed = true, .focused = true },
         },
     };
     var nodes: [4]canvas.WidgetLayoutNode = undefined;
@@ -5599,11 +5642,16 @@ test "runtime emits canvas display list from focused widget layout" {
         .y = 20,
     } });
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;
     const info = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{
-        .colors = .{ .focus_ring = canvas.Color.rgb8(1, 2, 3) },
+        .colors = .{
+            .accent = canvas.Color.rgb8(10, 20, 30),
+            .focus_ring = canvas.Color.rgb8(1, 2, 3),
+        },
         .stroke = .{ .focus = 3 },
     });
     try std.testing.expectEqual(@as(u64, 1), info.canvas_revision);
@@ -5621,6 +5669,14 @@ test "runtime emits canvas display list from focused widget layout" {
             if (id == testCanvasWidgetPartId(3, 3)) saw_stale_focus = true;
         }
         switch (command) {
+            .fill_rounded_rect => |fill| {
+                if (fill.id == testCanvasWidgetPartId(2, 1)) {
+                    switch (fill.fill) {
+                        .color => |color| try std.testing.expectEqualDeep(canvas.Color.rgb8(10, 20, 30), color),
+                        else => return error.TestUnexpectedResult,
+                    }
+                }
+            },
             .draw_text => |text| {
                 if (text.id == testCanvasWidgetPartId(2, 4)) {
                     try std.testing.expectEqualStrings("Run", text.text);
@@ -5633,6 +5689,16 @@ test "runtime emits canvas display list from focused widget layout" {
     try std.testing.expect(saw_runtime_focus);
     try std.testing.expect(!saw_stale_focus);
     try std.testing.expect(saw_run_text);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 24,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_pressed_id);
 
     const changed_children = [_]canvas.Widget{.{
         .id = 2,

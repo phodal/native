@@ -865,8 +865,9 @@ pub const ReferenceRenderSurface = struct {
             .clear => self.clear(clear_color),
             .load => {},
         }
-        const scissor = pass.scissorBounds();
-        for (pass.commands) |command| try self.renderCommand(command, scissor);
+        const scale = referencePassScale(pass.scale);
+        const scissor = if (pass.scissorBounds()) |bounds| referenceScaleRect(bounds, scale) else null;
+        for (pass.commands) |command| try self.renderCommand(referenceScaleCommand(command, scale), scissor);
     }
 
     pub fn pixelRgba8(self: ReferenceRenderSurface, x: usize, y: usize) [4]u8 {
@@ -4168,6 +4169,26 @@ fn referenceCommandBounds(command: RenderCommand, scissor: ?geometry.RectF) ?geo
         bounds = geometry.RectF.intersection(bounds, rect.normalized());
     }
     return if (bounds.isEmpty()) null else bounds;
+}
+
+fn referencePassScale(scale: f32) f32 {
+    if (!std.math.isFinite(scale) or scale <= 0) return 1;
+    return scale;
+}
+
+fn referenceScaleCommand(command: RenderCommand, scale: f32) RenderCommand {
+    if (scale == 1) return command;
+    var scaled = command;
+    const transform = Affine.scale(scale, scale);
+    scaled.transform = transform.multiply(command.transform);
+    scaled.local_bounds = referenceScaleRect(command.local_bounds, scale);
+    scaled.bounds = referenceScaleRect(command.bounds, scale);
+    if (command.clip) |clip| scaled.clip = referenceScaleRect(clip, scale);
+    return scaled;
+}
+
+fn referenceScaleRect(rect: geometry.RectF, scale: f32) geometry.RectF {
+    return geometry.RectF.init(rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale);
 }
 
 fn referencePixelCenter(x: usize, y: usize) geometry.PointF {
@@ -8213,6 +8234,41 @@ test "reference renderer clears and fills solid rect render pass" {
 
     try surface.renderPass(.{}, Color.rgb8(255, 255, 255));
     try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+}
+
+test "reference renderer applies render pass scale" {
+    const commands = [_]CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(1, 1, 1, 1),
+        .fill = .{ .color = Color.rgb8(255, 0, 0) },
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(2, 2),
+        .scale = 2,
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    var pixels: [4 * 4 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(4, 4, &pixels);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 2, 2);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 3);
 }
 
 test "reference renderer applies render pass scissor on load" {

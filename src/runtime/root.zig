@@ -22,6 +22,7 @@ pub const max_canvas_text_bytes_per_view: usize = 2048;
 const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
 const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
+const max_canvas_surface_extent_pixels: f32 = 16_384;
 pub const max_canvas_widget_nodes_per_view: usize = 16;
 pub const max_canvas_widget_semantics_per_view: usize = 16;
 pub const max_canvas_widget_text_bytes_per_view: usize = 512;
@@ -609,6 +610,32 @@ pub const Runtime = struct {
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
         return try self.planCanvasFrameForView(index, options, storage);
+    }
+
+    pub fn presentCanvasFramePixels(
+        self: *Runtime,
+        window_id: platform.WindowId,
+        label: []const u8,
+        canvas_frame: canvas.CanvasFrame,
+        pixels: []u8,
+        scratch: []u8,
+        clear_color: canvas.Color,
+    ) anyerror!void {
+        if (!canvas_frame.requiresRender()) return;
+        const pixel_size = try canvasFramePixelSize(canvas_frame);
+        const surface = if (scratch.len >= pixel_size.byte_len)
+            try canvas.ReferenceRenderSurface.initWithScratch(pixel_size.width, pixel_size.height, pixels, scratch)
+        else
+            try canvas.ReferenceRenderSurface.init(pixel_size.width, pixel_size.height, pixels);
+        try surface.renderPass(canvas_frame.renderPass(), clear_color);
+        try self.options.platform.services.presentGpuSurfacePixels(.{
+            .window_id = window_id,
+            .label = label,
+            .width = pixel_size.width,
+            .height = pixel_size.height,
+            .scale_factor = canvas_frame.scale,
+            .rgba8 = surface.pixels,
+        });
     }
 
     fn planCanvasFrameForView(self: *Runtime, index: usize, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) anyerror!canvas.CanvasFrame {
@@ -4145,6 +4172,27 @@ fn canvasDirtyBoundsFromChanges(changes: []const canvas.DiffChange) ?geometry.Re
 fn canvasFullRepaintBounds(surface_size: geometry.SizeF, render_bounds: ?geometry.RectF) ?geometry.RectF {
     if (canvasSurfaceRect(surface_size)) |surface| return surface;
     return render_bounds;
+}
+
+const CanvasPixelSize = struct {
+    width: usize,
+    height: usize,
+    byte_len: usize,
+};
+
+fn canvasFramePixelSize(frame: canvas.CanvasFrame) !CanvasPixelSize {
+    const scale = if (std.math.isFinite(frame.scale) and frame.scale > 0) frame.scale else 1;
+    const width_f = frame.surface_size.width * scale;
+    const height_f = frame.surface_size.height * scale;
+    if (!std.math.isFinite(width_f) or !std.math.isFinite(height_f)) return error.InvalidGpuSurfacePixels;
+    if (width_f <= 0 or height_f <= 0) return error.InvalidGpuSurfacePixels;
+    if (width_f > max_canvas_surface_extent_pixels or height_f > max_canvas_surface_extent_pixels) return error.InvalidGpuSurfacePixels;
+
+    const width: usize = @intFromFloat(@ceil(width_f));
+    const height: usize = @intFromFloat(@ceil(height_f));
+    const pixel_count = std.math.mul(usize, width, height) catch return error.InvalidGpuSurfacePixels;
+    const byte_len = std.math.mul(usize, pixel_count, 4) catch return error.InvalidGpuSurfacePixels;
+    return .{ .width = width, .height = height, .byte_len = byte_len };
 }
 
 fn clippedCanvasDirtyBounds(bounds: ?geometry.RectF, surface_size: geometry.SizeF) ?geometry.RectF {

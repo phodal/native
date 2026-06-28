@@ -59,6 +59,7 @@ pub const Error = error{
     CredentialNotFound,
     InvalidTrayOptions,
     TrayFieldTooLarge,
+    InvalidGpuSurfacePixels,
 };
 
 pub const WebEngine = enum {
@@ -746,6 +747,21 @@ pub const GpuSurfaceInputEvent = struct {
     modifiers: ShortcutModifiers = .{},
 };
 
+pub const GpuSurfacePixels = struct {
+    window_id: WindowId = 1,
+    label: []const u8,
+    width: usize,
+    height: usize,
+    scale_factor: f32 = 1,
+    rgba8: []const u8,
+
+    pub fn expectedByteLen(self: GpuSurfacePixels) ?usize {
+        if (self.width == 0 or self.height == 0) return null;
+        const pixels = std.math.mul(usize, self.width, self.height) catch return null;
+        return std.math.mul(usize, pixels, 4) catch return null;
+    }
+};
+
 pub const ClipboardData = struct {
     mime_type: []const u8 = "text/plain",
     bytes: []const u8,
@@ -857,6 +873,7 @@ pub const PlatformServices = struct {
     configure_menus_fn: ?*const fn (context: ?*anyopaque, menus: []const Menu) anyerror!void = null,
     configure_shortcuts_fn: ?*const fn (context: ?*anyopaque, shortcuts: []const Shortcut) anyerror!void = null,
     emit_window_event_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void = null,
+    present_gpu_surface_pixels_fn: ?*const fn (context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void = null,
 
     pub fn readClipboard(self: PlatformServices, buffer: []u8) anyerror![]const u8 {
         const read_fn = self.read_clipboard_fn orelse return error.UnsupportedService;
@@ -1085,6 +1102,14 @@ pub const PlatformServices = struct {
         const emit_fn = self.emit_window_event_fn orelse return error.UnsupportedService;
         return emit_fn(self.context, window_id, name, detail_json);
     }
+
+    pub fn presentGpuSurfacePixels(self: PlatformServices, pixels: GpuSurfacePixels) anyerror!void {
+        const expected = pixels.expectedByteLen() orelse return error.InvalidGpuSurfacePixels;
+        if (pixels.rgba8.len != expected) return error.InvalidGpuSurfacePixels;
+        if (pixels.label.len == 0 or pixels.label.len > max_view_label_bytes) return error.InvalidGpuSurfacePixels;
+        const present_fn = self.present_gpu_surface_pixels_fn orelse return error.UnsupportedService;
+        return present_fn(self.context, pixels);
+    }
 };
 
 pub const Platform = struct {
@@ -1211,6 +1236,15 @@ pub const NullPlatform = struct {
     window_event_detail: [max_window_event_detail_bytes]u8 = undefined,
     window_event_detail_len: usize = 0,
     window_event_count: usize = 0,
+    gpu_surface_present_window_id: WindowId = 0,
+    gpu_surface_present_label_storage: [max_view_label_bytes]u8 = undefined,
+    gpu_surface_present_label_len: usize = 0,
+    gpu_surface_present_width: usize = 0,
+    gpu_surface_present_height: usize = 0,
+    gpu_surface_present_scale_factor: f32 = 1,
+    gpu_surface_present_byte_len: usize = 0,
+    gpu_surface_present_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
+    gpu_surface_present_count: usize = 0,
 
     pub fn init(surface_value: Surface) NullPlatform {
         return .{ .surface_value = surface_value };
@@ -1275,6 +1309,7 @@ pub const NullPlatform = struct {
                 .configure_menus_fn = configureMenus,
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
+                .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
             },
             .app_info = self.app_info,
         };
@@ -1765,6 +1800,28 @@ pub const NullPlatform = struct {
         self.window_event_name_len = (try copyInto(&self.window_event_name, name)).len;
         self.window_event_detail_len = (try copyInto(&self.window_event_detail, detail_json)).len;
         self.window_event_count += 1;
+    }
+
+    fn presentGpuSurfacePixels(context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (!self.gpu_surfaces) return error.UnsupportedService;
+        const view_index = self.findViewIndex(pixels.window_id, pixels.label) orelse return error.ViewNotFound;
+        if (self.views[view_index].kind != .gpu_surface) return error.InvalidGpuSurfacePixels;
+        const expected = pixels.expectedByteLen() orelse return error.InvalidGpuSurfacePixels;
+        if (pixels.rgba8.len != expected) return error.InvalidGpuSurfacePixels;
+
+        self.gpu_surface_present_window_id = pixels.window_id;
+        self.gpu_surface_present_label_storage = undefined;
+        self.gpu_surface_present_label_len = (try copyInto(&self.gpu_surface_present_label_storage, pixels.label)).len;
+        self.gpu_surface_present_width = pixels.width;
+        self.gpu_surface_present_height = pixels.height;
+        self.gpu_surface_present_scale_factor = pixels.scale_factor;
+        self.gpu_surface_present_byte_len = pixels.rgba8.len;
+        self.gpu_surface_present_sample_rgba = if (pixels.rgba8.len >= 4)
+            .{ pixels.rgba8[0], pixels.rgba8[1], pixels.rgba8[2], pixels.rgba8[3] }
+        else
+            .{ 0, 0, 0, 0 };
+        self.gpu_surface_present_count += 1;
     }
 
     fn findWindowIndex(self: *const NullPlatform, window_id: WindowId) ?usize {
@@ -2364,6 +2421,43 @@ test "null platform rejects invalid native view parents" {
     });
     try std.testing.expectEqual(@as(usize, 2), null_platform.view_count);
     try std.testing.expectEqualStrings("toolbar", null_platform.views[1].parent.?);
+}
+
+test "null platform records gpu surface pixel presentation" {
+    var null_platform = NullPlatform.init(.{});
+    null_platform.gpu_surfaces = true;
+    const services = null_platform.platform().services;
+
+    try services.createView(.{
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 180),
+    });
+    const pixels = [_]u8{
+        12, 34, 56, 255,
+        78, 90, 12, 255,
+    };
+    try services.presentGpuSurfacePixels(.{
+        .label = "canvas",
+        .width = 2,
+        .height = 1,
+        .scale_factor = 2,
+        .rgba8 = &pixels,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_present_count);
+    try std.testing.expectEqualStrings("canvas", null_platform.gpu_surface_present_label_storage[0..null_platform.gpu_surface_present_label_len]);
+    try std.testing.expectEqual(@as(usize, 2), null_platform.gpu_surface_present_width);
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_present_height);
+    try std.testing.expectEqual(@as(f32, 2), null_platform.gpu_surface_present_scale_factor);
+    try std.testing.expectEqual(@as(usize, pixels.len), null_platform.gpu_surface_present_byte_len);
+    try std.testing.expectEqualDeep([4]u8{ 12, 34, 56, 255 }, null_platform.gpu_surface_present_sample_rgba);
+    try std.testing.expectError(error.InvalidGpuSurfacePixels, services.presentGpuSurfacePixels(.{
+        .label = "canvas",
+        .width = 2,
+        .height = 1,
+        .rgba8 = pixels[0..4],
+    }));
 }
 
 test "null platform preserves shifted webview storage after close" {

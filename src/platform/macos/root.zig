@@ -99,6 +99,7 @@ extern fn zero_native_appkit_set_view_frame(host: *AppKitHost, window_id: u64, l
 extern fn zero_native_appkit_set_view_visible(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, visible: c_int) c_int;
 extern fn zero_native_appkit_focus_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn zero_native_appkit_close_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
+extern fn zero_native_appkit_present_gpu_surface_pixels(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, width: usize, height: usize, scale: f64, rgba8: [*]const u8, rgba8_len: usize) c_int;
 extern fn zero_native_appkit_create_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, transparent: c_int, bridge_enabled: c_int) c_int;
 extern fn zero_native_appkit_set_webview_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
 extern fn zero_native_appkit_navigate_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize) c_int;
@@ -258,6 +259,7 @@ pub const MacPlatform = struct {
                 .configure_menus_fn = configureMenus,
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
+                .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
             },
             .app_info = self.app_info,
         };
@@ -622,6 +624,22 @@ fn closeView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []co
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
     if (zero_native_appkit_close_view(self.host, window_id, label.ptr, label.len) == 0) return error.ViewNotFound;
+}
+
+fn presentGpuSurfacePixels(context: ?*anyopaque, pixels: platform_mod.GpuSurfacePixels) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedViewKind;
+    if (zero_native_appkit_present_gpu_surface_pixels(
+        self.host,
+        pixels.window_id,
+        pixels.label.ptr,
+        pixels.label.len,
+        pixels.width,
+        pixels.height,
+        pixels.scale_factor,
+        pixels.rgba8.ptr,
+        pixels.rgba8.len,
+    ) == 0) return error.ViewNotFound;
 }
 
 fn createWebView(context: ?*anyopaque, options: platform_mod.WebViewOptions) anyerror!void {

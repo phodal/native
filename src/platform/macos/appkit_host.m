@@ -136,6 +136,8 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property(nonatomic, strong) CAMetalLayer *metalLayer;
 @property(nonatomic, strong) id<MTLBuffer> sampleBuffer;
+@property(nonatomic, strong) id<MTLTexture> canvasTexture;
+@property(nonatomic, strong) NSMutableData *canvasUploadData;
 @property(nonatomic, strong) NSTimer *displayTimer;
 @property(nonatomic, assign) ZeroNativeAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
@@ -146,9 +148,13 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) uint32_t lastSampleColor;
 @property(nonatomic, assign) CGSize lastDrawableSize;
 @property(nonatomic, assign) CGFloat lastScale;
+@property(nonatomic, assign) NSUInteger canvasTextureWidth;
+@property(nonatomic, assign) NSUInteger canvasTextureHeight;
+@property(nonatomic, assign) BOOL hasCanvasTexture;
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
 - (void)updateDrawableSize;
+- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (void)renderFrame;
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
@@ -225,6 +231,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)setNativeViewFrameInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height;
 - (BOOL)setNativeViewVisibleInWindow:(uint64_t)windowId label:(NSString *)label visible:(BOOL)visible;
 - (BOOL)focusNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
+- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (BOOL)nativeView:(NSView *)candidate isInSubtreeRootedAt:(NSView *)root;
 - (NSArray<NSString *> *)nativeViewKeysInSubtreeForWindow:(uint64_t)windowId rootKey:(NSString *)rootKey;
 - (BOOL)closeNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
@@ -470,6 +477,42 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     if (changed) [self emitResizeEvent];
 }
 
+- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
+    if (![self isAvailable] || !rgba8 || width == 0 || height == 0) return NO;
+    if (byteLength != width * height * 4) return NO;
+
+    const NSUInteger uploadLength = width * height * 4;
+    if (!self.canvasUploadData || self.canvasUploadData.length != uploadLength) {
+        self.canvasUploadData = [NSMutableData dataWithLength:uploadLength];
+    }
+    uint8_t *bgra = (uint8_t *)self.canvasUploadData.mutableBytes;
+    for (NSUInteger index = 0; index < uploadLength; index += 4) {
+        bgra[index + 0] = rgba8[index + 2];
+        bgra[index + 1] = rgba8[index + 1];
+        bgra[index + 2] = rgba8[index + 0];
+        bgra[index + 3] = rgba8[index + 3];
+    }
+
+    if (!self.canvasTexture || self.canvasTextureWidth != width || self.canvasTextureHeight != height) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:width height:height mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModeShared;
+        self.canvasTexture = [self.device newTextureWithDescriptor:descriptor];
+        self.canvasTextureWidth = width;
+        self.canvasTextureHeight = height;
+    }
+    if (!self.canvasTexture) return NO;
+
+    [self.canvasTexture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+                          mipmapLevel:0
+                            withBytes:bgra
+                          bytesPerRow:width * 4];
+    self.hasCanvasTexture = YES;
+    self.lastScale = scale > 0 ? scale : self.lastScale;
+    [self renderFrame];
+    return YES;
+}
+
 - (void)renderFrame {
     if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
     [self updateDrawableSize];
@@ -478,9 +521,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     if (!drawable) return;
 
     const double phase = (double)(self.frameIndex % 360) / 360.0;
-    const double red = 0.10 + 0.08 * sin(phase * 6.283185307179586);
-    const double green = 0.18 + 0.10 * sin((phase + 0.33) * 6.283185307179586);
-    const double blue = 0.34 + 0.16 * sin((phase + 0.66) * 6.283185307179586);
+    const double red = self.hasCanvasTexture ? 0.965 : 0.10 + 0.08 * sin(phase * 6.283185307179586);
+    const double green = self.hasCanvasTexture ? 0.973 : 0.18 + 0.10 * sin((phase + 0.33) * 6.283185307179586);
+    const double blue = self.hasCanvasTexture ? 0.988 : 0.34 + 0.16 * sin((phase + 0.66) * 6.283185307179586);
 
     MTLRenderPassDescriptor *descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
     descriptor.colorAttachments[0].texture = drawable.texture;
@@ -492,6 +535,24 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     if (!commandBuffer) return;
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:descriptor];
     [encoder endEncoding];
+
+    if (self.hasCanvasTexture && self.canvasTexture) {
+        const NSUInteger copyWidth = MIN((NSUInteger)drawable.texture.width, self.canvasTexture.width);
+        const NSUInteger copyHeight = MIN((NSUInteger)drawable.texture.height, self.canvasTexture.height);
+        if (copyWidth > 0 && copyHeight > 0) {
+            id<MTLBlitCommandEncoder> canvasBlit = [commandBuffer blitCommandEncoder];
+            [canvasBlit copyFromTexture:self.canvasTexture
+                            sourceSlice:0
+                            sourceLevel:0
+                           sourceOrigin:MTLOriginMake(0, 0, 0)
+                             sourceSize:MTLSizeMake(copyWidth, copyHeight, 1)
+                              toTexture:drawable.texture
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [canvasBlit endEncoding];
+        }
+    }
 
     const BOOL shouldSample = !self.verifiedNonblankFrame;
     if (shouldSample && !self.sampleBuffer) {
@@ -1222,6 +1283,13 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     if (!view || view.hidden) return NO;
     window = view.window ?: window;
     return [window makeFirstResponder:view];
+}
+
+- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
+    NSString *key = [self nativeViewKeyForWindow:windowId label:label];
+    NSView *view = self.nativeViews[key];
+    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
+    return [(ZeroNativeMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale rgba8:rgba8 byteLength:byteLength];
 }
 
 - (BOOL)nativeView:(NSView *)candidate isInSubtreeRootedAt:(NSView *)root {
@@ -2650,6 +2718,12 @@ int zero_native_appkit_close_view(zero_native_appkit_host_t *host, uint64_t wind
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object closeNativeViewInWindow:window_id label:labelString ?: @""] ? 1 : 0;
+}
+
+int zero_native_appkit_present_gpu_surface_pixels(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, const uint8_t *rgba8, size_t rgba8_len) {
+    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+    NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
+    return [object presentGpuSurfacePixelsInWindow:window_id label:labelString ?: @"" width:width height:height scale:scale rgba8:rgba8 byteLength:rgba8_len] ? 1 : 0;
 }
 
 int zero_native_appkit_create_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled) {

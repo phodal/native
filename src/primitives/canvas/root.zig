@@ -10,6 +10,7 @@ pub const Error = error{
     GlyphAtlasListFull,
     RenderBatchListFull,
     RenderListFull,
+    RenderResourceCacheListFull,
     RenderResourceListFull,
     TextLayoutLineListFull,
     RenderStackOverflow,
@@ -442,6 +443,7 @@ pub const RenderResource = struct {
     gradient_stop_count: usize = 0,
     glyph_count: usize = 0,
     text_len: usize = 0,
+    fingerprint: u64 = 0,
 };
 
 pub const RenderResourcePlan = struct {
@@ -449,6 +451,51 @@ pub const RenderResourcePlan = struct {
 
     pub fn resourceCount(self: RenderResourcePlan) usize {
         return self.resources.len;
+    }
+
+    pub fn cachePlan(self: RenderResourcePlan, previous: []const RenderResourceCacheEntry, frame_index: u64, entries: []RenderResourceCacheEntry, actions: []RenderResourceCacheAction) Error!RenderResourceCachePlan {
+        var planner = RenderResourceCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+};
+
+pub const RenderResourceKey = struct {
+    kind: RenderResourceKind,
+    id: ?ObjectId = null,
+    command_index: usize = 0,
+    image_id: ImageId = 0,
+    font_id: FontId = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const RenderResourceCacheEntry = struct {
+    key: RenderResourceKey,
+    last_used_frame: u64 = 0,
+};
+
+pub const RenderResourceCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const RenderResourceCacheAction = struct {
+    kind: RenderResourceCacheActionKind,
+    key: RenderResourceKey,
+    resource_index: ?usize = null,
+    cache_index: ?usize = null,
+};
+
+pub const RenderResourceCachePlan = struct {
+    entries: []const RenderResourceCacheEntry = &.{},
+    actions: []const RenderResourceCacheAction = &.{},
+
+    pub fn entryCount(self: RenderResourceCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: RenderResourceCachePlan) usize {
+        return self.actions.len;
     }
 };
 
@@ -1181,6 +1228,7 @@ pub const RenderResourcePlanner = struct {
                 .id = nonZeroObjectId(value.id),
                 .bounds = value.dst.normalized(),
                 .image_id = value.image_id,
+                .fingerprint = drawImageFingerprint(value),
             }),
             .draw_text => |value| try self.append(.{
                 .kind = .glyph_run,
@@ -1190,18 +1238,21 @@ pub const RenderResourcePlanner = struct {
                 .font_id = value.font_id,
                 .glyph_count = value.glyphs.len,
                 .text_len = value.text.len,
+                .fingerprint = drawTextFingerprint(value),
             }),
             .shadow => |value| try self.append(.{
                 .kind = .shadow,
                 .command_index = index,
                 .id = nonZeroObjectId(value.id),
                 .bounds = shadowBounds(value),
+                .fingerprint = shadowFingerprint(value),
             }),
             .blur => |value| try self.append(.{
                 .kind = .blur,
                 .command_index = index,
                 .id = nonZeroObjectId(value.id),
                 .bounds = value.rect.normalized().inflate(geometry.InsetsF.all(nonNegative(value.radius))),
+                .fingerprint = blurFingerprint(value),
             }),
         }
     }
@@ -1219,6 +1270,7 @@ pub const RenderResourcePlanner = struct {
                 .id = nonZeroObjectId(id),
                 .bounds = bounds,
                 .gradient_stop_count = gradient.stops.len,
+                .fingerprint = linearGradientFingerprint(gradient),
             }),
         }
     }
@@ -1229,6 +1281,95 @@ pub const RenderResourcePlanner = struct {
         self.len += 1;
     }
 };
+
+pub const RenderResourceCachePlanner = struct {
+    entries: []RenderResourceCacheEntry,
+    actions: []RenderResourceCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []RenderResourceCacheEntry, actions: []RenderResourceCacheAction) RenderResourceCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *RenderResourceCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *RenderResourceCachePlanner, resource_plan: RenderResourcePlan, previous: []const RenderResourceCacheEntry, frame_index: u64) Error!RenderResourceCachePlan {
+        self.reset();
+        for (resource_plan.resources, 0..) |resource, resource_index| {
+            const key = renderResourceKey(resource);
+            if (findRenderResourceCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
+
+            const previous_index = findRenderResourceCacheEntry(previous, key);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = key,
+                .resource_index = resource_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .key = key,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findRenderResourceCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *RenderResourceCachePlanner, entry: RenderResourceCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.RenderResourceCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *RenderResourceCachePlanner, action: RenderResourceCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.RenderResourceCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
+    }
+};
+
+fn renderResourceKey(resource: RenderResource) RenderResourceKey {
+    return .{
+        .kind = resource.kind,
+        .id = resource.id,
+        .command_index = if (resource.id == null and resource.kind != .image) resource.command_index else 0,
+        .image_id = resource.image_id,
+        .font_id = resource.font_id,
+        .fingerprint = resource.fingerprint,
+    };
+}
+
+fn findRenderResourceCacheEntry(entries: []const RenderResourceCacheEntry, key: RenderResourceKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (renderResourceKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
+    return a.kind == b.kind and
+        a.id == b.id and
+        a.command_index == b.command_index and
+        a.image_id == b.image_id and
+        a.font_id == b.font_id and
+        a.fingerprint == b.fingerprint;
+}
 
 fn renderBatchCanExtend(batch: RenderBatch, command: RenderCommand, pipeline: RenderPipelineKind, index: usize) bool {
     return batch.pipeline == pipeline and
@@ -1261,6 +1402,140 @@ fn renderPipelineForFill(fill: Fill) RenderPipelineKind {
         .color => .solid,
         .linear_gradient => .linear_gradient,
     };
+}
+
+const resource_hash_offset: u64 = 14695981039346656037;
+const resource_hash_prime: u64 = 1099511628211;
+
+fn linearGradientFingerprint(gradient: LinearGradient) u64 {
+    var hash = resourceHashTag("linear_gradient");
+    hash = resourceHashPoint(hash, gradient.start);
+    hash = resourceHashPoint(hash, gradient.end);
+    hash = resourceHashUsize(hash, gradient.stops.len);
+    for (gradient.stops) |stop| {
+        hash = resourceHashF32(hash, stop.offset);
+        hash = resourceHashColor(hash, stop.color);
+    }
+    return hash;
+}
+
+fn drawImageFingerprint(image: DrawImage) u64 {
+    var hash = resourceHashTag("image");
+    hash = resourceHashU64(hash, image.image_id);
+    hash = resourceHashOptionalRect(hash, image.src);
+    hash = resourceHashEnum(hash, @intFromEnum(image.fit));
+    return hash;
+}
+
+fn drawTextFingerprint(text: DrawText) u64 {
+    var hash = resourceHashTag("glyph_run");
+    hash = resourceHashU64(hash, text.font_id);
+    hash = resourceHashF32(hash, text.size);
+    hash = resourceHashPoint(hash, text.origin);
+    hash = resourceHashBytes(hash, text.text);
+    hash = resourceHashUsize(hash, text.glyphs.len);
+    for (text.glyphs) |glyph| {
+        hash = resourceHashU32(hash, glyph.id);
+        hash = resourceHashF32(hash, glyph.x);
+        hash = resourceHashF32(hash, glyph.y);
+        hash = resourceHashF32(hash, glyph.advance);
+    }
+    return hash;
+}
+
+fn shadowFingerprint(shadow: Shadow) u64 {
+    var hash = resourceHashTag("shadow");
+    hash = resourceHashRect(hash, shadow.rect);
+    hash = resourceHashRadius(hash, shadow.radius);
+    hash = resourceHashF32(hash, shadow.offset.dx);
+    hash = resourceHashF32(hash, shadow.offset.dy);
+    hash = resourceHashF32(hash, shadow.blur);
+    hash = resourceHashF32(hash, shadow.spread);
+    hash = resourceHashColor(hash, shadow.color);
+    return hash;
+}
+
+fn blurFingerprint(blur: Blur) u64 {
+    var hash = resourceHashTag("blur");
+    hash = resourceHashRect(hash, blur.rect);
+    hash = resourceHashF32(hash, blur.radius);
+    return hash;
+}
+
+fn resourceHashTag(tag: []const u8) u64 {
+    return resourceHashBytes(resource_hash_offset, tag);
+}
+
+fn resourceHashBytes(initial: u64, bytes: []const u8) u64 {
+    var hash = initial;
+    for (bytes) |byte| hash = resourceHashU8(hash, byte);
+    return hash;
+}
+
+fn resourceHashU8(hash: u64, value: u8) u64 {
+    return (hash ^ value) *% resource_hash_prime;
+}
+
+fn resourceHashU32(hash: u64, value: u32) u64 {
+    var next = hash;
+    next = resourceHashU8(next, @intCast(value & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 8) & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 16) & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 24) & 0xff));
+    return next;
+}
+
+fn resourceHashU64(hash: u64, value: u64) u64 {
+    var next = hash;
+    next = resourceHashU32(next, @intCast(value & 0xffff_ffff));
+    next = resourceHashU32(next, @intCast((value >> 32) & 0xffff_ffff));
+    return next;
+}
+
+fn resourceHashUsize(hash: u64, value: usize) u64 {
+    return resourceHashU64(hash, @intCast(value));
+}
+
+fn resourceHashEnum(hash: u64, value: anytype) u64 {
+    return resourceHashU64(hash, @intCast(value));
+}
+
+fn resourceHashF32(hash: u64, value: f32) u64 {
+    const bits: u32 = @bitCast(value);
+    return resourceHashU32(hash, bits);
+}
+
+fn resourceHashPoint(hash: u64, point: geometry.PointF) u64 {
+    return resourceHashF32(resourceHashF32(hash, point.x), point.y);
+}
+
+fn resourceHashRect(hash: u64, rect: geometry.RectF) u64 {
+    var next = resourceHashF32(hash, rect.x);
+    next = resourceHashF32(next, rect.y);
+    next = resourceHashF32(next, rect.width);
+    next = resourceHashF32(next, rect.height);
+    return next;
+}
+
+fn resourceHashOptionalRect(hash: u64, rect: ?geometry.RectF) u64 {
+    if (rect) |value| return resourceHashRect(resourceHashU8(hash, 1), value);
+    return resourceHashU8(hash, 0);
+}
+
+fn resourceHashRadius(hash: u64, radius: Radius) u64 {
+    var next = resourceHashF32(hash, radius.top_left);
+    next = resourceHashF32(next, radius.top_right);
+    next = resourceHashF32(next, radius.bottom_right);
+    next = resourceHashF32(next, radius.bottom_left);
+    return next;
+}
+
+fn resourceHashColor(hash: u64, color: Color) u64 {
+    var next = resourceHashF32(hash, color.r);
+    next = resourceHashF32(next, color.g);
+    next = resourceHashF32(next, color.b);
+    next = resourceHashF32(next, color.a);
+    return next;
 }
 
 pub const GlyphAtlasPlanner = struct {
@@ -3553,6 +3828,117 @@ test "resource plan collects gradient resources for lines and paths" {
     try std.testing.expectEqual(@as(usize, 1), plan.resources[1].command_index);
     try std.testing.expectEqual(@as(?ObjectId, 2), plan.resources[1].id);
     try expectRect(geometry.RectF.init(4, 4, 16, 16), plan.resources[1].bounds);
+}
+
+test "resource cache plan uploads retains and evicts resources" {
+    const stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = Color.rgb8(24, 24, 27) },
+    };
+    const first_commands = [_]CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(0, 0),
+            .end = geometry.PointF.init(20, 20),
+            .stops = &stops,
+        } } } },
+        .{ .draw_image = .{ .id = 2, .image_id = 8, .dst = geometry.RectF.init(24, 0, 20, 20) } },
+    };
+    const second_commands = [_]CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(0, 0),
+            .end = geometry.PointF.init(20, 20),
+            .stops = &stops,
+        } } } },
+        .{ .draw_text = .{
+            .id = 3,
+            .font_id = 7,
+            .size = 12,
+            .origin = geometry.PointF.init(24, 16),
+            .color = Color.rgb8(15, 23, 42),
+            .text = "Hi",
+        } },
+    };
+
+    var first_resources: [2]RenderResource = undefined;
+    const first_plan = try (DisplayList{ .commands = &first_commands }).resourcePlan(&first_resources);
+    var first_entries: [2]RenderResourceCacheEntry = undefined;
+    var first_actions: [2]RenderResourceCacheAction = undefined;
+    const first_cache = try first_plan.cachePlan(&.{}, 1, &first_entries, &first_actions);
+    try std.testing.expectEqual(@as(usize, 2), first_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), first_cache.actionCount());
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, first_cache.actions[0].kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, first_cache.actions[1].kind);
+    try std.testing.expectEqual(@as(u64, 1), first_cache.entries[0].last_used_frame);
+
+    var second_resources: [2]RenderResource = undefined;
+    const second_plan = try (DisplayList{ .commands = &second_commands }).resourcePlan(&second_resources);
+    var second_entries: [2]RenderResourceCacheEntry = undefined;
+    var second_actions: [3]RenderResourceCacheAction = undefined;
+    const second_cache = try second_plan.cachePlan(first_cache.entries, 2, &second_entries, &second_actions);
+
+    try std.testing.expectEqual(@as(usize, 2), second_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 3), second_cache.actionCount());
+    try std.testing.expectEqual(RenderResourceCacheActionKind.retain, second_cache.actions[0].kind);
+    try std.testing.expectEqual(@as(?usize, 0), second_cache.actions[0].cache_index);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, second_cache.actions[1].kind);
+    try std.testing.expectEqual(RenderResourceKind.glyph_run, second_cache.actions[1].key.kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.evict, second_cache.actions[2].kind);
+    try std.testing.expectEqual(RenderResourceKind.image, second_cache.actions[2].key.kind);
+    try std.testing.expectEqual(@as(u64, 2), second_cache.entries[0].last_used_frame);
+}
+
+test "resource cache plan treats changed fingerprints as uploads" {
+    const first_stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = Color.rgb8(24, 24, 27) },
+    };
+    const second_stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = Color.rgb8(37, 99, 235) },
+    };
+    const first_commands = [_]CanvasCommand{.{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+        .start = geometry.PointF.init(0, 0),
+        .end = geometry.PointF.init(20, 20),
+        .stops = &first_stops,
+    } } } }};
+    const second_commands = [_]CanvasCommand{.{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+        .start = geometry.PointF.init(0, 0),
+        .end = geometry.PointF.init(20, 20),
+        .stops = &second_stops,
+    } } } }};
+
+    var first_resources: [1]RenderResource = undefined;
+    const first_plan = try (DisplayList{ .commands = &first_commands }).resourcePlan(&first_resources);
+    var first_entries: [1]RenderResourceCacheEntry = undefined;
+    var first_actions: [1]RenderResourceCacheAction = undefined;
+    const first_cache = try first_plan.cachePlan(&.{}, 1, &first_entries, &first_actions);
+
+    var second_resources: [1]RenderResource = undefined;
+    const second_plan = try (DisplayList{ .commands = &second_commands }).resourcePlan(&second_resources);
+    try std.testing.expect(first_plan.resources[0].fingerprint != second_plan.resources[0].fingerprint);
+
+    var second_entries: [1]RenderResourceCacheEntry = undefined;
+    var second_actions: [2]RenderResourceCacheAction = undefined;
+    const second_cache = try second_plan.cachePlan(first_cache.entries, 2, &second_entries, &second_actions);
+    try std.testing.expectEqual(@as(usize, 2), second_cache.actionCount());
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, second_cache.actions[0].kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.evict, second_cache.actions[1].kind);
+}
+
+test "resource cache plan reports output overflow" {
+    const commands = [_]CanvasCommand{
+        .{ .draw_image = .{ .id = 1, .image_id = 1, .dst = geometry.RectF.init(0, 0, 10, 10) } },
+    };
+    var resources: [1]RenderResource = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).resourcePlan(&resources);
+
+    var no_entries: [0]RenderResourceCacheEntry = .{};
+    var actions: [1]RenderResourceCacheAction = undefined;
+    try std.testing.expectError(error.RenderResourceCacheListFull, plan.cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]RenderResourceCacheEntry = undefined;
+    var no_actions: [0]RenderResourceCacheAction = .{};
+    try std.testing.expectError(error.RenderResourceCacheListFull, plan.cachePlan(&.{}, 1, &entries, &no_actions));
 }
 
 test "resource plan reports output overflow" {

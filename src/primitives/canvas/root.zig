@@ -1014,6 +1014,7 @@ pub const Widget = struct {
     kind: WidgetKind,
     frame: geometry.RectF = .{},
     text: []const u8 = "",
+    command: []const u8 = "",
     text_selection: ?TextSelection = null,
     text_composition: ?TextRange = null,
     value: f32 = 0,
@@ -3331,10 +3332,12 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         previous.widget.value != next.widget.value or
         !optionalTextSelectionsEqual(previous.widget.text_selection, next.widget.text_selection) or
         !optionalTextRangesEqual(previous.widget.text_composition, next.widget.text_composition);
+    const behavior_dirty = !std.mem.eql(u8, previous.widget.command, next.widget.command);
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const semantics_dirty =
         layout_dirty or
         content_dirty or
+        behavior_dirty or
         state_dirty or
         !widgetSemanticsEqual(previous.widget.semantics, next.widget.semantics);
     const paint_dirty = layout_dirty or content_dirty or state_dirty;
@@ -5455,13 +5458,22 @@ test "widget layout diff separates paint and semantics dirtiness" {
         .text = "Run",
         .semantics = .{ .label = "Run report" },
     }};
+    const command_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+        .command = "report.run",
+    }};
 
     var previous_nodes: [2]WidgetLayoutNode = undefined;
     var pressed_nodes: [2]WidgetLayoutNode = undefined;
     var semantic_nodes: [2]WidgetLayoutNode = undefined;
+    var command_nodes: [2]WidgetLayoutNode = undefined;
     const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &previous_child }, geometry.RectF.init(0, 0, 140, 80), &previous_nodes);
     const pressed = try layoutWidgetTree(.{ .kind = .stack, .children = &pressed_child }, geometry.RectF.init(0, 0, 140, 80), &pressed_nodes);
     const semantic = try layoutWidgetTree(.{ .kind = .stack, .children = &semantic_child }, geometry.RectF.init(0, 0, 140, 80), &semantic_nodes);
+    const command = try layoutWidgetTree(.{ .kind = .stack, .children = &command_child }, geometry.RectF.init(0, 0, 140, 80), &command_nodes);
 
     var invalidations_buffer: [2]WidgetInvalidation = undefined;
     const pressed_invalidations = try WidgetLayoutTree.diff(previous, pressed, &invalidations_buffer);
@@ -5477,6 +5489,13 @@ test "widget layout diff separates paint and semantics dirtiness" {
     try std.testing.expect(!semantic_invalidations[0].paint_dirty);
     try std.testing.expect(semantic_invalidations[0].semantics_dirty);
     try std.testing.expect(semantic_invalidations[0].dirty_bounds == null);
+
+    const command_invalidations = try WidgetLayoutTree.diff(previous, command, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), command_invalidations.len);
+    try std.testing.expect(!command_invalidations[0].layout_dirty);
+    try std.testing.expect(!command_invalidations[0].paint_dirty);
+    try std.testing.expect(command_invalidations[0].semantics_dirty);
+    try std.testing.expect(command_invalidations[0].dirty_bounds == null);
 }
 
 test "widget layout diff marks grid column changes as layout dirty" {

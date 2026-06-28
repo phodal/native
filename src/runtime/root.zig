@@ -805,6 +805,38 @@ pub const Runtime = struct {
         }
     }
 
+    fn dispatchCanvasWidgetCommandFromPointer(self: *Runtime, app: App, pointer_event: CanvasWidgetPointerEvent) anyerror!void {
+        if (pointer_event.pointer.phase != .up) return;
+        const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
+        if (self.views[index].kind != .gpu_surface) return;
+        const target = pointer_event.target orelse return;
+        if (self.views[index].canvas_widget_pressed_id != target.id) return;
+        if (!canvasWidgetCommandable(target.kind)) return;
+        const command = self.views[index].canvasWidgetCommand(target.id) orelse return;
+        try self.dispatchCommand(app, .{
+            .name = command,
+            .source = .native_view,
+            .window_id = pointer_event.window_id,
+            .view_label = pointer_event.view_label,
+        });
+    }
+
+    fn dispatchCanvasWidgetCommandFromKeyboard(self: *Runtime, app: App, keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {
+        if (keyboard_event.keyboard.phase != .key_down or keyboard_event.keyboard.modifiers.hasNavigationModifier()) return;
+        if (!isCanvasWidgetActivationKey(keyboard_event.keyboard.key)) return;
+        const index = self.findViewIndex(keyboard_event.window_id, keyboard_event.view_label) orelse return;
+        if (self.views[index].kind != .gpu_surface) return;
+        const target = keyboard_event.target orelse return;
+        if (!canvasWidgetCommandable(target.kind)) return;
+        const command = self.views[index].canvasWidgetCommand(target.id) orelse return;
+        try self.dispatchCommand(app, .{
+            .name = command,
+            .source = .native_view,
+            .window_id = keyboard_event.window_id,
+            .view_label = keyboard_event.view_label,
+        });
+    }
+
     fn updateCanvasWidgetFocusFromKeyboardInput(self: *Runtime, input_event: GpuSurfaceInputEvent) void {
         if (input_event.kind != .key_down or !std.ascii.eqlIgnoreCase(input_event.key, "tab")) return;
         const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return;
@@ -1131,6 +1163,7 @@ pub const Runtime = struct {
                 };
                 if (widget_pointer_event) |pointer_event| {
                     try self.updateCanvasWidgetControlFromPointer(pointer_event);
+                    try self.dispatchCanvasWidgetCommandFromPointer(app, pointer_event);
                     self.updateCanvasWidgetInteractionFromPointer(pointer_event);
                     try self.updateCanvasWidgetScrollFromPointer(pointer_event);
                     self.updateCanvasWidgetFocusFromPointer(pointer_event);
@@ -1147,6 +1180,7 @@ pub const Runtime = struct {
                 if (widget_keyboard_event) |keyboard_event| {
                     try self.updateCanvasWidgetControlFromKeyboard(keyboard_event);
                     try self.updateCanvasWidgetTextFromKeyboard(keyboard_event);
+                    try self.dispatchCanvasWidgetCommandFromKeyboard(app, keyboard_event);
                     try self.dispatchEvent(app, .{ .canvas_widget_keyboard = keyboard_event });
                 }
                 const widget_text_input_event = self.routeCanvasWidgetTextInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
@@ -3327,6 +3361,13 @@ fn optionalCanvasTextRangesEqual(a: ?canvas.TextRange, b: ?canvas.TextRange) boo
     return b == null;
 }
 
+fn canvasWidgetCommandable(kind: canvas.WidgetKind) bool {
+    return switch (kind) {
+        .button, .icon_button, .menu_item, .list_item, .segmented_control, .checkbox, .toggle => true,
+        else => false,
+    };
+}
+
 fn canvasWidgetBooleanSelected(widget: canvas.Widget) bool {
     return widget.state.selected or widget.value >= 0.5;
 }
@@ -3601,16 +3642,25 @@ const RuntimeView = struct {
         return null;
     }
 
+    fn canvasWidgetCommand(self: *const RuntimeView, id: canvas.ObjectId) ?[]const u8 {
+        const index = self.canvasWidgetNodeIndexById(id) orelse return null;
+        const widget = self.widget_layout_nodes[index].widget;
+        if (widget.command.len == 0) return null;
+        return widget.command;
+    }
+
     fn rewriteCanvasWidgetTextStorage(self: *RuntimeView, edited_index: usize, next_state: canvas.TextEditState) anyerror!void {
         var temp: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
         var text_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
         var label_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
+        var command_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
         var temp_len: usize = 0;
 
         for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
             const text = if (index == edited_index) next_state.text else node.widget.text;
             text_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, text);
             label_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, node.widget.semantics.label);
+            command_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, node.widget.command);
         }
 
         @memcpy(self.widget_text_bytes[0..temp_len], temp[0..temp_len]);
@@ -3618,8 +3668,10 @@ const RuntimeView = struct {
         for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |*node, index| {
             const text_range = text_ranges[index];
             const label_range = label_ranges[index];
+            const command_range = command_ranges[index];
             node.widget.text = self.widget_text_bytes[text_range.start..text_range.end];
             node.widget.semantics.label = self.widget_text_bytes[label_range.start..label_range.end];
+            node.widget.command = self.widget_text_bytes[command_range.start..command_range.end];
         }
         self.widget_layout_nodes[edited_index].widget.text_selection = next_state.selection;
         self.widget_layout_nodes[edited_index].widget.text_composition = next_state.composition;
@@ -3699,7 +3751,9 @@ const RuntimeView = struct {
 
     fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode) anyerror!canvas.WidgetLayoutNode {
         var copy = node;
+        if (node.widget.command.len > 0) try validateCommandName(node.widget.command);
         copy.widget.text = try self.copyWidgetText(node.widget.text);
+        copy.widget.command = try self.copyWidgetText(node.widget.command);
         copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
         copy.widget.children = &.{};
         return copy;
@@ -6600,6 +6654,122 @@ test "runtime applies keyboard values to focused canvas controls" {
     try std.testing.expect(saw_full_slider_active);
 }
 
+test "runtime dispatches canvas widget commands from pointer and keyboard activation" {
+    const TestApp = struct {
+        command_count: u32 = 0,
+        widget_pointer_count: u32 = 0,
+        widget_keyboard_count: u32 = 0,
+        last_name: []const u8 = "",
+        last_source: CommandSource = .runtime,
+        last_window_id: platform.WindowId = 0,
+        last_view_label: []const u8 = "",
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-command", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .command => |command| {
+                    self.command_count += 1;
+                    self.last_name = command.name;
+                    self.last_source = command.source;
+                    self.last_window_id = command.window_id;
+                    self.last_view_label = command.view_label;
+                },
+                .canvas_widget_pointer => self.widget_pointer_count += 1,
+                .canvas_widget_keyboard => self.widget_keyboard_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const widgets = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 12, 96, 32),
+            .text = "Run",
+            .command = "widget.run",
+        },
+        .{
+            .id = 3,
+            .kind = .text_field,
+            .frame = geometry.RectF.init(12, 56, 140, 32),
+            .text = "Q",
+        },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    } });
+    try std.testing.expectEqualStrings("Qa", (try harness.runtime.canvasWidgetLayout(1, "canvas")).nodes[2].widget.text);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 20,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 20,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
+    try std.testing.expectEqualStrings("widget.run", app_state.last_name);
+    try std.testing.expectEqual(CommandSource.native_view, app_state.last_source);
+    try std.testing.expectEqual(@as(platform.WindowId, 1), app_state.last_window_id);
+    try std.testing.expectEqualStrings("canvas", app_state.last_view_label);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 2;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.command_count);
+    try std.testing.expectEqual(@as(u32, 2), app_state.widget_pointer_count);
+    try std.testing.expectEqual(@as(u32, 3), app_state.widget_keyboard_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "space",
+        .modifiers = .{ .option = true },
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.command_count);
+}
+
 test "runtime automation snapshot exposes canvas list roles" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -6959,6 +7129,16 @@ test "runtime validates canvas widget layout targets and limits" {
     var duplicate_nodes: [3]canvas.WidgetLayoutNode = undefined;
     const duplicate = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &duplicate_children }, geometry.RectF.init(0, 0, 320, 240), &duplicate_nodes);
     try std.testing.expectError(error.DuplicateWidgetId, harness.runtime.setCanvasWidgetLayout(1, "canvas", duplicate));
+
+    const invalid_command_children = [_]canvas.Widget{.{
+        .id = 5,
+        .kind = .button,
+        .text = "Run",
+        .command = "bad\ncommand",
+    }};
+    var invalid_command_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const invalid_command = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &invalid_command_children }, geometry.RectF.init(0, 0, 320, 240), &invalid_command_nodes);
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.setCanvasWidgetLayout(1, "canvas", invalid_command));
 
     var many_nodes: [max_canvas_widget_nodes_per_view + 1]canvas.WidgetLayoutNode = undefined;
     for (&many_nodes, 0..) |*node, index| {

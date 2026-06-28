@@ -455,6 +455,9 @@ pub const ViewInfo = struct {
     url: []const u8 = "",
     transparent: bool = false,
     bridge_enabled: bool = false,
+    gpu_frame_index: u64 = 0,
+    gpu_frame_nonblank: bool = false,
+    gpu_sample_color: u32 = 0,
     focused: bool = false,
     open: bool = true,
 };
@@ -618,6 +621,8 @@ pub const GpuSurfaceFrameEvent = struct {
     scale_factor: f32 = 1,
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
+    nonblank: bool = false,
+    sample_color: u32 = 0,
 };
 
 pub const GpuSurfaceResizeEvent = struct {

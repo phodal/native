@@ -55,6 +55,8 @@ const AppKitEvent = extern struct {
     drop_paths_len: usize,
     frame_index: u64,
     timestamp_ns: u64,
+    nonblank: c_int,
+    sample_color: u32,
     input_kind: c_int,
     button: c_int,
     delta_x: f64,
@@ -385,6 +387,8 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
             .scale_factor = @floatCast(event.scale),
             .frame_index = event.frame_index,
             .timestamp_ns = event.timestamp_ns,
+            .nonblank = event.nonblank != 0,
+            .sample_color = event.sample_color,
         } }),
         .gpu_surface_resize => state.emit(.{ .gpu_surface_resized = .{
             .window_id = event.window_id,

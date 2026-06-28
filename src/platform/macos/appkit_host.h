@@ -84,6 +84,8 @@ typedef struct {
     size_t drop_paths_len;
     uint64_t frame_index;
     uint64_t timestamp_ns;
+    int nonblank;
+    uint32_t sample_color;
     int input_kind;
     int button;
     double delta_x;

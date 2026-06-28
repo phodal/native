@@ -770,6 +770,11 @@ pub const Runtime = struct {
                 });
             },
             .gpu_surface_frame => |frame_event| {
+                if (self.findViewIndex(frame_event.window_id, frame_event.label)) |index| {
+                    self.views[index].gpu_frame_index = frame_event.frame_index;
+                    self.views[index].gpu_frame_nonblank = frame_event.nonblank;
+                    self.views[index].gpu_sample_color = frame_event.sample_color;
+                }
                 try self.dispatchEvent(app, .{ .gpu_surface_frame = frame_event });
             },
             .gpu_surface_resized => |resize_event| {
@@ -2873,6 +2878,9 @@ const RuntimeView = struct {
     command: []const u8 = "",
     transparent: bool = false,
     bridge_enabled: bool = false,
+    gpu_frame_index: u64 = 0,
+    gpu_frame_nonblank: bool = false,
+    gpu_sample_color: u32 = 0,
     focused: bool = false,
     open: bool = false,
     label_storage: [platform.max_view_label_bytes]u8 = undefined,
@@ -2900,6 +2908,9 @@ const RuntimeView = struct {
             .url = "",
             .transparent = self.transparent,
             .bridge_enabled = self.bridge_enabled,
+            .gpu_frame_index = self.gpu_frame_index,
+            .gpu_frame_nonblank = self.gpu_frame_nonblank,
+            .gpu_sample_color = self.gpu_sample_color,
             .focused = self.focused,
             .open = self.open,
         };

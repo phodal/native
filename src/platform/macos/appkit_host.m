@@ -135,19 +135,22 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property(nonatomic, strong) CAMetalLayer *metalLayer;
+@property(nonatomic, strong) id<MTLBuffer> sampleBuffer;
 @property(nonatomic, strong) NSTimer *displayTimer;
 @property(nonatomic, assign) ZeroNativeAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
 @property(nonatomic, strong) NSString *surfaceLabel;
 @property(nonatomic, assign) NSUInteger frameIndex;
 @property(nonatomic, assign) BOOL renderedFrame;
+@property(nonatomic, assign) BOOL verifiedNonblankFrame;
+@property(nonatomic, assign) uint32_t lastSampleColor;
 @property(nonatomic, assign) CGSize lastDrawableSize;
 @property(nonatomic, assign) CGFloat lastScale;
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
 - (void)updateDrawableSize;
 - (void)renderFrame;
-- (void)emitFrameEvent;
+- (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
 @end
@@ -388,7 +391,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     _metalLayer = [CAMetalLayer layer];
     _metalLayer.device = _device;
     _metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    _metalLayer.framebufferOnly = YES;
+    _metalLayer.framebufferOnly = NO;
     _metalLayer.opaque = YES;
     _metalLayer.contentsGravity = kCAGravityResize;
 
@@ -486,13 +489,62 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     descriptor.colorAttachments[0].clearColor = MTLClearColorMake(red, green, blue, 1.0);
 
     id<MTLCommandBuffer> commandBuffer = [self.commandQueue commandBuffer];
+    if (!commandBuffer) return;
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:descriptor];
     [encoder endEncoding];
+
+    const BOOL shouldSample = !self.verifiedNonblankFrame;
+    if (shouldSample && !self.sampleBuffer) {
+        self.sampleBuffer = [self.device newBufferWithLength:256 options:MTLResourceStorageModeShared];
+    }
+    id<MTLBuffer> sampleBuffer = shouldSample ? self.sampleBuffer : nil;
+    if (sampleBuffer) {
+        NSUInteger sampleX = drawable.texture.width > 1 ? drawable.texture.width / 2 : 0;
+        NSUInteger sampleY = drawable.texture.height > 1 ? drawable.texture.height / 2 : 0;
+        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+        [blit copyFromTexture:drawable.texture
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(sampleX, sampleY, 0)
+                   sourceSize:MTLSizeMake(1, 1, 1)
+                     toBuffer:sampleBuffer
+            destinationOffset:0
+       destinationBytesPerRow:256
+     destinationBytesPerImage:256];
+        [blit endEncoding];
+    }
+
+    const NSUInteger completedFrameIndex = self.frameIndex;
+    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
+        (void)completedBuffer;
+        uint32_t sampleColor = 0;
+        BOOL nonblank = NO;
+        if (sampleBuffer && completedBuffer.status == MTLCommandBufferStatusCompleted) {
+            const uint8_t *bytes = (const uint8_t *)sampleBuffer.contents;
+            sampleColor = ((uint32_t)bytes[3] << 24) | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[1] << 8) | (uint32_t)bytes[0];
+            nonblank = bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 0;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            BOOL eventNonblank = nonblank;
+            uint32_t eventSampleColor = sampleColor;
+            if (eventNonblank) {
+                strongSelf.verifiedNonblankFrame = YES;
+                strongSelf.lastSampleColor = eventSampleColor;
+            } else if (strongSelf.verifiedNonblankFrame) {
+                eventNonblank = YES;
+                eventSampleColor = strongSelf.lastSampleColor;
+            }
+            strongSelf.renderedFrame = YES;
+            [strongSelf emitFrameEventWithFrameIndex:completedFrameIndex sampleColor:eventSampleColor nonblank:eventNonblank];
+        });
+    }];
+
     [commandBuffer presentDrawable:drawable];
     [commandBuffer commit];
 
-    self.renderedFrame = YES;
-    [self emitFrameEvent];
     self.frameIndex += 1;
 }
 
@@ -555,7 +607,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP event:event button:0 deltaX:0 deltaY:0];
 }
 
-- (void)emitFrameEvent {
+- (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank {
     if (!self.host || self.surfaceLabel.length == 0) return;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     [self.host emitEvent:(zero_native_appkit_event_t){
@@ -566,8 +618,10 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
         .scale = self.lastScale > 0 ? self.lastScale : 1,
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
-        .frame_index = self.frameIndex,
+        .frame_index = frameIndex,
         .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .nonblank = nonblank ? 1 : 0,
+        .sample_color = sampleColor,
     }];
     [self.host scheduleFrame];
 }

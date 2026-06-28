@@ -628,6 +628,7 @@ pub fn build(b: *std.Build) void {
         \\  sleep 0.1
         \\done
         \\case "$snapshot" in *'view @w1/status-label kind=label'*'GPU frame 1 from canvas.'*) ;; *) echo "gpu-surface frame event did not reach the runtime" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'gpu_nonblank=true'*) ;; *) echo "gpu-surface frame was not verified as nonblank" >&2; exit 1 ;; esac
         \\"$cli" automate native-command gpu.refresh refresh >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do

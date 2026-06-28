@@ -621,6 +621,27 @@ pub const Runtime = struct {
         return self.views[index].widgetLayoutTree();
     }
 
+    pub fn emitCanvasWidgetDisplayList(self: *Runtime, window_id: platform.WindowId, label: []const u8, tokens: canvas.DesignTokens) anyerror!platform.ViewInfo {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+
+        var commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined;
+        var builder = canvas.Builder.init(&commands);
+        const focused_id = self.views[index].canvas_widget_focused_id;
+        try self.views[index].widgetLayoutTree().emitDisplayListWithState(&builder, tokens, .{
+            .focused_id = if (focused_id == 0) null else focused_id,
+        });
+
+        const display_list = builder.displayList();
+        var canvas_changes: [max_canvas_diff_changes_per_view]canvas.DiffChange = undefined;
+        const changes = try canvas.DisplayList.diff(self.views[index].canvasDisplayList(), display_list, &canvas_changes);
+        try self.views[index].copyCanvasDisplayList(display_list);
+        self.invalidateForCanvasChanges(self.views[index].frame, changes);
+        return self.views[index].info();
+    }
+
     pub fn routeCanvasWidgetPointerInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetPointerEvent {
         try self.validateViewParent(input_event.window_id);
         try validateViewLabel(input_event.label);
@@ -4655,6 +4676,13 @@ fn testViewByLabel(views: []const platform.ViewInfo, label: []const u8) ?platfor
     return null;
 }
 
+fn testCanvasWidgetPartId(id: canvas.ObjectId, slot: canvas.ObjectId) canvas.ObjectId {
+    if (id == 0) return 0;
+    const base = id *% 16;
+    const part = base +% slot;
+    return if (part == 0) id else part;
+}
+
 test "runtime loads app source into platform webview" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -5521,6 +5549,114 @@ test "runtime retains canvas widget layout for automation semantics" {
     var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
     try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=button name=\"Run query\"") != null);
+}
+
+test "runtime emits canvas display list from focused widget layout" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-display-list", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 320, 240),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 12, 96, 32),
+            .text = "Run",
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 56, 96, 32),
+            .text = "Stop",
+            .state = .{ .focused = true },
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 240), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 24,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    const info = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{
+        .colors = .{ .focus_ring = canvas.Color.rgb8(1, 2, 3) },
+        .stroke = .{ .focus = 3 },
+    });
+    try std.testing.expectEqual(@as(u64, 1), info.canvas_revision);
+    try std.testing.expectEqual(@as(usize, 7), info.canvas_command_count);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect(harness.runtime.pendingDirtyRegions().len > 0);
+
+    const retained = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_runtime_focus = false;
+    var saw_stale_focus = false;
+    var saw_run_text = false;
+    for (retained.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == testCanvasWidgetPartId(2, 3)) saw_runtime_focus = true;
+            if (id == testCanvasWidgetPartId(3, 3)) saw_stale_focus = true;
+        }
+        switch (command) {
+            .draw_text => |text| {
+                if (text.id == testCanvasWidgetPartId(2, 4)) {
+                    try std.testing.expectEqualStrings("Run", text.text);
+                    saw_run_text = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_runtime_focus);
+    try std.testing.expect(!saw_stale_focus);
+    try std.testing.expect(saw_run_text);
+
+    const changed_children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 12, 96, 32),
+        .text = "Changed",
+    }};
+    var changed_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const changed_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &changed_children }, geometry.RectF.init(0, 0, 320, 240), &changed_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", changed_layout);
+
+    const retained_after_widget_update = try harness.runtime.canvasDisplayList(1, "canvas");
+    for (retained_after_widget_update.commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                if (text.id == testCanvasWidgetPartId(2, 4)) {
+                    try std.testing.expectEqualStrings("Run", text.text);
+                    return;
+                }
+            },
+            else => {},
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 test "runtime automation snapshot exposes canvas list roles" {

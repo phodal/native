@@ -19,6 +19,7 @@ pub const max_canvas_gradient_stops_per_view: usize = 64;
 pub const max_canvas_path_elements_per_view: usize = 128;
 pub const max_canvas_glyphs_per_view: usize = 256;
 pub const max_canvas_text_bytes_per_view: usize = 2048;
+const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
 
 pub const LifecycleEvent = enum {
     start,
@@ -198,6 +199,10 @@ pub const Runtime = struct {
                 self.dirty_region_count += 1;
             }
         }
+    }
+
+    pub fn pendingDirtyRegions(self: *const Runtime) []const geometry.RectF {
+        return self.dirty_regions[0..self.dirty_region_count];
     }
 
     pub fn run(self: *Runtime, app: App) anyerror!void {
@@ -536,8 +541,10 @@ pub const Runtime = struct {
         try validateViewLabel(label);
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        var canvas_changes: [max_canvas_diff_changes_per_view]canvas.DiffChange = undefined;
+        const changes = try canvas.DisplayList.diff(self.views[index].canvasDisplayList(), display_list, &canvas_changes);
         try self.views[index].copyCanvasDisplayList(display_list);
-        self.invalidateFor(.state, self.views[index].frame);
+        self.invalidateForCanvasChanges(self.views[index].frame, changes);
         return self.views[index].info();
     }
 
@@ -547,6 +554,18 @@ pub const Runtime = struct {
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
         return self.views[index].canvasDisplayList();
+    }
+
+    fn invalidateForCanvasChanges(self: *Runtime, view_frame: geometry.RectF, changes: []const canvas.DiffChange) void {
+        var emitted_dirty_region = false;
+        for (changes) |change| {
+            const local_dirty = change.dirty_bounds orelse continue;
+            if (canvasDirtyRegionForView(view_frame, local_dirty)) |dirty_region| {
+                self.invalidateFor(.state, dirty_region);
+                emitted_dirty_region = true;
+            }
+        }
+        if (!emitted_dirty_region and changes.len > 0) self.invalidateFor(.state, view_frame);
     }
 
     pub fn listViews(self: *const Runtime, window_id: platform.WindowId, output: []platform.ViewInfo) []const platform.ViewInfo {
@@ -1318,6 +1337,14 @@ pub const Runtime = struct {
 
     fn rectsEqual(a: geometry.RectF, b: geometry.RectF) bool {
         return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
+    }
+
+    fn canvasDirtyRegionForView(view_frame: geometry.RectF, local_dirty: geometry.RectF) ?geometry.RectF {
+        const normalized_view = view_frame.normalized();
+        const surface_bounds = geometry.RectF.init(0, 0, normalized_view.width, normalized_view.height);
+        const clipped = geometry.RectF.intersection(surface_bounds, local_dirty.normalized());
+        if (clipped.isEmpty()) return null;
+        return clipped.translate(.{ .dx = normalized_view.x, .dy = normalized_view.y });
     }
 
     fn bindShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) !void {
@@ -4782,6 +4809,103 @@ test "runtime retains canvas display lists on GPU surface views" {
     try automation.snapshot.writeText(snapshot, &writer);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_revision=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_commands=3") != null);
+}
+
+test "runtime invalidates canvas display list dirty regions" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(50, 70, 320, 240),
+    });
+
+    var initial_commands: [1]canvas.CanvasCommand = undefined;
+    var initial_builder = canvas.Builder.init(&initial_commands);
+    try initial_builder.fillRect(.{
+        .id = 1,
+        .rect = geometry.RectF.init(-10, -10, 40, 40),
+        .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) },
+    });
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", initial_builder.displayList());
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(50, 70, 30, 30), harness.runtime.pendingDirtyRegions()[0]);
+
+    var moved_commands: [1]canvas.CanvasCommand = undefined;
+    var moved_builder = canvas.Builder.init(&moved_commands);
+    try moved_builder.fillRect(.{
+        .id = 1,
+        .rect = geometry.RectF.init(10, 0, 40, 40),
+        .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) },
+    });
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", moved_builder.displayList());
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(50, 70, 50, 40), harness.runtime.pendingDirtyRegions()[0]);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", moved_builder.displayList());
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime rejects duplicate canvas ids before replacing retained scene" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-duplicate", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    var valid_commands: [1]canvas.CanvasCommand = undefined;
+    var valid_builder = canvas.Builder.init(&valid_commands);
+    try valid_builder.fillRect(.{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 40, 40),
+        .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) },
+    });
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", valid_builder.displayList());
+
+    const duplicate_commands = [_]canvas.CanvasCommand{
+        .{ .fill_rect = .{ .id = 2, .rect = geometry.RectF.init(0, 0, 40, 40), .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) } } },
+        .{ .blur = .{ .id = 2, .rect = geometry.RectF.init(0, 0, 40, 40), .radius = 4 } },
+    };
+    try std.testing.expectError(error.DuplicateObjectId, harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &duplicate_commands }));
+
+    const retained = try harness.runtime.canvasDisplayList(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), retained.commandCount());
+    try std.testing.expectEqual(@as(?canvas.ObjectId, 1), retained.commands[0].objectId());
 }
 
 test "runtime validates canvas display list command limits" {

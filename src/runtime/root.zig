@@ -1507,7 +1507,8 @@ pub const Runtime = struct {
     fn appendAutomationWidgets(self: *Runtime, window_id: platform.WindowId, widget_count: *usize) void {
         for (self.views[0..self.view_count]) |view| {
             if (!view.open or view.window_id != window_id or view.kind != .gpu_surface) continue;
-            for (view.widgetSemantics()) |node| {
+            const semantics = view.widgetSemantics();
+            for (semantics) |node| {
                 if (widget_count.* >= self.automation_widgets.len) return;
                 self.automation_widgets[widget_count.*] = .{
                     .window_id = view.window_id,
@@ -1515,6 +1516,7 @@ pub const Runtime = struct {
                     .id = node.id,
                     .role = widgetRoleName(node.role),
                     .name = node.label,
+                    .parent_id = canvasWidgetSemanticParentId(semantics, node.parent_index),
                     .value = node.value,
                     .text_value = node.text_value,
                     .bounds = node.bounds.translate(geometry.OffsetF.init(view.frame.x, view.frame.y)),
@@ -4923,6 +4925,12 @@ fn canvasWidgetActions(actions: canvas.WidgetActions) automation.snapshot.Widget
     };
 }
 
+fn canvasWidgetSemanticParentId(nodes: []const canvas.WidgetSemanticsNode, parent_index: ?usize) ?u64 {
+    const index = parent_index orelse return null;
+    if (index >= nodes.len) return null;
+    return nodes[index].id;
+}
+
 fn canvasWidgetSelectedState(node: canvas.WidgetSemanticsNode) bool {
     if (node.state.selected) return true;
     const value = node.value orelse return false;
@@ -8052,18 +8060,22 @@ test "runtime automation snapshot exposes canvas list roles" {
     try std.testing.expectEqual(@as(u64, 1), snapshot.widgets[0].id);
     try std.testing.expectEqualStrings("list", snapshot.widgets[0].role);
     try std.testing.expectEqualStrings("Mailboxes", snapshot.widgets[0].name);
+    try std.testing.expect(snapshot.widgets[0].parent_id == null);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 240, 160), snapshot.widgets[0].bounds);
     try std.testing.expectEqualStrings("listitem", snapshot.widgets[1].role);
     try std.testing.expectEqualStrings("Inbox", snapshot.widgets[1].name);
+    try std.testing.expectEqual(@as(?u64, 1), snapshot.widgets[1].parent_id);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 240, 32), snapshot.widgets[1].bounds);
     try std.testing.expectEqualStrings("listitem", snapshot.widgets[2].role);
     try std.testing.expectEqualStrings("Archive", snapshot.widgets[2].name);
+    try std.testing.expectEqual(@as(?u64, 1), snapshot.widgets[2].parent_id);
 
     var a11y_buffer: [1024]u8 = undefined;
     var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
     try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=list name=\"Mailboxes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=listitem name=\"Inbox\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#1") != null);
 }
 
 test "runtime automation snapshot exposes canvas data grid roles" {
@@ -8113,16 +8125,20 @@ test "runtime automation snapshot exposes canvas data grid roles" {
     try std.testing.expectEqual(@as(usize, 7), snapshot.widgets.len);
     try std.testing.expectEqualStrings("grid", snapshot.widgets[0].role);
     try std.testing.expectEqualStrings("Deployments", snapshot.widgets[0].name);
+    try std.testing.expect(snapshot.widgets[0].parent_id == null);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 320, 180), snapshot.widgets[0].bounds);
     try std.testing.expectEqualStrings("row", snapshot.widgets[1].role);
+    try std.testing.expectEqual(@as(?u64, 1), snapshot.widgets[1].parent_id);
     try std.testing.expectEqualStrings("gridcell", snapshot.widgets[2].role);
     try std.testing.expectEqualStrings("Project", snapshot.widgets[2].name);
+    try std.testing.expectEqual(@as(?u64, 2), snapshot.widgets[2].parent_id);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 160, 28), snapshot.widgets[2].bounds);
     try std.testing.expect(snapshot.widgets[2].actions.focus);
     try std.testing.expect(snapshot.widgets[2].actions.select);
     try std.testing.expect(!snapshot.widgets[2].actions.press);
     try std.testing.expectEqualStrings("gridcell", snapshot.widgets[5].role);
     try std.testing.expectEqualStrings("Edge API", snapshot.widgets[5].name);
+    try std.testing.expectEqual(@as(?u64, 5), snapshot.widgets[5].parent_id);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 60, 160, 28), snapshot.widgets[5].bounds);
     try std.testing.expect(snapshot.widgets[5].actions.select);
 

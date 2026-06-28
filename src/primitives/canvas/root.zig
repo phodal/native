@@ -725,6 +725,10 @@ pub const CanvasRenderPass = struct {
     pub fn glyphAtlasEntryCount(self: CanvasRenderPass) usize {
         return self.glyph_atlas_entries.len;
     }
+
+    pub fn writeJson(self: CanvasRenderPass, writer: anytype) !void {
+        try writeCanvasRenderPassJson(self, writer);
+    }
 };
 
 pub const CanvasFrame = struct {
@@ -4316,6 +4320,147 @@ fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
     try writer.writeByte('}');
 }
 
+fn writeCanvasRenderPassJson(pass: CanvasRenderPass, writer: anytype) !void {
+    try writer.print(
+        "{{\"frameIndex\":{d},\"timestampNs\":{d},\"surfaceWidth\":{d},\"surfaceHeight\":{d},\"scale\":{d},\"loadAction\":",
+        .{ pass.frame_index, pass.timestamp_ns, pass.surface_size.width, pass.surface_size.height, pass.scale },
+    );
+    try json.writeString(writer, @tagName(pass.loadAction()));
+    try writer.writeAll(",\"fullRepaint\":");
+    try writer.writeAll(if (pass.full_repaint) "true" else "false");
+    try writer.writeAll(",\"requiresRender\":");
+    try writer.writeAll(if (pass.requiresRender()) "true" else "false");
+    try writer.writeAll(",\"dirtyBounds\":");
+    try writeOptionalRectJson(pass.dirty_bounds, writer);
+    try writer.writeAll(",\"scissorBounds\":");
+    try writeOptionalRectJson(pass.scissorBounds(), writer);
+    try writer.writeAll(",\"commands\":[");
+    for (pass.commands, 0..) |command, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderCommandJson(command, index, writer);
+    }
+    try writer.writeAll("],\"batches\":[");
+    for (pass.batches, 0..) |batch, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderBatchJson(batch, writer);
+    }
+    try writer.writeAll("],\"resources\":[");
+    for (pass.resources, 0..) |resource, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderResourceJson(resource, writer);
+    }
+    try writer.writeAll("],\"resourceActions\":[");
+    for (pass.resource_actions, 0..) |action, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderResourceCacheActionJson(action, writer);
+    }
+    try writer.writeAll("],\"glyphAtlasEntries\":[");
+    for (pass.glyph_atlas_entries, 0..) |entry, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeGlyphAtlasEntryJson(entry, writer);
+    }
+    try writer.writeAll("]}");
+}
+
+fn writeRenderCommandJson(command: RenderCommand, index: usize, writer: anytype) !void {
+    try writer.print("{{\"index\":{d},\"id\":", .{index});
+    try writeOptionalObjectIdJson(command.id, writer);
+    try writer.print(",\"opacity\":{d},\"clip\":", .{command.opacity});
+    try writeOptionalRectJson(command.clip, writer);
+    try writer.writeAll(",\"transform\":");
+    try writeAffineJson(command.transform, writer);
+    try writer.writeAll(",\"localBounds\":");
+    try writeRectJson(command.local_bounds, writer);
+    try writer.writeAll(",\"bounds\":");
+    try writeRectJson(command.bounds, writer);
+    try writer.writeAll(",\"command\":");
+    try writeCommandJson(command.command, writer);
+    try writer.writeByte('}');
+}
+
+fn writeRenderBatchJson(batch: RenderBatch, writer: anytype) !void {
+    try writer.writeAll("{\"pipeline\":");
+    try json.writeString(writer, @tagName(batch.pipeline));
+    try writer.print(",\"commandStart\":{d},\"commandCount\":{d},\"opacity\":{d},\"clip\":", .{ batch.command_start, batch.command_count, batch.opacity });
+    try writeOptionalRectJson(batch.clip, writer);
+    try writer.writeAll(",\"bounds\":");
+    try writeRectJson(batch.bounds, writer);
+    try writer.writeByte('}');
+}
+
+fn writeRenderResourceJson(resource: RenderResource, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(resource.kind));
+    try writer.print(",\"commandIndex\":{d},\"id\":", .{resource.command_index});
+    try writeOptionalObjectIdJson(resource.id, writer);
+    try writer.writeAll(",\"bounds\":");
+    try writeOptionalRectJson(resource.bounds, writer);
+    try writer.print(",\"imageId\":{d},\"fontId\":{d},\"gradientStopCount\":{d},\"glyphCount\":{d},\"textLen\":{d},\"fingerprint\":{d}}}", .{
+        resource.image_id,
+        resource.font_id,
+        resource.gradient_stop_count,
+        resource.glyph_count,
+        resource.text_len,
+        resource.fingerprint,
+    });
+}
+
+fn writeRenderResourceCacheActionJson(action: RenderResourceCacheAction, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(action.kind));
+    try writer.writeAll(",\"key\":");
+    try writeRenderResourceKeyJson(action.key, writer);
+    try writer.writeAll(",\"resourceIndex\":");
+    try writeOptionalUsizeJson(action.resource_index, writer);
+    try writer.writeAll(",\"cacheIndex\":");
+    try writeOptionalUsizeJson(action.cache_index, writer);
+    try writer.writeByte('}');
+}
+
+fn writeRenderResourceKeyJson(key: RenderResourceKey, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(key.kind));
+    try writer.writeAll(",\"id\":");
+    try writeOptionalObjectIdJson(key.id, writer);
+    try writer.print(",\"commandIndex\":{d},\"imageId\":{d},\"fontId\":{d},\"fingerprint\":{d}}}", .{ key.command_index, key.image_id, key.font_id, key.fingerprint });
+}
+
+fn writeGlyphAtlasEntryJson(entry: GlyphAtlasEntry, writer: anytype) !void {
+    try writer.print("{{\"key\":{{\"fontId\":{d},\"glyphId\":{d},\"size\":{d},\"subpixelX\":{d},\"subpixelY\":{d}}},\"commandIndex\":{d},\"glyphIndex\":{d}}}", .{
+        entry.key.font_id,
+        entry.key.glyph_id,
+        entry.key.size,
+        entry.key.subpixel_x,
+        entry.key.subpixel_y,
+        entry.command_index,
+        entry.glyph_index,
+    });
+}
+
+fn writeOptionalRectJson(rect: ?geometry.RectF, writer: anytype) !void {
+    if (rect) |value| {
+        try writeRectJson(value, writer);
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeOptionalObjectIdJson(id: ?ObjectId, writer: anytype) !void {
+    if (id) |value| {
+        try writer.print("{d}", .{value});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeOptionalUsizeJson(value: ?usize, writer: anytype) !void {
+    if (value) |number| {
+        try writer.print("{d}", .{number});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
 fn writeRectJson(rect: geometry.RectF, writer: anytype) !void {
     try writer.print("[{d},{d},{d},{d}]", .{ rect.x, rect.y, rect.width, rect.height });
 }
@@ -6594,6 +6739,18 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), render_pass.glyphAtlasEntryCount());
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, render_pass.resource_actions[0].kind);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), render_pass.scissorBounds());
+
+    var render_pass_json_buffer: [8192]u8 = undefined;
+    var render_pass_json_writer = std.Io.Writer.fixed(&render_pass_json_buffer);
+    try render_pass.writeJson(&render_pass_json_writer);
+    const render_pass_json = render_pass_json_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"loadAction\":\"clear\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"scissorBounds\":[0,0,320,200]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"commands\":[{\"index\":0,\"id\":1,\"opacity\":1,\"clip\":null,\"transform\":[1,0,0,1,0,0],\"localBounds\":[16,16,160,72],\"bounds\":[16,16,160,72],\"command\":{\"op\":\"fill_rounded_rect\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"batches\":[{\"pipeline\":\"linear_gradient\",\"commandStart\":0,\"commandCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resources\":[{\"kind\":\"linear_gradient\",\"commandIndex\":0,\"id\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resourceActions\":[{\"kind\":\"upload\",\"key\":{\"kind\":\"linear_gradient\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"glyphAtlasEntries\":[{\"key\":{\"fontId\":5,\"glyphId\":79") != null);
 
     const diagnostics = frame.diagnostics();
     try std.testing.expectEqual(@as(u64, 7), diagnostics.frame_index);

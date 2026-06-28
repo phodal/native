@@ -20,6 +20,10 @@ pub const max_canvas_path_elements_per_view: usize = 128;
 pub const max_canvas_glyphs_per_view: usize = 256;
 pub const max_canvas_text_bytes_per_view: usize = 2048;
 const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
+pub const max_canvas_widget_nodes_per_view: usize = 16;
+pub const max_canvas_widget_semantics_per_view: usize = 16;
+pub const max_canvas_widget_text_bytes_per_view: usize = 512;
+const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_nodes_per_view * 2 + 1;
 
 pub const LifecycleEvent = enum {
     start,
@@ -174,6 +178,7 @@ pub const Runtime = struct {
     async_bridge_responses: [max_async_bridge_responses]AsyncBridgeResponseSlot = [_]AsyncBridgeResponseSlot{.{}} ** max_async_bridge_responses,
     automation_windows: [automation.snapshot.max_windows]automation.snapshot.Window = undefined,
     automation_views: [automation.snapshot.max_views]platform.ViewInfo = undefined,
+    automation_widgets: [automation.snapshot.max_widgets]automation.snapshot.Widget = undefined,
 
     pub fn init(options: Options) Runtime {
         var runtime = Runtime{
@@ -556,6 +561,26 @@ pub const Runtime = struct {
         return self.views[index].canvasDisplayList();
     }
 
+    pub fn setCanvasWidgetLayout(self: *Runtime, window_id: platform.WindowId, label: []const u8, layout: canvas.WidgetLayoutTree) anyerror!platform.ViewInfo {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        var widget_invalidations: [max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined;
+        const invalidations = try canvas.WidgetLayoutTree.diff(self.views[index].widgetLayoutTree(), layout, &widget_invalidations);
+        try self.views[index].copyWidgetLayoutTree(layout);
+        self.invalidateForWidgetInvalidations(self.views[index].frame, invalidations);
+        return self.views[index].info();
+    }
+
+    pub fn canvasWidgetLayout(self: *const Runtime, window_id: platform.WindowId, label: []const u8) anyerror!canvas.WidgetLayoutTree {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        return self.views[index].widgetLayoutTree();
+    }
+
     fn invalidateForCanvasChanges(self: *Runtime, view_frame: geometry.RectF, changes: []const canvas.DiffChange) void {
         var emitted_dirty_region = false;
         for (changes) |change| {
@@ -566,6 +591,18 @@ pub const Runtime = struct {
             }
         }
         if (!emitted_dirty_region and changes.len > 0) self.invalidateFor(.state, view_frame);
+    }
+
+    fn invalidateForWidgetInvalidations(self: *Runtime, view_frame: geometry.RectF, invalidations: []const canvas.WidgetInvalidation) void {
+        var emitted_dirty_region = false;
+        for (invalidations) |invalidation| {
+            const local_dirty = invalidation.dirty_bounds orelse continue;
+            if (canvasDirtyRegionForView(view_frame, local_dirty)) |dirty_region| {
+                self.invalidateFor(.state, dirty_region);
+                emitted_dirty_region = true;
+            }
+        }
+        if (!emitted_dirty_region and invalidations.len > 0) self.invalidateFor(.state, null);
     }
 
     pub fn listViews(self: *const Runtime, window_id: platform.WindowId, output: []platform.ViewInfo) []const platform.ViewInfo {
@@ -925,11 +962,13 @@ pub const Runtime = struct {
             return .{
                 .windows = self.automation_windows[0..1],
                 .views = &.{},
+                .widgets = &.{},
                 .diagnostics = .{ .frame_index = self.last_diagnostics.frame_index, .command_count = self.last_diagnostics.command_count },
                 .source = self.loaded_source,
             };
         }
         var view_count: usize = 0;
+        var widget_count: usize = 0;
         for (self.windows[0..count], 0..) |window, index| {
             self.automation_windows[index] = .{
                 .id = window.info.id,
@@ -941,13 +980,36 @@ pub const Runtime = struct {
                 const views = self.listViews(window.info.id, self.automation_views[view_count..]);
                 view_count += views.len;
             }
+            self.appendAutomationWidgets(window.info.id, &widget_count);
         }
         return .{
             .windows = self.automation_windows[0..count],
             .views = self.automation_views[0..view_count],
+            .widgets = self.automation_widgets[0..widget_count],
             .diagnostics = .{ .frame_index = self.last_diagnostics.frame_index, .command_count = self.last_diagnostics.command_count },
             .source = self.loaded_source,
         };
+    }
+
+    fn appendAutomationWidgets(self: *Runtime, window_id: platform.WindowId, widget_count: *usize) void {
+        for (self.views[0..self.view_count]) |view| {
+            if (!view.open or view.window_id != window_id or view.kind != .gpu_surface) continue;
+            for (view.widgetSemantics()) |node| {
+                if (widget_count.* >= self.automation_widgets.len) return;
+                self.automation_widgets[widget_count.*] = .{
+                    .window_id = view.window_id,
+                    .view_label = view.label,
+                    .id = node.id,
+                    .role = widgetRoleName(node.role),
+                    .name = node.label,
+                    .value = node.value,
+                    .bounds = node.bounds.translate(geometry.OffsetF.init(view.frame.x, view.frame.y)),
+                    .focused = node.state.focused,
+                    .enabled = !node.state.disabled,
+                };
+                widget_count.* += 1;
+            }
+        }
     }
 
     pub fn frameDiagnostics(self: *Runtime) FrameDiagnostics {
@@ -2980,6 +3042,13 @@ const RuntimeView = struct {
     canvas_glyph_count: usize = 0,
     canvas_text_bytes: [max_canvas_text_bytes_per_view]u8 = undefined,
     canvas_text_len: usize = 0,
+    widget_layout_nodes: [max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
+    widget_layout_node_count: usize = 0,
+    widget_semantics_nodes: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined,
+    widget_semantics_node_count: usize = 0,
+    widget_revision: u64 = 0,
+    widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
+    widget_text_len: usize = 0,
     focused: bool = false,
     open: bool = false,
     label_storage: [platform.max_view_label_bytes]u8 = undefined,
@@ -3012,6 +3081,9 @@ const RuntimeView = struct {
             .gpu_sample_color = self.gpu_sample_color,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
+            .widget_revision = self.widget_revision,
+            .widget_node_count = self.widget_layout_node_count,
+            .widget_semantics_count = self.widget_semantics_node_count,
             .focused = self.focused,
             .open = self.open,
         };
@@ -3027,10 +3099,20 @@ const RuntimeView = struct {
         self.command = copyInto(&self.command_storage, source.command) catch unreachable;
         self.copyCanvasDisplayList(source.canvasDisplayList()) catch unreachable;
         self.canvas_revision = source.canvas_revision;
+        self.copyWidgetLayoutTree(source.widgetLayoutTree()) catch unreachable;
+        self.widget_revision = source.widget_revision;
     }
 
     fn canvasDisplayList(self: *const RuntimeView) canvas.DisplayList {
         return .{ .commands = self.canvas_commands[0..self.canvas_command_count] };
+    }
+
+    fn widgetLayoutTree(self: *const RuntimeView) canvas.WidgetLayoutTree {
+        return .{ .nodes = self.widget_layout_nodes[0..self.widget_layout_node_count] };
+    }
+
+    fn widgetSemantics(self: *const RuntimeView) []const canvas.WidgetSemanticsNode {
+        return self.widget_semantics_nodes[0..self.widget_semantics_node_count];
     }
 
     fn copyCanvasDisplayList(self: *RuntimeView, display_list: canvas.DisplayList) anyerror!void {
@@ -3051,6 +3133,35 @@ const RuntimeView = struct {
             self.canvas_command_count += 1;
         }
         self.canvas_revision += 1;
+    }
+
+    fn copyWidgetLayoutTree(self: *RuntimeView, layout: canvas.WidgetLayoutTree) anyerror!void {
+        if (layout.nodes.len > self.widget_layout_nodes.len) return error.WidgetNodeLimitReached;
+        if (layout.nodes.len > 0 and layout.nodes.ptr == self.widget_layout_nodes[0..].ptr) {
+            self.widget_revision += 1;
+            return;
+        }
+
+        self.widget_layout_node_count = 0;
+        self.widget_semantics_node_count = 0;
+        self.widget_text_len = 0;
+
+        for (layout.nodes) |node| {
+            self.widget_layout_nodes[self.widget_layout_node_count] = try self.copyWidgetLayoutNode(node);
+            self.widget_layout_node_count += 1;
+        }
+
+        const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
+        self.widget_semantics_node_count = semantics.len;
+        self.widget_revision += 1;
+    }
+
+    fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode) anyerror!canvas.WidgetLayoutNode {
+        var copy = node;
+        copy.widget.text = try self.copyWidgetText(node.widget.text);
+        copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
+        copy.widget.children = &.{};
+        return copy;
     }
 
     fn copyCanvasCommand(self: *RuntimeView, command: canvas.CanvasCommand) anyerror!canvas.CanvasCommand {
@@ -3155,6 +3266,15 @@ const RuntimeView = struct {
         @memcpy(self.canvas_text_bytes[start..end], text);
         self.canvas_text_len = end;
         return self.canvas_text_bytes[start..end];
+    }
+
+    fn copyWidgetText(self: *RuntimeView, text: []const u8) anyerror![]const u8 {
+        const end = self.widget_text_len + text.len;
+        if (end > self.widget_text_bytes.len) return error.WidgetTextTooLarge;
+        const start = self.widget_text_len;
+        @memcpy(self.widget_text_bytes[start..end], text);
+        self.widget_text_len = end;
+        return self.widget_text_bytes[start..end];
     }
 };
 
@@ -3538,6 +3658,16 @@ fn sourceWebViewUrl(source: ?platform.WebViewSource) []const u8 {
     };
 }
 
+fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
+    return switch (role) {
+        .none => "none",
+        .group => "group",
+        .text => "text",
+        .button => "button",
+        .progressbar => "progressbar",
+    };
+}
+
 fn writeWindowJson(window: platform.WindowInfo, output: []u8) ![]const u8 {
     var writer = std.Io.Writer.fixed(output);
     try writeWindowJsonToWriter(window, &writer);
@@ -3616,7 +3746,7 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
     try json.writeString(writer, view.command);
     try writer.writeAll(",\"url\":");
     try json.writeString(writer, view.url);
-    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuFrame\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"focused\":{},\"open\":{}}}", .{
+    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuFrame\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"widgetRevision\":{d},\"widgetNodeCount\":{d},\"widgetSemanticsCount\":{d},\"focused\":{},\"open\":{}}}", .{
         view.frame.x,
         view.frame.y,
         view.frame.width,
@@ -3631,6 +3761,9 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.gpu_sample_color,
         view.canvas_revision,
         view.canvas_command_count,
+        view.widget_revision,
+        view.widget_node_count,
+        view.widget_semantics_count,
         view.focused,
         view.open,
     });
@@ -3753,6 +3886,10 @@ fn builtinBridgeErrorMessage(err: anyerror) []const u8 {
         error.ViewRoleTooLarge => "View role is too large",
         error.ViewAccessibilityLabelTooLarge => "View accessibility label is too large",
         error.ViewTextTooLarge => "View text is too large",
+        error.WidgetNodeLimitReached => "Canvas widget node limit reached",
+        error.WidgetTextTooLarge => "Canvas widget text is too large",
+        error.WidgetSemanticsListFull => "Canvas widget semantics limit reached",
+        error.DuplicateWidgetId => "Canvas widget id already exists",
         error.UnsupportedViewKind => "This backend does not support this native view kind yet",
         error.UnsupportedViewFocus => "This backend does not support focusing this native view yet",
         error.NoSpaceLeft => "Native response buffer is too small",
@@ -4931,6 +5068,177 @@ test "runtime validates canvas display list command limits" {
     var commands: [max_canvas_commands_per_view + 1]canvas.CanvasCommand = undefined;
     for (&commands) |*command| command.* = .pop_opacity;
     try std.testing.expectError(error.CanvasCommandLimitReached, harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands }));
+}
+
+test "runtime retains canvas widget layout for automation semantics" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-semantics", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(50, 70, 320, 240),
+    });
+
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 12, 96, 32),
+        .text = "Run",
+        .semantics = .{ .label = "Run query" },
+    }};
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 240), &nodes);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    const info = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try std.testing.expectEqual(@as(u64, 1), info.widget_revision);
+    try std.testing.expectEqual(@as(usize, 2), info.widget_node_count);
+    try std.testing.expectEqual(@as(usize, 1), info.widget_semantics_count);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(60, 82, 96, 32), harness.runtime.pendingDirtyRegions()[0]);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 2), retained.nodeCount());
+    try std.testing.expectEqualStrings("Run", retained.nodes[1].widget.text);
+    try std.testing.expectEqualStrings("Run query", retained.nodes[1].widget.semantics.label);
+    try std.testing.expectEqual(@as(usize, 0), retained.nodes[1].widget.children.len);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    const canvas_view = testViewByLabel(snapshot.views, "canvas").?;
+    try std.testing.expectEqual(@as(u64, 1), canvas_view.widget_revision);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
+    try std.testing.expectEqual(@as(u64, 2), snapshot.widgets[0].id);
+    try std.testing.expectEqualStrings("button", snapshot.widgets[0].role);
+    try std.testing.expectEqualStrings("Run query", snapshot.widgets[0].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(60, 82, 96, 32), snapshot.widgets[0].bounds);
+
+    var a11y_buffer: [1024]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=button name=\"Run query\"") != null);
+}
+
+test "runtime invalidates canvas widget layout and semantics changes" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(50, 70, 320, 240),
+    });
+
+    const initial_children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 80, 32),
+        .text = "Run",
+    }};
+    var initial_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const initial = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &initial_children }, geometry.RectF.init(0, 0, 320, 240), &initial_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", initial);
+
+    const moved_children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(30, 10, 80, 32),
+        .text = "Run",
+    }};
+    var moved_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const moved = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &moved_children }, geometry.RectF.init(0, 0, 320, 240), &moved_nodes);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", moved);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(60, 80, 100, 32), harness.runtime.pendingDirtyRegions()[0]);
+
+    const renamed_children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(30, 10, 80, 32),
+        .text = "Run",
+        .semantics = .{ .label = "Run report" },
+    }};
+    var renamed_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const renamed = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &renamed_children }, geometry.RectF.init(0, 0, 320, 240), &renamed_nodes);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", renamed);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime validates canvas widget layout targets and limits" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-limits", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "status",
+        .kind = .statusbar,
+        .frame = geometry.RectF.init(0, 0, 320, 40),
+    });
+    try std.testing.expectError(error.InvalidViewOptions, harness.runtime.setCanvasWidgetLayout(1, "status", .{}));
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 40, 320, 240),
+    });
+
+    const duplicate_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .text, .text = "One" },
+        .{ .id = 2, .kind = .text, .text = "Two" },
+    };
+    var duplicate_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const duplicate = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &duplicate_children }, geometry.RectF.init(0, 0, 320, 240), &duplicate_nodes);
+    try std.testing.expectError(error.DuplicateWidgetId, harness.runtime.setCanvasWidgetLayout(1, "canvas", duplicate));
+
+    var many_nodes: [max_canvas_widget_nodes_per_view + 1]canvas.WidgetLayoutNode = undefined;
+    for (&many_nodes, 0..) |*node, index| {
+        node.* = .{
+            .widget = .{ .id = @intCast(index + 1), .kind = .text, .text = "x" },
+            .frame = geometry.RectF.init(0, @floatFromInt(index), 10, 10),
+            .depth = 0,
+        };
+    }
+    try std.testing.expectError(error.WidgetNodeLimitReached, harness.runtime.setCanvasWidgetLayout(1, "canvas", .{ .nodes = &many_nodes }));
 }
 
 test "runtime rejects canvas display lists on non-GPU views" {

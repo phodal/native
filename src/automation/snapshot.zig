@@ -4,6 +4,7 @@ const platform = @import("../platform/root.zig");
 
 pub const max_windows: usize = platform.max_windows;
 pub const max_views: usize = platform.max_windows + platform.max_views + platform.max_webviews;
+pub const max_widgets: usize = platform.max_views * 2;
 
 pub const Window = struct {
     id: platform.WindowId = 1,
@@ -17,9 +18,22 @@ pub const Diagnostics = struct {
     command_count: usize = 0,
 };
 
+pub const Widget = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8 = "",
+    id: u64 = 0,
+    role: []const u8 = "",
+    name: []const u8 = "",
+    value: ?f32 = null,
+    bounds: geometry.RectF = .{},
+    focused: bool = false,
+    enabled: bool = true,
+};
+
 pub const Input = struct {
     windows: []const Window,
     views: []const platform.ViewInfo = &.{},
+    widgets: []const Widget = &.{},
     diagnostics: Diagnostics = .{},
     source: ?platform.WebViewSource = null,
 };
@@ -64,14 +78,37 @@ pub fn writeText(input: Input, writer: anytype) !void {
             },
         );
         if (view.kind == .gpu_surface) {
-            try writer.print(" gpu_frame={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d}", .{
+            try writer.print(" gpu_frame={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d} widget_revision={d} widget_nodes={d} widget_semantics={d}", .{
                 view.gpu_frame_index,
                 view.gpu_frame_nonblank,
                 view.gpu_sample_color,
                 view.canvas_revision,
                 view.canvas_command_count,
+                view.widget_revision,
+                view.widget_node_count,
+                view.widget_semantics_count,
             });
         }
+        try writer.writeByte('\n');
+    }
+    for (input.widgets) |widget| {
+        try writer.print(
+            "    widget @w{d}/{s}#{d} role={s} name=\"{s}\" bounds=({d},{d} {d}x{d}) focused={any} enabled={any}",
+            .{
+                widget.window_id,
+                widget.view_label,
+                widget.id,
+                widget.role,
+                widget.name,
+                widget.bounds.x,
+                widget.bounds.y,
+                widget.bounds.width,
+                widget.bounds.height,
+                widget.focused,
+                widget.enabled,
+            },
+        );
+        if (widget.value) |value| try writer.print(" value={d}", .{value});
         try writer.writeByte('\n');
     }
     if (input.source) |source| {
@@ -80,7 +117,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
 }
 
 pub fn writeA11yText(input: Input, writer: anytype) !void {
-    try writer.print("a11y root=@w1 nodes={d}\n", .{input.windows.len + input.views.len});
+    try writer.print("a11y root=@w1 nodes={d}\n", .{input.windows.len + input.views.len + input.widgets.len});
     for (input.windows) |window| {
         try writer.print("@w{d} role=window name=\"{s}\" bounds=({d},{d} {d}x{d})\n", .{
             window.id,
@@ -104,6 +141,21 @@ pub fn writeA11yText(input: Input, writer: anytype) !void {
             view.frame.width,
             view.frame.height,
         });
+    }
+    for (input.widgets) |widget| {
+        try writer.print("@w{d}/{s}#{d} role={s} name=\"{s}\" bounds=({d},{d} {d}x{d})", .{
+            widget.window_id,
+            widget.view_label,
+            widget.id,
+            widget.role,
+            widget.name,
+            widget.bounds.x,
+            widget.bounds.y,
+            widget.bounds.width,
+            widget.bounds.height,
+        });
+        if (widget.value) |value| try writer.print(" value={d}", .{value});
+        try writer.writeByte('\n');
     }
 }
 
@@ -165,4 +217,36 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_sample=0xff336699") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_revision=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_commands=5") != null);
+}
+
+test "snapshot emits widget semantics" {
+    var buffer: [768]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
+    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .role = "canvas" }};
+    const widgets = [_]Widget{.{
+        .window_id = 1,
+        .view_label = "canvas",
+        .id = 42,
+        .role = "button",
+        .name = "Run query",
+        .bounds = geometry.RectF.init(10, 12, 80, 32),
+        .focused = true,
+    }};
+    try writeText(.{
+        .windows = &windows,
+        .views = &views,
+        .widgets = &widgets,
+    }, &writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "widget @w1/canvas#42 role=button name=\"Run query\"") != null);
+
+    var a11y_buffer: [768]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try writeA11yText(.{
+        .windows = &windows,
+        .views = &views,
+        .widgets = &widgets,
+    }, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "a11y root=@w1 nodes=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#42 role=button name=\"Run query\"") != null);
 }

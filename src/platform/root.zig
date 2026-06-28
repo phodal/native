@@ -460,6 +460,9 @@ pub const ViewInfo = struct {
     gpu_sample_color: u32 = 0,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
+    widget_revision: u64 = 0,
+    widget_node_count: usize = 0,
+    widget_semantics_count: usize = 0,
     focused: bool = false,
     open: bool = true,
 };

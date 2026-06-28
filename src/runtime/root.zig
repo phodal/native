@@ -748,6 +748,20 @@ pub const Runtime = struct {
         self.invalidateFor(.state, self.views[index].frame);
     }
 
+    fn updateCanvasWidgetScrollFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {
+        if (pointer_event.pointer.phase != .wheel) return;
+        const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
+        if (self.views[index].kind != .gpu_surface) return;
+
+        const scroll_index = self.views[index].nearestCanvasWidgetScrollIndex(pointer_event.route) orelse return;
+        const dirty = try self.views[index].applyCanvasWidgetScroll(scroll_index, pointer_event.pointer.delta.dy) orelse return;
+        if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
+            self.invalidateFor(.state, dirty_region);
+        } else {
+            self.invalidateFor(.state, self.views[index].frame);
+        }
+    }
+
     fn updateCanvasWidgetFocusFromKeyboardInput(self: *Runtime, input_event: GpuSurfaceInputEvent) void {
         if (input_event.kind != .key_down or !std.ascii.eqlIgnoreCase(input_event.key, "tab")) return;
         const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return;
@@ -1074,6 +1088,7 @@ pub const Runtime = struct {
                 };
                 if (widget_pointer_event) |pointer_event| {
                     self.updateCanvasWidgetInteractionFromPointer(pointer_event);
+                    try self.updateCanvasWidgetScrollFromPointer(pointer_event);
                     self.updateCanvasWidgetFocusFromPointer(pointer_event);
                     try self.dispatchEvent(app, .{ .canvas_widget_pointer = pointer_event });
                 }
@@ -3393,6 +3408,68 @@ const RuntimeView = struct {
             self.canvas_widget_pressed_id = 0;
         }
         self.widget_revision += 1;
+    }
+
+    fn nearestCanvasWidgetScrollIndex(self: *const RuntimeView, route: []const canvas.WidgetEventRouteEntry) ?usize {
+        var result: ?usize = null;
+        var result_depth: usize = 0;
+        for (route) |entry| {
+            if (entry.kind != .scroll_view or entry.node_index >= self.widget_layout_node_count) continue;
+            const depth = self.widget_layout_nodes[entry.node_index].depth;
+            if (result == null or depth >= result_depth) {
+                result = entry.node_index;
+                result_depth = depth;
+            }
+        }
+        return result;
+    }
+
+    fn applyCanvasWidgetScroll(self: *RuntimeView, scroll_index: usize, delta_y: f32) anyerror!?geometry.RectF {
+        if (scroll_index >= self.widget_layout_node_count) return null;
+        const scroll_node = self.widget_layout_nodes[scroll_index];
+        if (scroll_node.widget.kind != .scroll_view or scroll_node.widget.layout.virtualized) return null;
+
+        const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
+        if (viewport.isEmpty()) return null;
+
+        var current = canvas.ScrollState{
+            .offset = scroll_node.widget.value,
+            .viewport_extent = viewport.height,
+            .content_extent = self.canvasWidgetScrollContentExtent(scroll_index, viewport),
+        };
+        current = current.clamped();
+        const next = current.applyWheel(delta_y, .{});
+        if (next.offset == current.offset) return null;
+
+        const offset_delta = next.offset - current.offset;
+        self.widget_layout_nodes[scroll_index].widget.value = next.offset;
+        self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
+
+        const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
+        self.widget_semantics_node_count = semantics.len;
+        self.widget_revision += 1;
+        return scroll_node.frame;
+    }
+
+    fn canvasWidgetScrollContentExtent(self: *const RuntimeView, scroll_index: usize, viewport: geometry.RectF) f32 {
+        const scroll_depth = self.widget_layout_nodes[scroll_index].depth;
+        const offset = @max(0, self.widget_layout_nodes[scroll_index].widget.value);
+        var bottom = viewport.maxY();
+        var index = scroll_index + 1;
+        while (index < self.widget_layout_node_count and self.widget_layout_nodes[index].depth > scroll_depth) : (index += 1) {
+            bottom = @max(bottom, self.widget_layout_nodes[index].frame.maxY() + offset);
+        }
+        return @max(0, bottom - viewport.y);
+    }
+
+    fn translateCanvasWidgetScrollDescendants(self: *RuntimeView, scroll_index: usize, dy: f32) void {
+        const scroll_depth = self.widget_layout_nodes[scroll_index].depth;
+        var index = scroll_index + 1;
+        while (index < self.widget_layout_node_count and self.widget_layout_nodes[index].depth > scroll_depth) : (index += 1) {
+            const translated = self.widget_layout_nodes[index].frame.translate(.{ .dx = 0, .dy = dy });
+            self.widget_layout_nodes[index].frame = translated;
+            self.widget_layout_nodes[index].widget.frame = translated;
+        }
     }
 
     fn copyWidgetLayoutNode(self: *RuntimeView, node: canvas.WidgetLayoutNode) anyerror!canvas.WidgetLayoutNode {
@@ -5723,6 +5800,181 @@ test "runtime emits canvas display list from focused widget layout" {
         }
     }
     return error.TestUnexpectedResult;
+}
+
+test "runtime wheel input scrolls retained canvas scroll views" {
+    const TestApp = struct {
+        widget_pointer_count: u32 = 0,
+        raw_input_count: u32 = 0,
+        last_phase: canvas.WidgetPointerPhase = .hover,
+        last_target_id: canvas.ObjectId = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-scroll", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_pointer => |pointer_event| {
+                    self.widget_pointer_count += 1;
+                    self.last_phase = pointer_event.pointer.phase;
+                    self.last_target_id = if (pointer_event.target) |target| target.id else 0;
+                },
+                .gpu_surface_input => self.raw_input_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 180, 72),
+    });
+
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 88, 0, 32), .text = "Three" },
+    };
+    const scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .children = &children,
+    };
+    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 180, 72), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .scroll,
+        .x = 20,
+        .y = 20,
+        .delta_y = 24,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.raw_input_count);
+    try std.testing.expectEqual(canvas.WidgetPointerPhase.wheel, app_state.last_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_target_id);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 180, 72), harness.runtime.pendingDirtyRegions()[0]);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 24), retained.nodes[0].widget.value);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -24, 180, 32), retained.nodes[1].frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 20, 180, 32), retained.nodes[2].frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 64, 180, 32), retained.nodes[3].frame);
+    try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 4), snapshot.widgets.len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, -4, 180, 32), snapshot.widgets[1].bounds);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 40, 180, 32), snapshot.widgets[2].bounds);
+
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    const display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_scrolled_button = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .fill_rounded_rect => |fill| {
+                if (fill.id == testCanvasWidgetPartId(3, 1)) {
+                    try std.testing.expectEqualDeep(geometry.RectF.init(0, 20, 180, 32), fill.rect);
+                    saw_scrolled_button = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_scrolled_button);
+}
+
+test "runtime leaves virtualized canvas scroll views app driven" {
+    const TestApp = struct {
+        widget_pointer_count: u32 = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-virtual-scroll", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_pointer => self.widget_pointer_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 48),
+    });
+
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "One" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Two" },
+        .{ .id = 5, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Three" },
+    };
+    const scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .layout = .{
+            .virtualized = true,
+            .virtual_item_extent = 20,
+            .virtual_overscan = 1,
+        },
+        .children = &children,
+    };
+    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 160, 48), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .scroll,
+        .x = 12,
+        .y = 12,
+        .delta_y = 20,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0), retained.nodes[0].widget.value);
+    try std.testing.expectEqualDeep(layout.nodes[1].frame, retained.nodes[1].frame);
+    try std.testing.expectEqual(@as(u64, 1), harness.runtime.views[0].widget_revision);
 }
 
 test "runtime automation snapshot exposes canvas list roles" {

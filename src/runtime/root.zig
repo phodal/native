@@ -658,6 +658,26 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn routeCanvasWidgetTextInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetKeyboardEvent {
+        try self.validateViewParent(input_event.window_id);
+        try validateViewLabel(input_event.label);
+        const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        const focused_id = self.views[index].canvas_widget_focused_id;
+        if (focused_id == 0) return null;
+        const keyboard = canvasWidgetTextInputEventFromGpuInput(input_event, focused_id) orelse return null;
+
+        const route = try self.views[index].widgetLayoutTree().routeKeyboardEvent(keyboard, output);
+        if (route.target == null) return null;
+        return .{
+            .window_id = input_event.window_id,
+            .view_label = self.views[index].label,
+            .keyboard = keyboard,
+            .target = route.target,
+            .route = route.entries,
+        };
+    }
+
     fn updateCanvasWidgetFocusFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
         if (pointer_event.pointer.phase != .down) return;
         const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
@@ -1011,6 +1031,16 @@ pub const Runtime = struct {
                 };
                 if (widget_keyboard_event) |keyboard_event| {
                     try self.dispatchEvent(app, .{ .canvas_widget_keyboard = keyboard_event });
+                }
+                const widget_text_input_event = self.routeCanvasWidgetTextInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
+                    error.WindowNotFound,
+                    error.ViewNotFound,
+                    error.InvalidViewOptions,
+                    => null,
+                    else => return err,
+                };
+                if (widget_text_input_event) |text_input_event| {
+                    try self.dispatchEvent(app, .{ .canvas_widget_keyboard = text_input_event });
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
             },
@@ -3834,6 +3864,17 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
     };
     return .{
         .phase = phase,
+        .focused_id = focused_id,
+        .key = input_event.key,
+        .text = input_event.text,
+        .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
+    };
+}
+
+fn canvasWidgetTextInputEventFromGpuInput(input_event: GpuSurfaceInputEvent, focused_id: canvas.ObjectId) ?canvas.WidgetKeyboardEvent {
+    if (input_event.kind != .key_down or input_event.text.len == 0) return null;
+    return .{
+        .phase = .text_input,
         .focused_id = focused_id,
         .key = input_event.key,
         .text = input_event.text,
@@ -6861,6 +6902,8 @@ test "runtime dispatches routed canvas widget pointer events" {
         raw_input_count: u32 = 0,
         widget_pointer_count: u32 = 0,
         widget_keyboard_count: u32 = 0,
+        widget_key_down_count: u32 = 0,
+        widget_text_input_count: u32 = 0,
         last_view_label: []const u8 = "",
         last_phase: canvas.WidgetPointerPhase = .hover,
         last_keyboard_phase: canvas.WidgetKeyboardPhase = .key_up,
@@ -6901,6 +6944,11 @@ test "runtime dispatches routed canvas widget pointer events" {
                 },
                 .canvas_widget_keyboard => |keyboard_event| {
                     self.widget_keyboard_count += 1;
+                    switch (keyboard_event.keyboard.phase) {
+                        .key_down => self.widget_key_down_count += 1,
+                        .text_input => self.widget_text_input_count += 1,
+                        .key_up => {},
+                    }
                     self.last_view_label = keyboard_event.view_label;
                     self.last_keyboard_phase = keyboard_event.keyboard.phase;
                     self.last_keyboard_route_len = keyboard_event.route.len;
@@ -6990,18 +7038,19 @@ test "runtime dispatches routed canvas widget pointer events" {
         .label = "canvas",
         .kind = .key_down,
         .key = "enter",
-        .text = "\n",
         .modifiers = .{ .shift = true, .primary = true },
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
     try std.testing.expectEqual(@as(u32, 1), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_key_down_count);
+    try std.testing.expectEqual(@as(u32, 0), app_state.widget_text_input_count);
     try std.testing.expectEqual(@as(u32, 2), app_state.raw_input_count);
     try std.testing.expectEqual(canvas.WidgetKeyboardPhase.key_down, app_state.last_keyboard_phase);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);
     try std.testing.expectEqual(@as(usize, 3), app_state.last_keyboard_route_len);
     try std.testing.expectEqualStrings("enter", app_state.last_keyboard_key);
-    try std.testing.expectEqualStrings("\n", app_state.last_keyboard_text);
+    try std.testing.expectEqualStrings("", app_state.last_keyboard_text);
     try std.testing.expect(app_state.last_keyboard_shift);
     try std.testing.expect(app_state.last_keyboard_super);
 
@@ -7013,6 +7062,8 @@ test "runtime dispatches routed canvas widget pointer events" {
         .key = "tab",
     } });
     try std.testing.expectEqual(@as(u32, 2), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 2), app_state.widget_key_down_count);
+    try std.testing.expectEqual(@as(u32, 0), app_state.widget_text_input_count);
     try std.testing.expectEqual(@as(u32, 3), app_state.raw_input_count);
     try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 3), app_state.last_keyboard_target_id);
@@ -7028,11 +7079,30 @@ test "runtime dispatches routed canvas widget pointer events" {
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    } });
+    try std.testing.expectEqual(@as(u32, 4), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 3), app_state.widget_key_down_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_text_input_count);
+    try std.testing.expectEqual(@as(u32, 4), app_state.raw_input_count);
+    try std.testing.expectEqual(canvas.WidgetKeyboardPhase.text_input, app_state.last_keyboard_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), app_state.last_keyboard_target_id);
+    try std.testing.expectEqual(canvas.WidgetKind.text_field, app_state.last_keyboard_target_kind);
+    try std.testing.expectEqualStrings("a", app_state.last_keyboard_key);
+    try std.testing.expectEqualStrings("a", app_state.last_keyboard_text);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
         .key = "tab",
         .modifiers = .{ .shift = true },
     } });
-    try std.testing.expectEqual(@as(u32, 3), app_state.widget_keyboard_count);
-    try std.testing.expectEqual(@as(u32, 4), app_state.raw_input_count);
+    try std.testing.expectEqual(@as(u32, 5), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 4), app_state.widget_key_down_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_text_input_count);
+    try std.testing.expectEqual(@as(u32, 5), app_state.raw_input_count);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);

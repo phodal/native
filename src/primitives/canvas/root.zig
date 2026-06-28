@@ -1635,6 +1635,12 @@ pub const WidgetScrollMetrics = struct {
     content_extent: f32 = 0,
 };
 
+pub const WidgetListMetrics = struct {
+    present: bool = false,
+    item_index: u32 = 0,
+    item_count: u32 = 0,
+};
+
 pub const WidgetSemanticsNode = struct {
     id: ObjectId,
     role: WidgetRole,
@@ -1645,6 +1651,7 @@ pub const WidgetSemanticsNode = struct {
     grid_column_index: ?usize = null,
     grid_row_count: ?usize = null,
     grid_column_count: ?usize = null,
+    list: WidgetListMetrics = .{},
     scroll: WidgetScrollMetrics = .{},
     bounds: geometry.RectF,
     state: WidgetState,
@@ -4066,6 +4073,7 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
 
         const parent_index = nearestSemanticParent(semantic_stack[0..node.depth]);
         const grid = widgetGridSemantics(layout, node_index);
+        const list = widgetListSemantics(layout, node_index);
         const scroll = widgetScrollSemantics(layout, node_index);
         var actions = semanticActions(node.widget);
         if (scroll.scrollable and !node.widget.state.disabled) {
@@ -4083,6 +4091,7 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
             .grid_column_index = grid.column_index,
             .grid_row_count = grid.row_count,
             .grid_column_count = grid.column_count,
+            .list = list.metrics,
             .scroll = scroll.metrics,
             .bounds = node.frame,
             .state = node.widget.state,
@@ -4268,6 +4277,36 @@ fn maxDataGridColumnCount(layout: WidgetLayoutTree, grid_index: usize) usize {
         max_columns = @max(max_columns, dataRowColumnCount(layout, index));
     }
     return max_columns;
+}
+
+const WidgetListSemantics = struct {
+    metrics: WidgetListMetrics = .{},
+};
+
+fn widgetListSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetListSemantics {
+    if (node_index >= layout.nodes.len) return .{};
+    const node = layout.nodes[node_index];
+    if (node.widget.kind != .list_item) return .{};
+
+    const list_index = node.parent_index orelse return .{};
+    if (list_index >= layout.nodes.len or layout.nodes[list_index].widget.kind != .list) return .{};
+
+    const list = layout.nodes[list_index].widget;
+    const source_count = widgetChildCountByKind(list, .list_item);
+    const item_count = if (source_count > 0) source_count else directChildCountByKind(layout, list_index, .list_item);
+    if (item_count == 0) return .{};
+
+    const item_index = widgetChildOrdinalByKind(list, node.widget.id, .list_item) orelse
+        directChildOrdinalByKind(layout, list_index, node_index, .list_item) orelse return .{};
+    return .{ .metrics = .{
+        .present = true,
+        .item_index = saturatingU32(item_index),
+        .item_count = saturatingU32(item_count),
+    } };
+}
+
+fn saturatingU32(value: usize) u32 {
+    return if (value > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(value);
 }
 
 const WidgetScrollSemantics = struct {
@@ -6564,6 +6603,62 @@ test "widget virtualized scroll view lays out only visible overscan children" {
     try std.testing.expect(layout.hitTest(geometry.PointF.init(10, 56)) == null);
 }
 
+test "widget virtualized list exposes logical item semantics" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },
+        .{ .id = 3, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "One" },
+        .{ .id = 4, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Two" },
+        .{ .id = 5, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Three" },
+        .{ .id = 6, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Four" },
+        .{ .id = 7, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Five" },
+        .{ .id = 8, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Six" },
+        .{ .id = 9, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Seven" },
+        .{ .id = 10, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Eight" },
+        .{ .id = 11, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Nine" },
+    };
+    const list = Widget{
+        .id = 1,
+        .kind = .list,
+        .value = 45,
+        .layout = .{
+            .gap = 5,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+            .virtual_overscan = 1,
+        },
+        .children = &children,
+    };
+
+    var nodes: [6]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(list, geometry.RectF.init(0, 0, 120, 50), &nodes);
+    try std.testing.expectEqual(@as(usize, 6), layout.nodeCount());
+    try std.testing.expect(layout.findById(7) == null);
+
+    var semantics_buffer: [6]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 6), semantics.len);
+    try std.testing.expectEqual(WidgetRole.list, semantics[0].role);
+    try std.testing.expect(!semantics[0].list.present);
+
+    try std.testing.expectEqual(WidgetRole.listitem, semantics[1].role);
+    try std.testing.expectEqual(@as(ObjectId, 2), semantics[1].id);
+    try std.testing.expect(semantics[1].list.present);
+    try std.testing.expectEqual(@as(u32, 0), semantics[1].list.item_index);
+    try std.testing.expectEqual(@as(u32, 10), semantics[1].list.item_count);
+
+    try std.testing.expectEqual(WidgetRole.listitem, semantics[3].role);
+    try std.testing.expectEqual(@as(ObjectId, 4), semantics[3].id);
+    try std.testing.expect(semantics[3].list.present);
+    try std.testing.expectEqual(@as(u32, 2), semantics[3].list.item_index);
+    try std.testing.expectEqual(@as(u32, 10), semantics[3].list.item_count);
+
+    try std.testing.expectEqual(WidgetRole.listitem, semantics[5].role);
+    try std.testing.expectEqual(@as(ObjectId, 6), semantics[5].id);
+    try std.testing.expect(semantics[5].list.present);
+    try std.testing.expectEqual(@as(u32, 4), semantics[5].list.item_index);
+    try std.testing.expectEqual(@as(u32, 10), semantics[5].list.item_count);
+}
+
 test "widget pointer route includes capture target and bubble phases" {
     const row_children = [_]Widget{.{
         .id = 2,
@@ -7513,12 +7608,19 @@ test "widget list layout groups list items semantically" {
     try std.testing.expectEqual(WidgetRole.list, semantics[0].role);
     try std.testing.expectEqualStrings("Mailboxes", semantics[0].label);
     try std.testing.expect(semantics[0].parent_index == null);
+    try std.testing.expect(!semantics[0].list.present);
     try std.testing.expectEqual(WidgetRole.listitem, semantics[1].role);
     try std.testing.expectEqual(@as(?usize, 0), semantics[1].parent_index);
     try std.testing.expectEqual(@as(?f32, 1), semantics[1].value);
+    try std.testing.expect(semantics[1].list.present);
+    try std.testing.expectEqual(@as(u32, 0), semantics[1].list.item_index);
+    try std.testing.expectEqual(@as(u32, 2), semantics[1].list.item_count);
     try std.testing.expectEqual(WidgetRole.listitem, semantics[2].role);
     try std.testing.expectEqual(@as(?usize, 0), semantics[2].parent_index);
     try std.testing.expectEqual(@as(?f32, 0), semantics[2].value);
+    try std.testing.expect(semantics[2].list.present);
+    try std.testing.expectEqual(@as(u32, 1), semantics[2].list.item_index);
+    try std.testing.expectEqual(@as(u32, 2), semantics[2].list.item_count);
 }
 
 test "widget layout reports fixed buffer errors" {

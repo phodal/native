@@ -50,6 +50,12 @@ pub const WidgetScroll = struct {
     content_extent: f32 = 0,
 };
 
+pub const WidgetList = struct {
+    present: bool = false,
+    item_index: u32 = 0,
+    item_count: u32 = 0,
+};
+
 pub const Widget = struct {
     window_id: platform.WindowId = 1,
     view_label: []const u8 = "",
@@ -63,6 +69,7 @@ pub const Widget = struct {
     grid_column_index: ?usize = null,
     grid_row_count: ?usize = null,
     grid_column_count: ?usize = null,
+    list: WidgetList = .{},
     scroll: WidgetScroll = .{},
     bounds: geometry.RectF = .{},
     focused: bool = false,
@@ -178,6 +185,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
         if (widget.value) |value| try writer.print(" value={d}", .{value});
         try writeWidgetTextValue(widget, writer);
         try writeWidgetGrid(widget, writer);
+        try writeWidgetList(widget, writer);
         try writeWidgetScroll(widget, writer);
         try writeWidgetState(widget, writer);
         try writeWidgetActions(widget.actions, writer);
@@ -231,6 +239,7 @@ pub fn writeA11yText(input: Input, writer: anytype) !void {
         if (widget.value) |value| try writer.print(" value={d}", .{value});
         try writeWidgetTextValue(widget, writer);
         try writeWidgetGrid(widget, writer);
+        try writeWidgetList(widget, writer);
         try writeWidgetScroll(widget, writer);
         try writeWidgetState(widget, writer);
         try writeWidgetActions(widget.actions, writer);
@@ -268,6 +277,11 @@ fn writeWidgetGridValue(name: []const u8, value: ?usize, wrote: *bool, writer: a
     if (wrote.*) try writer.writeByte(',');
     try writer.print("{s}={d}", .{ name, unwrapped });
     wrote.* = true;
+}
+
+fn writeWidgetList(widget: Widget, writer: anytype) !void {
+    if (!widget.list.present) return;
+    try writer.print(" list=[index={d},count={d}]", .{ widget.list.item_index, widget.list.item_count });
 }
 
 fn writeWidgetScroll(widget: Widget, writer: anytype) !void {
@@ -413,6 +427,11 @@ test "snapshot emits widget semantics" {
         .grid_column_index = 2,
         .grid_row_count = 4,
         .grid_column_count = 5,
+        .list = .{
+            .present = true,
+            .item_index = 3,
+            .item_count = 9,
+        },
         .scroll = .{
             .present = true,
             .offset = 12.0,
@@ -437,6 +456,7 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "parent=#7") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "text=\"deploy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[hovered,pressed,selected]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "actions=[focus,press]") != null);
@@ -455,6 +475,7 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#7") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "text=\"deploy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[hovered,pressed,selected]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,press]") != null);

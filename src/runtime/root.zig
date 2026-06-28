@@ -1536,6 +1536,11 @@ pub const Runtime = struct {
                     .grid_column_index = node.grid_column_index,
                     .grid_row_count = node.grid_row_count,
                     .grid_column_count = node.grid_column_count,
+                    .list = .{
+                        .present = node.list.present,
+                        .item_index = node.list.item_index,
+                        .item_count = node.list.item_count,
+                    },
                     .scroll = .{
                         .present = node.scroll.present,
                         .offset = node.scroll.offset,
@@ -8238,9 +8243,15 @@ test "runtime automation snapshot exposes canvas list roles" {
     try std.testing.expectEqualStrings("Inbox", snapshot.widgets[1].name);
     try std.testing.expectEqual(@as(?u64, 1), snapshot.widgets[1].parent_id);
     try std.testing.expectEqualDeep(geometry.RectF.init(20, 30, 240, 32), snapshot.widgets[1].bounds);
+    try std.testing.expect(snapshot.widgets[1].list.present);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.widgets[1].list.item_index);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.widgets[1].list.item_count);
     try std.testing.expectEqualStrings("listitem", snapshot.widgets[2].role);
     try std.testing.expectEqualStrings("Archive", snapshot.widgets[2].name);
     try std.testing.expectEqual(@as(?u64, 1), snapshot.widgets[2].parent_id);
+    try std.testing.expect(snapshot.widgets[2].list.present);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.widgets[2].list.item_index);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.widgets[2].list.item_count);
 
     var a11y_buffer: [1024]u8 = undefined;
     var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
@@ -8248,6 +8259,7 @@ test "runtime automation snapshot exposes canvas list roles" {
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=list name=\"Mailboxes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=listitem name=\"Inbox\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=0,count=2]") != null);
 }
 
 test "runtime automation snapshot exposes canvas data grid roles" {

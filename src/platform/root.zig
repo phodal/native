@@ -481,6 +481,11 @@ pub const ViewInfo = struct {
             .timestamp_ns = self.gpu_timestamp_ns,
             .nonblank = self.gpu_frame_nonblank,
             .sample_color = self.gpu_sample_color,
+            .canvas_revision = self.canvas_revision,
+            .canvas_command_count = self.canvas_command_count,
+            .widget_revision = self.widget_revision,
+            .widget_node_count = self.widget_node_count,
+            .widget_semantics_count = self.widget_semantics_count,
         };
     }
 };
@@ -647,6 +652,11 @@ pub const GpuFrame = struct {
     timestamp_ns: u64 = 0,
     nonblank: bool = false,
     sample_color: u32 = 0,
+    canvas_revision: u64 = 0,
+    canvas_command_count: usize = 0,
+    widget_revision: u64 = 0,
+    widget_node_count: usize = 0,
+    widget_semantics_count: usize = 0,
 };
 
 pub const GpuSurfaceFrameEvent = struct {
@@ -658,6 +668,11 @@ pub const GpuSurfaceFrameEvent = struct {
     timestamp_ns: u64 = 0,
     nonblank: bool = false,
     sample_color: u32 = 0,
+    canvas_revision: u64 = 0,
+    canvas_command_count: usize = 0,
+    widget_revision: u64 = 0,
+    widget_node_count: usize = 0,
+    widget_semantics_count: usize = 0,
 };
 
 pub const GpuSurfaceResizeEvent = struct {

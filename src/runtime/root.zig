@@ -1119,6 +1119,7 @@ pub const Runtime = struct {
                 });
             },
             .gpu_surface_frame => |frame_event| {
+                var enriched_frame_event = frame_event;
                 if (self.findViewIndex(frame_event.window_id, frame_event.label)) |index| {
                     self.views[index].gpu_size = frame_event.size;
                     self.views[index].gpu_scale_factor = frame_event.scale_factor;
@@ -1126,8 +1127,13 @@ pub const Runtime = struct {
                     self.views[index].gpu_timestamp_ns = frame_event.timestamp_ns;
                     self.views[index].gpu_frame_nonblank = frame_event.nonblank;
                     self.views[index].gpu_sample_color = frame_event.sample_color;
+                    enriched_frame_event.canvas_revision = self.views[index].canvas_revision;
+                    enriched_frame_event.canvas_command_count = self.views[index].canvas_command_count;
+                    enriched_frame_event.widget_revision = self.views[index].widget_revision;
+                    enriched_frame_event.widget_node_count = self.views[index].widget_layout_node_count;
+                    enriched_frame_event.widget_semantics_count = self.views[index].widget_semantics_node_count;
                 }
-                try self.dispatchEvent(app, .{ .gpu_surface_frame = frame_event });
+                try self.dispatchEvent(app, .{ .gpu_surface_frame = enriched_frame_event });
             },
             .gpu_surface_resized => |resize_event| {
                 if (self.findViewIndex(resize_event.window_id, resize_event.label)) |index| {
@@ -8051,6 +8057,11 @@ test "runtime dispatches GPU surface events" {
         input_count: u32 = 0,
         last_label: []const u8 = "",
         last_input_kind: platform.GpuSurfaceInputKind = .pointer_move,
+        last_canvas_revision: u64 = 0,
+        last_canvas_command_count: usize = 0,
+        last_widget_revision: u64 = 0,
+        last_widget_node_count: usize = 0,
+        last_widget_semantics_count: usize = 0,
 
         fn app(self: *@This()) App {
             return .{ .context = self, .name = "gpu-events", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
@@ -8063,6 +8074,11 @@ test "runtime dispatches GPU surface events" {
                 .gpu_surface_frame => |frame_event| {
                     self.frame_count += 1;
                     self.last_label = frame_event.label;
+                    self.last_canvas_revision = frame_event.canvas_revision;
+                    self.last_canvas_command_count = frame_event.canvas_command_count;
+                    self.last_widget_revision = frame_event.widget_revision;
+                    self.last_widget_node_count = frame_event.widget_node_count;
+                    self.last_widget_semantics_count = frame_event.widget_semantics_count;
                 },
                 .gpu_surface_resized => |resize_event| {
                     self.resize_count += 1;
@@ -8096,6 +8112,30 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(f32, 640), initial_frame.size.width);
     try std.testing.expectEqual(@as(f32, 360), initial_frame.size.height);
     try std.testing.expectEqual(@as(u64, 0), initial_frame.frame_index);
+    try std.testing.expectEqual(@as(u64, 0), initial_frame.canvas_revision);
+    try std.testing.expectEqual(@as(usize, 0), initial_frame.canvas_command_count);
+    try std.testing.expectEqual(@as(u64, 0), initial_frame.widget_revision);
+    try std.testing.expectEqual(@as(usize, 0), initial_frame.widget_node_count);
+
+    var commands: [1]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try builder.fillRect(.{
+        .id = 10,
+        .rect = geometry.RectF.init(0, 0, 320, 180),
+        .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) },
+    });
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", builder.displayList());
+
+    const widgets = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(12, 12, 96, 32),
+        .text = "Run",
+        .semantics = .{ .label = "Run report" },
+    }};
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 640, 360), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
     harness.runtime.invalidated = false;
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
@@ -8110,6 +8150,11 @@ test "runtime dispatches GPU surface events" {
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.frame_count);
     try std.testing.expectEqualStrings("canvas", app_state.last_label);
+    try std.testing.expectEqual(@as(u64, 1), app_state.last_canvas_revision);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_command_count);
+    try std.testing.expectEqual(@as(u64, 1), app_state.last_widget_revision);
+    try std.testing.expectEqual(@as(usize, 2), app_state.last_widget_node_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_widget_semantics_count);
     try std.testing.expect(!harness.runtime.invalidated);
     const frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expectEqual(created.id, frame.surface_id);
@@ -8122,6 +8167,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(u64, 42), frame.timestamp_ns);
     try std.testing.expect(frame.nonblank);
     try std.testing.expectEqual(@as(u32, 0xff336699), frame.sample_color);
+    try std.testing.expectEqual(@as(u64, 1), frame.canvas_revision);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_command_count);
+    try std.testing.expectEqual(@as(u64, 1), frame.widget_revision);
+    try std.testing.expectEqual(@as(usize, 2), frame.widget_node_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.widget_semantics_count);
     var view_json_buffer: [1024]u8 = undefined;
     const view_json = try writeViewJson(harness.runtime.views[0].info(), &view_json_buffer);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuWidth\":640") != null);

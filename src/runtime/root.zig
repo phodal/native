@@ -3873,6 +3873,7 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
 
 fn canvasWidgetTextInputEventFromGpuInput(input_event: GpuSurfaceInputEvent, focused_id: canvas.ObjectId) ?canvas.WidgetKeyboardEvent {
     if (input_event.kind != .key_down or input_event.text.len == 0) return null;
+    if (gpuInputHasTextCommandModifier(input_event)) return null;
     return .{
         .phase = .text_input,
         .focused_id = focused_id,
@@ -3880,6 +3881,10 @@ fn canvasWidgetTextInputEventFromGpuInput(input_event: GpuSurfaceInputEvent, foc
         .text = input_event.text,
         .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
     };
+}
+
+fn gpuInputHasTextCommandModifier(input_event: GpuSurfaceInputEvent) bool {
+    return input_event.modifiers.primary or input_event.modifiers.command or input_event.modifiers.control;
 }
 
 fn canvasWidgetKeyboardModifiers(modifiers: platform.ShortcutModifiers) canvas.WidgetKeyboardModifiers {
@@ -7096,13 +7101,32 @@ test "runtime dispatches routed canvas widget pointer events" {
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
-        .key = "tab",
-        .modifiers = .{ .shift = true },
+        .key = "a",
+        .text = "a",
+        .modifiers = .{ .primary = true, .command = true },
     } });
     try std.testing.expectEqual(@as(u32, 5), app_state.widget_keyboard_count);
     try std.testing.expectEqual(@as(u32, 4), app_state.widget_key_down_count);
     try std.testing.expectEqual(@as(u32, 1), app_state.widget_text_input_count);
     try std.testing.expectEqual(@as(u32, 5), app_state.raw_input_count);
+    try std.testing.expectEqual(canvas.WidgetKeyboardPhase.key_down, app_state.last_keyboard_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), app_state.last_keyboard_target_id);
+    try std.testing.expectEqual(canvas.WidgetKind.text_field, app_state.last_keyboard_target_kind);
+    try std.testing.expectEqualStrings("a", app_state.last_keyboard_key);
+    try std.testing.expectEqualStrings("a", app_state.last_keyboard_text);
+    try std.testing.expect(app_state.last_keyboard_super);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+        .modifiers = .{ .shift = true },
+    } });
+    try std.testing.expectEqual(@as(u32, 6), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 5), app_state.widget_key_down_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_text_input_count);
+    try std.testing.expectEqual(@as(u32, 6), app_state.raw_input_count);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);

@@ -1029,6 +1029,14 @@ pub const WidgetKeyboardModifiers = struct {
     control: bool = false,
     alt: bool = false,
     super: bool = false,
+
+    pub fn hasCommandModifier(self: WidgetKeyboardModifiers) bool {
+        return self.control or self.super;
+    }
+
+    pub fn hasNavigationModifier(self: WidgetKeyboardModifiers) bool {
+        return self.control or self.alt or self.super;
+    }
 };
 
 pub const WidgetKeyboardEvent = struct {
@@ -1037,6 +1045,10 @@ pub const WidgetKeyboardEvent = struct {
     key: []const u8 = "",
     text: []const u8 = "",
     modifiers: WidgetKeyboardModifiers = .{},
+
+    pub fn textEditEvent(self: WidgetKeyboardEvent) ?TextInputEvent {
+        return widgetKeyboardTextEditEvent(self);
+    }
 };
 
 pub const WidgetEventPhase = enum {
@@ -2937,6 +2949,25 @@ fn routeWidgetKeyboardEvent(layout: WidgetLayoutTree, event: WidgetKeyboardEvent
     const target = focusTargetFromNode(layout.nodes[target_index], target_index) orelse return .{ .entries = output[0..0] };
     const entries = try routeWidgetEventPath(layout, target.index, output);
     return .{ .target = target, .entries = entries };
+}
+
+fn widgetKeyboardTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
+    return switch (event.phase) {
+        .text_input => if (event.text.len > 0 and !event.modifiers.hasCommandModifier()) .{ .insert_text = event.text } else null,
+        .key_down => widgetKeyboardKeyDownTextEditEvent(event),
+        .key_up => null,
+    };
+}
+
+fn widgetKeyboardKeyDownTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
+    if (event.modifiers.hasNavigationModifier()) return null;
+    if (std.ascii.eqlIgnoreCase(event.key, "backspace")) return .delete_backward;
+    if (std.ascii.eqlIgnoreCase(event.key, "delete")) return .delete_forward;
+    if (std.ascii.eqlIgnoreCase(event.key, "arrowleft")) return .{ .move_caret = .{ .direction = .previous, .extend = event.modifiers.shift } };
+    if (std.ascii.eqlIgnoreCase(event.key, "arrowright")) return .{ .move_caret = .{ .direction = .next, .extend = event.modifiers.shift } };
+    if (std.ascii.eqlIgnoreCase(event.key, "home")) return .{ .move_caret = .{ .direction = .start, .extend = event.modifiers.shift } };
+    if (std.ascii.eqlIgnoreCase(event.key, "end")) return .{ .move_caret = .{ .direction = .end, .extend = event.modifiers.shift } };
+    return null;
 }
 
 fn routeWidgetEventPath(layout: WidgetLayoutTree, target_index: usize, output: []WidgetEventRouteEntry) Error![]const WidgetEventRouteEntry {
@@ -6561,6 +6592,46 @@ test "text edit state applies utf8-aware caret insert and delete events" {
 
     var small: [1]u8 = undefined;
     try std.testing.expectError(error.TextEditBufferTooSmall, state.apply(.{ .insert_text = "toolong" }, &small));
+}
+
+test "widget keyboard events map to text edit events" {
+    var storage_a: [64]u8 = undefined;
+    var storage_b: [64]u8 = undefined;
+    var state = TextEditState.init("Hi");
+
+    const insert = (WidgetKeyboardEvent{ .phase = .text_input, .text = "!" }).textEditEvent().?;
+    state = try state.apply(insert, &storage_a);
+    try std.testing.expectEqualStrings("Hi!", state.text);
+    try std.testing.expectEqual(@as(usize, 3), state.selection.focus);
+
+    const backspace = (WidgetKeyboardEvent{ .phase = .key_down, .key = "backspace" }).textEditEvent().?;
+    state = try state.apply(backspace, &storage_b);
+    try std.testing.expectEqualStrings("Hi", state.text);
+    try std.testing.expectEqual(@as(usize, 2), state.selection.focus);
+
+    const extend_left = (WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .shift = true } }).textEditEvent().?;
+    state = try state.apply(extend_left, &storage_a);
+    try std.testing.expectEqual(@as(usize, 2), state.selection.anchor);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
+    const delete_forward = (WidgetKeyboardEvent{ .phase = .key_down, .key = "delete" }).textEditEvent().?;
+    state = try state.apply(delete_forward, &storage_b);
+    try std.testing.expectEqualStrings("H", state.text);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
+    const home = (WidgetKeyboardEvent{ .phase = .key_down, .key = "home" }).textEditEvent().?;
+    state = try state.apply(home, &storage_a);
+    try std.testing.expectEqual(@as(usize, 0), state.selection.focus);
+
+    const option_insert = (WidgetKeyboardEvent{ .phase = .text_input, .text = "@", .modifiers = .{ .alt = true } }).textEditEvent().?;
+    switch (option_insert) {
+        .insert_text => |text| try std.testing.expectEqualStrings("@", text),
+        else => try std.testing.expect(false),
+    }
+
+    try std.testing.expect((WidgetKeyboardEvent{ .phase = .text_input, .text = "a", .modifiers = .{ .super = true } }).textEditEvent() == null);
+    try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .alt = true } }).textEditEvent() == null);
+    try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_up, .key = "backspace" }).textEditEvent() == null);
 }
 
 test "text edit state tracks ime composition ranges" {

@@ -1258,6 +1258,22 @@ pub const Easing = enum {
     spring,
 };
 
+pub const ColorScheme = enum {
+    light,
+    dark,
+};
+
+pub const ColorContrast = enum {
+    standard,
+    high,
+};
+
+pub const ThemeOptions = struct {
+    color_scheme: ColorScheme = .light,
+    contrast: ColorContrast = .standard,
+    density: Density = .regular,
+};
+
 pub const ColorTokens = struct {
     background: Color = Color.rgb8(255, 255, 255),
     surface: Color = Color.rgb8(255, 255, 255),
@@ -1271,6 +1287,74 @@ pub const ColorTokens = struct {
     focus_ring: Color = Color.rgb8(37, 99, 235),
     shadow: Color = Color.rgba8(15, 23, 42, 38),
     disabled: Color = Color.rgb8(226, 232, 240),
+
+    pub fn theme(color_scheme: ColorScheme, contrast: ColorContrast) ColorTokens {
+        return switch (color_scheme) {
+            .light => switch (contrast) {
+                .standard => light(),
+                .high => highContrastLight(),
+            },
+            .dark => switch (contrast) {
+                .standard => dark(),
+                .high => highContrastDark(),
+            },
+        };
+    }
+
+    pub fn light() ColorTokens {
+        return .{};
+    }
+
+    pub fn dark() ColorTokens {
+        return .{
+            .background = Color.rgb8(9, 11, 17),
+            .surface = Color.rgb8(17, 24, 39),
+            .surface_subtle = Color.rgb8(30, 41, 59),
+            .surface_pressed = Color.rgb8(51, 65, 85),
+            .text = Color.rgb8(248, 250, 252),
+            .text_muted = Color.rgb8(148, 163, 184),
+            .border = Color.rgba8(226, 232, 240, 42),
+            .accent = Color.rgb8(244, 244, 245),
+            .accent_text = Color.rgb8(9, 9, 11),
+            .focus_ring = Color.rgb8(96, 165, 250),
+            .shadow = Color.rgba8(0, 0, 0, 110),
+            .disabled = Color.rgb8(51, 65, 85),
+        };
+    }
+
+    pub fn highContrastLight() ColorTokens {
+        return .{
+            .background = Color.rgb8(255, 255, 255),
+            .surface = Color.rgb8(255, 255, 255),
+            .surface_subtle = Color.rgb8(243, 244, 246),
+            .surface_pressed = Color.rgb8(229, 231, 235),
+            .text = Color.rgb8(0, 0, 0),
+            .text_muted = Color.rgb8(55, 65, 81),
+            .border = Color.rgba8(0, 0, 0, 180),
+            .accent = Color.rgb8(0, 0, 0),
+            .accent_text = Color.rgb8(255, 255, 255),
+            .focus_ring = Color.rgb8(0, 84, 197),
+            .shadow = Color.rgba8(0, 0, 0, 96),
+            .disabled = Color.rgb8(156, 163, 175),
+        };
+    }
+
+    pub fn highContrastDark() ColorTokens {
+        return .{
+            .background = Color.rgb8(0, 0, 0),
+            .surface = Color.rgb8(10, 10, 10),
+            .surface_subtle = Color.rgb8(23, 23, 23),
+            .surface_pressed = Color.rgb8(38, 38, 38),
+            .text = Color.rgb8(255, 255, 255),
+            .text_muted = Color.rgb8(229, 231, 235),
+            .border = Color.rgba8(255, 255, 255, 190),
+            .accent = Color.rgb8(255, 255, 255),
+            .accent_text = Color.rgb8(0, 0, 0),
+            .focus_ring = Color.rgb8(147, 197, 253),
+            .shadow = Color.rgba8(0, 0, 0, 180),
+            .disabled = Color.rgb8(82, 82, 82),
+        };
+    }
 };
 
 pub const TypographyTokens = struct {
@@ -1501,6 +1585,13 @@ pub const DesignTokens = struct {
     motion: MotionTokens = .{},
     layer: LayerTokens = .{},
     density: Density = .regular,
+
+    pub fn theme(options: ThemeOptions) DesignTokens {
+        return .{
+            .colors = ColorTokens.theme(options.color_scheme, options.contrast),
+            .density = options.density,
+        };
+    }
 };
 
 pub const WidgetKind = enum {
@@ -7293,6 +7384,58 @@ test "widget focus target lookup validates focusable ids" {
     const target = layout.focusTargetById(3).?;
     try std.testing.expectEqual(@as(ObjectId, 3), target.id);
     try std.testing.expectEqual(WidgetKind.button, target.kind);
+}
+
+test "design tokens provide theme and contrast palettes" {
+    const light = DesignTokens.theme(.{});
+    try std.testing.expectEqual(Density.regular, light.density);
+    try std.testing.expectEqualDeep(ColorTokens.light(), light.colors);
+
+    const dark = DesignTokens.theme(.{ .color_scheme = .dark, .density = .compact });
+    try std.testing.expectEqual(Density.compact, dark.density);
+    try std.testing.expectEqualDeep(ColorTokens.dark(), dark.colors);
+    try std.testing.expectEqualDeep(Color.rgb8(9, 11, 17), dark.colors.background);
+    try std.testing.expectEqualDeep(Color.rgb8(248, 250, 252), dark.colors.text);
+
+    const high_contrast = DesignTokens.theme(.{ .color_scheme = .dark, .contrast = .high, .density = .spacious });
+    try std.testing.expectEqual(Density.spacious, high_contrast.density);
+    try std.testing.expectEqualDeep(ColorTokens.highContrastDark(), high_contrast.colors);
+    try std.testing.expectEqualDeep(Color.rgb8(0, 0, 0), high_contrast.colors.background);
+    try std.testing.expectEqualDeep(Color.rgba8(255, 255, 255, 190), high_contrast.colors.border);
+}
+
+test "themed design tokens flow into widget display lists" {
+    const tokens = DesignTokens.theme(.{ .color_scheme = .dark, .contrast = .high });
+    const button = Widget{
+        .id = 9,
+        .kind = .button,
+        .frame = geometry.RectF.init(8, 8, 96, 32),
+        .text = "Run",
+        .state = .{ .selected = true, .focused = true },
+    };
+
+    var commands: [4]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, button, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget spatial focus traversal moves across data grid cells" {

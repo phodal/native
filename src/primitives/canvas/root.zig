@@ -650,6 +650,7 @@ pub const WidgetKind = enum {
     panel,
     text,
     button,
+    text_field,
     checkbox,
     toggle,
     slider,
@@ -676,6 +677,7 @@ pub const WidgetRole = enum {
     group,
     text,
     button,
+    textbox,
     checkbox,
     switch_control,
     slider,
@@ -1051,6 +1053,7 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
             .panel => try emitPanelWidgetChrome(builder, widget, tokens),
             .text => try emitTextWidget(builder, widget, tokens),
             .button => try emitButtonWidget(builder, widget, tokens),
+            .text_field => try emitTextFieldWidget(builder, widget, tokens),
             .checkbox => try emitCheckboxWidget(builder, widget, tokens),
             .toggle => try emitToggleWidget(builder, widget, tokens),
             .slider => try emitSliderWidget(builder, widget, tokens),
@@ -1619,6 +1622,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .panel => try emitPanelWidget(builder, widget, tokens, depth),
         .text => try emitTextWidget(builder, widget, tokens),
         .button => try emitButtonWidget(builder, widget, tokens),
+        .text_field => try emitTextFieldWidget(builder, widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, widget, tokens),
         .toggle => try emitToggleWidget(builder, widget, tokens),
         .slider => try emitSliderWidget(builder, widget, tokens),
@@ -1716,6 +1720,35 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .color = buttonTextColor(tokens, widget.state),
         .text = widget.text,
     });
+}
+
+fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const radius = Radius.all(tokens.radius.md);
+    try builder.fillRoundedRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+        .radius = radius,
+        .fill = .{ .color = if (widget.state.disabled) tokens.colors.disabled else tokens.colors.surface },
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = .{ .color = if (widget.state.focused) tokens.colors.focus_ring else tokens.colors.border },
+            .width = if (widget.state.focused) tokens.stroke.focus else tokens.stroke.regular,
+        },
+    });
+    if (widget.text.len > 0) {
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 3),
+            .font_id = tokens.typography.font_id,
+            .size = tokens.typography.body_size,
+            .origin = textOrigin(widget.frame, tokens.typography.body_size, tokens.spacing.md),
+            .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
+            .text = widget.text,
+        });
+    }
 }
 
 fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -1959,7 +1992,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .button, .checkbox, .toggle, .slider, .progress => {},
+        .text, .button, .text_field, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -2233,6 +2266,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .stack, .row, .column, .panel => .group,
         .text => .text,
         .button => .button,
+        .text_field => .textbox,
         .checkbox => .checkbox,
         .toggle => .switch_control,
         .slider => .slider,
@@ -2256,7 +2290,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .button, .text_field, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -2270,7 +2304,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .stack => false,
-        .panel, .text, .button, .checkbox, .toggle, .slider, .progress => true,
+        .panel, .text, .button, .text_field, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -3441,6 +3475,50 @@ test "widget controls expose roles values focus and hit testing" {
     try std.testing.expectEqual(@as(?f32, 0), semantics[2].value);
     try std.testing.expectEqual(WidgetRole.slider, semantics[3].role);
     try std.testing.expectEqual(@as(?f32, 0.35), semantics[3].value);
+}
+
+test "widget text fields expose textbox semantics and render focused chrome" {
+    const text_field = Widget{
+        .id = 8,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 180, 36),
+        .text = "search terms",
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Search" },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(text_field, text_field.frame, &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 8), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(WidgetKind.text_field, layout.hitTest(geometry.PointF.init(20, 24)).?.kind);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
+    try std.testing.expectEqualStrings("Search", semantics[0].label);
+    try std.testing.expect(semantics[0].focusable);
+
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3) },
+        .stroke = .{ .focus = 3 },
+    };
+    var commands: [3]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, text_field, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 3), stroke.stroke.width);
+            try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try std.testing.expectEqualStrings("search terms", text.text),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget layout reports fixed buffer errors" {

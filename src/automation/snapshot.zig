@@ -26,6 +26,7 @@ pub const WidgetActions = struct {
     decrement: bool = false,
     set_text: bool = false,
     select: bool = false,
+    drag: bool = false,
     drop_files: bool = false,
 
     pub fn isEmpty(self: WidgetActions) bool {
@@ -36,6 +37,7 @@ pub const WidgetActions = struct {
             !self.decrement and
             !self.set_text and
             !self.select and
+            !self.drag and
             !self.drop_files;
     }
 };
@@ -325,6 +327,7 @@ fn writeWidgetActions(actions: WidgetActions, writer: anytype) !void {
     try writeWidgetAction(actions.decrement, "decrement", &wrote, writer);
     try writeWidgetAction(actions.set_text, "set_text", &wrote, writer);
     try writeWidgetAction(actions.select, "select", &wrote, writer);
+    try writeWidgetAction(actions.drag, "drag", &wrote, writer);
     try writeWidgetAction(actions.drop_files, "drop_files", &wrote, writer);
     try writer.writeByte(']');
 }
@@ -450,7 +453,7 @@ test "snapshot emits widget semantics" {
         .hovered = true,
         .pressed = true,
         .selected = true,
-        .actions = .{ .focus = true, .press = true, .drop_files = true },
+        .actions = .{ .focus = true, .press = true, .drag = true, .drop_files = true },
         .text_selection = .{ .start = 4, .end = 4 },
         .text_composition = .{ .start = 0, .end = 3 },
     }};
@@ -466,7 +469,7 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[hovered,pressed,selected]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "actions=[focus,press,drop_files]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "actions=[focus,press,drag,drop_files]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "selection=4..4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "composition=0..3") != null);
 
@@ -485,7 +488,7 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[hovered,pressed,selected]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,press,drop_files]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,press,drag,drop_files]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "selection=4..4") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "composition=0..3") != null);
 }

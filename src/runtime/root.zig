@@ -86,6 +86,14 @@ pub const CanvasWidgetFileDropEvent = struct {
     route: []const canvas.WidgetEventRouteEntry = &.{},
 };
 
+pub const CanvasWidgetDragEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    drag: canvas.WidgetDragEvent,
+    source: ?canvas.WidgetHit = null,
+    route: []const canvas.WidgetEventRouteEntry = &.{},
+};
+
 pub const InvalidationReason = enum {
     startup,
     surface_resize,
@@ -112,6 +120,7 @@ pub const Event = union(enum) {
     canvas_widget_pointer: CanvasWidgetPointerEvent,
     canvas_widget_keyboard: CanvasWidgetKeyboardEvent,
     canvas_widget_file_drop: CanvasWidgetFileDropEvent,
+    canvas_widget_drag: CanvasWidgetDragEvent,
 
     pub fn name(self: Event) []const u8 {
         return switch (self) {
@@ -125,6 +134,7 @@ pub const Event = union(enum) {
             .canvas_widget_pointer => "canvas_widget_pointer",
             .canvas_widget_keyboard => "canvas_widget_keyboard",
             .canvas_widget_file_drop => "canvas_widget_file_drop",
+            .canvas_widget_drag => "canvas_widget_drag",
         };
     }
 };
@@ -922,6 +932,31 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn routeCanvasWidgetDragInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetDragEvent {
+        try self.validateViewParent(input_event.window_id);
+        if (input_event.kind != .pointer_drag) return null;
+        try validateViewLabel(input_event.label);
+        const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        const source_id = self.views[index].canvas_widget_pressed_id;
+        if (source_id == 0) return null;
+
+        const drag = canvas.WidgetDragEvent{
+            .source_id = source_id,
+            .point = geometry.PointF.init(input_event.x, input_event.y),
+            .delta = geometry.OffsetF.init(input_event.delta_x, input_event.delta_y),
+        };
+        const route = try self.views[index].widgetLayoutTree().routeDragEvent(drag, output);
+        if (route.target == null) return null;
+        return .{
+            .window_id = input_event.window_id,
+            .view_label = self.views[index].label,
+            .drag = drag,
+            .source = route.target,
+            .route = route.entries,
+        };
+    }
+
     fn updateCanvasWidgetFocusFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
         if (pointer_event.pointer.phase != .down) return;
         const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
@@ -1464,6 +1499,16 @@ pub const Runtime = struct {
                     self.updateCanvasWidgetFocusFromPointer(pointer_event);
                     try self.dispatchEvent(app, .{ .canvas_widget_pointer = pointer_event });
                 }
+                const widget_drag_event = self.routeCanvasWidgetDragInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
+                    error.WindowNotFound,
+                    error.ViewNotFound,
+                    error.InvalidViewOptions,
+                    => null,
+                    else => return err,
+                };
+                if (widget_drag_event) |drag_event| {
+                    try self.dispatchEvent(app, .{ .canvas_widget_drag = drag_event });
+                }
                 self.updateCanvasWidgetFocusFromKeyboardInput(input_event);
                 const widget_keyboard_event = self.routeCanvasWidgetKeyboardInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
                     error.WindowNotFound,
@@ -1544,6 +1589,7 @@ pub const Runtime = struct {
             .canvas_widget_pointer => {},
             .canvas_widget_keyboard => {},
             .canvas_widget_file_drop => {},
+            .canvas_widget_drag => {},
             .lifecycle => {},
         }
     }
@@ -5187,6 +5233,7 @@ fn canvasWidgetActions(actions: canvas.WidgetActions) automation.snapshot.Widget
         .decrement = actions.decrement,
         .set_text = actions.set_text,
         .select = actions.select,
+        .drag = actions.drag,
         .drop_files = actions.drop_files,
     };
 }
@@ -10677,6 +10724,111 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);
     try std.testing.expect(app_state.last_keyboard_shift);
+}
+
+test "runtime dispatches opted-in canvas widget drag events" {
+    const TestApp = struct {
+        raw_input_count: u32 = 0,
+        widget_pointer_count: u32 = 0,
+        widget_drag_count: u32 = 0,
+        last_drag_source_id: canvas.ObjectId = 0,
+        last_drag_route_len: usize = 0,
+        last_drag_x: f32 = 0,
+        last_drag_dx: f32 = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-drag", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .gpu_surface_input => self.raw_input_count += 1,
+                .canvas_widget_pointer => self.widget_pointer_count += 1,
+                .canvas_widget_drag => |drag_event| {
+                    self.widget_drag_count += 1;
+                    self.last_drag_source_id = if (drag_event.source) |source| source.id else 0;
+                    self.last_drag_route_len = drag_event.route.len;
+                    self.last_drag_x = drag_event.drag.point.x;
+                    self.last_drag_dx = drag_event.drag.delta.dx;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 16, 96, 32),
+            .text = "Drag",
+            .semantics = .{ .actions = .{ .drag = true } },
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 58, 96, 32),
+            .text = "Plain",
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_drag,
+        .x = 44,
+        .y = 28,
+        .delta_x = 12,
+    } });
+    try std.testing.expectEqual(@as(u32, 0), app_state.widget_drag_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.raw_input_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 28,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_drag,
+        .x = 64,
+        .y = 30,
+        .delta_x = 44,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_drag_count);
+    try std.testing.expectEqual(@as(u32, 3), app_state.widget_pointer_count);
+    try std.testing.expectEqual(@as(u32, 3), app_state.raw_input_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_drag_source_id);
+    try std.testing.expectEqual(@as(usize, 3), app_state.last_drag_route_len);
+    try std.testing.expectEqual(@as(f32, 64), app_state.last_drag_x);
+    try std.testing.expectEqual(@as(f32, 44), app_state.last_drag_dx);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[1].actions.drag);
+    try std.testing.expect(!snapshot.widgets[2].actions.drag);
 }
 
 test "runtime dispatches automation canvas widget actions" {

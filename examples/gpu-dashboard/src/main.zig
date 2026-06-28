@@ -195,7 +195,7 @@ const GpuDashboardApp = struct {
                 }
             },
             .gpu_surface_frame => |frame_event| try self.handleGpuFrame(runtime, frame_event),
-            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .lifecycle => {},
+            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
         }
     }
 

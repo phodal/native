@@ -1555,6 +1555,7 @@ pub const WidgetActions = struct {
     decrement: bool = false,
     set_text: bool = false,
     select: bool = false,
+    drag: bool = false,
     drop_files: bool = false,
 
     pub fn isEmpty(self: WidgetActions) bool {
@@ -1565,6 +1566,7 @@ pub const WidgetActions = struct {
             !self.decrement and
             !self.set_text and
             !self.select and
+            !self.drag and
             !self.drop_files;
     }
 };
@@ -1664,6 +1666,12 @@ pub const WidgetKeyboardEvent = struct {
 pub const WidgetFileDropEvent = struct {
     point: geometry.PointF,
     paths: []const []const u8 = &.{},
+};
+
+pub const WidgetDragEvent = struct {
+    source_id: ObjectId = 0,
+    point: geometry.PointF,
+    delta: geometry.OffsetF = .{},
 };
 
 pub const WidgetEventPhase = enum {
@@ -1792,6 +1800,10 @@ pub const WidgetLayoutTree = struct {
 
     pub fn routeFileDropEvent(self: WidgetLayoutTree, event: WidgetFileDropEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
         return routeWidgetFileDropEvent(self, event, output);
+    }
+
+    pub fn routeDragEvent(self: WidgetLayoutTree, event: WidgetDragEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+        return routeWidgetDragEvent(self, event, output);
     }
 
     pub fn focusTarget(self: WidgetLayoutTree, current_id: ?ObjectId, direction: WidgetFocusDirection) ?WidgetFocusTarget {
@@ -3967,6 +3979,12 @@ fn routeWidgetFileDropEvent(layout: WidgetLayoutTree, event: WidgetFileDropEvent
     return .{ .target = widgetHitFromNode(layout.nodes[target_index], target_index), .entries = entries };
 }
 
+fn routeWidgetDragEvent(layout: WidgetLayoutTree, event: WidgetDragEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+    const target_index = widgetDragSourceIndex(layout, event.source_id) orelse return .{ .entries = output[0..0] };
+    const entries = try routeWidgetEventPath(layout, target_index, output);
+    return .{ .target = widgetHitFromNode(layout.nodes[target_index], target_index), .entries = entries };
+}
+
 fn widgetDropTargetIndexAtPoint(layout: WidgetLayoutTree, point: geometry.PointF) ?usize {
     var index = layout.nodes.len;
     while (index > 0) {
@@ -3978,6 +3996,14 @@ fn widgetDropTargetIndexAtPoint(layout: WidgetLayoutTree, point: geometry.PointF
         return index;
     }
     return null;
+}
+
+fn widgetDragSourceIndex(layout: WidgetLayoutTree, id: ObjectId) ?usize {
+    if (id == 0) return null;
+    const index = widgetIndexById(layout, id) orelse return null;
+    const node = layout.nodes[index];
+    if (!isDragSource(node.widget)) return null;
+    return index;
 }
 
 fn widgetKeyboardTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
@@ -4497,6 +4523,7 @@ fn semanticActions(widget: Widget) WidgetActions {
     actions.decrement = actions.decrement or widget.semantics.actions.decrement;
     actions.set_text = actions.set_text or widget.semantics.actions.set_text;
     actions.select = actions.select or widget.semantics.actions.select;
+    actions.drag = actions.drag or widget.semantics.actions.drag;
     actions.drop_files = actions.drop_files or widget.semantics.actions.drop_files;
     return actions;
 }
@@ -4541,6 +4568,13 @@ fn isDropTarget(widget: Widget) bool {
         !widget.state.disabled and
         !widget.semantics.hidden and
         widget.semantics.actions.drop_files;
+}
+
+fn isDragSource(widget: Widget) bool {
+    return widget.id != 0 and
+        !widget.state.disabled and
+        !widget.semantics.hidden and
+        widget.semantics.actions.drag;
 }
 
 fn isHitTarget(widget: Widget) bool {
@@ -4721,6 +4755,7 @@ fn widgetActionsEqual(a: WidgetActions, b: WidgetActions) bool {
         a.decrement == b.decrement and
         a.set_text == b.set_text and
         a.select == b.select and
+        a.drag == b.drag and
         a.drop_files == b.drop_files;
 }
 
@@ -6944,6 +6979,100 @@ test "widget file drop route ignores missing paths disabled and non-drop targets
     const plain = try layout.routeFileDropEvent(.{
         .point = geometry.PointF.init(110, 20),
         .paths = &paths,
+    }, &empty_entries);
+    try std.testing.expect(plain.target == null);
+    try std.testing.expectEqual(@as(usize, 0), plain.entries.len);
+}
+
+test "widget drag route targets explicit drag source semantics" {
+    const row_children = [_]Widget{.{
+        .id = 3,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 0, 80, 32),
+        .text = "Move",
+    }};
+    const root_children = [_]Widget{.{
+        .id = 2,
+        .kind = .row,
+        .frame = geometry.RectF.init(8, 8, 120, 44),
+        .semantics = .{ .actions = .{ .drag = true } },
+        .children = &row_children,
+    }};
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .children = &root_children,
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 160, 80), &nodes);
+    var route_entries: [3]WidgetEventRouteEntry = undefined;
+    const route = try layout.routeDragEvent(.{
+        .source_id = 2,
+        .point = geometry.PointF.init(60, 40),
+        .delta = geometry.OffsetF.init(20, 4),
+    }, &route_entries);
+
+    try std.testing.expect(route.target != null);
+    try std.testing.expectEqual(@as(ObjectId, 2), route.target.?.id);
+    try std.testing.expectEqual(WidgetKind.row, route.target.?.kind);
+    try std.testing.expectEqual(@as(usize, 3), route.entries.len);
+    try expectRouteEntry(route.entries[0], .capture, 1);
+    try expectRouteEntry(route.entries[1], .target, 2);
+    try expectRouteEntry(route.entries[2], .bubble, 1);
+
+    var semantics_buffer: [4]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    for (semantics) |semantic| {
+        if (semantic.id == 2) {
+            try std.testing.expect(semantic.actions.drag);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "widget drag route ignores missing disabled and non-drag sources" {
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .children = &.{
+            .{
+                .id = 2,
+                .kind = .panel,
+                .frame = geometry.RectF.init(8, 8, 80, 44),
+                .semantics = .{ .actions = .{ .drag = true } },
+                .state = .{ .disabled = true },
+            },
+            .{
+                .id = 3,
+                .kind = .button,
+                .frame = geometry.RectF.init(96, 8, 80, 44),
+                .text = "Plain",
+            },
+        },
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 200, 80), &nodes);
+    var empty_entries: [0]WidgetEventRouteEntry = .{};
+
+    const no_source = try layout.routeDragEvent(.{
+        .point = geometry.PointF.init(20, 20),
+    }, &empty_entries);
+    try std.testing.expect(no_source.target == null);
+    try std.testing.expectEqual(@as(usize, 0), no_source.entries.len);
+
+    const disabled = try layout.routeDragEvent(.{
+        .source_id = 2,
+        .point = geometry.PointF.init(20, 20),
+    }, &empty_entries);
+    try std.testing.expect(disabled.target == null);
+    try std.testing.expectEqual(@as(usize, 0), disabled.entries.len);
+
+    const plain = try layout.routeDragEvent(.{
+        .source_id = 3,
+        .point = geometry.PointF.init(110, 20),
     }, &empty_entries);
     try std.testing.expect(plain.target == null);
     try std.testing.expectEqual(@as(usize, 0), plain.entries.len);

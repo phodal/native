@@ -150,7 +150,7 @@ const GpuSurfaceApp = struct {
                     self.gpu_input_count += 1;
                 }
             },
-            .shortcut, .files_dropped, .canvas_widget_pointer, .lifecycle => {},
+            .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .lifecycle => {},
         }
     }
 

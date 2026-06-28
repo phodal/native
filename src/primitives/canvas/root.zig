@@ -1137,6 +1137,10 @@ pub const WidgetLayoutTree = struct {
         return focusWidgetTarget(self, current_id, direction);
     }
 
+    pub fn focusTargetById(self: WidgetLayoutTree, id: ObjectId) ?WidgetFocusTarget {
+        return focusWidgetTargetById(self, id);
+    }
+
     pub fn collectSemantics(self: WidgetLayoutTree, output: []WidgetSemanticsNode) Error![]const WidgetSemanticsNode {
         return collectWidgetSemantics(self, output);
     }
@@ -2989,6 +2993,11 @@ fn focusWidgetTarget(layout: WidgetLayoutTree, current_id: ?ObjectId, direction:
     };
 }
 
+fn focusWidgetTargetById(layout: WidgetLayoutTree, id: ObjectId) ?WidgetFocusTarget {
+    const index = widgetIndexById(layout, id) orelse return null;
+    return focusTargetFromNode(layout.nodes[index], index);
+}
+
 fn focusForward(layout: WidgetLayoutTree, current_index: ?usize) ?WidgetFocusTarget {
     var index: usize = if (current_index) |value| value + 1 else 0;
     while (index < layout.nodes.len) : (index += 1) {
@@ -4665,6 +4674,41 @@ test "widget focus traversal skips disabled nodes and wraps" {
     try std.testing.expectEqual(@as(ObjectId, 2), layout.focusTarget(4, .forward).?.id);
     try std.testing.expectEqual(@as(ObjectId, 4), layout.focusTarget(2, .backward).?.id);
     try std.testing.expectEqual(@as(ObjectId, 4), layout.focusTarget(null, .backward).?.id);
+}
+
+test "widget focus target lookup validates focusable ids" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .text,
+            .frame = geometry.RectF.init(0, 0, 100, 20),
+            .text = "Title",
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 28, 100, 32),
+            .text = "Run",
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 68, 100, 32),
+            .text = "Disabled",
+            .state = .{ .disabled = true },
+        },
+    };
+    const root = Widget{ .kind = .stack, .children = &children };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 140, 120), &nodes);
+    try std.testing.expect(layout.focusTargetById(2) == null);
+    try std.testing.expect(layout.focusTargetById(4) == null);
+    try std.testing.expect(layout.focusTargetById(99) == null);
+
+    const target = layout.focusTargetById(3).?;
+    try std.testing.expectEqual(@as(ObjectId, 3), target.id);
+    try std.testing.expectEqual(WidgetKind.button, target.kind);
 }
 
 test "widget layout collects accessibility semantics" {

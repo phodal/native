@@ -67,6 +67,14 @@ pub const CanvasWidgetPointerEvent = struct {
     route: []const canvas.WidgetEventRouteEntry = &.{},
 };
 
+pub const CanvasWidgetKeyboardEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    keyboard: canvas.WidgetKeyboardEvent,
+    target: ?canvas.WidgetFocusTarget = null,
+    route: []const canvas.WidgetEventRouteEntry = &.{},
+};
+
 pub const InvalidationReason = enum {
     startup,
     surface_resize,
@@ -91,6 +99,7 @@ pub const Event = union(enum) {
     gpu_surface_resized: GpuSurfaceResizeEvent,
     gpu_surface_input: GpuSurfaceInputEvent,
     canvas_widget_pointer: CanvasWidgetPointerEvent,
+    canvas_widget_keyboard: CanvasWidgetKeyboardEvent,
 
     pub fn name(self: Event) []const u8 {
         return switch (self) {
@@ -102,6 +111,7 @@ pub const Event = union(enum) {
             .gpu_surface_resized => "gpu_surface_resized",
             .gpu_surface_input => "gpu_surface_input",
             .canvas_widget_pointer => "canvas_widget_pointer",
+            .canvas_widget_keyboard => "canvas_widget_keyboard",
         };
     }
 };
@@ -628,6 +638,41 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn routeCanvasWidgetKeyboardInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetKeyboardEvent {
+        try self.validateViewParent(input_event.window_id);
+        try validateViewLabel(input_event.label);
+        const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        const focused_id = self.views[index].canvas_widget_focused_id;
+        if (focused_id == 0) return null;
+        const keyboard = canvasWidgetKeyboardEventFromGpuInput(input_event, focused_id) orelse return null;
+
+        const route = try self.views[index].widgetLayoutTree().routeKeyboardEvent(keyboard, output);
+        if (route.target == null) return null;
+        return .{
+            .window_id = input_event.window_id,
+            .view_label = self.views[index].label,
+            .keyboard = keyboard,
+            .target = route.target,
+            .route = route.entries,
+        };
+    }
+
+    fn updateCanvasWidgetFocusFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
+        if (pointer_event.pointer.phase != .down) return;
+        const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
+        if (self.views[index].kind != .gpu_surface) return;
+
+        const next_focus_id: canvas.ObjectId = if (pointer_event.target) |target| blk: {
+            if (self.views[index].widgetLayoutTree().focusTargetById(target.id) != null) break :blk target.id;
+            break :blk 0;
+        } else 0;
+
+        if (self.views[index].canvas_widget_focused_id == next_focus_id) return;
+        self.views[index].canvas_widget_focused_id = next_focus_id;
+        self.invalidateFor(.state, self.views[index].frame);
+    }
+
     fn invalidateForCanvasChanges(self: *Runtime, view_frame: geometry.RectF, changes: []const canvas.DiffChange) void {
         var emitted_dirty_region = false;
         for (changes) |change| {
@@ -940,7 +985,18 @@ pub const Runtime = struct {
                     else => return err,
                 };
                 if (widget_pointer_event) |pointer_event| {
+                    self.updateCanvasWidgetFocusFromPointer(pointer_event);
                     try self.dispatchEvent(app, .{ .canvas_widget_pointer = pointer_event });
+                }
+                const widget_keyboard_event = self.routeCanvasWidgetKeyboardInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
+                    error.WindowNotFound,
+                    error.ViewNotFound,
+                    error.InvalidViewOptions,
+                    => null,
+                    else => return err,
+                };
+                if (widget_keyboard_event) |keyboard_event| {
+                    try self.dispatchEvent(app, .{ .canvas_widget_keyboard = keyboard_event });
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
             },
@@ -985,6 +1041,7 @@ pub const Runtime = struct {
             .gpu_surface_resized => {},
             .gpu_surface_input => {},
             .canvas_widget_pointer => {},
+            .canvas_widget_keyboard => {},
             .lifecycle => {},
         }
     }
@@ -1067,7 +1124,7 @@ pub const Runtime = struct {
                     .name = node.label,
                     .value = node.value,
                     .bounds = node.bounds.translate(geometry.OffsetF.init(view.frame.x, view.frame.y)),
-                    .focused = node.state.focused,
+                    .focused = node.state.focused or (view.focused and node.id == view.canvas_widget_focused_id),
                     .enabled = !node.state.disabled,
                 };
                 widget_count.* += 1;
@@ -3114,6 +3171,7 @@ const RuntimeView = struct {
     widget_semantics_nodes: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined,
     widget_semantics_node_count: usize = 0,
     widget_revision: u64 = 0,
+    canvas_widget_focused_id: canvas.ObjectId = 0,
     widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
     widget_text_len: usize = 0,
     focused: bool = false,
@@ -3223,6 +3281,9 @@ const RuntimeView = struct {
 
         const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
         self.widget_semantics_node_count = semantics.len;
+        if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
+            self.canvas_widget_focused_id = 0;
+        }
         self.widget_revision += 1;
     }
 
@@ -3743,6 +3804,33 @@ fn canvasWidgetPointerEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?canv
         .phase = phase,
         .point = geometry.PointF.init(input_event.x, input_event.y),
         .delta = geometry.OffsetF.init(input_event.delta_x, input_event.delta_y),
+    };
+}
+
+fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focused_id: canvas.ObjectId) ?canvas.WidgetKeyboardEvent {
+    const phase: canvas.WidgetKeyboardPhase = switch (input_event.kind) {
+        .key_down => .key_down,
+        .key_up => .key_up,
+        .pointer_down,
+        .pointer_up,
+        .pointer_move,
+        .pointer_drag,
+        .scroll,
+        => return null,
+    };
+    return .{
+        .phase = phase,
+        .focused_id = focused_id,
+        .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
+    };
+}
+
+fn canvasWidgetKeyboardModifiers(modifiers: platform.ShortcutModifiers) canvas.WidgetKeyboardModifiers {
+    return .{
+        .shift = modifiers.shift,
+        .control = modifiers.control,
+        .alt = modifiers.option,
+        .super = modifiers.command or modifiers.primary,
     };
 }
 
@@ -6756,11 +6844,18 @@ test "runtime dispatches routed canvas widget pointer events" {
     const TestApp = struct {
         raw_input_count: u32 = 0,
         widget_pointer_count: u32 = 0,
+        widget_keyboard_count: u32 = 0,
         last_view_label: []const u8 = "",
         last_phase: canvas.WidgetPointerPhase = .hover,
+        last_keyboard_phase: canvas.WidgetKeyboardPhase = .key_up,
         last_target_id: canvas.ObjectId = 0,
         last_target_kind: canvas.WidgetKind = .stack,
+        last_keyboard_target_id: canvas.ObjectId = 0,
+        last_keyboard_target_kind: canvas.WidgetKind = .stack,
         last_route_len: usize = 0,
+        last_keyboard_route_len: usize = 0,
+        last_keyboard_shift: bool = false,
+        last_keyboard_super: bool = false,
 
         fn app(self: *@This()) App {
             return .{ .context = self, .name = "gpu-widget-input", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
@@ -6784,6 +6879,21 @@ test "runtime dispatches routed canvas widget pointer events" {
                     } else {
                         self.last_target_id = 0;
                         self.last_target_kind = .stack;
+                    }
+                },
+                .canvas_widget_keyboard => |keyboard_event| {
+                    self.widget_keyboard_count += 1;
+                    self.last_view_label = keyboard_event.view_label;
+                    self.last_keyboard_phase = keyboard_event.keyboard.phase;
+                    self.last_keyboard_route_len = keyboard_event.route.len;
+                    self.last_keyboard_shift = keyboard_event.keyboard.modifiers.shift;
+                    self.last_keyboard_super = keyboard_event.keyboard.modifiers.super;
+                    if (keyboard_event.target) |target| {
+                        self.last_keyboard_target_id = target.id;
+                        self.last_keyboard_target_kind = target.kind;
+                    } else {
+                        self.last_keyboard_target_id = 0;
+                        self.last_keyboard_target_kind = .stack;
                     }
                 },
                 else => {},
@@ -6838,15 +6948,29 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_target_kind);
     try std.testing.expectEqual(@as(usize, 3), app_state.last_route_len);
     try std.testing.expect(harness.runtime.views[0].focused);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expect(harness.runtime.invalidated);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 2), snapshot.widgets.len);
+    try std.testing.expect(!snapshot.widgets[0].focused);
+    try std.testing.expect(snapshot.widgets[1].focused);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
+        .modifiers = .{ .shift = true, .primary = true },
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_keyboard_count);
     try std.testing.expectEqual(@as(u32, 2), app_state.raw_input_count);
+    try std.testing.expectEqual(canvas.WidgetKeyboardPhase.key_down, app_state.last_keyboard_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
+    try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);
+    try std.testing.expectEqual(@as(usize, 3), app_state.last_keyboard_route_len);
+    try std.testing.expect(app_state.last_keyboard_shift);
+    try std.testing.expect(app_state.last_keyboard_super);
 }
 
 test "runtime dispatches shortcut command events" {

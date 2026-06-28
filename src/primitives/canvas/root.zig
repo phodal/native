@@ -910,7 +910,9 @@ pub const WidgetKind = enum {
     popover,
     menu_surface,
     text,
+    icon,
     button,
+    icon_button,
     text_field,
     tooltip,
     menu_item,
@@ -945,6 +947,7 @@ pub const WidgetRole = enum {
     none,
     group,
     text,
+    image,
     button,
     textbox,
     tooltip,
@@ -1376,7 +1379,9 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
             .popover => try emitPopoverWidgetChrome(builder, widget, tokens),
             .menu_surface => try emitMenuSurfaceWidgetChrome(builder, widget, tokens),
             .text => try emitTextWidget(builder, widget, tokens),
+            .icon => try emitIconWidget(builder, widget, tokens),
             .button => try emitButtonWidget(builder, widget, tokens),
+            .icon_button => try emitIconButtonWidget(builder, widget, tokens),
             .text_field => try emitTextFieldWidget(builder, widget, tokens),
             .tooltip => try emitTooltipWidget(builder, widget, tokens),
             .menu_item => try emitMenuItemWidget(builder, widget, tokens),
@@ -1956,7 +1961,9 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .popover => try emitPopoverWidget(builder, widget, tokens, depth),
         .menu_surface => try emitMenuSurfaceWidget(builder, widget, tokens, depth),
         .text => try emitTextWidget(builder, widget, tokens),
+        .icon => try emitIconWidget(builder, widget, tokens),
         .button => try emitButtonWidget(builder, widget, tokens),
+        .icon_button => try emitIconButtonWidget(builder, widget, tokens),
         .text_field => try emitTextFieldWidget(builder, widget, tokens),
         .tooltip => try emitTooltipWidget(builder, widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, widget, tokens),
@@ -2103,6 +2110,19 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
     });
 }
 
+fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    if (widget.text.len == 0) return;
+    const size = iconGlyphSize(widget, tokens);
+    try builder.drawText(.{
+        .id = widgetPartId(widget.id, 1),
+        .font_id = tokens.typography.font_id,
+        .size = size,
+        .origin = centeredTextOrigin(widget.frame, widget.text, size),
+        .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
+        .text = widget.text,
+    });
+}
+
 fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = Radius.all(tokens.radius.md);
     try builder.fillRoundedRect(.{
@@ -2139,6 +2159,36 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .color = buttonTextColor(tokens, widget.state),
         .text = widget.text,
     });
+}
+
+fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const radius = Radius.all(tokens.radius.md);
+    try builder.fillRoundedRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+        .radius = radius,
+        .fill = .{ .color = buttonFillColor(tokens, widget.state) },
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = .{ .color = if (widget.state.focused) tokens.colors.focus_ring else tokens.colors.border },
+            .width = if (widget.state.focused) tokens.stroke.focus else tokens.stroke.regular,
+        },
+    });
+    if (widget.text.len > 0) {
+        const size = iconGlyphSize(widget, tokens);
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 3),
+            .font_id = tokens.typography.font_id,
+            .size = size,
+            .origin = centeredTextOrigin(widget.frame, widget.text, size),
+            .color = buttonTextColor(tokens, widget.state),
+            .text = widget.text,
+        });
+    }
 }
 
 fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -2496,6 +2546,19 @@ fn textOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.PointF {
     );
 }
 
+fn centeredTextOrigin(frame: geometry.RectF, text: []const u8, size: f32) geometry.PointF {
+    const width = estimateTextWidth(text, size);
+    return geometry.PointF.init(
+        frame.x + @max(0, (frame.width - width) * 0.5),
+        frame.y + @max(size, (frame.height + size * 0.5) * 0.5),
+    );
+}
+
+fn iconGlyphSize(widget: Widget, tokens: DesignTokens) f32 {
+    if (widget.frame.height > 0) return @min(@max(12, widget.frame.height * 0.48), @max(12, tokens.typography.title_size));
+    return tokens.typography.button_size;
+}
+
 fn widgetTextSelectionRange(widget: Widget) ?TextRange {
     if (widget.kind != .text_field) return null;
     if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
@@ -2599,7 +2662,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .button, .text_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
+        .text, .icon, .button, .icon_button, .text_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -2983,7 +3046,9 @@ fn semanticRole(widget: Widget) WidgetRole {
         .menu_surface => .menu,
         .list => .list,
         .text => .text,
+        .icon => .image,
         .button => .button,
+        .icon_button => .button,
         .text_field => .textbox,
         .tooltip => .tooltip,
         .menu_item => .menuitem,
@@ -3013,7 +3078,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .button, .icon_button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -3026,8 +3091,8 @@ fn isFocusable(widget: Widget) bool {
 fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
-        .row, .column, .grid, .list, .stack, .tooltip => false,
-        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+        .row, .column, .grid, .list, .stack, .tooltip, .icon => false,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -4569,6 +4634,83 @@ test "widget controls expose roles values focus and hit testing" {
     try std.testing.expectEqual(@as(?f32, 0), semantics[2].value);
     try std.testing.expectEqual(WidgetRole.slider, semantics[3].role);
     try std.testing.expectEqual(@as(?f32, 0.35), semantics[3].value);
+}
+
+test "widget icons expose image and button semantics" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .icon,
+            .frame = geometry.RectF.init(8, 8, 24, 24),
+            .text = "?",
+            .semantics = .{ .label = "Help" },
+        },
+        .{
+            .id = 3,
+            .kind = .icon_button,
+            .frame = geometry.RectF.init(40, 4, 32, 32),
+            .text = "+",
+            .state = .{ .focused = true },
+            .semantics = .{ .label = "Add item" },
+        },
+    };
+    const root = Widget{ .kind = .stack, .children = &children };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 120, 48), &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expect(layout.hitTest(geometry.PointF.init(16, 16)) == null);
+
+    const button_hit = layout.hitTest(geometry.PointF.init(48, 16)).?;
+    try std.testing.expectEqual(@as(ObjectId, 3), button_hit.id);
+    try std.testing.expectEqual(WidgetKind.icon_button, button_hit.kind);
+
+    var semantics_buffer: [2]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 2), semantics.len);
+    try std.testing.expectEqual(WidgetRole.image, semantics[0].role);
+    try std.testing.expectEqualStrings("Help", semantics[0].label);
+    try std.testing.expect(!semantics[0].focusable);
+    try std.testing.expectEqual(WidgetRole.button, semantics[1].role);
+    try std.testing.expectEqualStrings("Add item", semantics[1].label);
+    try std.testing.expect(semantics[1].focusable);
+
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3) },
+        .stroke = .{ .focus = 4 },
+    };
+    var icon_commands: [1]CanvasCommand = undefined;
+    var icon_builder = Builder.init(&icon_commands);
+    try emitWidgetTree(&icon_builder, children[0], tokens);
+    const icon_display_list = icon_builder.displayList();
+    try std.testing.expectEqual(@as(usize, 1), icon_display_list.commandCount());
+    switch (icon_display_list.commands[0]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(2, 1)), text.id);
+            try std.testing.expectEqualStrings("?", text.text);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var button_commands: [3]CanvasCommand = undefined;
+    var button_builder = Builder.init(&button_commands);
+    try emitWidgetTree(&button_builder, children[1], tokens);
+    const button_display_list = button_builder.displayList();
+    try std.testing.expectEqual(@as(usize, 3), button_display_list.commandCount());
+    switch (button_display_list.commands[1]) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 4), stroke.stroke.width);
+            try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (button_display_list.commands[2]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 3)), text.id);
+            try std.testing.expectEqualStrings("+", text.text);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget text fields expose textbox semantics and render focused chrome" {

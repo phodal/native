@@ -5043,6 +5043,8 @@ test "runtime builds canvas frame plans from retained GPU canvas state" {
     var render_commands: [4]canvas.RenderCommand = undefined;
     var render_batches: [4]canvas.RenderBatch = undefined;
     var resources: [4]canvas.RenderResource = undefined;
+    var resource_cache_entries: [4]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [4]canvas.RenderResourceCacheAction = undefined;
     var glyphs: [4]canvas.GlyphAtlasEntry = undefined;
     var changes: [4]canvas.DiffChange = undefined;
     const frame = try harness.runtime.canvasFramePlan(1, "canvas", null, .{
@@ -5052,6 +5054,8 @@ test "runtime builds canvas frame plans from retained GPU canvas state" {
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     });
@@ -5065,6 +5069,9 @@ test "runtime builds canvas frame plans from retained GPU canvas state" {
     try std.testing.expectEqual(@as(usize, 2), frame.render_plan.commandCount());
     try std.testing.expectEqual(@as(usize, 2), frame.batch_plan.batchCount());
     try std.testing.expectEqual(@as(usize, 2), frame.resource_plan.resourceCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.actionCount());
+    try std.testing.expectEqual(canvas.RenderResourceCacheActionKind.upload, frame.resource_cache_plan.actions[0].kind);
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 320, 240), frame.dirty_bounds.?);
@@ -5101,12 +5108,16 @@ test "runtime canvas frame plan computes incremental dirty from previous display
     var render_commands: [2]canvas.RenderCommand = undefined;
     var render_batches: [1]canvas.RenderBatch = undefined;
     var resources: [0]canvas.RenderResource = .{};
+    var resource_cache_entries: [0]canvas.RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]canvas.RenderResourceCacheAction = .{};
     var glyphs: [0]canvas.GlyphAtlasEntry = .{};
     var changes: [2]canvas.DiffChange = undefined;
     const frame = try harness.runtime.canvasFramePlan(1, "canvas", .{ .commands = &previous_commands }, .{}, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     });
@@ -5642,12 +5653,16 @@ test "runtime rejects canvas display lists on non-GPU views" {
     var render_commands: [0]canvas.RenderCommand = .{};
     var render_batches: [0]canvas.RenderBatch = .{};
     var resources: [0]canvas.RenderResource = .{};
+    var resource_cache_entries: [0]canvas.RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]canvas.RenderResourceCacheAction = .{};
     var glyphs: [0]canvas.GlyphAtlasEntry = .{};
     var changes: [0]canvas.DiffChange = .{};
     try std.testing.expectError(error.InvalidViewOptions, harness.runtime.canvasFramePlan(1, "status", null, .{}, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     }));

@@ -505,12 +505,15 @@ pub const CanvasFrameOptions = struct {
     surface_size: geometry.SizeF = .{},
     scale: f32 = 1,
     full_repaint: bool = false,
+    previous_resource_cache: []const RenderResourceCacheEntry = &.{},
 };
 
 pub const CanvasFrameStorage = struct {
     render_commands: []RenderCommand,
     render_batches: []RenderBatch,
     resources: []RenderResource,
+    resource_cache_entries: []RenderResourceCacheEntry,
+    resource_cache_actions: []RenderResourceCacheAction,
     glyph_atlas_entries: []GlyphAtlasEntry,
     changes: []DiffChange,
 };
@@ -525,6 +528,7 @@ pub const CanvasFrame = struct {
     render_plan: RenderPlan = .{},
     batch_plan: RenderBatchPlan = .{},
     resource_plan: RenderResourcePlan = .{},
+    resource_cache_plan: RenderResourceCachePlan = .{},
     glyph_atlas_plan: GlyphAtlasPlan = .{},
     changes: []const DiffChange = &.{},
     dirty_bounds: ?geometry.RectF = null,
@@ -1033,6 +1037,12 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
     const render_plan = try next.renderPlan(storage.render_commands);
     const batch_plan = try render_plan.batchPlan(storage.render_batches);
     const resource_plan = try next.resourcePlan(storage.resources);
+    const resource_cache_plan = try resource_plan.cachePlan(
+        options.previous_resource_cache,
+        options.frame_index,
+        storage.resource_cache_entries,
+        storage.resource_cache_actions,
+    );
     const glyph_atlas_plan = try next.glyphAtlasPlan(storage.glyph_atlas_entries);
 
     const full_repaint = options.full_repaint or previous == null;
@@ -1056,6 +1066,7 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .render_plan = render_plan,
         .batch_plan = batch_plan,
         .resource_plan = resource_plan,
+        .resource_cache_plan = resource_cache_plan,
         .glyph_atlas_plan = glyph_atlas_plan,
         .changes = changes,
         .dirty_bounds = dirty_bounds,
@@ -5202,6 +5213,8 @@ test "canvas frame plan builds first frame renderer packet" {
     var render_commands: [2]RenderCommand = undefined;
     var render_batches: [2]RenderBatch = undefined;
     var resources: [2]RenderResource = undefined;
+    var resource_cache_entries: [2]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [2]RenderResourceCacheAction = undefined;
     var glyphs: [2]GlyphAtlasEntry = undefined;
     var changes: [2]DiffChange = undefined;
     const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
@@ -5213,6 +5226,8 @@ test "canvas frame plan builds first frame renderer packet" {
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     });
@@ -5228,9 +5243,92 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(RenderPipelineKind.linear_gradient, frame.batch_plan.batches[0].pipeline);
     try std.testing.expectEqual(RenderPipelineKind.glyph_run, frame.batch_plan.batches[1].pipeline);
     try std.testing.expectEqual(@as(usize, 2), frame.resource_plan.resourceCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.actionCount());
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, frame.resource_cache_plan.actions[0].kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, frame.resource_cache_plan.actions[1].kind);
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), frame.dirty_bounds);
+}
+
+test "canvas frame plan carries resource cache retain upload and evict actions" {
+    const stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = Color.rgb8(24, 24, 27) },
+    };
+    const previous_commands = [_]CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(0, 0),
+            .end = geometry.PointF.init(20, 20),
+            .stops = &stops,
+        } } } },
+        .{ .draw_image = .{ .id = 2, .image_id = 8, .dst = geometry.RectF.init(24, 0, 20, 20) } },
+    };
+    const next_commands = [_]CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 20, 20), .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(0, 0),
+            .end = geometry.PointF.init(20, 20),
+            .stops = &stops,
+        } } } },
+        .{ .draw_text = .{
+            .id = 3,
+            .font_id = 7,
+            .size = 12,
+            .origin = geometry.PointF.init(24, 16),
+            .color = Color.rgb8(15, 23, 42),
+            .text = "Hi",
+        } },
+    };
+
+    var previous_render_commands: [2]RenderCommand = undefined;
+    var previous_render_batches: [2]RenderBatch = undefined;
+    var previous_resources: [2]RenderResource = undefined;
+    var previous_cache_entries: [2]RenderResourceCacheEntry = undefined;
+    var previous_cache_actions: [2]RenderResourceCacheAction = undefined;
+    var previous_glyphs: [0]GlyphAtlasEntry = .{};
+    var previous_changes: [0]DiffChange = .{};
+    const previous_frame = try (DisplayList{ .commands = &previous_commands }).framePlan(null, .{
+        .frame_index = 1,
+    }, .{
+        .render_commands = &previous_render_commands,
+        .render_batches = &previous_render_batches,
+        .resources = &previous_resources,
+        .resource_cache_entries = &previous_cache_entries,
+        .resource_cache_actions = &previous_cache_actions,
+        .glyph_atlas_entries = &previous_glyphs,
+        .changes = &previous_changes,
+    });
+
+    var next_render_commands: [2]RenderCommand = undefined;
+    var next_render_batches: [2]RenderBatch = undefined;
+    var next_resources: [2]RenderResource = undefined;
+    var next_cache_entries: [2]RenderResourceCacheEntry = undefined;
+    var next_cache_actions: [3]RenderResourceCacheAction = undefined;
+    var next_glyphs: [2]GlyphAtlasEntry = undefined;
+    var next_changes: [2]DiffChange = undefined;
+    const next_frame = try (DisplayList{ .commands = &next_commands }).framePlan(.{ .commands = &previous_commands }, .{
+        .frame_index = 2,
+        .previous_resource_cache = previous_frame.resource_cache_plan.entries,
+    }, .{
+        .render_commands = &next_render_commands,
+        .render_batches = &next_render_batches,
+        .resources = &next_resources,
+        .resource_cache_entries = &next_cache_entries,
+        .resource_cache_actions = &next_cache_actions,
+        .glyph_atlas_entries = &next_glyphs,
+        .changes = &next_changes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), next_frame.resource_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 3), next_frame.resource_cache_plan.actionCount());
+    try std.testing.expectEqual(RenderResourceCacheActionKind.retain, next_frame.resource_cache_plan.actions[0].kind);
+    try std.testing.expectEqual(RenderResourceKind.linear_gradient, next_frame.resource_cache_plan.actions[0].key.kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.upload, next_frame.resource_cache_plan.actions[1].kind);
+    try std.testing.expectEqual(RenderResourceKind.glyph_run, next_frame.resource_cache_plan.actions[1].key.kind);
+    try std.testing.expectEqual(RenderResourceCacheActionKind.evict, next_frame.resource_cache_plan.actions[2].kind);
+    try std.testing.expectEqual(RenderResourceKind.image, next_frame.resource_cache_plan.actions[2].key.kind);
+    try std.testing.expectEqual(@as(u64, 2), next_frame.resource_cache_plan.entries[0].last_used_frame);
 }
 
 test "canvas frame plan clips incremental dirty bounds to surface" {
@@ -5246,6 +5344,8 @@ test "canvas frame plan clips incremental dirty bounds to surface" {
     var render_commands: [2]RenderCommand = undefined;
     var render_batches: [1]RenderBatch = undefined;
     var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
     var glyphs: [0]GlyphAtlasEntry = .{};
     var changes: [2]DiffChange = undefined;
     const frame = try (DisplayList{ .commands = &next_commands }).framePlan(.{ .commands = &previous_commands }, .{
@@ -5254,6 +5354,8 @@ test "canvas frame plan clips incremental dirty bounds to surface" {
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     });
@@ -5275,12 +5377,16 @@ test "canvas frame plan leaves unchanged retained frame clean" {
     var render_commands: [1]RenderCommand = undefined;
     var render_batches: [1]RenderBatch = undefined;
     var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
     var glyphs: [0]GlyphAtlasEntry = .{};
     var changes: [1]DiffChange = undefined;
     const frame = try (DisplayList{ .commands = &commands }).framePlan(.{ .commands = &commands }, .{}, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     });
@@ -5301,12 +5407,16 @@ test "canvas frame plan reports diff storage overflow" {
     var render_commands: [1]RenderCommand = undefined;
     var render_batches: [1]RenderBatch = undefined;
     var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
     var glyphs: [0]GlyphAtlasEntry = .{};
     var changes: [0]DiffChange = .{};
     try std.testing.expectError(error.DiffListFull, (DisplayList{ .commands = &next_commands }).framePlan(.{}, .{}, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
         .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     }));

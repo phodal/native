@@ -21,6 +21,7 @@ pub const Error = error{
     TextEditBufferTooSmall,
     ReferenceRenderSurfaceTooSmall,
     ReferenceRenderUnsupportedCommand,
+    RenderEncoderListFull,
     RenderStackOverflow,
     RenderStackUnderflow,
     WidgetDepthExceeded,
@@ -1027,6 +1028,66 @@ pub const CanvasRenderPassLoadAction = enum {
     clear,
 };
 
+pub const RenderEncoderBeginPass = struct {
+    load_action: CanvasRenderPassLoadAction = .skip,
+    surface_size: geometry.SizeF = .{},
+    scale: f32 = 1,
+    dirty_bounds: ?geometry.RectF = null,
+};
+
+pub const RenderEncoderCommand = union(enum) {
+    begin_pass: RenderEncoderBeginPass,
+    set_scissor: geometry.RectF,
+    pipeline_cache: RenderPipelineCacheAction,
+    resource_cache: RenderResourceCacheAction,
+    glyph_atlas_cache: GlyphAtlasCacheAction,
+    text_layout_cache: TextLayoutCacheAction,
+    bind_pipeline: RenderPipelineKind,
+    draw_batch: RenderBatch,
+    end_pass,
+};
+
+pub const RenderEncoderPlan = struct {
+    commands: []const RenderEncoderCommand = &.{},
+
+    pub fn commandCount(self: RenderEncoderPlan) usize {
+        return self.commands.len;
+    }
+
+    pub fn cacheActionCount(self: RenderEncoderPlan) usize {
+        var count: usize = 0;
+        for (self.commands) |command| {
+            switch (command) {
+                .pipeline_cache, .resource_cache, .glyph_atlas_cache, .text_layout_cache => count += 1,
+                else => {},
+            }
+        }
+        return count;
+    }
+
+    pub fn bindPipelineCount(self: RenderEncoderPlan) usize {
+        var count: usize = 0;
+        for (self.commands) |command| {
+            switch (command) {
+                .bind_pipeline => count += 1,
+                else => {},
+            }
+        }
+        return count;
+    }
+
+    pub fn drawBatchCount(self: RenderEncoderPlan) usize {
+        var count: usize = 0;
+        for (self.commands) |command| {
+            switch (command) {
+                .draw_batch => count += 1,
+                else => {},
+            }
+        }
+        return count;
+    }
+};
+
 pub const CanvasRenderPass = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
@@ -1101,6 +1162,11 @@ pub const CanvasRenderPass = struct {
 
     pub fn writeJson(self: CanvasRenderPass, writer: anytype) !void {
         try writeCanvasRenderPassJson(self, writer);
+    }
+
+    pub fn encoderPlan(self: CanvasRenderPass, output: []RenderEncoderCommand) Error!RenderEncoderPlan {
+        var planner = RenderEncoderPlanner.init(output);
+        return planner.build(self);
     }
 };
 
@@ -2839,6 +2905,55 @@ fn findRenderPipelineCacheEntry(entries: []const RenderPipelineCacheEntry, pipel
     }
     return null;
 }
+
+pub const RenderEncoderPlanner = struct {
+    commands: []RenderEncoderCommand,
+    len: usize = 0,
+
+    pub fn init(commands: []RenderEncoderCommand) RenderEncoderPlanner {
+        return .{ .commands = commands };
+    }
+
+    pub fn reset(self: *RenderEncoderPlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *RenderEncoderPlanner, pass: CanvasRenderPass) Error!RenderEncoderPlan {
+        self.reset();
+        if (!pass.requiresRender()) return .{ .commands = self.commands[0..0] };
+
+        try self.append(.{ .begin_pass = .{
+            .load_action = pass.loadAction(),
+            .surface_size = pass.surface_size,
+            .scale = pass.scale,
+            .dirty_bounds = pass.dirty_bounds,
+        } });
+        if (pass.scissorBounds()) |bounds| try self.append(.{ .set_scissor = bounds });
+
+        for (pass.pipeline_actions) |action| try self.append(.{ .pipeline_cache = action });
+        for (pass.resource_actions) |action| try self.append(.{ .resource_cache = action });
+        for (pass.glyph_atlas_actions) |action| try self.append(.{ .glyph_atlas_cache = action });
+        for (pass.text_layout_actions) |action| try self.append(.{ .text_layout_cache = action });
+
+        var bound_pipeline: ?RenderPipelineKind = null;
+        for (pass.batches) |batch| {
+            if (bound_pipeline == null or bound_pipeline.? != batch.pipeline) {
+                try self.append(.{ .bind_pipeline = batch.pipeline });
+                bound_pipeline = batch.pipeline;
+            }
+            try self.append(.{ .draw_batch = batch });
+        }
+        try self.append(.end_pass);
+
+        return .{ .commands = self.commands[0..self.len] };
+    }
+
+    fn append(self: *RenderEncoderPlanner, command: RenderEncoderCommand) Error!void {
+        if (self.len >= self.commands.len) return error.RenderEncoderListFull;
+        self.commands[self.len] = command;
+        self.len += 1;
+    }
+};
 
 pub const RenderResourcePlanner = struct {
     resources: []RenderResource,
@@ -10385,6 +10500,28 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(TextLayoutCacheActionKind.upload, render_pass.text_layout_actions[0].kind);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), render_pass.scissorBounds());
 
+    var encoder_commands: [16]RenderEncoderCommand = undefined;
+    const encoder_plan = try render_pass.encoderPlan(&encoder_commands);
+    try std.testing.expectEqual(@as(usize, 14), encoder_plan.commandCount());
+    try std.testing.expectEqual(@as(usize, 7), encoder_plan.cacheActionCount());
+    try std.testing.expectEqual(@as(usize, 2), encoder_plan.bindPipelineCount());
+    try std.testing.expectEqual(@as(usize, 2), encoder_plan.drawBatchCount());
+    switch (encoder_plan.commands[0]) {
+        .begin_pass => |begin| {
+            try std.testing.expectEqual(CanvasRenderPassLoadAction.clear, begin.load_action);
+            try std.testing.expectEqualDeep(geometry.SizeF.init(320, 200), begin.surface_size);
+        },
+        else => return error.TestExpectedEqual,
+    }
+    switch (encoder_plan.commands[1]) {
+        .set_scissor => |bounds| try expectRect(geometry.RectF.init(0, 0, 320, 200), bounds),
+        else => return error.TestExpectedEqual,
+    }
+    switch (encoder_plan.commands[encoder_plan.commands.len - 1]) {
+        .end_pass => {},
+        else => return error.TestExpectedEqual,
+    }
+
     var render_pass_json_buffer: [8192]u8 = undefined;
     var render_pass_json_writer = std.Io.Writer.fixed(&render_pass_json_buffer);
     try render_pass.writeJson(&render_pass_json_writer);
@@ -10455,6 +10592,26 @@ test "canvas frame plan builds first frame renderer packet" {
         "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
+}
+
+test "render encoder plan skips clean passes and reports output overflow" {
+    var clean_encoder_commands: [1]RenderEncoderCommand = undefined;
+    const clean_plan = try (CanvasRenderPass{}).encoderPlan(&clean_encoder_commands);
+    try std.testing.expectEqual(@as(usize, 0), clean_plan.commandCount());
+
+    const batches = [_]RenderBatch{.{ .pipeline = .solid, .command_start = 0, .command_count = 1 }};
+    const pass = CanvasRenderPass{
+        .full_repaint = true,
+        .batches = &batches,
+    };
+    var encoder_commands: [4]RenderEncoderCommand = undefined;
+    const plan = try pass.encoderPlan(&encoder_commands);
+    try std.testing.expectEqual(@as(usize, 4), plan.commandCount());
+    try std.testing.expectEqual(@as(usize, 1), plan.bindPipelineCount());
+    try std.testing.expectEqual(@as(usize, 1), plan.drawBatchCount());
+
+    var too_small: [3]RenderEncoderCommand = undefined;
+    try std.testing.expectError(error.RenderEncoderListFull, pass.encoderPlan(&too_small));
 }
 
 test "canvas frame plan carries resource cache retain upload and evict actions" {

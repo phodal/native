@@ -647,6 +647,10 @@ test "gpu dashboard display list renders through the reference surface" {
     try std.testing.expect(frame.pipeline_cache_plan.uploadCount() >= 4);
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 10);
+    var encoder_commands: [max_dashboard_glyphs + max_dashboard_commands * 3]canvas.RenderEncoderCommand = undefined;
+    const encoder_plan = try frame.renderPass().encoderPlan(&encoder_commands);
+    try std.testing.expectEqual(frame.batch_plan.batchCount(), encoder_plan.drawBatchCount());
+    try std.testing.expect(encoder_plan.cacheActionCount() >= frame.pipeline_cache_plan.actionCount());
 
     const pixel_count = 720 * 520 * 4;
     const pixels = try std.testing.allocator.alloc(u8, pixel_count);

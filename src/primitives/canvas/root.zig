@@ -13,6 +13,7 @@ pub const Error = error{
     RenderResourceCacheListFull,
     RenderResourceListFull,
     TextLayoutLineListFull,
+    TextEditBufferTooSmall,
     RenderStackOverflow,
     RenderStackUnderflow,
     WidgetDepthExceeded,
@@ -275,6 +276,96 @@ pub const TextLayout = struct {
 
     pub fn lineCount(self: TextLayout) usize {
         return self.lines.len;
+    }
+};
+
+pub const TextRange = struct {
+    start: usize = 0,
+    end: usize = 0,
+
+    pub fn init(start: usize, end: usize) TextRange {
+        return .{ .start = start, .end = end };
+    }
+
+    pub fn normalized(self: TextRange, text_len: usize) TextRange {
+        const start = @min(self.start, text_len);
+        const end = @min(self.end, text_len);
+        return if (start <= end)
+            .{ .start = start, .end = end }
+        else
+            .{ .start = end, .end = start };
+    }
+
+    pub fn byteLen(self: TextRange, text_len: usize) usize {
+        const range = self.normalized(text_len);
+        return range.end - range.start;
+    }
+
+    pub fn isCollapsed(self: TextRange, text_len: usize) bool {
+        const range = self.normalized(text_len);
+        return range.start == range.end;
+    }
+};
+
+pub const TextSelection = struct {
+    anchor: usize = 0,
+    focus: usize = 0,
+
+    pub fn collapsed(offset: usize) TextSelection {
+        return .{ .anchor = offset, .focus = offset };
+    }
+
+    pub fn range(self: TextSelection, text_len: usize) TextRange {
+        return TextRange.init(self.anchor, self.focus).normalized(text_len);
+    }
+
+    pub fn isCollapsed(self: TextSelection, text_len: usize) bool {
+        return self.range(text_len).isCollapsed(text_len);
+    }
+};
+
+pub const TextCaretDirection = enum {
+    previous,
+    next,
+    start,
+    end,
+};
+
+pub const TextCaretMove = struct {
+    direction: TextCaretDirection,
+    extend: bool = false,
+};
+
+pub const TextCompositionUpdate = struct {
+    text: []const u8 = "",
+    cursor: ?usize = null,
+};
+
+pub const TextInputEvent = union(enum) {
+    insert_text: []const u8,
+    delete_backward,
+    delete_forward,
+    move_caret: TextCaretMove,
+    set_selection: TextSelection,
+    set_composition: TextCompositionUpdate,
+    commit_composition,
+    cancel_composition,
+};
+
+pub const TextEditState = struct {
+    text: []const u8 = "",
+    selection: TextSelection = .{},
+    composition: ?TextRange = null,
+
+    pub fn init(text: []const u8) TextEditState {
+        return .{
+            .text = text,
+            .selection = TextSelection.collapsed(text.len),
+        };
+    }
+
+    pub fn apply(self: TextEditState, event: TextInputEvent, output: []u8) Error!TextEditState {
+        return applyTextInputEvent(self, event, output);
     }
 };
 
@@ -770,6 +861,8 @@ pub const Widget = struct {
     kind: WidgetKind,
     frame: geometry.RectF = .{},
     text: []const u8 = "",
+    text_selection: ?TextSelection = null,
+    text_composition: ?TextRange = null,
     value: f32 = 0,
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
@@ -850,6 +943,8 @@ pub const WidgetSemanticsNode = struct {
     bounds: geometry.RectF,
     state: WidgetState,
     focusable: bool = false,
+    text_selection: ?TextRange = null,
+    text_composition: ?TextRange = null,
     parent_index: ?usize = null,
 };
 
@@ -1083,6 +1178,28 @@ pub fn layoutTextRun(text: DrawText, options: TextLayoutOptions, output: []TextL
         try appendTextLine(output, &len, text, 0, 0, 0, 0, lineHeight(text, options), &bounds);
     }
     return .{ .lines = output[0..len], .bounds = bounds };
+}
+
+pub fn applyTextInputEvent(state: TextEditState, event: TextInputEvent, output: []u8) Error!TextEditState {
+    const normalized = normalizeTextEditState(state);
+    return switch (event) {
+        .insert_text => |text| replaceTextEditRange(normalized, activeTextReplaceRange(normalized), text, output, null, text.len),
+        .delete_backward => deleteBackwardTextEdit(normalized, output),
+        .delete_forward => deleteForwardTextEdit(normalized, output),
+        .move_caret => |move| moveTextCaret(normalized, move),
+        .set_selection => |selection| .{
+            .text = normalized.text,
+            .selection = snapTextSelection(normalized.text, selection),
+            .composition = null,
+        },
+        .set_composition => |composition| setTextComposition(normalized, composition, output),
+        .commit_composition => .{
+            .text = normalized.text,
+            .selection = normalized.selection,
+            .composition = null,
+        },
+        .cancel_composition => cancelTextComposition(normalized, output),
+    };
 }
 
 pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
@@ -1914,6 +2031,12 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
 
 fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = Radius.all(tokens.radius.md);
+    const text_size = tokens.typography.body_size;
+    const origin = textOrigin(widget.frame, text_size, tokens.spacing.md);
+    const selection_range = widgetTextSelectionRange(widget);
+    const composition_range = widgetTextCompositionRange(widget);
+    const has_text_affordances = selection_range != null or composition_range != null;
+
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -1929,15 +2052,50 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .width = if (widget.state.focused) tokens.stroke.focus else tokens.stroke.regular,
         },
     });
+    if (selection_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            try builder.fillRoundedRect(.{
+                .id = widgetPartId(widget.id, 3),
+                .rect = textRangeInlineRect(widget.text, widget.frame, range, text_size, tokens.spacing.md),
+                .radius = Radius.all(tokens.radius.sm),
+                .fill = .{ .color = textSelectionFillColor(tokens) },
+            });
+        }
+    }
     if (widget.text.len > 0) {
         try builder.drawText(.{
-            .id = widgetPartId(widget.id, 3),
+            .id = widgetPartId(widget.id, if (has_text_affordances) 4 else 3),
             .font_id = tokens.typography.font_id,
-            .size = tokens.typography.body_size,
-            .origin = textOrigin(widget.frame, tokens.typography.body_size, tokens.spacing.md),
+            .size = text_size,
+            .origin = origin,
             .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
             .text = widget.text,
         });
+    }
+    if (composition_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            const rect = textRangeInlineRect(widget.text, widget.frame, range, text_size, tokens.spacing.md);
+            const y = rect.y + rect.height - 1;
+            try builder.drawLine(.{
+                .id = widgetPartId(widget.id, 5),
+                .from = geometry.PointF.init(rect.x, y),
+                .to = geometry.PointF.init(rect.x + rect.width, y),
+                .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = 1 },
+            });
+        }
+    }
+    if (widget.state.focused) {
+        if (selection_range) |range| {
+            if (range.isCollapsed(widget.text.len)) {
+                const x = origin.x + estimateTextOffsetX(widget.text, range.start, text_size);
+                try builder.drawLine(.{
+                    .id = widgetPartId(widget.id, 6),
+                    .from = geometry.PointF.init(x, origin.y - text_size),
+                    .to = geometry.PointF.init(x, origin.y + 2),
+                    .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = tokens.stroke.regular },
+                });
+            }
+        }
     }
 }
 
@@ -2223,6 +2381,51 @@ fn textOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.PointF {
     return geometry.PointF.init(
         frame.x + inset,
         frame.y + @max(size, (frame.height + size * 0.5) * 0.5),
+    );
+}
+
+fn widgetTextSelectionRange(widget: Widget) ?TextRange {
+    if (widget.kind != .text_field) return null;
+    if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
+    return null;
+}
+
+fn widgetTextCompositionRange(widget: Widget) ?TextRange {
+    if (widget.kind != .text_field) return null;
+    if (widget.text_composition) |range| return snapTextRange(widget.text, range);
+    return null;
+}
+
+fn textRangeInlineRect(text: []const u8, frame: geometry.RectF, range: TextRange, size: f32, inset: f32) geometry.RectF {
+    const normalized = snapTextRange(text, range);
+    const origin = textOrigin(frame, size, inset);
+    const start_x = origin.x + estimateTextOffsetX(text, normalized.start, size);
+    const end_x = origin.x + estimateTextOffsetX(text, normalized.end, size);
+    return geometry.RectF.init(
+        start_x,
+        origin.y - size,
+        @max(1, end_x - start_x),
+        size * 1.25,
+    );
+}
+
+fn estimateTextOffsetX(text: []const u8, offset: usize, size: f32) f32 {
+    const target = snapTextOffset(text, offset);
+    var cursor: usize = 0;
+    var width: f32 = 0;
+    while (cursor < target) {
+        width += size * 0.5;
+        cursor = nextTextOffset(text, cursor);
+    }
+    return width;
+}
+
+fn textSelectionFillColor(tokens: DesignTokens) Color {
+    return Color.rgba(
+        tokens.colors.focus_ring.r,
+        tokens.colors.focus_ring.g,
+        tokens.colors.focus_ring.b,
+        0.18,
     );
 }
 
@@ -2591,6 +2794,8 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
             .bounds = node.frame,
             .state = node.widget.state,
             .focusable = node.widget.semantics.focusable or defaultFocusable(node.widget),
+            .text_selection = widgetTextSelectionRange(node.widget),
+            .text_composition = widgetTextCompositionRange(node.widget),
             .parent_index = parent_index,
         };
         semantic_stack[node.depth] = len;
@@ -2754,7 +2959,10 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         previous.parent_index != next.parent_index or
         !rectsEqual(previous.frame, next.frame) or
         !widgetLayoutStylesEqual(previous.widget.layout, next.widget.layout);
-    const content_dirty = !std.mem.eql(u8, previous.widget.text, next.widget.text) or previous.widget.value != next.widget.value;
+    const content_dirty = !std.mem.eql(u8, previous.widget.text, next.widget.text) or
+        previous.widget.value != next.widget.value or
+        !optionalTextSelectionsEqual(previous.widget.text_selection, next.widget.text_selection) or
+        !optionalTextRangesEqual(previous.widget.text_composition, next.widget.text_composition);
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const semantics_dirty =
         layout_dirty or
@@ -3135,6 +3343,176 @@ fn isTextBreakByte(byte: u8) bool {
     return byte == ' ' or byte == '\t';
 }
 
+const TextReplaceResult = struct {
+    text: []const u8,
+    inserted_range: TextRange,
+};
+
+fn normalizeTextEditState(state: TextEditState) TextEditState {
+    return .{
+        .text = state.text,
+        .selection = snapTextSelection(state.text, state.selection),
+        .composition = if (state.composition) |range| snapTextRange(state.text, range) else null,
+    };
+}
+
+fn activeTextReplaceRange(state: TextEditState) TextRange {
+    if (state.composition) |range| return snapTextRange(state.text, range);
+    return state.selection.range(state.text.len);
+}
+
+fn replaceTextEditRange(
+    state: TextEditState,
+    range: TextRange,
+    replacement: []const u8,
+    output: []u8,
+    composition: ?TextRange,
+    cursor_offset: usize,
+) Error!TextEditState {
+    const result = try replaceTextRange(state.text, range, replacement, output);
+    const cursor = snapTextOffset(result.text, result.inserted_range.start + @min(cursor_offset, replacement.len));
+    return .{
+        .text = result.text,
+        .selection = TextSelection.collapsed(cursor),
+        .composition = composition,
+    };
+}
+
+fn setTextComposition(state: TextEditState, composition: TextCompositionUpdate, output: []u8) Error!TextEditState {
+    const range = activeTextReplaceRange(state);
+    const cursor = snapTextOffset(composition.text, composition.cursor orelse composition.text.len);
+    const result = try replaceTextRange(state.text, range, composition.text, output);
+    const absolute_cursor = snapTextOffset(result.text, result.inserted_range.start + cursor);
+    return .{
+        .text = result.text,
+        .selection = TextSelection.collapsed(absolute_cursor),
+        .composition = result.inserted_range,
+    };
+}
+
+fn cancelTextComposition(state: TextEditState, output: []u8) Error!TextEditState {
+    const composition = state.composition orelse return state;
+    const range = snapTextRange(state.text, composition);
+    const result = try replaceTextRange(state.text, range, "", output);
+    return .{
+        .text = result.text,
+        .selection = TextSelection.collapsed(result.inserted_range.start),
+        .composition = null,
+    };
+}
+
+fn deleteBackwardTextEdit(state: TextEditState, output: []u8) Error!TextEditState {
+    const range = activeTextReplaceRange(state);
+    if (!range.isCollapsed(state.text.len)) return replaceTextEditRange(state, range, "", output, null, 0);
+
+    const caret = snapTextOffset(state.text, state.selection.focus);
+    if (caret == 0) return .{ .text = state.text, .selection = TextSelection.collapsed(0), .composition = null };
+    return replaceTextEditRange(state, TextRange.init(previousTextOffset(state.text, caret), caret), "", output, null, 0);
+}
+
+fn deleteForwardTextEdit(state: TextEditState, output: []u8) Error!TextEditState {
+    const range = activeTextReplaceRange(state);
+    if (!range.isCollapsed(state.text.len)) return replaceTextEditRange(state, range, "", output, null, 0);
+
+    const caret = snapTextOffset(state.text, state.selection.focus);
+    if (caret >= state.text.len) return .{ .text = state.text, .selection = TextSelection.collapsed(state.text.len), .composition = null };
+    return replaceTextEditRange(state, TextRange.init(caret, nextTextOffset(state.text, caret)), "", output, null, 0);
+}
+
+fn moveTextCaret(state: TextEditState, move: TextCaretMove) TextEditState {
+    const range = state.selection.range(state.text.len);
+    const focus = snapTextOffset(state.text, state.selection.focus);
+    const target = switch (move.direction) {
+        .previous => if (!move.extend and !range.isCollapsed(state.text.len)) range.start else previousTextOffset(state.text, focus),
+        .next => if (!move.extend and !range.isCollapsed(state.text.len)) range.end else nextTextOffset(state.text, focus),
+        .start => 0,
+        .end => state.text.len,
+    };
+    const selection = if (move.extend)
+        TextSelection{ .anchor = state.selection.anchor, .focus = target }
+    else
+        TextSelection.collapsed(target);
+    return .{
+        .text = state.text,
+        .selection = snapTextSelection(state.text, selection),
+        .composition = null,
+    };
+}
+
+fn replaceTextRange(source: []const u8, range: TextRange, replacement: []const u8, output: []u8) Error!TextReplaceResult {
+    const snapped = snapTextRange(source, range);
+    const prefix_len = snapped.start;
+    const suffix = source[snapped.end..];
+    const suffix_start = prefix_len + replacement.len;
+    const next_len = prefix_len + replacement.len + suffix.len;
+    if (next_len > output.len) return error.TextEditBufferTooSmall;
+
+    if (suffix_start > snapped.end) {
+        std.mem.copyBackwards(u8, output[suffix_start..next_len], suffix);
+        std.mem.copyForwards(u8, output[0..prefix_len], source[0..prefix_len]);
+        std.mem.copyForwards(u8, output[prefix_len..suffix_start], replacement);
+    } else {
+        std.mem.copyForwards(u8, output[0..prefix_len], source[0..prefix_len]);
+        std.mem.copyForwards(u8, output[prefix_len..suffix_start], replacement);
+        std.mem.copyForwards(u8, output[suffix_start..next_len], suffix);
+    }
+    return .{
+        .text = output[0..next_len],
+        .inserted_range = TextRange.init(prefix_len, suffix_start),
+    };
+}
+
+fn snapTextSelection(text: []const u8, selection: TextSelection) TextSelection {
+    return .{
+        .anchor = snapTextOffset(text, selection.anchor),
+        .focus = snapTextOffset(text, selection.focus),
+    };
+}
+
+fn snapTextRange(text: []const u8, range: TextRange) TextRange {
+    const normalized = range.normalized(text.len);
+    return TextRange.init(
+        snapTextOffset(text, normalized.start),
+        snapTextOffset(text, normalized.end),
+    ).normalized(text.len);
+}
+
+fn previousTextOffset(text: []const u8, offset: usize) usize {
+    var cursor = snapTextOffset(text, offset);
+    if (cursor == 0) return 0;
+    cursor -= 1;
+    while (cursor > 0 and isUtf8ContinuationByte(text[cursor])) {
+        cursor -= 1;
+    }
+    return cursor;
+}
+
+fn nextTextOffset(text: []const u8, offset: usize) usize {
+    const cursor = snapTextOffset(text, offset);
+    if (cursor >= text.len) return text.len;
+    return @min(text.len, cursor + utf8SequenceLength(text[cursor]));
+}
+
+fn snapTextOffset(text: []const u8, offset: usize) usize {
+    var cursor = @min(offset, text.len);
+    while (cursor > 0 and cursor < text.len and isUtf8ContinuationByte(text[cursor])) {
+        cursor -= 1;
+    }
+    return cursor;
+}
+
+fn utf8SequenceLength(lead: u8) usize {
+    if ((lead & 0x80) == 0) return 1;
+    if ((lead & 0xe0) == 0xc0) return 2;
+    if ((lead & 0xf0) == 0xe0) return 3;
+    if ((lead & 0xf8) == 0xf0) return 4;
+    return 1;
+}
+
+fn isUtf8ContinuationByte(byte: u8) bool {
+    return (byte & 0xc0) == 0x80;
+}
+
 fn commandsEqual(a: CanvasCommand, b: CanvasCommand) bool {
     return switch (a) {
         .push_clip => |value| switch (b) {
@@ -3363,6 +3741,22 @@ fn affinesEqual(a: Affine, b: Affine) bool {
 fn optionalF32Equal(a: ?f32, b: ?f32) bool {
     if (a) |left| {
         if (b) |right| return left == right;
+        return false;
+    }
+    return b == null;
+}
+
+fn optionalTextSelectionsEqual(a: ?TextSelection, b: ?TextSelection) bool {
+    if (a) |left| {
+        if (b) |right| return left.anchor == right.anchor and left.focus == right.focus;
+        return false;
+    }
+    return b == null;
+}
+
+fn optionalTextRangesEqual(a: ?TextRange, b: ?TextRange) bool {
+    if (a) |left| {
+        if (b) |right| return left.start == right.start and left.end == right.end;
         return false;
     }
     return b == null;
@@ -3949,6 +4343,69 @@ test "widget text fields expose textbox semantics and render focused chrome" {
     }
     switch (display_list.commands[2]) {
         .draw_text => |text| try std.testing.expectEqualStrings("search terms", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget text fields render selection caret and composition ranges" {
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(10, 20, 30) },
+    };
+    const composing = Widget{
+        .id = 9,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(8, 10, 180, 36),
+        .text = "abcdef",
+        .text_selection = .{ .anchor = 1, .focus = 4 },
+        .text_composition = TextRange.init(2, 4),
+        .state = .{ .focused = true },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(composing, composing.frame, &nodes);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqualDeep(TextRange.init(1, 4), semantics[0].text_selection.?);
+    try std.testing.expectEqualDeep(TextRange.init(2, 4), semantics[0].text_composition.?);
+
+    var commands: [6]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    switch (display_list.commands[2]) {
+        .fill_rounded_rect => |selection| try expectFillColor(textSelectionFillColor(tokens), selection.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .draw_text => |text| try std.testing.expectEqualStrings("abcdef", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[4]) {
+        .draw_line => |line| try expectFillColor(tokens.colors.focus_ring, line.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const caret = Widget{
+        .id = 10,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(8, 10, 180, 36),
+        .text = "abcd",
+        .text_selection = TextSelection.collapsed(2),
+        .state = .{ .focused = true },
+    };
+    var caret_commands: [4]CanvasCommand = undefined;
+    var caret_builder = Builder.init(&caret_commands);
+    try emitWidgetTree(&caret_builder, caret, tokens);
+    const caret_display_list = caret_builder.displayList();
+    try std.testing.expectEqual(@as(usize, 4), caret_display_list.commandCount());
+    switch (caret_display_list.commands[3]) {
+        .draw_line => |line| {
+            try expectFillColor(tokens.colors.focus_ring, line.stroke.fill);
+            try std.testing.expectEqual(line.from.x, line.to.x);
+        },
         else => return error.TestUnexpectedResult,
     }
 }
@@ -5496,6 +5953,54 @@ test "canvas frame plan reports diff storage overflow" {
         .glyph_atlas_entries = &glyphs,
         .changes = &changes,
     }));
+}
+
+test "text edit state applies utf8-aware caret insert and delete events" {
+    var storage_a: [64]u8 = undefined;
+    var storage_b: [64]u8 = undefined;
+    var state = TextEditState.init("AéB");
+
+    state = try state.apply(.{ .move_caret = .{ .direction = .previous } }, &storage_a);
+    try std.testing.expectEqual(@as(usize, 3), state.selection.focus);
+
+    state = try state.apply(.delete_backward, &storage_a);
+    try std.testing.expectEqualStrings("AB", state.text);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
+    state = try state.apply(.{ .insert_text = "x" }, &storage_b);
+    try std.testing.expectEqualStrings("AxB", state.text);
+    try std.testing.expectEqual(@as(usize, 2), state.selection.focus);
+
+    state = try state.apply(.{ .set_selection = .{ .anchor = 1, .focus = 3 } }, &storage_a);
+    state = try state.apply(.delete_forward, &storage_a);
+    try std.testing.expectEqualStrings("A", state.text);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
+    var small: [1]u8 = undefined;
+    try std.testing.expectError(error.TextEditBufferTooSmall, state.apply(.{ .insert_text = "toolong" }, &small));
+}
+
+test "text edit state tracks ime composition ranges" {
+    var storage_a: [64]u8 = undefined;
+    var storage_b: [64]u8 = undefined;
+    var state = TextEditState.init("hello");
+
+    state = try state.apply(.{ .set_selection = .{ .anchor = 1, .focus = 4 } }, &storage_a);
+    state = try state.apply(.{ .set_composition = .{ .text = "é", .cursor = 2 } }, &storage_a);
+    try std.testing.expectEqualStrings("héo", state.text);
+    try std.testing.expectEqualDeep(TextRange.init(1, 3), state.composition.?);
+    try std.testing.expectEqual(@as(usize, 3), state.selection.focus);
+
+    state = try state.apply(.commit_composition, &storage_b);
+    try std.testing.expectEqualStrings("héo", state.text);
+    try std.testing.expect(state.composition == null);
+
+    state = try state.apply(.{ .set_composition = .{ .text = "ll", .cursor = 2 } }, &storage_b);
+    try std.testing.expectEqualStrings("héllo", state.text);
+    state = try state.apply(.cancel_composition, &storage_a);
+    try std.testing.expectEqualStrings("héo", state.text);
+    try std.testing.expectEqual(@as(usize, 3), state.selection.focus);
+    try std.testing.expect(state.composition == null);
 }
 
 test "text layout wraps words into deterministic line boxes" {

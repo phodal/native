@@ -747,6 +747,19 @@ pub const Runtime = struct {
         return self.views[index].widgetLayoutTree();
     }
 
+    pub fn editCanvasWidgetText(self: *Runtime, window_id: platform.WindowId, label: []const u8, id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!platform.ViewInfo {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        if (id == 0) return error.InvalidCommand;
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        if (!self.views[index].canEditCanvasWidgetText(id)) return error.InvalidCommand;
+
+        const dirty = try self.views[index].applyCanvasWidgetTextEdit(id, edit) orelse return self.views[index].info();
+        self.invalidateForCanvasWidgetDirty(index, dirty);
+        return self.views[index].info();
+    }
+
     pub fn emitCanvasWidgetDisplayList(self: *Runtime, window_id: platform.WindowId, label: []const u8, tokens: canvas.DesignTokens) anyerror!platform.ViewInfo {
         try self.validateViewParent(window_id);
         try validateViewLabel(label);
@@ -1857,16 +1870,16 @@ pub const Runtime = struct {
             try self.focusAutomationCanvasWidget(view_index, id);
         }
         const dirty = try self.views[view_index].setCanvasWidgetSelected(id, true) orelse return;
-        self.invalidateForAutomationCanvasWidgetDirty(view_index, dirty);
+        self.invalidateForCanvasWidgetDirty(view_index, dirty);
     }
 
     fn setAutomationCanvasWidgetText(self: *Runtime, view_index: usize, id: canvas.ObjectId, text: []const u8) anyerror!void {
         try self.focusAutomationCanvasWidget(view_index, id);
         const dirty = try self.views[view_index].setCanvasWidgetTextValue(id, text) orelse return;
-        self.invalidateForAutomationCanvasWidgetDirty(view_index, dirty);
+        self.invalidateForCanvasWidgetDirty(view_index, dirty);
     }
 
-    fn invalidateForAutomationCanvasWidgetDirty(self: *Runtime, view_index: usize, dirty: geometry.RectF) void {
+    fn invalidateForCanvasWidgetDirty(self: *Runtime, view_index: usize, dirty: geometry.RectF) void {
         if (canvasDirtyRegionForView(self.views[view_index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -4087,6 +4100,12 @@ const RuntimeView = struct {
         self.widget_semantics_node_count = semantics.len;
         self.widget_revision += 1;
         return self.widget_layout_nodes[index].frame;
+    }
+
+    fn canEditCanvasWidgetText(self: *const RuntimeView, id: canvas.ObjectId) bool {
+        const index = self.canvasWidgetNodeIndexById(id) orelse return false;
+        const widget = self.widget_layout_nodes[index].widget;
+        return (widget.kind == .text_field or widget.kind == .search_field) and !widget.state.disabled;
     }
 
     fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
@@ -7470,6 +7489,86 @@ test "runtime applies text input to focused canvas text fields" {
     try std.testing.expectEqualDeep(canvas.TextRange.init(5, 5), harness.runtime.views[0].widgetSemantics()[0].text_selection.?);
     try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 5, .end = 5 }, snapshot.widgets[0].text_selection.?);
     try std.testing.expect(snapshot.widgets[0].text_composition == null);
+}
+
+test "runtime applies ime composition edits to canvas text fields" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-text-ime", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 240, 120),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 160, 36),
+        .text = "Cafe",
+        .semantics = .{ .label = "Name" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_selection = .{ .anchor = 3, .focus = 4 } });
+    try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = "\xc3\xa9", .cursor = 2 } });
+    try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(3, 5), retained.nodes[1].widget.text_composition.?);
+
+    var snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqualStrings("Name", snapshot.widgets[0].name);
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", snapshot.widgets[0].text_value);
+    try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 5, .end = 5 }, snapshot.widgets[0].text_selection.?);
+    try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 3, .end = 5 }, snapshot.widgets[0].text_composition.?);
+
+    var a11y_buffer: [1024]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "text=\"Caf\xc3\xa9\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "composition=3..5") != null);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .commit_composition);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expect(retained.nodes[1].widget.text_composition == null);
+    try std.testing.expectEqual(@as(u64, 4), harness.runtime.views[0].widget_revision);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = " noir", .cursor = 5 } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9 noir", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(5, 10), retained.nodes[1].widget.text_composition.?);
+    try std.testing.expectEqual(@as(u64, 5), harness.runtime.views[0].widget_revision);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .cancel_composition);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expect(retained.nodes[1].widget.text_composition == null);
+    try std.testing.expectEqual(@as(u64, 6), harness.runtime.views[0].widget_revision);
+
+    snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", snapshot.widgets[0].text_value);
+    try std.testing.expect(snapshot.widgets[0].text_composition == null);
+
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.editCanvasWidgetText(1, "canvas", 99, .commit_composition));
 }
 
 test "runtime applies pointer selection to canvas text fields" {

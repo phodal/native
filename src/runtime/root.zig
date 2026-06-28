@@ -22,6 +22,7 @@ pub const max_canvas_text_bytes_per_view: usize = 2048;
 const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
 const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
+const max_canvas_text_layouts_per_view: usize = 16;
 const max_canvas_surface_extent_pixels: f32 = 16_384;
 pub const max_canvas_widget_nodes_per_view: usize = 16;
 pub const max_canvas_widget_semantics_per_view: usize = 16;
@@ -685,6 +686,7 @@ pub const Runtime = struct {
         }
         frame_options.previous_resource_cache = self.views[index].canvasFrameResourceCache();
         frame_options.previous_glyph_atlas_cache = self.views[index].canvasFrameGlyphAtlasCache();
+        frame_options.previous_text_layout_cache = self.views[index].canvasFrameTextLayoutCache();
 
         const display_list = self.views[index].canvasDisplayList();
         var render_plan = try display_list.renderPlan(storage.render_commands);
@@ -705,6 +707,16 @@ pub const Runtime = struct {
             storage.glyph_atlas_cache_entries,
             storage.glyph_atlas_cache_actions,
         );
+        const text_layout_plan = try display_list.textLayoutPlan(frame_options.text_layout_options, storage.text_layout_plans, storage.text_layout_lines);
+        const text_layout_cache_plan = if (storage.text_layout_cache_entries.len == 0 and storage.text_layout_cache_actions.len == 0)
+            canvas.TextLayoutCachePlan{}
+        else
+            try text_layout_plan.cachePlan(
+                frame_options.previous_text_layout_cache,
+                frame_options.frame_index,
+                storage.text_layout_cache_entries,
+                storage.text_layout_cache_actions,
+            );
 
         const full_repaint = frame_options.full_repaint or
             !self.views[index].presented_canvas_valid or
@@ -732,12 +744,15 @@ pub const Runtime = struct {
             .resource_cache_plan = resource_cache_plan,
             .glyph_atlas_plan = glyph_atlas_plan,
             .glyph_atlas_cache_plan = glyph_atlas_cache_plan,
+            .text_layout_plan = text_layout_plan,
+            .text_layout_cache_plan = text_layout_cache_plan,
             .changes = changes,
             .dirty_bounds = dirty_bounds,
             .budget = frame_options.budget,
         };
         try self.views[index].copyCanvasFrameResourceCache(canvas_frame.resource_cache_plan.entries);
         try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
+        try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
         try self.views[index].copyPresentedCanvasSummary(display_list);
         self.views[index].recordCanvasFrame(canvas_frame);
         return canvas_frame;
@@ -1464,6 +1479,11 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_glyph_atlas_upload_count = self.views[index].canvas_frame_glyph_atlas_upload_count;
                     enriched_frame_event.canvas_frame_glyph_atlas_retain_count = self.views[index].canvas_frame_glyph_atlas_retain_count;
                     enriched_frame_event.canvas_frame_glyph_atlas_evict_count = self.views[index].canvas_frame_glyph_atlas_evict_count;
+                    enriched_frame_event.canvas_frame_text_layout_count = self.views[index].canvas_frame_text_layout_count;
+                    enriched_frame_event.canvas_frame_text_layout_line_count = self.views[index].canvas_frame_text_layout_line_count;
+                    enriched_frame_event.canvas_frame_text_layout_upload_count = self.views[index].canvas_frame_text_layout_upload_count;
+                    enriched_frame_event.canvas_frame_text_layout_retain_count = self.views[index].canvas_frame_text_layout_retain_count;
+                    enriched_frame_event.canvas_frame_text_layout_evict_count = self.views[index].canvas_frame_text_layout_evict_count;
                     enriched_frame_event.canvas_frame_change_count = self.views[index].canvas_frame_change_count;
                     enriched_frame_event.canvas_frame_budget_exceeded_count = self.views[index].canvas_frame_budget_status.exceededCount();
                     enriched_frame_event.canvas_frame_budget_ok = self.views[index].canvas_frame_budget_status.ok();
@@ -3996,6 +4016,8 @@ const RuntimeView = struct {
     canvas_frame_resource_cache_count: usize = 0,
     canvas_frame_glyph_atlas_cache: [max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined,
     canvas_frame_glyph_atlas_cache_count: usize = 0,
+    canvas_frame_text_layout_cache: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined,
+    canvas_frame_text_layout_cache_count: usize = 0,
     canvas_frame_requires_render: bool = false,
     canvas_frame_full_repaint: bool = false,
     canvas_frame_batch_count: usize = 0,
@@ -4007,6 +4029,11 @@ const RuntimeView = struct {
     canvas_frame_glyph_atlas_upload_count: usize = 0,
     canvas_frame_glyph_atlas_retain_count: usize = 0,
     canvas_frame_glyph_atlas_evict_count: usize = 0,
+    canvas_frame_text_layout_count: usize = 0,
+    canvas_frame_text_layout_line_count: usize = 0,
+    canvas_frame_text_layout_upload_count: usize = 0,
+    canvas_frame_text_layout_retain_count: usize = 0,
+    canvas_frame_text_layout_evict_count: usize = 0,
     canvas_frame_change_count: usize = 0,
     canvas_frame_budget: canvas.CanvasFrameBudget = .{},
     canvas_frame_budget_status: canvas.CanvasFrameBudgetStatus = .{},
@@ -4071,6 +4098,11 @@ const RuntimeView = struct {
             .canvas_frame_glyph_atlas_upload_count = self.canvas_frame_glyph_atlas_upload_count,
             .canvas_frame_glyph_atlas_retain_count = self.canvas_frame_glyph_atlas_retain_count,
             .canvas_frame_glyph_atlas_evict_count = self.canvas_frame_glyph_atlas_evict_count,
+            .canvas_frame_text_layout_count = self.canvas_frame_text_layout_count,
+            .canvas_frame_text_layout_line_count = self.canvas_frame_text_layout_line_count,
+            .canvas_frame_text_layout_upload_count = self.canvas_frame_text_layout_upload_count,
+            .canvas_frame_text_layout_retain_count = self.canvas_frame_text_layout_retain_count,
+            .canvas_frame_text_layout_evict_count = self.canvas_frame_text_layout_evict_count,
             .canvas_frame_change_count = self.canvas_frame_change_count,
             .canvas_frame_budget_exceeded_count = self.canvas_frame_budget_status.exceededCount(),
             .canvas_frame_budget_ok = self.canvas_frame_budget_status.ok(),
@@ -4113,6 +4145,10 @@ const RuntimeView = struct {
         return self.canvas_frame_glyph_atlas_cache[0..self.canvas_frame_glyph_atlas_cache_count];
     }
 
+    fn canvasFrameTextLayoutCache(self: *const RuntimeView) []const canvas.TextLayoutCacheEntry {
+        return self.canvas_frame_text_layout_cache[0..self.canvas_frame_text_layout_cache_count];
+    }
+
     fn widgetLayoutTree(self: *const RuntimeView) canvas.WidgetLayoutTree {
         return .{ .nodes = self.widget_layout_nodes[0..self.widget_layout_node_count] };
     }
@@ -4153,6 +4189,12 @@ const RuntimeView = struct {
         self.canvas_frame_glyph_atlas_cache_count = entries.len;
     }
 
+    fn copyCanvasFrameTextLayoutCache(self: *RuntimeView, entries: []const canvas.TextLayoutCacheEntry) anyerror!void {
+        const count = @min(entries.len, self.canvas_frame_text_layout_cache.len);
+        @memcpy(self.canvas_frame_text_layout_cache[0..count], entries[0..count]);
+        self.canvas_frame_text_layout_cache_count = count;
+    }
+
     fn recordCanvasFrame(self: *RuntimeView, frame: canvas.CanvasFrame) void {
         self.canvas_frame_requires_render = frame.requiresRender();
         self.canvas_frame_full_repaint = frame.full_repaint;
@@ -4165,6 +4207,11 @@ const RuntimeView = struct {
         self.canvas_frame_glyph_atlas_upload_count = frame.glyph_atlas_cache_plan.uploadCount();
         self.canvas_frame_glyph_atlas_retain_count = frame.glyph_atlas_cache_plan.retainCount();
         self.canvas_frame_glyph_atlas_evict_count = frame.glyph_atlas_cache_plan.evictCount();
+        self.canvas_frame_text_layout_count = frame.text_layout_plan.planCount();
+        self.canvas_frame_text_layout_line_count = frame.text_layout_plan.lineCount();
+        self.canvas_frame_text_layout_upload_count = frame.text_layout_cache_plan.uploadCount();
+        self.canvas_frame_text_layout_retain_count = frame.text_layout_cache_plan.retainCount();
+        self.canvas_frame_text_layout_evict_count = frame.text_layout_cache_plan.evictCount();
         self.canvas_frame_change_count = frame.changes.len;
         self.canvas_frame_budget = frame.budget;
         self.canvas_frame_budget_status = frame.budgetStatus();
@@ -4183,6 +4230,11 @@ const RuntimeView = struct {
             .glyph_atlas_upload_count = self.canvas_frame_glyph_atlas_upload_count,
             .glyph_atlas_retain_count = self.canvas_frame_glyph_atlas_retain_count,
             .glyph_atlas_evict_count = self.canvas_frame_glyph_atlas_evict_count,
+            .text_layout_count = self.canvas_frame_text_layout_count,
+            .text_layout_line_count = self.canvas_frame_text_layout_line_count,
+            .text_layout_upload_count = self.canvas_frame_text_layout_upload_count,
+            .text_layout_retain_count = self.canvas_frame_text_layout_retain_count,
+            .text_layout_evict_count = self.canvas_frame_text_layout_evict_count,
             .change_count = self.canvas_frame_change_count,
             .full_repaint = self.canvas_frame_full_repaint,
             .requires_render = self.canvas_frame_requires_render,
@@ -4778,6 +4830,8 @@ fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
         budget.max_resources == 0 and
         budget.max_resource_uploads == 0 and
         budget.max_glyph_atlas_entries == 0 and
+        budget.max_text_layouts == 0 and
+        budget.max_text_layout_lines == 0 and
         budget.max_changes == 0;
 }
 
@@ -5434,7 +5488,7 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
     try json.writeString(writer, view.command);
     try writer.writeAll(",\"url\":");
     try json.writeString(writer, view.url);
-    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuWidth\":{d},\"gpuHeight\":{d},\"gpuScale\":{d},\"gpuFrame\":{d},\"gpuTimestampNs\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"canvasFrameRequiresRender\":{},\"canvasFrameFullRepaint\":{},\"canvasFrameBatchCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d},\"canvasFrameChangeCount\":{d},\"canvasFrameBudgetExceededCount\":{d},\"canvasFrameBudgetOk\":{},\"canvasFrameDirtyBounds\":", .{
+    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuWidth\":{d},\"gpuHeight\":{d},\"gpuScale\":{d},\"gpuFrame\":{d},\"gpuTimestampNs\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"canvasFrameRequiresRender\":{},\"canvasFrameFullRepaint\":{},\"canvasFrameBatchCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
         view.frame.x,
         view.frame.y,
         view.frame.width,
@@ -5464,6 +5518,13 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_glyph_atlas_upload_count,
         view.canvas_frame_glyph_atlas_retain_count,
         view.canvas_frame_glyph_atlas_evict_count,
+    });
+    try writer.print(",\"canvasFrameTextLayoutCount\":{d},\"canvasFrameTextLayoutLineCount\":{d},\"canvasFrameTextLayoutUploadCount\":{d},\"canvasFrameTextLayoutRetainCount\":{d},\"canvasFrameTextLayoutEvictCount\":{d},\"canvasFrameChangeCount\":{d},\"canvasFrameBudgetExceededCount\":{d},\"canvasFrameBudgetOk\":{},\"canvasFrameDirtyBounds\":", .{
+        view.canvas_frame_text_layout_count,
+        view.canvas_frame_text_layout_line_count,
+        view.canvas_frame_text_layout_upload_count,
+        view.canvas_frame_text_layout_retain_count,
+        view.canvas_frame_text_layout_evict_count,
         view.canvas_frame_change_count,
         view.canvas_frame_budget_exceeded_count,
         view.canvas_frame_budget_ok,
@@ -7135,6 +7196,10 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
     var glyphs: [1]canvas.GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [1]canvas.GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [1]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [1]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [1]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [2]canvas.TextLayoutCacheAction = undefined;
     var changes: [1]canvas.DiffChange = undefined;
     const frame_storage = canvas.CanvasFrameStorage{
         .render_commands = &render_commands,
@@ -7145,6 +7210,10 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
         .glyph_atlas_entries = &glyphs,
         .glyph_atlas_cache_entries = &glyph_cache_entries,
         .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .text_layout_plans = &text_layout_plans,
+        .text_layout_lines = &text_layout_lines,
+        .text_layout_cache_entries = &text_layout_cache_entries,
+        .text_layout_cache_actions = &text_layout_cache_actions,
         .changes = &changes,
     };
 
@@ -7154,12 +7223,19 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
     try std.testing.expectEqual(@as(usize, 0), first_frame.glyph_atlas_cache_plan.evictCount());
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_cache_count);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), first_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_upload_count);
 
     const clean_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
     try std.testing.expectEqual(@as(usize, 0), clean_frame.glyph_atlas_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 1), clean_frame.glyph_atlas_cache_plan.retainCount());
     try std.testing.expectEqual(@as(usize, 0), clean_frame.glyph_atlas_cache_plan.evictCount());
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), clean_frame.text_layout_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.text_layout_cache_plan.evictCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_retain_count);
 
     const next_commands = [_]canvas.CanvasCommand{.{ .draw_text = .{
         .id = 1,
@@ -7179,6 +7255,12 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
     try std.testing.expectEqual(@as(u32, 'B'), harness.runtime.views[0].canvas_frame_glyph_atlas_cache[0].key.glyph_id);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_upload_count);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_evict_count);
+    try std.testing.expectEqual(@as(usize, 1), changed_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 0), changed_frame.text_layout_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), changed_frame.text_layout_cache_plan.evictCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_evict_count);
 }
 
 test "runtime next canvas frame applies render override dirty regions" {

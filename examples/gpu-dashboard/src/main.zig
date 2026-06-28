@@ -159,6 +159,10 @@ const GpuDashboardApp = struct {
     glyphs: [max_dashboard_glyphs]canvas.GlyphAtlasEntry = undefined,
     glyph_cache_entries: [max_dashboard_glyphs]canvas.GlyphAtlasCacheEntry = undefined,
     glyph_cache_actions: [max_dashboard_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined,
+    text_layout_plans: [max_dashboard_commands]canvas.TextLayoutPlan = undefined,
+    text_layout_lines: [max_dashboard_glyphs]canvas.TextLine = undefined,
+    text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined,
+    text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined,
     changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined,
 
     fn app(self: *@This()) zero_native.App {
@@ -342,6 +346,10 @@ const GpuDashboardApp = struct {
             .glyph_atlas_entries = &self.glyphs,
             .glyph_atlas_cache_entries = &self.glyph_cache_entries,
             .glyph_atlas_cache_actions = &self.glyph_cache_actions,
+            .text_layout_plans = &self.text_layout_plans,
+            .text_layout_lines = &self.text_layout_lines,
+            .text_layout_cache_entries = &self.text_layout_cache_entries,
+            .text_layout_cache_actions = &self.text_layout_cache_actions,
             .changes = &self.changes,
         };
     }
@@ -477,6 +485,10 @@ fn dashboardFrameStorage(
     glyphs: []canvas.GlyphAtlasEntry,
     glyph_cache_entries: []canvas.GlyphAtlasCacheEntry,
     glyph_cache_actions: []canvas.GlyphAtlasCacheAction,
+    text_layout_plans: []canvas.TextLayoutPlan,
+    text_layout_lines: []canvas.TextLine,
+    text_layout_cache_entries: []canvas.TextLayoutCacheEntry,
+    text_layout_cache_actions: []canvas.TextLayoutCacheAction,
     changes: []canvas.DiffChange,
 ) canvas.CanvasFrameStorage {
     return .{
@@ -488,6 +500,10 @@ fn dashboardFrameStorage(
         .glyph_atlas_entries = glyphs,
         .glyph_atlas_cache_entries = glyph_cache_entries,
         .glyph_atlas_cache_actions = glyph_cache_actions,
+        .text_layout_plans = text_layout_plans,
+        .text_layout_lines = text_layout_lines,
+        .text_layout_cache_entries = text_layout_cache_entries,
+        .text_layout_cache_actions = text_layout_cache_actions,
         .changes = changes,
     };
 }
@@ -512,6 +528,14 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_resource_retain_count = frame.canvas_frame_resource_retain_count,
         .canvas_frame_resource_evict_count = frame.canvas_frame_resource_evict_count,
         .canvas_frame_glyph_atlas_entry_count = frame.canvas_frame_glyph_atlas_entry_count,
+        .canvas_frame_glyph_atlas_upload_count = frame.canvas_frame_glyph_atlas_upload_count,
+        .canvas_frame_glyph_atlas_retain_count = frame.canvas_frame_glyph_atlas_retain_count,
+        .canvas_frame_glyph_atlas_evict_count = frame.canvas_frame_glyph_atlas_evict_count,
+        .canvas_frame_text_layout_count = frame.canvas_frame_text_layout_count,
+        .canvas_frame_text_layout_line_count = frame.canvas_frame_text_layout_line_count,
+        .canvas_frame_text_layout_upload_count = frame.canvas_frame_text_layout_upload_count,
+        .canvas_frame_text_layout_retain_count = frame.canvas_frame_text_layout_retain_count,
+        .canvas_frame_text_layout_evict_count = frame.canvas_frame_text_layout_evict_count,
         .canvas_frame_change_count = frame.canvas_frame_change_count,
         .canvas_frame_budget_exceeded_count = frame.canvas_frame_budget_exceeded_count,
         .canvas_frame_budget_ok = frame.canvas_frame_budget_ok,
@@ -592,15 +616,20 @@ test "gpu dashboard display list renders through the reference surface" {
     var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [max_dashboard_commands]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined;
     var changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined;
     const frame = try dashboardFrame(display_list, null, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .full_repaint = true,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
+    try std.testing.expect(frame.text_layout_plan.planCount() >= 10);
 
     const pixel_count = 720 * 520 * 4;
     const pixels = try std.testing.allocator.alloc(u8, pixel_count);
@@ -642,12 +671,16 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [max_dashboard_commands]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined;
     var changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined;
 
     const frame = try dashboardFrame(display_list, display_list, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .render_overrides = sampled,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);

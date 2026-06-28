@@ -16,6 +16,7 @@ pub const Error = error{
     RenderResourceListFull,
     TextLayoutCacheListFull,
     TextLayoutLineListFull,
+    TextLayoutPlanListFull,
     TextEditBufferTooSmall,
     ReferenceRenderSurfaceTooSmall,
     ReferenceRenderUnsupportedCommand,
@@ -366,6 +367,25 @@ pub const TextLayoutPlan = struct {
     }
 };
 
+pub const TextLayoutPlanSet = struct {
+    plans: []const TextLayoutPlan = &.{},
+
+    pub fn planCount(self: TextLayoutPlanSet) usize {
+        return self.plans.len;
+    }
+
+    pub fn lineCount(self: TextLayoutPlanSet) usize {
+        var count: usize = 0;
+        for (self.plans) |plan| count += plan.lineCount();
+        return count;
+    }
+
+    pub fn cachePlan(self: TextLayoutPlanSet, previous: []const TextLayoutCacheEntry, frame_index: u64, entries: []TextLayoutCacheEntry, actions: []TextLayoutCacheAction) Error!TextLayoutCachePlan {
+        var planner = TextLayoutCachePlanner.init(entries, actions);
+        return planner.buildMany(self.plans, previous, frame_index);
+    }
+};
+
 pub const TextLayoutCacheEntry = struct {
     key: TextLayoutKey,
     line_count: usize = 0,
@@ -382,6 +402,7 @@ pub const TextLayoutCacheActionKind = enum {
 pub const TextLayoutCacheAction = struct {
     kind: TextLayoutCacheActionKind,
     key: TextLayoutKey,
+    layout_index: ?usize = null,
     cache_index: ?usize = null,
 };
 
@@ -778,6 +799,8 @@ pub const CanvasFrameOptions = struct {
     budget: CanvasFrameBudget = .{},
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
     previous_glyph_atlas_cache: []const GlyphAtlasCacheEntry = &.{},
+    previous_text_layout_cache: []const TextLayoutCacheEntry = &.{},
+    text_layout_options: TextLayoutOptions = .{},
     previous_render_overrides: []const CanvasRenderOverride = &.{},
     render_overrides: []const CanvasRenderOverride = &.{},
 };
@@ -791,6 +814,10 @@ pub const CanvasFrameStorage = struct {
     glyph_atlas_entries: []GlyphAtlasEntry,
     glyph_atlas_cache_entries: []GlyphAtlasCacheEntry = &.{},
     glyph_atlas_cache_actions: []GlyphAtlasCacheAction = &.{},
+    text_layout_plans: []TextLayoutPlan = &.{},
+    text_layout_lines: []TextLine = &.{},
+    text_layout_cache_entries: []TextLayoutCacheEntry = &.{},
+    text_layout_cache_actions: []TextLayoutCacheAction = &.{},
     changes: []DiffChange,
 };
 
@@ -800,6 +827,8 @@ pub const CanvasFrameBudget = struct {
     max_resources: usize = 0,
     max_resource_uploads: usize = 0,
     max_glyph_atlas_entries: usize = 0,
+    max_text_layouts: usize = 0,
+    max_text_layout_lines: usize = 0,
     max_changes: usize = 0,
 
     pub fn status(self: CanvasFrameBudget, diagnostics: CanvasFrameDiagnostics) CanvasFrameBudgetStatus {
@@ -809,6 +838,8 @@ pub const CanvasFrameBudget = struct {
             .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
             .resource_uploads_over = budgetExceeded(self.max_resource_uploads, diagnostics.resource_upload_count),
             .glyph_atlas_entries_over = budgetExceeded(self.max_glyph_atlas_entries, diagnostics.glyph_atlas_entry_count),
+            .text_layouts_over = budgetExceeded(self.max_text_layouts, diagnostics.text_layout_count),
+            .text_layout_lines_over = budgetExceeded(self.max_text_layout_lines, diagnostics.text_layout_line_count),
             .changes_over = budgetExceeded(self.max_changes, diagnostics.change_count),
         };
     }
@@ -820,6 +851,8 @@ pub const CanvasFrameBudgetStatus = struct {
     resources_over: bool = false,
     resource_uploads_over: bool = false,
     glyph_atlas_entries_over: bool = false,
+    text_layouts_over: bool = false,
+    text_layout_lines_over: bool = false,
     changes_over: bool = false,
 
     pub fn ok(self: CanvasFrameBudgetStatus) bool {
@@ -833,6 +866,8 @@ pub const CanvasFrameBudgetStatus = struct {
         if (self.resources_over) count += 1;
         if (self.resource_uploads_over) count += 1;
         if (self.glyph_atlas_entries_over) count += 1;
+        if (self.text_layouts_over) count += 1;
+        if (self.text_layout_lines_over) count += 1;
         if (self.changes_over) count += 1;
         return count;
     }
@@ -850,6 +885,11 @@ pub const CanvasFrameDiagnostics = struct {
     glyph_atlas_upload_count: usize = 0,
     glyph_atlas_retain_count: usize = 0,
     glyph_atlas_evict_count: usize = 0,
+    text_layout_count: usize = 0,
+    text_layout_line_count: usize = 0,
+    text_layout_upload_count: usize = 0,
+    text_layout_retain_count: usize = 0,
+    text_layout_evict_count: usize = 0,
     change_count: usize = 0,
     full_repaint: bool = false,
     requires_render: bool = false,
@@ -863,7 +903,7 @@ pub const CanvasFrameDiagnostics = struct {
 
     pub fn writeJson(self: CanvasFrameDiagnostics, writer: anytype) !void {
         try writer.print(
-            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
                 self.frame_index,
                 self.command_count,
@@ -876,6 +916,11 @@ pub const CanvasFrameDiagnostics = struct {
                 self.glyph_atlas_upload_count,
                 self.glyph_atlas_retain_count,
                 self.glyph_atlas_evict_count,
+                self.text_layout_count,
+                self.text_layout_line_count,
+                self.text_layout_upload_count,
+                self.text_layout_retain_count,
+                self.text_layout_evict_count,
                 self.change_count,
                 self.budget_status.exceededCount(),
             },
@@ -919,6 +964,8 @@ pub const CanvasRenderPass = struct {
     resource_actions: []const RenderResourceCacheAction = &.{},
     glyph_atlas_entries: []const GlyphAtlasEntry = &.{},
     glyph_atlas_actions: []const GlyphAtlasCacheAction = &.{},
+    text_layouts: []const TextLayoutPlan = &.{},
+    text_layout_actions: []const TextLayoutCacheAction = &.{},
 
     pub fn requiresRender(self: CanvasRenderPass) bool {
         return self.full_repaint or self.dirty_bounds != null;
@@ -957,6 +1004,20 @@ pub const CanvasRenderPass = struct {
         return self.glyph_atlas_actions.len;
     }
 
+    pub fn textLayoutCount(self: CanvasRenderPass) usize {
+        return self.text_layouts.len;
+    }
+
+    pub fn textLayoutLineCount(self: CanvasRenderPass) usize {
+        var count: usize = 0;
+        for (self.text_layouts) |plan| count += plan.lineCount();
+        return count;
+    }
+
+    pub fn textLayoutActionCount(self: CanvasRenderPass) usize {
+        return self.text_layout_actions.len;
+    }
+
     pub fn writeJson(self: CanvasRenderPass, writer: anytype) !void {
         try writeCanvasRenderPassJson(self, writer);
     }
@@ -975,6 +1036,8 @@ pub const CanvasFrame = struct {
     resource_cache_plan: RenderResourceCachePlan = .{},
     glyph_atlas_plan: GlyphAtlasPlan = .{},
     glyph_atlas_cache_plan: GlyphAtlasCachePlan = .{},
+    text_layout_plan: TextLayoutPlanSet = .{},
+    text_layout_cache_plan: TextLayoutCachePlan = .{},
     changes: []const DiffChange = &.{},
     dirty_bounds: ?geometry.RectF = null,
     budget: CanvasFrameBudget = .{},
@@ -1006,6 +1069,11 @@ pub const CanvasFrame = struct {
             .glyph_atlas_upload_count = self.glyph_atlas_cache_plan.uploadCount(),
             .glyph_atlas_retain_count = self.glyph_atlas_cache_plan.retainCount(),
             .glyph_atlas_evict_count = self.glyph_atlas_cache_plan.evictCount(),
+            .text_layout_count = self.text_layout_plan.planCount(),
+            .text_layout_line_count = self.text_layout_plan.lineCount(),
+            .text_layout_upload_count = self.text_layout_cache_plan.uploadCount(),
+            .text_layout_retain_count = self.text_layout_cache_plan.retainCount(),
+            .text_layout_evict_count = self.text_layout_cache_plan.evictCount(),
             .change_count = self.changes.len,
             .full_repaint = self.full_repaint,
             .requires_render = self.requiresRender(),
@@ -1032,6 +1100,8 @@ pub const CanvasFrame = struct {
             .resource_actions = self.resource_cache_plan.actions,
             .glyph_atlas_entries = self.glyph_atlas_plan.entries,
             .glyph_atlas_actions = self.glyph_atlas_cache_plan.actions,
+            .text_layouts = self.text_layout_plan.plans,
+            .text_layout_actions = self.text_layout_cache_plan.actions,
         };
     }
 };
@@ -2174,6 +2244,11 @@ pub const DisplayList = struct {
         return planner.build(self);
     }
 
+    pub fn textLayoutPlan(self: DisplayList, options: TextLayoutOptions, output: []TextLayoutPlan, lines: []TextLine) Error!TextLayoutPlanSet {
+        var planner = TextLayoutPlanner.init(output, lines);
+        return planner.build(self, options);
+    }
+
     pub fn framePlan(self: DisplayList, previous: ?DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
         return buildCanvasFrame(previous, self, options, storage);
     }
@@ -2364,6 +2439,16 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         storage.glyph_atlas_cache_entries,
         storage.glyph_atlas_cache_actions,
     );
+    const text_layout_plan = try next.textLayoutPlan(options.text_layout_options, storage.text_layout_plans, storage.text_layout_lines);
+    const text_layout_cache_plan = if (storage.text_layout_cache_entries.len == 0 and storage.text_layout_cache_actions.len == 0)
+        TextLayoutCachePlan{}
+    else
+        try text_layout_plan.cachePlan(
+            options.previous_text_layout_cache,
+            options.frame_index,
+            storage.text_layout_cache_entries,
+            storage.text_layout_cache_actions,
+        );
 
     const full_repaint = options.full_repaint or previous == null;
     var changes: []const DiffChange = storage.changes[0..0];
@@ -2389,6 +2474,8 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .resource_cache_plan = resource_cache_plan,
         .glyph_atlas_plan = glyph_atlas_plan,
         .glyph_atlas_cache_plan = glyph_atlas_cache_plan,
+        .text_layout_plan = text_layout_plan,
+        .text_layout_cache_plan = text_layout_cache_plan,
         .changes = changes,
         .dirty_bounds = dirty_bounds,
         .budget = options.budget,
@@ -3232,6 +3319,43 @@ pub const GlyphAtlasCachePlanner = struct {
     }
 };
 
+pub const TextLayoutPlanner = struct {
+    plans: []TextLayoutPlan,
+    lines: []TextLine,
+    plan_len: usize = 0,
+    line_len: usize = 0,
+
+    pub fn init(plans: []TextLayoutPlan, lines: []TextLine) TextLayoutPlanner {
+        return .{ .plans = plans, .lines = lines };
+    }
+
+    pub fn reset(self: *TextLayoutPlanner) void {
+        self.plan_len = 0;
+        self.line_len = 0;
+    }
+
+    pub fn build(self: *TextLayoutPlanner, display_list: DisplayList, options: TextLayoutOptions) Error!TextLayoutPlanSet {
+        self.reset();
+        if (self.plans.len == 0 and self.lines.len == 0) return .{};
+
+        for (display_list.commands) |command| {
+            switch (command) {
+                .draw_text => |value| try self.consumeText(value, options),
+                else => {},
+            }
+        }
+        return .{ .plans = self.plans[0..self.plan_len] };
+    }
+
+    fn consumeText(self: *TextLayoutPlanner, text: DrawText, options: TextLayoutOptions) Error!void {
+        if (self.plan_len >= self.plans.len) return error.TextLayoutPlanListFull;
+        const plan = try layoutTextRunPlan(text, options, self.lines[self.line_len..]);
+        self.plans[self.plan_len] = plan;
+        self.plan_len += 1;
+        self.line_len += plan.lineCount();
+    }
+};
+
 pub const TextLayoutCachePlanner = struct {
     entries: []TextLayoutCacheEntry,
     actions: []TextLayoutCacheAction,
@@ -3248,23 +3372,32 @@ pub const TextLayoutCachePlanner = struct {
     }
 
     pub fn build(self: *TextLayoutCachePlanner, plan: TextLayoutPlan, previous: []const TextLayoutCacheEntry, frame_index: u64) Error!TextLayoutCachePlan {
+        return self.buildMany(&.{plan}, previous, frame_index);
+    }
+
+    pub fn buildMany(self: *TextLayoutCachePlanner, plans: []const TextLayoutPlan, previous: []const TextLayoutCacheEntry, frame_index: u64) Error!TextLayoutCachePlan {
         self.reset();
 
-        const previous_index = findTextLayoutCacheEntry(previous, plan.key);
-        try self.appendEntry(.{
-            .key = plan.key,
-            .line_count = plan.lineCount(),
-            .bounds = plan.layout.bounds,
-            .last_used_frame = frame_index,
-        });
-        try self.appendAction(.{
-            .kind = if (previous_index == null) .upload else .retain,
-            .key = plan.key,
-            .cache_index = previous_index,
-        });
+        for (plans, 0..) |plan, layout_index| {
+            if (findTextLayoutCacheEntry(self.entries[0..self.entry_len], plan.key) != null) continue;
+
+            const previous_index = findTextLayoutCacheEntry(previous, plan.key);
+            try self.appendEntry(.{
+                .key = plan.key,
+                .line_count = plan.lineCount(),
+                .bounds = plan.layout.bounds,
+                .last_used_frame = frame_index,
+            });
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = plan.key,
+                .layout_index = layout_index,
+                .cache_index = previous_index,
+            });
+        }
 
         for (previous, 0..) |entry, index| {
-            if (textLayoutKeysEqual(entry.key, plan.key)) continue;
+            if (findTextLayoutCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
             try self.appendAction(.{
                 .kind = .evict,
                 .key = entry.key,
@@ -6670,6 +6803,16 @@ fn writeCanvasRenderPassJson(pass: CanvasRenderPass, writer: anytype) !void {
         if (index > 0) try writer.writeByte(',');
         try writeGlyphAtlasCacheActionJson(action, writer);
     }
+    try writer.writeAll("],\"textLayouts\":[");
+    for (pass.text_layouts, 0..) |layout, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeTextLayoutPlanJson(layout, writer);
+    }
+    try writer.writeAll("],\"textLayoutActions\":[");
+    for (pass.text_layout_actions, 0..) |action, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeTextLayoutCacheActionJson(action, writer);
+    }
     try writer.writeAll("]}");
 }
 
@@ -6767,6 +6910,43 @@ fn writeGlyphAtlasKeyJson(key: GlyphAtlasKey, writer: anytype) !void {
         key.size,
         key.subpixel_x,
         key.subpixel_y,
+    });
+}
+
+fn writeTextLayoutPlanJson(plan: TextLayoutPlan, writer: anytype) !void {
+    try writer.writeAll("{\"key\":");
+    try writeTextLayoutKeyJson(plan.key, writer);
+    try writer.print(",\"lineCount\":{d},\"bounds\":", .{plan.lineCount()});
+    try writeOptionalRectJson(plan.layout.bounds, writer);
+    try writer.writeByte('}');
+}
+
+fn writeTextLayoutCacheActionJson(action: TextLayoutCacheAction, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(action.kind));
+    try writer.writeAll(",\"key\":");
+    try writeTextLayoutKeyJson(action.key, writer);
+    try writer.writeAll(",\"layoutIndex\":");
+    try writeOptionalUsizeJson(action.layout_index, writer);
+    try writer.writeAll(",\"cacheIndex\":");
+    try writeOptionalUsizeJson(action.cache_index, writer);
+    try writer.writeByte('}');
+}
+
+fn writeTextLayoutKeyJson(key: TextLayoutKey, writer: anytype) !void {
+    try writer.print("{{\"fontId\":{d},\"size\":{d},\"origin\":[{d},{d}],\"maxWidth\":{d},\"lineHeight\":{d},\"wrap\":", .{
+        key.font_id,
+        key.size,
+        key.origin.x,
+        key.origin.y,
+        key.max_width,
+        key.line_height,
+    });
+    try json.writeString(writer, @tagName(key.wrap));
+    try writer.print(",\"textLen\":{d},\"glyphCount\":{d},\"fingerprint\":{d}}}", .{
+        key.text_len,
+        key.glyph_count,
+        key.fingerprint,
     });
 }
 
@@ -9878,6 +10058,10 @@ test "canvas frame plan builds first frame renderer packet" {
     var glyphs: [2]GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [2]GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [2]GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [1]TextLayoutPlan = undefined;
+    var text_layout_lines: [1]TextLine = undefined;
+    var text_layout_cache_entries: [1]TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [1]TextLayoutCacheAction = undefined;
     var changes: [2]DiffChange = undefined;
     const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
         .frame_index = 7,
@@ -9900,6 +10084,10 @@ test "canvas frame plan builds first frame renderer packet" {
         .glyph_atlas_entries = &glyphs,
         .glyph_atlas_cache_entries = &glyph_cache_entries,
         .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .text_layout_plans = &text_layout_plans,
+        .text_layout_lines = &text_layout_lines,
+        .text_layout_cache_entries = &text_layout_cache_entries,
+        .text_layout_cache_actions = &text_layout_cache_actions,
         .changes = &changes,
     });
 
@@ -9922,6 +10110,10 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_cache_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.text_layout_plan.planCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.text_layout_plan.lineCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.text_layout_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.text_layout_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), frame.dirty_bounds);
 
@@ -9938,8 +10130,12 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), render_pass.resourceActionCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.glyphAtlasEntryCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.glyphAtlasActionCount());
+    try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutCount());
+    try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutLineCount());
+    try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutActionCount());
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, render_pass.resource_actions[0].kind);
     try std.testing.expectEqual(GlyphAtlasCacheActionKind.upload, render_pass.glyph_atlas_actions[0].kind);
+    try std.testing.expectEqual(TextLayoutCacheActionKind.upload, render_pass.text_layout_actions[0].kind);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), render_pass.scissorBounds());
 
     var render_pass_json_buffer: [8192]u8 = undefined;
@@ -9954,6 +10150,8 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resourceActions\":[{\"kind\":\"upload\",\"key\":{\"kind\":\"linear_gradient\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"glyphAtlasEntries\":[{\"key\":{\"fontId\":5,\"glyphId\":79") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"glyphAtlasActions\":[{\"kind\":\"upload\",\"key\":{\"fontId\":5,\"glyphId\":79") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"textLayouts\":[{\"key\":{\"fontId\":5,\"size\":14") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"textLayoutActions\":[{\"kind\":\"upload\",\"key\":{\"fontId\":5,\"size\":14") != null);
 
     const diagnostics = frame.diagnostics();
     try std.testing.expectEqual(@as(u64, 7), diagnostics.frame_index);
@@ -9967,6 +10165,11 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), diagnostics.glyph_atlas_upload_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.glyph_atlas_retain_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.glyph_atlas_evict_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.text_layout_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.text_layout_line_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.text_layout_upload_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.text_layout_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.text_layout_evict_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.change_count);
     try std.testing.expect(diagnostics.full_repaint);
     try std.testing.expect(diagnostics.requires_render);
@@ -9977,23 +10180,25 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(!diagnostics.budget_status.resources_over);
     try std.testing.expect(diagnostics.budget_status.resource_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.glyph_atlas_entries_over);
+    try std.testing.expect(!diagnostics.budget_status.text_layouts_over);
+    try std.testing.expect(!diagnostics.budget_status.text_layout_lines_over);
     try std.testing.expect(!diagnostics.budget_status.changes_over);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.budget_status.exceededCount());
     try std.testing.expectEqual(@as(usize, 2), frame.budgetStatus().exceededCount());
 
-    var diagnostics_json_buffer: [512]u8 = undefined;
+    var diagnostics_json_buffer: [768]u8 = undefined;
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":2,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":2,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
-    var clean_json_buffer: [512]u8 = undefined;
+    var clean_json_buffer: [768]u8 = undefined;
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }
@@ -11047,6 +11252,7 @@ test "text layout cache plans upload retain and evict work" {
     try std.testing.expectEqual(@as(usize, 1), retained.retainCount());
     try std.testing.expectEqual(@as(usize, 0), retained.evictCount());
     try std.testing.expectEqual(@as(u64, 2), retained.entries[0].last_used_frame);
+    try std.testing.expectEqual(@as(?usize, 0), retained.actions[0].layout_index);
     try std.testing.expectEqual(@as(?usize, 0), retained.actions[0].cache_index);
 
     var changed_lines: [4]TextLine = undefined;
@@ -11059,8 +11265,51 @@ test "text layout cache plans upload retain and evict work" {
     try std.testing.expectEqual(@as(usize, 0), changed.retainCount());
     try std.testing.expectEqual(@as(usize, 1), changed.evictCount());
     try std.testing.expectEqual(TextLayoutCacheActionKind.upload, changed.actions[0].kind);
+    try std.testing.expectEqual(@as(?usize, 0), changed.actions[0].layout_index);
     try std.testing.expectEqual(TextLayoutCacheActionKind.evict, changed.actions[1].kind);
+    try std.testing.expect(changed.actions[1].layout_index == null);
     try std.testing.expectEqual(@as(?usize, 0), changed.actions[1].cache_index);
+}
+
+test "display list text layout plan caches multiple text runs" {
+    const commands = [_]CanvasCommand{
+        .{ .draw_text = .{
+            .id = 1,
+            .font_id = 1,
+            .size = 10,
+            .origin = geometry.PointF.init(0, 10),
+            .color = Color.rgb8(0, 0, 0),
+            .text = "Alpha",
+        } },
+        .{ .draw_text = .{
+            .id = 2,
+            .font_id = 1,
+            .size = 10,
+            .origin = geometry.PointF.init(0, 28),
+            .color = Color.rgb8(0, 0, 0),
+            .text = "Beta",
+        } },
+    };
+
+    var plans: [2]TextLayoutPlan = undefined;
+    var lines: [2]TextLine = undefined;
+    const plan_set = try (DisplayList{ .commands = &commands }).textLayoutPlan(.{}, &plans, &lines);
+    try std.testing.expectEqual(@as(usize, 2), plan_set.planCount());
+    try std.testing.expectEqual(@as(usize, 2), plan_set.lineCount());
+    try std.testing.expect(plan_set.plans[0].key.fingerprint != plan_set.plans[1].key.fingerprint);
+
+    var entries: [2]TextLayoutCacheEntry = undefined;
+    var actions: [2]TextLayoutCacheAction = undefined;
+    const first = try plan_set.cachePlan(&.{}, 1, &entries, &actions);
+    try std.testing.expectEqual(@as(usize, 2), first.uploadCount());
+    try std.testing.expectEqual(@as(?usize, 0), first.actions[0].layout_index);
+    try std.testing.expectEqual(@as(?usize, 1), first.actions[1].layout_index);
+
+    var retained_entries: [2]TextLayoutCacheEntry = undefined;
+    var retained_actions: [2]TextLayoutCacheAction = undefined;
+    const retained = try plan_set.cachePlan(first.entries, 2, &retained_entries, &retained_actions);
+    try std.testing.expectEqual(@as(usize, 2), retained.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), retained.evictCount());
 }
 
 test "text layout cache reports capacity overflow" {

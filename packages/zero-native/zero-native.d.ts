@@ -200,6 +200,11 @@ export interface ZeroNativeViewInfo {
   canvasFrameGlyphAtlasUploadCount: number;
   canvasFrameGlyphAtlasRetainCount: number;
   canvasFrameGlyphAtlasEvictCount: number;
+  canvasFrameTextLayoutCount: number;
+  canvasFrameTextLayoutLineCount: number;
+  canvasFrameTextLayoutUploadCount: number;
+  canvasFrameTextLayoutRetainCount: number;
+  canvasFrameTextLayoutEvictCount: number;
   canvasFrameChangeCount: number;
   canvasFrameBudgetExceededCount: number;
   canvasFrameBudgetOk: boolean;

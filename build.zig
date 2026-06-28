@@ -91,6 +91,9 @@ pub fn build(b: *std.Build) void {
     const diagnostics_mod = module(b, target, optimize, "src/primitives/diagnostics/root.zig");
     const platform_info_mod = module(b, target, optimize, "src/primitives/platform_info/root.zig");
     const json_mod = module(b, target, optimize, "src/primitives/json/root.zig");
+    const canvas_mod = module(b, target, optimize, "src/primitives/canvas/root.zig");
+    canvas_mod.addImport("geometry", geometry_mod);
+    canvas_mod.addImport("json", json_mod);
     const debug_mod = module(b, target, optimize, "src/debug/root.zig");
     debug_mod.addImport("app_dirs", app_dirs_mod);
     debug_mod.addImport("trace", trace_mod);
@@ -103,6 +106,7 @@ pub fn build(b: *std.Build) void {
     const diagnostics_tests = testArtifact(b, diagnostics_mod);
     const platform_info_tests = testArtifact(b, platform_info_mod);
     const json_tests = testArtifact(b, json_mod);
+    const canvas_tests = testArtifact(b, canvas_mod);
 
     const desktop_mod = module(b, target, optimize, "src/root.zig");
     desktop_mod.addImport("geometry", geometry_mod);
@@ -113,6 +117,7 @@ pub fn build(b: *std.Build) void {
     desktop_mod.addImport("diagnostics", diagnostics_mod);
     desktop_mod.addImport("platform_info", platform_info_mod);
     desktop_mod.addImport("json", json_mod);
+    desktop_mod.addImport("canvas", canvas_mod);
     desktop_mod.export_symbol_names = &.{
         "zero_native_app_create",
         "zero_native_app_destroy",
@@ -207,6 +212,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(diagnostics_tests).step);
     test_step.dependOn(&b.addRunArtifact(platform_info_tests).step);
     test_step.dependOn(&b.addRunArtifact(json_tests).step);
+    test_step.dependOn(&b.addRunArtifact(canvas_tests).step);
     test_step.dependOn(&b.addRunArtifact(desktop_tests).step);
     test_step.dependOn(&b.addRunArtifact(automation_protocol_tests).step);
     test_step.dependOn(&b.addRunArtifact(tooling_tests).step);
@@ -298,6 +304,7 @@ pub fn build(b: *std.Build) void {
     addTestStep(b, "test-diagnostics", "Run diagnostics module tests", diagnostics_tests);
     addTestStep(b, "test-platform-info", "Run platform info module tests", platform_info_tests);
     addTestStep(b, "test-json", "Run JSON primitive tests", json_tests);
+    addTestStep(b, "test-canvas", "Run canvas display list tests", canvas_tests);
     addTestStep(b, "test-desktop", "Run zero-native framework tests", desktop_tests);
     addTestStep(b, "test-automation-protocol", "Run automation protocol tests", automation_protocol_tests);
     addTestStep(b, "test-tooling", "Run zero-native tooling tests", tooling_tests);

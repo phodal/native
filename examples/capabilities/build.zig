@@ -153,6 +153,9 @@ fn zeroNativeModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
     const diagnostics_mod = externalModule(b, target, optimize, zero_native_path, "src/primitives/diagnostics/root.zig");
     const platform_info_mod = externalModule(b, target, optimize, zero_native_path, "src/primitives/platform_info/root.zig");
     const json_mod = externalModule(b, target, optimize, zero_native_path, "src/primitives/json/root.zig");
+    const canvas_mod = externalModule(b, target, optimize, zero_native_path, "src/primitives/canvas/root.zig");
+    canvas_mod.addImport("geometry", geometry_mod);
+    canvas_mod.addImport("json", json_mod);
     const debug_mod = externalModule(b, target, optimize, zero_native_path, "src/debug/root.zig");
     debug_mod.addImport("app_dirs", app_dirs_mod);
     debug_mod.addImport("trace", trace_mod);
@@ -166,6 +169,7 @@ fn zeroNativeModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
     zero_native_mod.addImport("diagnostics", diagnostics_mod);
     zero_native_mod.addImport("platform_info", platform_info_mod);
     zero_native_mod.addImport("json", json_mod);
+    zero_native_mod.addImport("canvas", canvas_mod);
     return zero_native_mod;
 }
 

@@ -5,6 +5,7 @@ pub const app_manifest = @import("app_manifest");
 pub const trace = @import("trace");
 pub const diagnostics = @import("diagnostics");
 pub const platform_info = @import("platform_info");
+pub const canvas = @import("canvas");
 
 pub const runtime = @import("runtime/root.zig");
 pub const platform = @import("platform/root.zig");

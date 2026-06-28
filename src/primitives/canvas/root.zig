@@ -14,6 +14,7 @@ pub const Error = error{
     RenderOverrideListFull,
     RenderResourceCacheListFull,
     RenderResourceListFull,
+    TextLayoutCacheListFull,
     TextLayoutLineListFull,
     TextEditBufferTooSmall,
     ReferenceRenderSurfaceTooSmall,
@@ -336,6 +337,84 @@ pub const TextLayout = struct {
 
     pub fn lineCount(self: TextLayout) usize {
         return self.lines.len;
+    }
+};
+
+pub const TextLayoutKey = struct {
+    font_id: FontId = 0,
+    size: f32 = 0,
+    origin: geometry.PointF = .{},
+    max_width: f32 = 0,
+    line_height: f32 = 0,
+    wrap: TextWrap = .word,
+    text_len: usize = 0,
+    glyph_count: usize = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const TextLayoutPlan = struct {
+    key: TextLayoutKey = .{},
+    layout: TextLayout = .{},
+
+    pub fn lineCount(self: TextLayoutPlan) usize {
+        return self.layout.lineCount();
+    }
+
+    pub fn cachePlan(self: TextLayoutPlan, previous: []const TextLayoutCacheEntry, frame_index: u64, entries: []TextLayoutCacheEntry, actions: []TextLayoutCacheAction) Error!TextLayoutCachePlan {
+        var planner = TextLayoutCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+};
+
+pub const TextLayoutCacheEntry = struct {
+    key: TextLayoutKey,
+    line_count: usize = 0,
+    bounds: ?geometry.RectF = null,
+    last_used_frame: u64 = 0,
+};
+
+pub const TextLayoutCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const TextLayoutCacheAction = struct {
+    kind: TextLayoutCacheActionKind,
+    key: TextLayoutKey,
+    cache_index: ?usize = null,
+};
+
+pub const TextLayoutCachePlan = struct {
+    entries: []const TextLayoutCacheEntry = &.{},
+    actions: []const TextLayoutCacheAction = &.{},
+
+    pub fn entryCount(self: TextLayoutCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: TextLayoutCachePlan) usize {
+        return self.actions.len;
+    }
+
+    pub fn uploadCount(self: TextLayoutCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: TextLayoutCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: TextLayoutCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: TextLayoutCachePlan, kind: TextLayoutCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
     }
 };
 
@@ -2194,11 +2273,18 @@ pub fn layoutWidgetTree(widget: Widget, bounds: geometry.RectF, output: []Widget
 }
 
 pub fn layoutTextRun(text: DrawText, options: TextLayoutOptions, output: []TextLine) Error!TextLayout {
+    return (try layoutTextRunPlan(text, options, output)).layout;
+}
+
+pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []TextLine) Error!TextLayoutPlan {
     var len: usize = 0;
     var bounds: ?geometry.RectF = null;
     if (text.glyphs.len > 0) {
         try appendTextLine(output, &len, text, 0, text.text.len, 0, text.glyphs.len, lineHeight(text, options), &bounds);
-        return .{ .lines = output[0..len], .bounds = bounds };
+        return .{
+            .key = textLayoutKey(text, options),
+            .layout = .{ .lines = output[0..len], .bounds = bounds },
+        };
     }
 
     var start: usize = 0;
@@ -2212,7 +2298,10 @@ pub fn layoutTextRun(text: DrawText, options: TextLayoutOptions, output: []TextL
     if (text.text.len == 0) {
         try appendTextLine(output, &len, text, 0, 0, 0, 0, lineHeight(text, options), &bounds);
     }
-    return .{ .lines = output[0..len], .bounds = bounds };
+    return .{
+        .key = textLayoutKey(text, options),
+        .layout = .{ .lines = output[0..len], .bounds = bounds },
+    };
 }
 
 pub fn applyTextInputEvent(state: TextEditState, event: TextInputEvent, output: []u8) Error!TextEditState {
@@ -2879,6 +2968,49 @@ fn drawTextFingerprint(text: DrawText) u64 {
     return hash;
 }
 
+fn textLayoutKey(text: DrawText, options: TextLayoutOptions) TextLayoutKey {
+    return .{
+        .font_id = text.font_id,
+        .size = text.size,
+        .origin = text.origin,
+        .max_width = nonNegative(options.max_width),
+        .line_height = nonNegative(options.line_height),
+        .wrap = options.wrap,
+        .text_len = text.text.len,
+        .glyph_count = text.glyphs.len,
+        .fingerprint = textLayoutFingerprint(text, options),
+    };
+}
+
+fn textLayoutFingerprint(text: DrawText, options: TextLayoutOptions) u64 {
+    var hash = resourceHashTag("text_layout");
+    hash = resourceHashU64(hash, drawTextFingerprint(text));
+    hash = resourceHashF32(hash, nonNegative(options.max_width));
+    hash = resourceHashF32(hash, nonNegative(options.line_height));
+    hash = resourceHashEnum(hash, @intFromEnum(options.wrap));
+    return hash;
+}
+
+fn findTextLayoutCacheEntry(entries: []const TextLayoutCacheEntry, key: TextLayoutKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (textLayoutKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn textLayoutKeysEqual(a: TextLayoutKey, b: TextLayoutKey) bool {
+    return a.font_id == b.font_id and
+        a.size == b.size and
+        a.origin.x == b.origin.x and
+        a.origin.y == b.origin.y and
+        a.max_width == b.max_width and
+        a.line_height == b.line_height and
+        a.wrap == b.wrap and
+        a.text_len == b.text_len and
+        a.glyph_count == b.glyph_count and
+        a.fingerprint == b.fingerprint;
+}
+
 fn shadowFingerprint(shadow: Shadow) u64 {
     var hash = resourceHashTag("shadow");
     hash = resourceHashRect(hash, shadow.rect);
@@ -3095,6 +3227,65 @@ pub const GlyphAtlasCachePlanner = struct {
 
     fn appendAction(self: *GlyphAtlasCachePlanner, action: GlyphAtlasCacheAction) Error!void {
         if (self.action_len >= self.actions.len) return error.GlyphAtlasCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
+    }
+};
+
+pub const TextLayoutCachePlanner = struct {
+    entries: []TextLayoutCacheEntry,
+    actions: []TextLayoutCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []TextLayoutCacheEntry, actions: []TextLayoutCacheAction) TextLayoutCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *TextLayoutCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *TextLayoutCachePlanner, plan: TextLayoutPlan, previous: []const TextLayoutCacheEntry, frame_index: u64) Error!TextLayoutCachePlan {
+        self.reset();
+
+        const previous_index = findTextLayoutCacheEntry(previous, plan.key);
+        try self.appendEntry(.{
+            .key = plan.key,
+            .line_count = plan.lineCount(),
+            .bounds = plan.layout.bounds,
+            .last_used_frame = frame_index,
+        });
+        try self.appendAction(.{
+            .kind = if (previous_index == null) .upload else .retain,
+            .key = plan.key,
+            .cache_index = previous_index,
+        });
+
+        for (previous, 0..) |entry, index| {
+            if (textLayoutKeysEqual(entry.key, plan.key)) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *TextLayoutCachePlanner, entry: TextLayoutCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.TextLayoutCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *TextLayoutCachePlanner, action: TextLayoutCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.TextLayoutCacheListFull;
         self.actions[self.action_len] = action;
         self.action_len += 1;
     }
@@ -10801,7 +10992,16 @@ test "text layout wraps words into deterministic line boxes" {
     };
 
     var lines: [4]TextLine = undefined;
-    const layout = try layoutTextRun(text, .{ .max_width = 30, .line_height = 14, .wrap = .word }, &lines);
+    const plan = try layoutTextRunPlan(text, .{ .max_width = 30, .line_height = 14, .wrap = .word }, &lines);
+    const layout = plan.layout;
+    try std.testing.expectEqual(@as(FontId, 1), plan.key.font_id);
+    try std.testing.expectEqual(@as(f32, 10), plan.key.size);
+    try std.testing.expectEqual(@as(f32, 30), plan.key.max_width);
+    try std.testing.expectEqual(@as(f32, 14), plan.key.line_height);
+    try std.testing.expectEqual(TextWrap.word, plan.key.wrap);
+    try std.testing.expectEqual(text.text.len, plan.key.text_len);
+    try std.testing.expectEqual(@as(usize, 0), plan.key.glyph_count);
+    try std.testing.expect(plan.key.fingerprint != 0);
     try std.testing.expectEqual(@as(usize, 4), layout.lineCount());
     try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
     try std.testing.expectEqual(@as(usize, 5), layout.lines[0].text_len);
@@ -10814,6 +11014,73 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(usize, 17), layout.lines[3].text_start);
     try std.testing.expectEqual(@as(usize, 4), layout.lines[3].text_len);
     try expectRect(geometry.RectF.init(4, 10, 25, 56), layout.bounds);
+}
+
+test "text layout cache plans upload retain and evict work" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Hello world from zero",
+    };
+
+    var lines: [4]TextLine = undefined;
+    const plan = try layoutTextRunPlan(text, .{ .max_width = 30, .line_height = 14, .wrap = .word }, &lines);
+    var entries: [1]TextLayoutCacheEntry = undefined;
+    var actions: [1]TextLayoutCacheAction = undefined;
+    const first = try plan.cachePlan(&.{}, 1, &entries, &actions);
+    try std.testing.expectEqual(@as(usize, 1), first.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), first.uploadCount());
+    try std.testing.expectEqual(@as(usize, 0), first.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), first.evictCount());
+    try std.testing.expectEqual(@as(usize, 4), first.entries[0].line_count);
+    try std.testing.expectEqual(@as(u64, 1), first.entries[0].last_used_frame);
+    try expectRect(geometry.RectF.init(4, 10, 25, 56), first.entries[0].bounds);
+    try std.testing.expectEqual(TextLayoutCacheActionKind.upload, first.actions[0].kind);
+
+    var retained_entries: [1]TextLayoutCacheEntry = undefined;
+    var retained_actions: [1]TextLayoutCacheAction = undefined;
+    const retained = try plan.cachePlan(first.entries, 2, &retained_entries, &retained_actions);
+    try std.testing.expectEqual(@as(usize, 1), retained.entryCount());
+    try std.testing.expectEqual(@as(usize, 0), retained.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), retained.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), retained.evictCount());
+    try std.testing.expectEqual(@as(u64, 2), retained.entries[0].last_used_frame);
+    try std.testing.expectEqual(@as(?usize, 0), retained.actions[0].cache_index);
+
+    var changed_lines: [4]TextLine = undefined;
+    const changed_plan = try layoutTextRunPlan(text, .{ .max_width = 60, .line_height = 14, .wrap = .word }, &changed_lines);
+    var changed_entries: [1]TextLayoutCacheEntry = undefined;
+    var changed_actions: [2]TextLayoutCacheAction = undefined;
+    const changed = try changed_plan.cachePlan(retained.entries, 3, &changed_entries, &changed_actions);
+    try std.testing.expectEqual(@as(usize, 1), changed.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), changed.uploadCount());
+    try std.testing.expectEqual(@as(usize, 0), changed.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), changed.evictCount());
+    try std.testing.expectEqual(TextLayoutCacheActionKind.upload, changed.actions[0].kind);
+    try std.testing.expectEqual(TextLayoutCacheActionKind.evict, changed.actions[1].kind);
+    try std.testing.expectEqual(@as(?usize, 0), changed.actions[1].cache_index);
+}
+
+test "text layout cache reports capacity overflow" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Hello",
+    };
+    var lines: [1]TextLine = undefined;
+    const plan = try layoutTextRunPlan(text, .{}, &lines);
+
+    var no_entries: [0]TextLayoutCacheEntry = .{};
+    var actions: [1]TextLayoutCacheAction = undefined;
+    try std.testing.expectError(error.TextLayoutCacheListFull, plan.cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]TextLayoutCacheEntry = undefined;
+    var no_actions: [0]TextLayoutCacheAction = .{};
+    try std.testing.expectError(error.TextLayoutCacheListFull, plan.cachePlan(&.{}, 1, &entries, &no_actions));
 }
 
 test "text layout handles newlines and shaped glyph runs" {

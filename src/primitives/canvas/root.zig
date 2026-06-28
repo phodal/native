@@ -1320,12 +1320,52 @@ pub const BlurTokens = struct {
     md: f32 = 16,
 };
 
+pub const MotionDuration = enum {
+    fast,
+    normal,
+    slow,
+};
+
+pub const MotionAnimationOptions = struct {
+    id: ObjectId,
+    start_ns: u64 = 0,
+    duration: MotionDuration = .normal,
+    easing: ?Easing = null,
+    spring: ?SpringToken = null,
+    from_opacity: ?f32 = null,
+    to_opacity: ?f32 = null,
+    from_transform: ?Affine = null,
+    to_transform: ?Affine = null,
+};
+
 pub const MotionTokens = struct {
     fast_ms: u32 = 120,
     normal_ms: u32 = 180,
     slow_ms: u32 = 260,
     easing: Easing = .standard,
     spring: SpringToken = .{},
+
+    pub fn durationMs(self: MotionTokens, duration: MotionDuration) u32 {
+        return switch (duration) {
+            .fast => self.fast_ms,
+            .normal => self.normal_ms,
+            .slow => self.slow_ms,
+        };
+    }
+
+    pub fn animation(self: MotionTokens, options: MotionAnimationOptions) CanvasRenderAnimation {
+        return .{
+            .id = options.id,
+            .start_ns = options.start_ns,
+            .duration_ms = self.durationMs(options.duration),
+            .easing = options.easing orelse self.easing,
+            .spring = options.spring orelse self.spring,
+            .from_opacity = options.from_opacity,
+            .to_opacity = options.to_opacity,
+            .from_transform = options.from_transform,
+            .to_transform = options.to_transform,
+        };
+    }
 };
 
 pub const SpringToken = struct {
@@ -9661,6 +9701,55 @@ test "canvas render animations sample overrides for frame planning" {
 
     var empty_overrides: [0]CanvasRenderOverride = .{};
     try std.testing.expectError(error.RenderOverrideListFull, sampleCanvasRenderAnimations(&animations, 500_001_000, &empty_overrides));
+}
+
+test "motion tokens build render animations" {
+    const tokens = MotionTokens{
+        .fast_ms = 90,
+        .normal_ms = 160,
+        .slow_ms = 320,
+        .easing = .linear,
+        .spring = .{ .mass = 2, .stiffness = 180, .damping = 22 },
+    };
+
+    try std.testing.expectEqual(@as(u32, 90), tokens.durationMs(.fast));
+    try std.testing.expectEqual(@as(u32, 160), tokens.durationMs(.normal));
+    try std.testing.expectEqual(@as(u32, 320), tokens.durationMs(.slow));
+
+    const animation = tokens.animation(.{
+        .id = 7,
+        .start_ns = 10_000,
+        .duration = .slow,
+        .from_opacity = 0,
+        .to_opacity = 1,
+        .from_transform = Affine.translate(0, 0),
+        .to_transform = Affine.translate(16, 0),
+    });
+
+    try std.testing.expectEqual(@as(ObjectId, 7), animation.id);
+    try std.testing.expectEqual(@as(u64, 10_000), animation.start_ns);
+    try std.testing.expectEqual(@as(u32, 320), animation.duration_ms);
+    try std.testing.expectEqual(Easing.linear, animation.easing);
+    try std.testing.expectEqual(@as(f32, 2), animation.spring.mass);
+    try std.testing.expectEqual(@as(f32, 180), animation.spring.stiffness);
+    try std.testing.expectEqual(@as(f32, 22), animation.spring.damping);
+
+    var overrides: [1]CanvasRenderOverride = undefined;
+    const sampled = try sampleCanvasRenderAnimations(&.{animation}, animation.start_ns + 160_000_000, &overrides);
+    try std.testing.expectEqual(@as(usize, 1), sampled.len);
+    try std.testing.expectEqual(@as(ObjectId, 7), sampled[0].id);
+    try std.testing.expectEqual(@as(f32, 0.5), sampled[0].opacity.?);
+    try std.testing.expectEqualDeep(Affine.translate(8, 0), sampled[0].transform.?);
+
+    const override_animation = tokens.animation(.{
+        .id = 8,
+        .easing = .emphasized,
+        .spring = .{ .mass = 3, .stiffness = 140, .damping = 18 },
+    });
+    try std.testing.expectEqual(Easing.emphasized, override_animation.easing);
+    try std.testing.expectEqual(@as(f32, 3), override_animation.spring.mass);
+    try std.testing.expectEqual(@as(f32, 140), override_animation.spring.stiffness);
+    try std.testing.expectEqual(@as(f32, 18), override_animation.spring.damping);
 }
 
 test "reference renderer clears and fills solid rect render pass" {

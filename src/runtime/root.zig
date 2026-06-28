@@ -1489,6 +1489,10 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_requires_render = self.views[index].canvas_frame_requires_render;
                     enriched_frame_event.canvas_frame_full_repaint = self.views[index].canvas_frame_full_repaint;
                     enriched_frame_event.canvas_frame_batch_count = self.views[index].canvas_frame_batch_count;
+                    enriched_frame_event.canvas_frame_encoder_command_count = self.views[index].canvas_frame_encoder_command_count;
+                    enriched_frame_event.canvas_frame_encoder_cache_action_count = self.views[index].canvas_frame_encoder_cache_action_count;
+                    enriched_frame_event.canvas_frame_encoder_bind_pipeline_count = self.views[index].canvas_frame_encoder_bind_pipeline_count;
+                    enriched_frame_event.canvas_frame_encoder_draw_batch_count = self.views[index].canvas_frame_encoder_draw_batch_count;
                     enriched_frame_event.canvas_frame_pipeline_count = self.views[index].canvas_frame_pipeline_count;
                     enriched_frame_event.canvas_frame_pipeline_upload_count = self.views[index].canvas_frame_pipeline_upload_count;
                     enriched_frame_event.canvas_frame_pipeline_retain_count = self.views[index].canvas_frame_pipeline_retain_count;
@@ -4045,6 +4049,10 @@ const RuntimeView = struct {
     canvas_frame_requires_render: bool = false,
     canvas_frame_full_repaint: bool = false,
     canvas_frame_batch_count: usize = 0,
+    canvas_frame_encoder_command_count: usize = 0,
+    canvas_frame_encoder_cache_action_count: usize = 0,
+    canvas_frame_encoder_bind_pipeline_count: usize = 0,
+    canvas_frame_encoder_draw_batch_count: usize = 0,
     canvas_frame_pipeline_count: usize = 0,
     canvas_frame_pipeline_upload_count: usize = 0,
     canvas_frame_pipeline_retain_count: usize = 0,
@@ -4118,6 +4126,10 @@ const RuntimeView = struct {
             .canvas_frame_requires_render = self.canvas_frame_requires_render,
             .canvas_frame_full_repaint = self.canvas_frame_full_repaint,
             .canvas_frame_batch_count = self.canvas_frame_batch_count,
+            .canvas_frame_encoder_command_count = self.canvas_frame_encoder_command_count,
+            .canvas_frame_encoder_cache_action_count = self.canvas_frame_encoder_cache_action_count,
+            .canvas_frame_encoder_bind_pipeline_count = self.canvas_frame_encoder_bind_pipeline_count,
+            .canvas_frame_encoder_draw_batch_count = self.canvas_frame_encoder_draw_batch_count,
             .canvas_frame_pipeline_count = self.canvas_frame_pipeline_count,
             .canvas_frame_pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
             .canvas_frame_pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
@@ -4238,9 +4250,14 @@ const RuntimeView = struct {
     }
 
     fn recordCanvasFrame(self: *RuntimeView, frame: canvas.CanvasFrame) void {
+        const render_pass = frame.renderPass();
         self.canvas_frame_requires_render = frame.requiresRender();
         self.canvas_frame_full_repaint = frame.full_repaint;
         self.canvas_frame_batch_count = frame.batch_plan.batchCount();
+        self.canvas_frame_encoder_command_count = render_pass.encoderCommandCount();
+        self.canvas_frame_encoder_cache_action_count = render_pass.encoderCacheActionCount();
+        self.canvas_frame_encoder_bind_pipeline_count = render_pass.encoderBindPipelineCount();
+        self.canvas_frame_encoder_draw_batch_count = render_pass.encoderDrawBatchCount();
         self.canvas_frame_pipeline_count = frame.pipeline_cache_plan.entryCount();
         self.canvas_frame_pipeline_upload_count = frame.pipeline_cache_plan.uploadCount();
         self.canvas_frame_pipeline_retain_count = frame.pipeline_cache_plan.retainCount();
@@ -4268,6 +4285,10 @@ const RuntimeView = struct {
         self.canvas_frame_budget_status = self.canvas_frame_budget.status(.{
             .command_count = self.canvas_command_count,
             .batch_count = self.canvas_frame_batch_count,
+            .encoder_command_count = self.canvas_frame_encoder_command_count,
+            .encoder_cache_action_count = self.canvas_frame_encoder_cache_action_count,
+            .encoder_bind_pipeline_count = self.canvas_frame_encoder_bind_pipeline_count,
+            .encoder_draw_batch_count = self.canvas_frame_encoder_draw_batch_count,
             .pipeline_count = self.canvas_frame_pipeline_count,
             .pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
             .pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
@@ -4877,6 +4898,7 @@ fn canvasDirtyBoundsFromChanges(changes: []const canvas.DiffChange) ?geometry.Re
 fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
     return budget.max_commands == 0 and
         budget.max_batches == 0 and
+        budget.max_encoder_commands == 0 and
         budget.max_pipelines == 0 and
         budget.max_pipeline_uploads == 0 and
         budget.max_resources == 0 and
@@ -5563,7 +5585,11 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_full_repaint,
         view.canvas_frame_batch_count,
     });
-    try writer.print(",\"canvasFramePipelineCount\":{d},\"canvasFramePipelineUploadCount\":{d},\"canvasFramePipelineRetainCount\":{d},\"canvasFramePipelineEvictCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
+    try writer.print(",\"canvasFrameEncoderCommandCount\":{d},\"canvasFrameEncoderCacheActionCount\":{d},\"canvasFrameEncoderBindPipelineCount\":{d},\"canvasFrameEncoderDrawBatchCount\":{d},\"canvasFramePipelineCount\":{d},\"canvasFramePipelineUploadCount\":{d},\"canvasFramePipelineRetainCount\":{d},\"canvasFramePipelineEvictCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
+        view.canvas_frame_encoder_command_count,
+        view.canvas_frame_encoder_cache_action_count,
+        view.canvas_frame_encoder_bind_pipeline_count,
+        view.canvas_frame_encoder_draw_batch_count,
         view.canvas_frame_pipeline_count,
         view.canvas_frame_pipeline_upload_count,
         view.canvas_frame_pipeline_retain_count,
@@ -10577,6 +10603,10 @@ test "runtime dispatches GPU surface events" {
         last_canvas_frame_requires_render: bool = false,
         last_canvas_frame_full_repaint: bool = false,
         last_canvas_frame_batch_count: usize = 0,
+        last_canvas_frame_encoder_command_count: usize = 0,
+        last_canvas_frame_encoder_cache_action_count: usize = 0,
+        last_canvas_frame_encoder_bind_pipeline_count: usize = 0,
+        last_canvas_frame_encoder_draw_batch_count: usize = 0,
         last_canvas_frame_resource_count: usize = 0,
         last_canvas_frame_resource_upload_count: usize = 0,
         last_canvas_frame_resource_retain_count: usize = 0,
@@ -10606,6 +10636,10 @@ test "runtime dispatches GPU surface events" {
                     self.last_canvas_frame_requires_render = frame_event.canvas_frame_requires_render;
                     self.last_canvas_frame_full_repaint = frame_event.canvas_frame_full_repaint;
                     self.last_canvas_frame_batch_count = frame_event.canvas_frame_batch_count;
+                    self.last_canvas_frame_encoder_command_count = frame_event.canvas_frame_encoder_command_count;
+                    self.last_canvas_frame_encoder_cache_action_count = frame_event.canvas_frame_encoder_cache_action_count;
+                    self.last_canvas_frame_encoder_bind_pipeline_count = frame_event.canvas_frame_encoder_bind_pipeline_count;
+                    self.last_canvas_frame_encoder_draw_batch_count = frame_event.canvas_frame_encoder_draw_batch_count;
                     self.last_canvas_frame_resource_count = frame_event.canvas_frame_resource_count;
                     self.last_canvas_frame_resource_upload_count = frame_event.canvas_frame_resource_upload_count;
                     self.last_canvas_frame_resource_retain_count = frame_event.canvas_frame_resource_retain_count;
@@ -10702,6 +10736,10 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(app_state.last_canvas_frame_requires_render);
     try std.testing.expect(app_state.last_canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_batch_count);
+    try std.testing.expectEqual(@as(usize, 6), app_state.last_canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_resource_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_resource_upload_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_resource_retain_count);
@@ -10731,6 +10769,10 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(frame.canvas_frame_requires_render);
     try std.testing.expect(frame.canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_batch_count);
+    try std.testing.expectEqual(@as(usize, 6), frame.canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_resource_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_resource_upload_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_resource_retain_count);
@@ -10743,7 +10785,7 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(u64, 1), frame.widget_revision);
     try std.testing.expectEqual(@as(usize, 2), frame.widget_node_count);
     try std.testing.expectEqual(@as(usize, 1), frame.widget_semantics_count);
-    var view_json_buffer: [2048]u8 = undefined;
+    var view_json_buffer: [3072]u8 = undefined;
     const view_json = try writeViewJson(harness.runtime.views[0].info(), &view_json_buffer);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuWidth\":640") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuHeight\":360") != null);
@@ -10755,6 +10797,10 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameRequiresRender\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameFullRepaint\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameBatchCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameEncoderCommandCount\":6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameEncoderCacheActionCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameEncoderBindPipelineCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameEncoderDrawBatchCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameResourceCount\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameResourceUploadCount\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameResourceRetainCount\":0") != null);
@@ -10780,6 +10826,10 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(!app_state.last_canvas_frame_requires_render);
     try std.testing.expect(!app_state.last_canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_batch_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_change_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
@@ -10788,6 +10838,10 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(u64, 8), clean_frame.frame_index);
     try std.testing.expect(!clean_frame.canvas_frame_requires_render);
     try std.testing.expect(!clean_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 1), clean_frame.canvas_frame_budget_exceeded_count);
     try std.testing.expect(!clean_frame.canvas_frame_budget_ok);
     try std.testing.expect(clean_frame.canvas_frame_dirty_bounds == null);

@@ -532,6 +532,10 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_requires_render = frame.canvas_frame_requires_render,
         .canvas_frame_full_repaint = frame.canvas_frame_full_repaint,
         .canvas_frame_batch_count = frame.canvas_frame_batch_count,
+        .canvas_frame_encoder_command_count = frame.canvas_frame_encoder_command_count,
+        .canvas_frame_encoder_cache_action_count = frame.canvas_frame_encoder_cache_action_count,
+        .canvas_frame_encoder_bind_pipeline_count = frame.canvas_frame_encoder_bind_pipeline_count,
+        .canvas_frame_encoder_draw_batch_count = frame.canvas_frame_encoder_draw_batch_count,
         .canvas_frame_pipeline_count = frame.canvas_frame_pipeline_count,
         .canvas_frame_pipeline_upload_count = frame.canvas_frame_pipeline_upload_count,
         .canvas_frame_pipeline_retain_count = frame.canvas_frame_pipeline_retain_count,
@@ -762,6 +766,8 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expect(frame.canvas_frame_requires_render);
     try std.testing.expect(!frame.canvas_frame_full_repaint);
     try std.testing.expect(frame.canvas_frame_batch_count >= 8);
+    try std.testing.expect(frame.canvas_frame_encoder_command_count >= frame.canvas_frame_batch_count);
+    try std.testing.expectEqual(frame.canvas_frame_batch_count, frame.canvas_frame_encoder_draw_batch_count);
     try std.testing.expect(frame.canvas_frame_pipeline_count >= 4);
     try std.testing.expect(frame.canvas_frame_pipeline_retain_count >= 4);
 }

@@ -136,7 +136,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
             },
         );
         if (view.kind == .gpu_surface) {
-            try writer.print(" gpu_size={d}x{d} gpu_scale={d} gpu_frame={d} gpu_timestamp_ns={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d} canvas_frame_requires_render={any} canvas_frame_full_repaint={any} canvas_frame_batches={d} canvas_frame_pipelines={d} canvas_frame_pipeline_uploads={d} canvas_frame_pipeline_retains={d} canvas_frame_pipeline_evicts={d} canvas_frame_resources={d} canvas_frame_uploads={d} canvas_frame_retains={d} canvas_frame_evicts={d} canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
+            try writer.print(" gpu_size={d}x{d} gpu_scale={d} gpu_frame={d} gpu_timestamp_ns={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d} canvas_frame_requires_render={any} canvas_frame_full_repaint={any} canvas_frame_batches={d} canvas_frame_encoder_commands={d} canvas_frame_encoder_cache_actions={d} canvas_frame_encoder_pipeline_binds={d} canvas_frame_encoder_draws={d} canvas_frame_pipelines={d} canvas_frame_pipeline_uploads={d} canvas_frame_pipeline_retains={d} canvas_frame_pipeline_evicts={d} canvas_frame_resources={d} canvas_frame_uploads={d} canvas_frame_retains={d} canvas_frame_evicts={d} canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
                 view.gpu_size.width,
                 view.gpu_size.height,
                 view.gpu_scale_factor,
@@ -149,6 +149,10 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.canvas_frame_requires_render,
                 view.canvas_frame_full_repaint,
                 view.canvas_frame_batch_count,
+                view.canvas_frame_encoder_command_count,
+                view.canvas_frame_encoder_cache_action_count,
+                view.canvas_frame_encoder_bind_pipeline_count,
+                view.canvas_frame_encoder_draw_batch_count,
                 view.canvas_frame_pipeline_count,
                 view.canvas_frame_pipeline_upload_count,
                 view.canvas_frame_pipeline_retain_count,
@@ -402,7 +406,7 @@ test "snapshot emits GPU surface frame proof" {
     var buffer: [1280]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
-    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .gpu_size = geometry.SizeF.init(320, 180), .gpu_scale_factor = 2, .gpu_frame_index = 4, .gpu_timestamp_ns = 99, .gpu_frame_nonblank = true, .gpu_sample_color = 0xff336699, .canvas_revision = 2, .canvas_command_count = 5, .canvas_frame_requires_render = true, .canvas_frame_full_repaint = true, .canvas_frame_batch_count = 3, .canvas_frame_pipeline_count = 2, .canvas_frame_pipeline_upload_count = 1, .canvas_frame_pipeline_retain_count = 1, .canvas_frame_pipeline_evict_count = 0, .canvas_frame_resource_count = 2, .canvas_frame_resource_upload_count = 1, .canvas_frame_resource_retain_count = 1, .canvas_frame_resource_evict_count = 0, .canvas_frame_glyph_atlas_entry_count = 4, .canvas_frame_change_count = 0, .canvas_frame_budget_exceeded_count = 2, .canvas_frame_budget_ok = false, .canvas_frame_dirty_bounds = geometry.RectF.init(0, 0, 320, 180), .cursor = .text }};
+    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .gpu_size = geometry.SizeF.init(320, 180), .gpu_scale_factor = 2, .gpu_frame_index = 4, .gpu_timestamp_ns = 99, .gpu_frame_nonblank = true, .gpu_sample_color = 0xff336699, .canvas_revision = 2, .canvas_command_count = 5, .canvas_frame_requires_render = true, .canvas_frame_full_repaint = true, .canvas_frame_batch_count = 3, .canvas_frame_encoder_command_count = 8, .canvas_frame_encoder_cache_action_count = 2, .canvas_frame_encoder_bind_pipeline_count = 3, .canvas_frame_encoder_draw_batch_count = 3, .canvas_frame_pipeline_count = 2, .canvas_frame_pipeline_upload_count = 1, .canvas_frame_pipeline_retain_count = 1, .canvas_frame_pipeline_evict_count = 0, .canvas_frame_resource_count = 2, .canvas_frame_resource_upload_count = 1, .canvas_frame_resource_retain_count = 1, .canvas_frame_resource_evict_count = 0, .canvas_frame_glyph_atlas_entry_count = 4, .canvas_frame_change_count = 0, .canvas_frame_budget_exceeded_count = 2, .canvas_frame_budget_ok = false, .canvas_frame_dirty_bounds = geometry.RectF.init(0, 0, 320, 180), .cursor = .text }};
     try writeText(.{
         .windows = &windows,
         .views = &views,
@@ -418,6 +422,8 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_requires_render=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_full_repaint=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_batches=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_encoder_commands=8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_encoder_pipeline_binds=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_pipelines=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_pipeline_uploads=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_resources=2") != null);

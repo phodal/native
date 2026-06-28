@@ -885,6 +885,7 @@ pub const CanvasFrameStorage = struct {
 pub const CanvasFrameBudget = struct {
     max_commands: usize = 0,
     max_batches: usize = 0,
+    max_encoder_commands: usize = 0,
     max_pipelines: usize = 0,
     max_pipeline_uploads: usize = 0,
     max_resources: usize = 0,
@@ -898,6 +899,7 @@ pub const CanvasFrameBudget = struct {
         return .{
             .commands_over = budgetExceeded(self.max_commands, diagnostics.command_count),
             .batches_over = budgetExceeded(self.max_batches, diagnostics.batch_count),
+            .encoder_commands_over = budgetExceeded(self.max_encoder_commands, diagnostics.encoder_command_count),
             .pipelines_over = budgetExceeded(self.max_pipelines, diagnostics.pipeline_count),
             .pipeline_uploads_over = budgetExceeded(self.max_pipeline_uploads, diagnostics.pipeline_upload_count),
             .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
@@ -913,6 +915,7 @@ pub const CanvasFrameBudget = struct {
 pub const CanvasFrameBudgetStatus = struct {
     commands_over: bool = false,
     batches_over: bool = false,
+    encoder_commands_over: bool = false,
     pipelines_over: bool = false,
     pipeline_uploads_over: bool = false,
     resources_over: bool = false,
@@ -930,6 +933,7 @@ pub const CanvasFrameBudgetStatus = struct {
         var count: usize = 0;
         if (self.commands_over) count += 1;
         if (self.batches_over) count += 1;
+        if (self.encoder_commands_over) count += 1;
         if (self.pipelines_over) count += 1;
         if (self.pipeline_uploads_over) count += 1;
         if (self.resources_over) count += 1;
@@ -946,6 +950,10 @@ pub const CanvasFrameDiagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
     batch_count: usize = 0,
+    encoder_command_count: usize = 0,
+    encoder_cache_action_count: usize = 0,
+    encoder_bind_pipeline_count: usize = 0,
+    encoder_draw_batch_count: usize = 0,
     pipeline_count: usize = 0,
     pipeline_upload_count: usize = 0,
     pipeline_retain_count: usize = 0,
@@ -976,11 +984,15 @@ pub const CanvasFrameDiagnostics = struct {
 
     pub fn writeJson(self: CanvasFrameDiagnostics, writer: anytype) !void {
         try writer.print(
-            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"pipelineCount\":{d},\"pipelineUploadCount\":{d},\"pipelineRetainCount\":{d},\"pipelineEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"encoderCommandCount\":{d},\"encoderCacheActionCount\":{d},\"encoderBindPipelineCount\":{d},\"encoderDrawBatchCount\":{d},\"pipelineCount\":{d},\"pipelineUploadCount\":{d},\"pipelineRetainCount\":{d},\"pipelineEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
                 self.frame_index,
                 self.command_count,
                 self.batch_count,
+                self.encoder_command_count,
+                self.encoder_cache_action_count,
+                self.encoder_bind_pipeline_count,
+                self.encoder_draw_batch_count,
                 self.pipeline_count,
                 self.pipeline_upload_count,
                 self.pipeline_retain_count,
@@ -1130,6 +1142,38 @@ pub const CanvasRenderPass = struct {
         return self.pipeline_actions.len;
     }
 
+    pub fn encoderCommandCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        var count: usize = 2 + self.encoderCacheActionCount() + self.encoderBindPipelineCount() + self.encoderDrawBatchCount();
+        if (self.scissorBounds() != null) count += 1;
+        return count;
+    }
+
+    pub fn encoderCacheActionCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        return self.pipeline_actions.len +
+            self.resource_actions.len +
+            self.glyph_atlas_actions.len +
+            self.text_layout_actions.len;
+    }
+
+    pub fn encoderBindPipelineCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        var count: usize = 0;
+        var bound_pipeline: ?RenderPipelineKind = null;
+        for (self.batches) |batch| {
+            if (bound_pipeline == null or bound_pipeline.? != batch.pipeline) {
+                count += 1;
+                bound_pipeline = batch.pipeline;
+            }
+        }
+        return count;
+    }
+
+    pub fn encoderDrawBatchCount(self: CanvasRenderPass) usize {
+        return if (self.requiresRender()) self.batches.len else 0;
+    }
+
     pub fn resourceCount(self: CanvasRenderPass) usize {
         return self.resources.len;
     }
@@ -1205,10 +1249,15 @@ pub const CanvasFrame = struct {
     }
 
     fn diagnosticsWithoutBudgetStatus(self: CanvasFrame) CanvasFrameDiagnostics {
+        const render_pass = self.renderPass();
         return .{
             .frame_index = self.frame_index,
             .command_count = self.render_plan.commandCount(),
             .batch_count = self.batch_plan.batchCount(),
+            .encoder_command_count = render_pass.encoderCommandCount(),
+            .encoder_cache_action_count = render_pass.encoderCacheActionCount(),
+            .encoder_bind_pipeline_count = render_pass.encoderBindPipelineCount(),
+            .encoder_draw_batch_count = render_pass.encoderDrawBatchCount(),
             .pipeline_count = self.pipeline_cache_plan.entryCount(),
             .pipeline_upload_count = self.pipeline_cache_plan.uploadCount(),
             .pipeline_retain_count = self.pipeline_cache_plan.retainCount(),
@@ -10421,6 +10470,7 @@ test "canvas frame plan builds first frame renderer packet" {
         .budget = .{
             .max_commands = 1,
             .max_batches = 2,
+            .max_encoder_commands = 13,
             .max_pipelines = 2,
             .max_pipeline_uploads = 1,
             .max_resources = 2,
@@ -10487,6 +10537,10 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), render_pass.commandCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.batchCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.pipelineActionCount());
+    try std.testing.expectEqual(@as(usize, 14), render_pass.encoderCommandCount());
+    try std.testing.expectEqual(@as(usize, 7), render_pass.encoderCacheActionCount());
+    try std.testing.expectEqual(@as(usize, 2), render_pass.encoderBindPipelineCount());
+    try std.testing.expectEqual(@as(usize, 2), render_pass.encoderDrawBatchCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.resourceCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.resourceActionCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.glyphAtlasEntryCount());
@@ -10542,6 +10596,10 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(u64, 7), diagnostics.frame_index);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.command_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.batch_count);
+    try std.testing.expectEqual(@as(usize, 14), diagnostics.encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 7), diagnostics.encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.pipeline_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.pipeline_upload_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.pipeline_retain_count);
@@ -10566,6 +10624,7 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(!diagnostics.budgetOk());
     try std.testing.expect(diagnostics.budget_status.commands_over);
     try std.testing.expect(!diagnostics.budget_status.batches_over);
+    try std.testing.expect(diagnostics.budget_status.encoder_commands_over);
     try std.testing.expect(!diagnostics.budget_status.pipelines_over);
     try std.testing.expect(diagnostics.budget_status.pipeline_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.resources_over);
@@ -10574,22 +10633,22 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(!diagnostics.budget_status.text_layouts_over);
     try std.testing.expect(!diagnostics.budget_status.text_layout_lines_over);
     try std.testing.expect(!diagnostics.budget_status.changes_over);
-    try std.testing.expectEqual(@as(usize, 3), diagnostics.budget_status.exceededCount());
-    try std.testing.expectEqual(@as(usize, 3), frame.budgetStatus().exceededCount());
+    try std.testing.expectEqual(@as(usize, 4), diagnostics.budget_status.exceededCount());
+    try std.testing.expectEqual(@as(usize, 4), frame.budgetStatus().exceededCount());
 
-    var diagnostics_json_buffer: [1024]u8 = undefined;
+    var diagnostics_json_buffer: [1280]u8 = undefined;
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":3,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
-    var clean_json_buffer: [1024]u8 = undefined;
+    var clean_json_buffer: [1280]u8 = undefined;
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }

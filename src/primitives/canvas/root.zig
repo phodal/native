@@ -7,6 +7,7 @@ pub const Error = error{
     DiffListFull,
     DuplicateObjectId,
     DuplicateWidgetId,
+    GlyphAtlasListFull,
     RenderListFull,
     RenderResourceListFull,
     RenderStackOverflow,
@@ -210,6 +211,28 @@ pub const Glyph = struct {
     x: f32,
     y: f32,
     advance: f32 = 0,
+};
+
+pub const GlyphAtlasKey = struct {
+    font_id: FontId = 0,
+    glyph_id: u32 = 0,
+    size: f32 = 0,
+    subpixel_x: u8 = 0,
+    subpixel_y: u8 = 0,
+};
+
+pub const GlyphAtlasEntry = struct {
+    key: GlyphAtlasKey,
+    command_index: usize,
+    glyph_index: usize,
+};
+
+pub const GlyphAtlasPlan = struct {
+    entries: []const GlyphAtlasEntry = &.{},
+
+    pub fn entryCount(self: GlyphAtlasPlan) usize {
+        return self.entries.len;
+    }
 };
 
 pub const DrawText = struct {
@@ -708,6 +731,11 @@ pub const DisplayList = struct {
         var planner = RenderResourcePlanner.init(output);
         return planner.build(self);
     }
+
+    pub fn glyphAtlasPlan(self: DisplayList, output: []GlyphAtlasEntry) Error!GlyphAtlasPlan {
+        var planner = GlyphAtlasPlanner.init(output);
+        return planner.build(self);
+    }
 };
 
 pub const Builder = struct {
@@ -991,6 +1019,70 @@ pub const RenderResourcePlanner = struct {
     fn append(self: *RenderResourcePlanner, resource: RenderResource) Error!void {
         if (self.len >= self.resources.len) return error.RenderResourceListFull;
         self.resources[self.len] = resource;
+        self.len += 1;
+    }
+};
+
+pub const GlyphAtlasPlanner = struct {
+    entries: []GlyphAtlasEntry,
+    len: usize = 0,
+
+    pub fn init(entries: []GlyphAtlasEntry) GlyphAtlasPlanner {
+        return .{ .entries = entries };
+    }
+
+    pub fn reset(self: *GlyphAtlasPlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *GlyphAtlasPlanner, display_list: DisplayList) Error!GlyphAtlasPlan {
+        self.reset();
+        for (display_list.commands, 0..) |command, command_index| {
+            switch (command) {
+                .draw_text => |value| try self.consumeText(value, command_index),
+                else => {},
+            }
+        }
+        return .{ .entries = self.entries[0..self.len] };
+    }
+
+    fn consumeText(self: *GlyphAtlasPlanner, text: DrawText, command_index: usize) Error!void {
+        if (text.glyphs.len > 0) {
+            for (text.glyphs, 0..) |glyph, glyph_index| {
+                const key = GlyphAtlasKey{
+                    .font_id = text.font_id,
+                    .glyph_id = glyph.id,
+                    .size = text.size,
+                    .subpixel_x = subpixelBucket(text.origin.x + glyph.x),
+                    .subpixel_y = subpixelBucket(text.origin.y + glyph.y),
+                };
+                try self.appendUnique(key, command_index, glyph_index);
+            }
+            return;
+        }
+
+        for (text.text, 0..) |byte, byte_index| {
+            const key = GlyphAtlasKey{
+                .font_id = text.font_id,
+                .glyph_id = byte,
+                .size = text.size,
+                .subpixel_x = subpixelBucket(text.origin.x + @as(f32, @floatFromInt(byte_index)) * text.size * 0.5),
+                .subpixel_y = subpixelBucket(text.origin.y),
+            };
+            try self.appendUnique(key, command_index, byte_index);
+        }
+    }
+
+    fn appendUnique(self: *GlyphAtlasPlanner, key: GlyphAtlasKey, command_index: usize, glyph_index: usize) Error!void {
+        for (self.entries[0..self.len]) |entry| {
+            if (glyphAtlasKeysEqual(entry.key, key)) return;
+        }
+        if (self.len >= self.entries.len) return error.GlyphAtlasListFull;
+        self.entries[self.len] = .{
+            .key = key,
+            .command_index = command_index,
+            .glyph_index = glyph_index,
+        };
         self.len += 1;
     }
 };
@@ -1618,6 +1710,14 @@ fn widgetSemanticsEqual(a: WidgetSemantics, b: WidgetSemantics) bool {
         a.focusable == b.focusable;
 }
 
+fn glyphAtlasKeysEqual(a: GlyphAtlasKey, b: GlyphAtlasKey) bool {
+    return a.font_id == b.font_id and
+        a.glyph_id == b.glyph_id and
+        a.size == b.size and
+        a.subpixel_x == b.subpixel_x and
+        a.subpixel_y == b.subpixel_y;
+}
+
 fn diffDisplayLists(previous: DisplayList, next: DisplayList, output: []DiffChange) Error![]const DiffChange {
     try validateUniqueObjectIds(previous);
     try validateUniqueObjectIds(next);
@@ -1813,6 +1913,12 @@ fn nonNegative(value: f32) f32 {
 
 fn nonZeroObjectId(id: ObjectId) ?ObjectId {
     return if (id == 0) null else id;
+}
+
+fn subpixelBucket(value: f32) u8 {
+    const fraction = value - @floor(value);
+    const scaled = @floor(fraction * 4.0);
+    return @intFromFloat(std.math.clamp(scaled, 0, 3));
 }
 
 fn commandsEqual(a: CanvasCommand, b: CanvasCommand) bool {
@@ -2984,6 +3090,80 @@ test "resource plan reports output overflow" {
     };
     var resources: [0]RenderResource = .{};
     try std.testing.expectError(error.RenderResourceListFull, (DisplayList{ .commands = &commands }).resourcePlan(&resources));
+}
+
+test "glyph atlas plan deduplicates shaped glyph keys" {
+    const first_glyphs = [_]Glyph{
+        .{ .id = 10, .x = 0.10, .y = 0, .advance = 8 },
+        .{ .id = 11, .x = 8.25, .y = 0, .advance = 8 },
+    };
+    const second_glyphs = [_]Glyph{
+        .{ .id = 10, .x = 0.20, .y = 0, .advance = 8 },
+        .{ .id = 10, .x = 0.55, .y = 0, .advance = 8 },
+    };
+    const commands = [_]CanvasCommand{
+        .{ .draw_text = .{
+            .id = 1,
+            .font_id = 7,
+            .size = 16,
+            .origin = geometry.PointF.init(12, 24),
+            .color = Color.rgb8(15, 23, 42),
+            .glyphs = &first_glyphs,
+        } },
+        .{ .draw_text = .{
+            .id = 2,
+            .font_id = 7,
+            .size = 16,
+            .origin = geometry.PointF.init(12, 24),
+            .color = Color.rgb8(15, 23, 42),
+            .glyphs = &second_glyphs,
+        } },
+    };
+
+    var entries: [4]GlyphAtlasEntry = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).glyphAtlasPlan(&entries);
+    try std.testing.expectEqual(@as(usize, 3), plan.entryCount());
+    try std.testing.expectEqual(@as(FontId, 7), plan.entries[0].key.font_id);
+    try std.testing.expectEqual(@as(u32, 10), plan.entries[0].key.glyph_id);
+    try std.testing.expectEqual(@as(u8, 0), plan.entries[0].key.subpixel_x);
+    try std.testing.expectEqual(@as(u32, 11), plan.entries[1].key.glyph_id);
+    try std.testing.expectEqual(@as(u8, 1), plan.entries[1].key.subpixel_x);
+    try std.testing.expectEqual(@as(u32, 10), plan.entries[2].key.glyph_id);
+    try std.testing.expectEqual(@as(u8, 2), plan.entries[2].key.subpixel_x);
+}
+
+test "glyph atlas plan falls back to byte glyph keys" {
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 3,
+        .size = 12,
+        .origin = geometry.PointF.init(0.5, 8.75),
+        .color = Color.rgb8(15, 23, 42),
+        .text = "ABC",
+    } }};
+
+    var entries: [3]GlyphAtlasEntry = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).glyphAtlasPlan(&entries);
+    try std.testing.expectEqual(@as(usize, 3), plan.entryCount());
+    try std.testing.expectEqual(@as(u32, 'A'), plan.entries[0].key.glyph_id);
+    try std.testing.expectEqual(@as(u8, 2), plan.entries[0].key.subpixel_x);
+    try std.testing.expectEqual(@as(u8, 3), plan.entries[0].key.subpixel_y);
+    try std.testing.expectEqual(@as(u32, 'B'), plan.entries[1].key.glyph_id);
+    try std.testing.expectEqual(@as(u32, 'C'), plan.entries[2].key.glyph_id);
+}
+
+test "glyph atlas plan reports output overflow" {
+    const glyphs = [_]Glyph{.{ .id = 10, .x = 0, .y = 0 }};
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 1,
+        .size = 14,
+        .origin = geometry.PointF.init(0, 0),
+        .color = Color.rgb8(0, 0, 0),
+        .glyphs = &glyphs,
+    } }};
+    var entries: [0]GlyphAtlasEntry = .{};
+    try std.testing.expectError(error.GlyphAtlasListFull, (DisplayList{ .commands = &commands }).glyphAtlasPlan(&entries));
 }
 
 test "display list serializes deterministically" {

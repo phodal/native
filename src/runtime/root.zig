@@ -3698,6 +3698,8 @@ fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
         .textbox => "textbox",
         .tooltip => "tooltip",
         .dialog => "dialog",
+        .menu => "menu",
+        .menuitem => "menuitem",
         .list => "list",
         .listitem => "listitem",
         .tab => "tab",
@@ -5450,6 +5452,60 @@ test "runtime automation snapshot exposes canvas popover dialog roles" {
     try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=dialog name=\"Command palette\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=button name=\"Open\"") != null);
+}
+
+test "runtime automation snapshot exposes canvas menu roles" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-menu-semantics", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(40, 50, 260, 180),
+    });
+
+    const items = [_]canvas.Widget{
+        .{ .id = 2, .kind = .menu_item, .frame = geometry.RectF.init(0, 0, 0, 28), .text = "Rename" },
+        .{ .id = 3, .kind = .menu_item, .frame = geometry.RectF.init(0, 0, 0, 28), .text = "Archive" },
+    };
+    const menu = canvas.Widget{
+        .id = 1,
+        .kind = .menu_surface,
+        .frame = geometry.RectF.init(12, 16, 180, 90),
+        .layout = .{ .padding = geometry.InsetsF.all(6), .gap = 2 },
+        .semantics = .{ .label = "More actions" },
+        .children = &items,
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(menu, menu.frame, &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 3), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("menu", snapshot.widgets[0].role);
+    try std.testing.expectEqualStrings("More actions", snapshot.widgets[0].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(52, 66, 180, 90), snapshot.widgets[0].bounds);
+    try std.testing.expectEqualStrings("menuitem", snapshot.widgets[1].role);
+    try std.testing.expectEqualStrings("Rename", snapshot.widgets[1].name);
+    try std.testing.expectEqualDeep(geometry.RectF.init(58, 72, 168, 28), snapshot.widgets[1].bounds);
+    try std.testing.expectEqualStrings("menuitem", snapshot.widgets[2].role);
+    try std.testing.expectEqualStrings("Archive", snapshot.widgets[2].name);
+
+    var a11y_buffer: [512]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#1 role=menu name=\"More actions\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#2 role=menuitem name=\"Rename\"") != null);
 }
 
 test "runtime invalidates canvas widget layout and semantics changes" {

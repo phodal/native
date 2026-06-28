@@ -652,10 +652,12 @@ pub const WidgetKind = enum {
     list,
     panel,
     popover,
+    menu_surface,
     text,
     button,
     text_field,
     tooltip,
+    menu_item,
     list_item,
     segmented_control,
     checkbox,
@@ -688,6 +690,8 @@ pub const WidgetRole = enum {
     textbox,
     tooltip,
     dialog,
+    menu,
+    menuitem,
     list,
     listitem,
     tab,
@@ -1078,10 +1082,12 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
             },
             .panel => try emitPanelWidgetChrome(builder, widget, tokens),
             .popover => try emitPopoverWidgetChrome(builder, widget, tokens),
+            .menu_surface => try emitMenuSurfaceWidgetChrome(builder, widget, tokens),
             .text => try emitTextWidget(builder, widget, tokens),
             .button => try emitButtonWidget(builder, widget, tokens),
             .text_field => try emitTextFieldWidget(builder, widget, tokens),
             .tooltip => try emitTooltipWidget(builder, widget, tokens),
+            .menu_item => try emitMenuItemWidget(builder, widget, tokens),
             .list_item => try emitListItemWidget(builder, widget, tokens),
             .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
             .checkbox => try emitCheckboxWidget(builder, widget, tokens),
@@ -1656,10 +1662,12 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .scroll_view => try emitScrollViewWidget(builder, widget, tokens, depth),
         .panel => try emitPanelWidget(builder, widget, tokens, depth),
         .popover => try emitPopoverWidget(builder, widget, tokens, depth),
+        .menu_surface => try emitMenuSurfaceWidget(builder, widget, tokens, depth),
         .text => try emitTextWidget(builder, widget, tokens),
         .button => try emitButtonWidget(builder, widget, tokens),
         .text_field => try emitTextFieldWidget(builder, widget, tokens),
         .tooltip => try emitTooltipWidget(builder, widget, tokens),
+        .menu_item => try emitMenuItemWidget(builder, widget, tokens),
         .list_item => try emitListItemWidget(builder, widget, tokens),
         .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, widget, tokens),
@@ -1682,6 +1690,11 @@ fn emitPanelWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
 
 fn emitPopoverWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     try emitPopoverWidgetChrome(builder, widget, tokens);
+    try emitWidgetChildren(builder, widget.children, tokens, depth);
+}
+
+fn emitMenuSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitMenuSurfaceWidgetChrome(builder, widget, tokens);
     try emitWidgetChildren(builder, widget.children, tokens, depth);
 }
 
@@ -1725,6 +1738,38 @@ fn emitPanelWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens
 
 fn emitPopoverWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = Radius.all(tokens.radius.xl);
+    const shadow_token = tokens.shadow.md;
+    if (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0) {
+        try builder.shadow(.{
+            .id = widgetPartId(widget.id, 1),
+            .rect = widget.frame,
+            .radius = radius,
+            .offset = .{ .dx = 0, .dy = shadow_token.y },
+            .blur = shadow_token.blur,
+            .spread = shadow_token.spread,
+            .color = tokens.colors.shadow,
+        });
+    }
+
+    try builder.fillRoundedRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .fill = .{ .color = tokens.colors.surface },
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 3),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = .{ .color = tokens.colors.border },
+            .width = tokens.stroke.hairline,
+        },
+    });
+}
+
+fn emitMenuSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const radius = Radius.all(tokens.radius.lg);
     const shadow_token = tokens.shadow.md;
     if (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0) {
         try builder.shadow(.{
@@ -1863,6 +1908,10 @@ fn emitTooltipWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Er
             .text = widget.text,
         });
     }
+}
+
+fn emitMenuItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    try emitListItemWidget(builder, widget, tokens);
 }
 
 fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -2160,12 +2209,13 @@ fn layoutWidgetDepth(
         .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns),
         .scroll_view => try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value),
         .list => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
+        .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout.gap),
         .stack, .panel, .popover => {
             for (widget.children) |child| {
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .button, .text_field, .tooltip, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
+        .text, .button, .text_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -2501,11 +2551,13 @@ fn semanticRole(widget: Widget) WidgetRole {
     return switch (widget.kind) {
         .stack, .row, .column, .grid, .scroll_view, .panel => .group,
         .popover => .dialog,
+        .menu_surface => .menu,
         .list => .list,
         .text => .text,
         .button => .button,
         .text_field => .textbox,
         .tooltip => .tooltip,
+        .menu_item => .menuitem,
         .list_item => .listitem,
         .segmented_control => .tab,
         .checkbox => .checkbox,
@@ -2532,7 +2584,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .text_field, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -2546,7 +2598,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .list, .stack, .tooltip => false,
-        .scroll_view, .panel, .popover, .text, .button, .text_field, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -3942,6 +3994,76 @@ test "widget popover emits overlay chrome and routes child events" {
     try std.testing.expectEqual(WidgetRole.button, semantics[1].role);
     try std.testing.expectEqual(@as(?usize, 0), semantics[1].parent_index);
     try std.testing.expect(semantics[1].focusable);
+}
+
+test "widget menu surface groups menu items semantically" {
+    const items = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .menu_item,
+            .frame = geometry.RectF.init(0, 0, 0, 28),
+            .text = "Rename",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 3,
+            .kind = .menu_item,
+            .frame = geometry.RectF.init(0, 0, 0, 28),
+            .text = "Archive",
+        },
+    };
+    const menu = Widget{
+        .id = 1,
+        .kind = .menu_surface,
+        .frame = geometry.RectF.init(20, 24, 180, 90),
+        .layout = .{ .padding = geometry.InsetsF.all(6), .gap = 2 },
+        .semantics = .{ .label = "More actions" },
+        .children = &items,
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(menu, menu.frame, &nodes);
+    try std.testing.expectEqual(@as(usize, 3), layout.nodeCount());
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(20, 24, 180, 90));
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(26, 30, 168, 28));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(26, 60, 168, 28));
+
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
+    try std.testing.expect(display_list.commands[0] == .shadow);
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(1, 2)), display_list.commands[1].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[3].objectId());
+
+    try std.testing.expectEqual(@as(ObjectId, 2), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.focusTarget(2, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 2), layout.hitTest(geometry.PointF.init(34, 38)).?.id);
+    const blank_hit = layout.hitTest(geometry.PointF.init(190, 108)).?;
+    try std.testing.expectEqual(@as(ObjectId, 1), blank_hit.id);
+    try std.testing.expectEqual(WidgetKind.menu_surface, blank_hit.kind);
+
+    var route_buffer: [3]WidgetEventRouteEntry = undefined;
+    const route = try layout.routePointerEvent(.{ .phase = .down, .point = geometry.PointF.init(34, 38) }, &route_buffer);
+    try std.testing.expectEqual(@as(usize, 3), route.entries.len);
+    try expectRouteEntry(route.entries[0], .capture, 1);
+    try expectRouteEntry(route.entries[1], .target, 2);
+    try expectRouteEntry(route.entries[2], .bubble, 1);
+
+    var semantics_buffer: [3]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 3), semantics.len);
+    try std.testing.expectEqual(WidgetRole.menu, semantics[0].role);
+    try std.testing.expectEqualStrings("More actions", semantics[0].label);
+    try std.testing.expect(semantics[0].parent_index == null);
+    try std.testing.expectEqual(WidgetRole.menuitem, semantics[1].role);
+    try std.testing.expectEqualStrings("Rename", semantics[1].label);
+    try std.testing.expectEqual(@as(?usize, 0), semantics[1].parent_index);
+    try std.testing.expect(semantics[1].focusable);
+    try std.testing.expectEqual(WidgetRole.menuitem, semantics[2].role);
+    try std.testing.expectEqualStrings("Archive", semantics[2].label);
+    try std.testing.expectEqual(@as(?usize, 0), semantics[2].parent_index);
 }
 
 test "widget list item and segmented controls expose selectable semantics" {

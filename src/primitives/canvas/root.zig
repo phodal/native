@@ -639,6 +639,7 @@ pub const CanvasFrameOptions = struct {
     surface_size: geometry.SizeF = .{},
     scale: f32 = 1,
     full_repaint: bool = false,
+    budget: CanvasFrameBudget = .{},
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
     previous_render_overrides: []const CanvasRenderOverride = &.{},
     render_overrides: []const CanvasRenderOverride = &.{},
@@ -654,6 +655,50 @@ pub const CanvasFrameStorage = struct {
     changes: []DiffChange,
 };
 
+pub const CanvasFrameBudget = struct {
+    max_commands: usize = 0,
+    max_batches: usize = 0,
+    max_resources: usize = 0,
+    max_resource_uploads: usize = 0,
+    max_glyph_atlas_entries: usize = 0,
+    max_changes: usize = 0,
+
+    pub fn status(self: CanvasFrameBudget, diagnostics: CanvasFrameDiagnostics) CanvasFrameBudgetStatus {
+        return .{
+            .commands_over = budgetExceeded(self.max_commands, diagnostics.command_count),
+            .batches_over = budgetExceeded(self.max_batches, diagnostics.batch_count),
+            .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
+            .resource_uploads_over = budgetExceeded(self.max_resource_uploads, diagnostics.resource_upload_count),
+            .glyph_atlas_entries_over = budgetExceeded(self.max_glyph_atlas_entries, diagnostics.glyph_atlas_entry_count),
+            .changes_over = budgetExceeded(self.max_changes, diagnostics.change_count),
+        };
+    }
+};
+
+pub const CanvasFrameBudgetStatus = struct {
+    commands_over: bool = false,
+    batches_over: bool = false,
+    resources_over: bool = false,
+    resource_uploads_over: bool = false,
+    glyph_atlas_entries_over: bool = false,
+    changes_over: bool = false,
+
+    pub fn ok(self: CanvasFrameBudgetStatus) bool {
+        return self.exceededCount() == 0;
+    }
+
+    pub fn exceededCount(self: CanvasFrameBudgetStatus) usize {
+        var count: usize = 0;
+        if (self.commands_over) count += 1;
+        if (self.batches_over) count += 1;
+        if (self.resources_over) count += 1;
+        if (self.resource_uploads_over) count += 1;
+        if (self.glyph_atlas_entries_over) count += 1;
+        if (self.changes_over) count += 1;
+        return count;
+    }
+};
+
 pub const CanvasFrameDiagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
@@ -667,10 +712,16 @@ pub const CanvasFrameDiagnostics = struct {
     full_repaint: bool = false,
     requires_render: bool = false,
     dirty_bounds: ?geometry.RectF = null,
+    budget: CanvasFrameBudget = .{},
+    budget_status: CanvasFrameBudgetStatus = .{},
+
+    pub fn budgetOk(self: CanvasFrameDiagnostics) bool {
+        return self.budget_status.ok();
+    }
 
     pub fn writeJson(self: CanvasFrameDiagnostics, writer: anytype) !void {
         try writer.print(
-            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"changeCount\":{d}",
+            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
                 self.frame_index,
                 self.command_count,
@@ -681,8 +732,11 @@ pub const CanvasFrameDiagnostics = struct {
                 self.resource_evict_count,
                 self.glyph_atlas_entry_count,
                 self.change_count,
+                self.budget_status.exceededCount(),
             },
         );
+        try writer.writeAll(",\"budgetOk\":");
+        try writer.writeAll(if (self.budgetOk()) "true" else "false");
         try writer.writeAll(",\"fullRepaint\":");
         try writer.writeAll(if (self.full_repaint) "true" else "false");
         try writer.writeAll(",\"requiresRender\":");
@@ -696,6 +750,10 @@ pub const CanvasFrameDiagnostics = struct {
         try writer.writeByte('}');
     }
 };
+
+fn budgetExceeded(limit: usize, value: usize) bool {
+    return limit > 0 and value > limit;
+}
 
 pub const CanvasRenderPassLoadAction = enum {
     skip,
@@ -768,12 +826,23 @@ pub const CanvasFrame = struct {
     glyph_atlas_plan: GlyphAtlasPlan = .{},
     changes: []const DiffChange = &.{},
     dirty_bounds: ?geometry.RectF = null,
+    budget: CanvasFrameBudget = .{},
 
     pub fn requiresRender(self: CanvasFrame) bool {
         return self.full_repaint or self.dirty_bounds != null;
     }
 
+    pub fn budgetStatus(self: CanvasFrame) CanvasFrameBudgetStatus {
+        return self.budget.status(self.diagnosticsWithoutBudgetStatus());
+    }
+
     pub fn diagnostics(self: CanvasFrame) CanvasFrameDiagnostics {
+        var result = self.diagnosticsWithoutBudgetStatus();
+        result.budget_status = self.budget.status(result);
+        return result;
+    }
+
+    fn diagnosticsWithoutBudgetStatus(self: CanvasFrame) CanvasFrameDiagnostics {
         return .{
             .frame_index = self.frame_index,
             .command_count = self.render_plan.commandCount(),
@@ -787,6 +856,7 @@ pub const CanvasFrame = struct {
             .full_repaint = self.full_repaint,
             .requires_render = self.requiresRender(),
             .dirty_bounds = self.dirty_bounds,
+            .budget = self.budget,
         };
     }
 
@@ -1993,6 +2063,7 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .glyph_atlas_plan = glyph_atlas_plan,
         .changes = changes,
         .dirty_bounds = dirty_bounds,
+        .budget = options.budget,
     };
 }
 
@@ -8839,6 +8910,13 @@ test "canvas frame plan builds first frame renderer packet" {
         .timestamp_ns = 88,
         .surface_size = geometry.SizeF.init(320, 200),
         .scale = 2,
+        .budget = .{
+            .max_commands = 1,
+            .max_batches = 2,
+            .max_resources = 2,
+            .max_resource_uploads = 1,
+            .max_glyph_atlas_entries = 2,
+        },
     }, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
@@ -8909,20 +8987,29 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(diagnostics.full_repaint);
     try std.testing.expect(diagnostics.requires_render);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), diagnostics.dirty_bounds);
+    try std.testing.expect(!diagnostics.budgetOk());
+    try std.testing.expect(diagnostics.budget_status.commands_over);
+    try std.testing.expect(!diagnostics.budget_status.batches_over);
+    try std.testing.expect(!diagnostics.budget_status.resources_over);
+    try std.testing.expect(diagnostics.budget_status.resource_uploads_over);
+    try std.testing.expect(!diagnostics.budget_status.glyph_atlas_entries_over);
+    try std.testing.expect(!diagnostics.budget_status.changes_over);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.budget_status.exceededCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.budgetStatus().exceededCount());
 
     var diagnostics_json_buffer: [512]u8 = undefined;
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"changeCount\":0,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"changeCount\":0,\"budgetExceededCount\":2,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
-    var clean_json_buffer: [256]u8 = undefined;
+    var clean_json_buffer: [512]u8 = undefined;
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"changeCount\":0,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }

@@ -180,6 +180,13 @@ export interface ZeroNativeViewInfo {
   enabled: boolean;
   transparent: boolean;
   bridge: boolean;
+  gpuWidth: number;
+  gpuHeight: number;
+  gpuScale: number;
+  gpuFrame: number;
+  gpuTimestampNs: number;
+  gpuNonblank: boolean;
+  gpuSampleColor: number;
   focused: boolean;
   command: string;
   open: boolean;

@@ -78,8 +78,12 @@ pub fn writeText(input: Input, writer: anytype) !void {
             },
         );
         if (view.kind == .gpu_surface) {
-            try writer.print(" gpu_frame={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d} widget_revision={d} widget_nodes={d} widget_semantics={d}", .{
+            try writer.print(" gpu_size={d}x{d} gpu_scale={d} gpu_frame={d} gpu_timestamp_ns={d} gpu_nonblank={any} gpu_sample=0x{x:0>8} canvas_revision={d} canvas_commands={d} widget_revision={d} widget_nodes={d} widget_semantics={d}", .{
+                view.gpu_size.width,
+                view.gpu_size.height,
+                view.gpu_scale_factor,
                 view.gpu_frame_index,
+                view.gpu_timestamp_ns,
                 view.gpu_frame_nonblank,
                 view.gpu_sample_color,
                 view.canvas_revision,
@@ -207,12 +211,15 @@ test "snapshot emits GPU surface frame proof" {
     var buffer: [512]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
-    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .gpu_frame_index = 4, .gpu_frame_nonblank = true, .gpu_sample_color = 0xff336699, .canvas_revision = 2, .canvas_command_count = 5 }};
+    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .gpu_size = geometry.SizeF.init(320, 180), .gpu_scale_factor = 2, .gpu_frame_index = 4, .gpu_timestamp_ns = 99, .gpu_frame_nonblank = true, .gpu_sample_color = 0xff336699, .canvas_revision = 2, .canvas_command_count = 5 }};
     try writeText(.{
         .windows = &windows,
         .views = &views,
     }, &writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_size=320x180") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_scale=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_frame=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_timestamp_ns=99") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_nonblank=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_sample=0xff336699") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_revision=2") != null);

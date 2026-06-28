@@ -54,6 +54,7 @@ pub const CommandSource = enum {
 };
 
 pub const ShortcutEvent = platform.ShortcutEvent;
+pub const GpuFrame = platform.GpuFrame;
 pub const GpuSurfaceFrameEvent = platform.GpuSurfaceFrameEvent;
 pub const GpuSurfaceResizeEvent = platform.GpuSurfaceResizeEvent;
 pub const GpuSurfaceInputEvent = platform.GpuSurfaceInputEvent;
@@ -572,6 +573,13 @@ pub const Runtime = struct {
         return self.views[index].canvasDisplayList().framePlan(previous, frame_options, storage);
     }
 
+    pub fn gpuSurfaceFrame(self: *const Runtime, window_id: platform.WindowId, label: []const u8) anyerror!platform.GpuFrame {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        return self.views[index].info().gpuFrame() orelse error.InvalidViewOptions;
+    }
+
     pub fn setCanvasWidgetLayout(self: *Runtime, window_id: platform.WindowId, label: []const u8, layout: canvas.WidgetLayoutTree) anyerror!platform.ViewInfo {
         try self.validateViewParent(window_id);
         try validateViewLabel(label);
@@ -862,7 +870,10 @@ pub const Runtime = struct {
             },
             .gpu_surface_frame => |frame_event| {
                 if (self.findViewIndex(frame_event.window_id, frame_event.label)) |index| {
+                    self.views[index].gpu_size = frame_event.size;
+                    self.views[index].gpu_scale_factor = frame_event.scale_factor;
                     self.views[index].gpu_frame_index = frame_event.frame_index;
+                    self.views[index].gpu_timestamp_ns = frame_event.timestamp_ns;
                     self.views[index].gpu_frame_nonblank = frame_event.nonblank;
                     self.views[index].gpu_sample_color = frame_event.sample_color;
                 }
@@ -871,6 +882,8 @@ pub const Runtime = struct {
             .gpu_surface_resized => |resize_event| {
                 if (self.findViewIndex(resize_event.window_id, resize_event.label)) |index| {
                     self.views[index].frame = resize_event.frame;
+                    self.views[index].gpu_size = resize_event.frame.size();
+                    self.views[index].gpu_scale_factor = resize_event.scale_factor;
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_resized = resize_event });
                 self.invalidateFor(.surface_resize, resize_event.frame);
@@ -2545,6 +2558,7 @@ pub const Runtime = struct {
             .enabled = options.enabled,
             .transparent = options.transparent,
             .bridge_enabled = options.bridge_enabled,
+            .gpu_size = if (options.kind == .gpu_surface) options.frame.size() else geometry.SizeF.init(0, 0),
             .focused = false,
             .open = true,
         };
@@ -3039,7 +3053,10 @@ const RuntimeView = struct {
     command: []const u8 = "",
     transparent: bool = false,
     bridge_enabled: bool = false,
+    gpu_size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    gpu_scale_factor: f32 = 1,
     gpu_frame_index: u64 = 0,
+    gpu_timestamp_ns: u64 = 0,
     gpu_frame_nonblank: bool = false,
     gpu_sample_color: u32 = 0,
     canvas_commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined,
@@ -3087,7 +3104,10 @@ const RuntimeView = struct {
             .url = "",
             .transparent = self.transparent,
             .bridge_enabled = self.bridge_enabled,
+            .gpu_size = self.gpu_size,
+            .gpu_scale_factor = self.gpu_scale_factor,
             .gpu_frame_index = self.gpu_frame_index,
+            .gpu_timestamp_ns = self.gpu_timestamp_ns,
             .gpu_frame_nonblank = self.gpu_frame_nonblank,
             .gpu_sample_color = self.gpu_sample_color,
             .canvas_revision = self.canvas_revision,
@@ -3763,7 +3783,7 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
     try json.writeString(writer, view.command);
     try writer.writeAll(",\"url\":");
     try json.writeString(writer, view.url);
-    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuFrame\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"widgetRevision\":{d},\"widgetNodeCount\":{d},\"widgetSemanticsCount\":{d},\"focused\":{},\"open\":{}}}", .{
+    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuWidth\":{d},\"gpuHeight\":{d},\"gpuScale\":{d},\"gpuFrame\":{d},\"gpuTimestampNs\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"widgetRevision\":{d},\"widgetNodeCount\":{d},\"widgetSemanticsCount\":{d},\"focused\":{},\"open\":{}}}", .{
         view.frame.x,
         view.frame.y,
         view.frame.width,
@@ -3773,7 +3793,11 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.enabled,
         view.transparent,
         view.bridge_enabled,
+        view.gpu_size.width,
+        view.gpu_size.height,
+        view.gpu_scale_factor,
         view.gpu_frame_index,
+        view.gpu_timestamp_ns,
         view.gpu_frame_nonblank,
         view.gpu_sample_color,
         view.canvas_revision,
@@ -6310,9 +6334,23 @@ test "runtime dispatches GPU surface events" {
 
     var harness: TestHarness() = undefined;
     harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);
+
+    const created = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 640, 360),
+    });
+    const initial_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(created.id, initial_frame.surface_id);
+    try std.testing.expectEqual(@as(f32, 640), initial_frame.size.width);
+    try std.testing.expectEqual(@as(f32, 360), initial_frame.size.height);
+    try std.testing.expectEqual(@as(u64, 0), initial_frame.frame_index);
+    harness.runtime.invalidated = false;
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
         .window_id = 1,
@@ -6321,10 +6359,32 @@ test "runtime dispatches GPU surface events" {
         .scale_factor = 2,
         .frame_index = 7,
         .timestamp_ns = 42,
+        .nonblank = true,
+        .sample_color = 0xff336699,
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.frame_count);
     try std.testing.expectEqualStrings("canvas", app_state.last_label);
     try std.testing.expect(!harness.runtime.invalidated);
+    const frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(created.id, frame.surface_id);
+    try std.testing.expectEqual(@as(platform.WindowId, 1), frame.window_id);
+    try std.testing.expectEqualStrings("canvas", frame.label);
+    try std.testing.expectEqual(@as(f32, 640), frame.size.width);
+    try std.testing.expectEqual(@as(f32, 360), frame.size.height);
+    try std.testing.expectEqual(@as(f32, 2), frame.scale_factor);
+    try std.testing.expectEqual(@as(u64, 7), frame.frame_index);
+    try std.testing.expectEqual(@as(u64, 42), frame.timestamp_ns);
+    try std.testing.expect(frame.nonblank);
+    try std.testing.expectEqual(@as(u32, 0xff336699), frame.sample_color);
+    var view_json_buffer: [1024]u8 = undefined;
+    const view_json = try writeViewJson(harness.runtime.views[0].info(), &view_json_buffer);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuWidth\":640") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuHeight\":360") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuScale\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuFrame\":7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuTimestampNs\":42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuNonblank\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuSampleColor\":4281558681") != null);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
         .window_id = 1,
@@ -6334,6 +6394,10 @@ test "runtime dispatches GPU surface events" {
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.resize_count);
     try std.testing.expect(harness.runtime.invalidated);
+    const resized_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 800), resized_frame.size.width);
+    try std.testing.expectEqual(@as(f32, 450), resized_frame.size.height);
+    try std.testing.expectEqual(@as(f32, 2), resized_frame.scale_factor);
 
     harness.runtime.invalidated = false;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{

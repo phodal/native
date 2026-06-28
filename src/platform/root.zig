@@ -455,7 +455,10 @@ pub const ViewInfo = struct {
     url: []const u8 = "",
     transparent: bool = false,
     bridge_enabled: bool = false,
+    gpu_size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    gpu_scale_factor: f32 = 1,
     gpu_frame_index: u64 = 0,
+    gpu_timestamp_ns: u64 = 0,
     gpu_frame_nonblank: bool = false,
     gpu_sample_color: u32 = 0,
     canvas_revision: u64 = 0,
@@ -465,6 +468,21 @@ pub const ViewInfo = struct {
     widget_semantics_count: usize = 0,
     focused: bool = false,
     open: bool = true,
+
+    pub fn gpuFrame(self: ViewInfo) ?GpuFrame {
+        if (self.kind != .gpu_surface) return null;
+        return .{
+            .surface_id = self.id,
+            .window_id = self.window_id,
+            .label = self.label,
+            .size = self.gpu_size,
+            .scale_factor = self.gpu_scale_factor,
+            .frame_index = self.gpu_frame_index,
+            .timestamp_ns = self.gpu_timestamp_ns,
+            .nonblank = self.gpu_frame_nonblank,
+            .sample_color = self.gpu_sample_color,
+        };
+    }
 };
 
 pub const AppInfo = struct {
@@ -617,6 +635,18 @@ pub const MenuCommandEvent = struct {
 pub const FileDropEvent = struct {
     window_id: WindowId = 1,
     paths: []const []const u8 = &.{},
+};
+
+pub const GpuFrame = struct {
+    surface_id: ViewId = 0,
+    window_id: WindowId = 1,
+    label: []const u8 = "",
+    size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    scale_factor: f32 = 1,
+    frame_index: u64 = 0,
+    timestamp_ns: u64 = 0,
+    nonblank: bool = false,
+    sample_color: u32 = 0,
 };
 
 pub const GpuSurfaceFrameEvent = struct {

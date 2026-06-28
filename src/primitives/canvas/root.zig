@@ -10,6 +10,7 @@ pub const Error = error{
     GlyphAtlasListFull,
     RenderBatchListFull,
     RenderListFull,
+    RenderOverrideListFull,
     RenderResourceCacheListFull,
     RenderResourceListFull,
     TextLayoutLineListFull,
@@ -482,6 +483,18 @@ pub const CanvasRenderOverride = struct {
     id: ObjectId,
     opacity: ?f32 = null,
     transform: ?Affine = null,
+};
+
+pub const CanvasRenderAnimation = struct {
+    id: ObjectId,
+    start_ns: u64 = 0,
+    duration_ms: u32 = 0,
+    easing: Easing = .standard,
+    spring: SpringToken = .{},
+    from_opacity: ?f32 = null,
+    to_opacity: ?f32 = null,
+    from_transform: ?Affine = null,
+    to_transform: ?Affine = null,
 };
 
 pub const RenderPlan = struct {
@@ -1854,6 +1867,25 @@ pub fn applyTextInputEvent(state: TextEditState, event: TextInputEvent, output: 
     };
 }
 
+pub fn sampleCanvasRenderAnimations(animations: []const CanvasRenderAnimation, timestamp_ns: u64, output: []CanvasRenderOverride) Error![]const CanvasRenderOverride {
+    var len: usize = 0;
+    for (animations) |animation| {
+        if (animation.id == 0) continue;
+        const progress = motionProgress(animation, timestamp_ns);
+        const opacity = sampleAnimatedF32(animation.from_opacity, animation.to_opacity, progress);
+        const transform = sampleAnimatedAffine(animation.from_transform, animation.to_transform, progress);
+        if (opacity == null and transform == null) continue;
+        if (len >= output.len) return error.RenderOverrideListFull;
+        output[len] = .{
+            .id = animation.id,
+            .opacity = opacity,
+            .transform = transform,
+        };
+        len += 1;
+    }
+    return output[0..len];
+}
+
 pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
     var render_plan = try next.renderPlan(storage.render_commands);
     const render_override_dirty_bounds = renderOverrideDirtyBounds(render_plan.commands, options.previous_render_overrides, options.render_overrides);
@@ -2263,6 +2295,60 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.image_id == b.image_id and
         a.font_id == b.font_id and
         a.fingerprint == b.fingerprint;
+}
+
+fn motionProgress(animation: CanvasRenderAnimation, timestamp_ns: u64) f32 {
+    const raw = rawMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns);
+    return easedMotionProgress(animation.easing, animation.spring, raw);
+}
+
+fn rawMotionProgress(start_ns: u64, duration_ms: u32, timestamp_ns: u64) f32 {
+    if (duration_ms == 0) return 1;
+    if (timestamp_ns <= start_ns) return 0;
+    const duration_ns = @as(u64, duration_ms) * 1_000_000;
+    const elapsed_ns = timestamp_ns - start_ns;
+    if (elapsed_ns >= duration_ns) return 1;
+    return @as(f32, @floatFromInt(elapsed_ns)) / @as(f32, @floatFromInt(duration_ns));
+}
+
+fn easedMotionProgress(easing: Easing, spring: SpringToken, progress: f32) f32 {
+    const t = std.math.clamp(progress, 0, 1);
+    return switch (easing) {
+        .linear => t,
+        .standard => t * t * (3 - 2 * t),
+        .emphasized => 1 - std.math.pow(f32, 1 - t, 3),
+        .spring => springMotionProgress(t, spring),
+    };
+}
+
+fn springMotionProgress(progress: f32, spring: SpringToken) f32 {
+    if (progress <= 0) return 0;
+    if (progress >= 1) return 1;
+    const mass = @max(0.001, spring.mass);
+    const stiffness = @max(1, spring.stiffness);
+    const damping = @max(0.001, spring.damping);
+    const omega = @sqrt(stiffness / mass);
+    const decay = @exp(-damping * progress / (mass * 24));
+    return std.math.clamp(1 - decay * @cos(omega * progress), 0, 1);
+}
+
+fn sampleAnimatedF32(from: ?f32, to: ?f32, progress: f32) ?f32 {
+    const start = from orelse return null;
+    const end = to orelse return null;
+    return start + (end - start) * progress;
+}
+
+fn sampleAnimatedAffine(from: ?Affine, to: ?Affine, progress: f32) ?Affine {
+    const start = from orelse return null;
+    const end = to orelse return null;
+    return .{
+        .a = start.a + (end.a - start.a) * progress,
+        .b = start.b + (end.b - start.b) * progress,
+        .c = start.c + (end.c - start.c) * progress,
+        .d = start.d + (end.d - start.d) * progress,
+        .tx = start.tx + (end.tx - start.tx) * progress,
+        .ty = start.ty + (end.ty - start.ty) * progress,
+    };
 }
 
 fn applyRenderOverrides(commands: []RenderCommand, overrides: []const CanvasRenderOverride) ?geometry.RectF {
@@ -8036,6 +8122,59 @@ test "canvas frame plan applies render overrides without display list changes" {
     try std.testing.expect(!clean_frame.requiresRender());
     try std.testing.expect(clean_frame.dirty_bounds == null);
     try std.testing.expectEqualDeep(geometry.RectF.init(10, 0, 10, 10), clean_frame.render_plan.commands[0].bounds);
+}
+
+test "canvas render animations sample overrides for frame planning" {
+    const animations = [_]CanvasRenderAnimation{.{
+        .id = 1,
+        .start_ns = 1_000,
+        .duration_ms = 1000,
+        .easing = .linear,
+        .from_opacity = 0,
+        .to_opacity = 1,
+        .from_transform = Affine.translate(0, 0),
+        .to_transform = Affine.translate(20, 0),
+    }};
+
+    var overrides: [1]CanvasRenderOverride = undefined;
+    const sampled = try sampleCanvasRenderAnimations(&animations, 500_001_000, &overrides);
+    try std.testing.expectEqual(@as(usize, 1), sampled.len);
+    try std.testing.expectEqual(@as(ObjectId, 1), sampled[0].id);
+    try std.testing.expectEqual(@as(f32, 0.5), sampled[0].opacity.?);
+    try std.testing.expectEqualDeep(Affine.translate(10, 0), sampled[0].transform.?);
+
+    const commands = [_]CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 10, 10),
+        .fill = .{ .color = Color.rgb8(255, 0, 0) },
+    } }};
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [1]DiffChange = undefined;
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(.{ .commands = &commands }, .{
+        .surface_size = geometry.SizeF.init(40, 20),
+        .render_overrides = sampled,
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
+    try expectRect(geometry.RectF.init(0, 0, 20, 10), frame.dirty_bounds);
+    try std.testing.expectEqual(@as(f32, 0.5), frame.render_plan.commands[0].opacity);
+    try std.testing.expectEqualDeep(Affine.translate(10, 0), frame.render_plan.commands[0].transform);
+
+    var empty_overrides: [0]CanvasRenderOverride = .{};
+    try std.testing.expectError(error.RenderOverrideListFull, sampleCanvasRenderAnimations(&animations, 500_001_000, &empty_overrides));
 }
 
 test "reference renderer clears and fills solid rect render pass" {

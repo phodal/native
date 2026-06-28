@@ -13,6 +13,7 @@ const toolbar_height: f32 = 54;
 const sidebar_width: f32 = 196;
 const canvas_width: f32 = 720;
 const statusbar_height: f32 = 34;
+const max_dashboard_pipelines: usize = 8;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_dashboard_overrides: usize = 2;
@@ -153,6 +154,8 @@ const GpuDashboardApp = struct {
     scratch: ?[]u8 = null,
     render_commands: [max_dashboard_commands]canvas.RenderCommand = undefined,
     render_batches: [max_dashboard_commands]canvas.RenderBatch = undefined,
+    pipeline_cache_entries: [max_dashboard_pipelines]canvas.RenderPipelineCacheEntry = undefined,
+    pipeline_cache_actions: [max_dashboard_pipelines * 2]canvas.RenderPipelineCacheAction = undefined,
     resources: [max_dashboard_commands]canvas.RenderResource = undefined,
     cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined,
     cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined,
@@ -226,8 +229,8 @@ const GpuDashboardApp = struct {
             var status_buffer: [192]u8 = undefined;
             const status = try std.fmt.bufPrint(
                 &status_buffer,
-                "Canvas frame planned: {d} commands, {d} batches, {d} resources.",
-                .{ frame_event.canvas_command_count, frame_event.canvas_frame_batch_count, frame_event.canvas_frame_resource_count },
+                "Canvas frame planned: {d} commands, {d} batches, {d} pipelines, {d} resources.",
+                .{ frame_event.canvas_command_count, frame_event.canvas_frame_batch_count, frame_event.canvas_frame_pipeline_count, frame_event.canvas_frame_resource_count },
             );
             try self.updateStatus(runtime, frame_event.window_id, status);
         }
@@ -340,6 +343,8 @@ const GpuDashboardApp = struct {
         return .{
             .render_commands = &self.render_commands,
             .render_batches = &self.render_batches,
+            .pipeline_cache_entries = &self.pipeline_cache_entries,
+            .pipeline_cache_actions = &self.pipeline_cache_actions,
             .resources = &self.resources,
             .resource_cache_entries = &self.cache_entries,
             .resource_cache_actions = &self.cache_actions,
@@ -479,6 +484,8 @@ fn dashboardFrame(display_list: canvas.DisplayList, previous: ?canvas.DisplayLis
 fn dashboardFrameStorage(
     render_commands: []canvas.RenderCommand,
     render_batches: []canvas.RenderBatch,
+    pipeline_cache_entries: []canvas.RenderPipelineCacheEntry,
+    pipeline_cache_actions: []canvas.RenderPipelineCacheAction,
     resources: []canvas.RenderResource,
     cache_entries: []canvas.RenderResourceCacheEntry,
     cache_actions: []canvas.RenderResourceCacheAction,
@@ -494,6 +501,8 @@ fn dashboardFrameStorage(
     return .{
         .render_commands = render_commands,
         .render_batches = render_batches,
+        .pipeline_cache_entries = pipeline_cache_entries,
+        .pipeline_cache_actions = pipeline_cache_actions,
         .resources = resources,
         .resource_cache_entries = cache_entries,
         .resource_cache_actions = cache_actions,
@@ -523,6 +532,10 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_requires_render = frame.canvas_frame_requires_render,
         .canvas_frame_full_repaint = frame.canvas_frame_full_repaint,
         .canvas_frame_batch_count = frame.canvas_frame_batch_count,
+        .canvas_frame_pipeline_count = frame.canvas_frame_pipeline_count,
+        .canvas_frame_pipeline_upload_count = frame.canvas_frame_pipeline_upload_count,
+        .canvas_frame_pipeline_retain_count = frame.canvas_frame_pipeline_retain_count,
+        .canvas_frame_pipeline_evict_count = frame.canvas_frame_pipeline_evict_count,
         .canvas_frame_resource_count = frame.canvas_frame_resource_count,
         .canvas_frame_resource_upload_count = frame.canvas_frame_resource_upload_count,
         .canvas_frame_resource_retain_count = frame.canvas_frame_resource_retain_count,
@@ -610,6 +623,8 @@ test "gpu dashboard display list renders through the reference surface" {
 
     var render_commands: [max_dashboard_commands]canvas.RenderCommand = undefined;
     var render_batches: [max_dashboard_commands]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_dashboard_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_dashboard_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
     var resources: [max_dashboard_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined;
@@ -624,10 +639,12 @@ test "gpu dashboard display list renders through the reference surface" {
     const frame = try dashboardFrame(display_list, null, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .full_repaint = true,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
+    try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
+    try std.testing.expect(frame.pipeline_cache_plan.uploadCount() >= 4);
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 10);
 
@@ -665,6 +682,8 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
 
     var render_commands: [max_dashboard_commands]canvas.RenderCommand = undefined;
     var render_batches: [max_dashboard_commands]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_dashboard_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_dashboard_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
     var resources: [max_dashboard_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined;
@@ -680,9 +699,10 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     const frame = try dashboardFrame(display_list, display_list, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .render_overrides = sampled,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
+    try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expect(frame.dirty_bounds != null);
 }
@@ -738,6 +758,8 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expect(frame.canvas_frame_requires_render);
     try std.testing.expect(!frame.canvas_frame_full_repaint);
     try std.testing.expect(frame.canvas_frame_batch_count >= 8);
+    try std.testing.expect(frame.canvas_frame_pipeline_count >= 4);
+    try std.testing.expect(frame.canvas_frame_pipeline_retain_count >= 4);
 }
 
 fn expectVisiblePixel(pixel: [4]u8) !void {

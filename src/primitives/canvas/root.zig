@@ -12,6 +12,7 @@ pub const Error = error{
     RenderBatchListFull,
     RenderListFull,
     RenderOverrideListFull,
+    RenderPipelineCacheListFull,
     RenderResourceCacheListFull,
     RenderResourceListFull,
     TextLayoutCacheListFull,
@@ -694,6 +695,62 @@ pub const RenderBatchPlan = struct {
     pub fn batchCount(self: RenderBatchPlan) usize {
         return self.batches.len;
     }
+
+    pub fn cachePlan(self: RenderBatchPlan, previous: []const RenderPipelineCacheEntry, frame_index: u64, entries: []RenderPipelineCacheEntry, actions: []RenderPipelineCacheAction) Error!RenderPipelineCachePlan {
+        var planner = RenderPipelineCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+};
+
+pub const RenderPipelineCacheEntry = struct {
+    pipeline: RenderPipelineKind,
+    last_used_frame: u64 = 0,
+};
+
+pub const RenderPipelineCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const RenderPipelineCacheAction = struct {
+    kind: RenderPipelineCacheActionKind,
+    pipeline: RenderPipelineKind,
+    batch_index: ?usize = null,
+    cache_index: ?usize = null,
+};
+
+pub const RenderPipelineCachePlan = struct {
+    entries: []const RenderPipelineCacheEntry = &.{},
+    actions: []const RenderPipelineCacheAction = &.{},
+
+    pub fn entryCount(self: RenderPipelineCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: RenderPipelineCachePlan) usize {
+        return self.actions.len;
+    }
+
+    pub fn uploadCount(self: RenderPipelineCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: RenderPipelineCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: RenderPipelineCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: RenderPipelineCachePlan, kind: RenderPipelineCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
+    }
 };
 
 pub const RenderResourceKind = enum {
@@ -797,6 +854,7 @@ pub const CanvasFrameOptions = struct {
     scale: f32 = 1,
     full_repaint: bool = false,
     budget: CanvasFrameBudget = .{},
+    previous_pipeline_cache: []const RenderPipelineCacheEntry = &.{},
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
     previous_glyph_atlas_cache: []const GlyphAtlasCacheEntry = &.{},
     previous_text_layout_cache: []const TextLayoutCacheEntry = &.{},
@@ -808,6 +866,8 @@ pub const CanvasFrameOptions = struct {
 pub const CanvasFrameStorage = struct {
     render_commands: []RenderCommand,
     render_batches: []RenderBatch,
+    pipeline_cache_entries: []RenderPipelineCacheEntry = &.{},
+    pipeline_cache_actions: []RenderPipelineCacheAction = &.{},
     resources: []RenderResource,
     resource_cache_entries: []RenderResourceCacheEntry,
     resource_cache_actions: []RenderResourceCacheAction,
@@ -824,6 +884,8 @@ pub const CanvasFrameStorage = struct {
 pub const CanvasFrameBudget = struct {
     max_commands: usize = 0,
     max_batches: usize = 0,
+    max_pipelines: usize = 0,
+    max_pipeline_uploads: usize = 0,
     max_resources: usize = 0,
     max_resource_uploads: usize = 0,
     max_glyph_atlas_entries: usize = 0,
@@ -835,6 +897,8 @@ pub const CanvasFrameBudget = struct {
         return .{
             .commands_over = budgetExceeded(self.max_commands, diagnostics.command_count),
             .batches_over = budgetExceeded(self.max_batches, diagnostics.batch_count),
+            .pipelines_over = budgetExceeded(self.max_pipelines, diagnostics.pipeline_count),
+            .pipeline_uploads_over = budgetExceeded(self.max_pipeline_uploads, diagnostics.pipeline_upload_count),
             .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
             .resource_uploads_over = budgetExceeded(self.max_resource_uploads, diagnostics.resource_upload_count),
             .glyph_atlas_entries_over = budgetExceeded(self.max_glyph_atlas_entries, diagnostics.glyph_atlas_entry_count),
@@ -848,6 +912,8 @@ pub const CanvasFrameBudget = struct {
 pub const CanvasFrameBudgetStatus = struct {
     commands_over: bool = false,
     batches_over: bool = false,
+    pipelines_over: bool = false,
+    pipeline_uploads_over: bool = false,
     resources_over: bool = false,
     resource_uploads_over: bool = false,
     glyph_atlas_entries_over: bool = false,
@@ -863,6 +929,8 @@ pub const CanvasFrameBudgetStatus = struct {
         var count: usize = 0;
         if (self.commands_over) count += 1;
         if (self.batches_over) count += 1;
+        if (self.pipelines_over) count += 1;
+        if (self.pipeline_uploads_over) count += 1;
         if (self.resources_over) count += 1;
         if (self.resource_uploads_over) count += 1;
         if (self.glyph_atlas_entries_over) count += 1;
@@ -877,6 +945,10 @@ pub const CanvasFrameDiagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
     batch_count: usize = 0,
+    pipeline_count: usize = 0,
+    pipeline_upload_count: usize = 0,
+    pipeline_retain_count: usize = 0,
+    pipeline_evict_count: usize = 0,
     resource_count: usize = 0,
     resource_upload_count: usize = 0,
     resource_retain_count: usize = 0,
@@ -903,11 +975,15 @@ pub const CanvasFrameDiagnostics = struct {
 
     pub fn writeJson(self: CanvasFrameDiagnostics, writer: anytype) !void {
         try writer.print(
-            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"pipelineCount\":{d},\"pipelineUploadCount\":{d},\"pipelineRetainCount\":{d},\"pipelineEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
                 self.frame_index,
                 self.command_count,
                 self.batch_count,
+                self.pipeline_count,
+                self.pipeline_upload_count,
+                self.pipeline_retain_count,
+                self.pipeline_evict_count,
                 self.resource_count,
                 self.resource_upload_count,
                 self.resource_retain_count,
@@ -960,6 +1036,7 @@ pub const CanvasRenderPass = struct {
     dirty_bounds: ?geometry.RectF = null,
     commands: []const RenderCommand = &.{},
     batches: []const RenderBatch = &.{},
+    pipeline_actions: []const RenderPipelineCacheAction = &.{},
     resources: []const RenderResource = &.{},
     resource_actions: []const RenderResourceCacheAction = &.{},
     glyph_atlas_entries: []const GlyphAtlasEntry = &.{},
@@ -986,6 +1063,10 @@ pub const CanvasRenderPass = struct {
 
     pub fn batchCount(self: CanvasRenderPass) usize {
         return self.batches.len;
+    }
+
+    pub fn pipelineActionCount(self: CanvasRenderPass) usize {
+        return self.pipeline_actions.len;
     }
 
     pub fn resourceCount(self: CanvasRenderPass) usize {
@@ -1032,6 +1113,7 @@ pub const CanvasFrame = struct {
     display_list: DisplayList = .{},
     render_plan: RenderPlan = .{},
     batch_plan: RenderBatchPlan = .{},
+    pipeline_cache_plan: RenderPipelineCachePlan = .{},
     resource_plan: RenderResourcePlan = .{},
     resource_cache_plan: RenderResourceCachePlan = .{},
     glyph_atlas_plan: GlyphAtlasPlan = .{},
@@ -1061,6 +1143,10 @@ pub const CanvasFrame = struct {
             .frame_index = self.frame_index,
             .command_count = self.render_plan.commandCount(),
             .batch_count = self.batch_plan.batchCount(),
+            .pipeline_count = self.pipeline_cache_plan.entryCount(),
+            .pipeline_upload_count = self.pipeline_cache_plan.uploadCount(),
+            .pipeline_retain_count = self.pipeline_cache_plan.retainCount(),
+            .pipeline_evict_count = self.pipeline_cache_plan.evictCount(),
             .resource_count = self.resource_plan.resourceCount(),
             .resource_upload_count = self.resource_cache_plan.uploadCount(),
             .resource_retain_count = self.resource_cache_plan.retainCount(),
@@ -1096,6 +1182,7 @@ pub const CanvasFrame = struct {
             .dirty_bounds = self.dirty_bounds,
             .commands = self.render_plan.commands,
             .batches = self.batch_plan.batches,
+            .pipeline_actions = self.pipeline_cache_plan.actions,
             .resources = self.resource_plan.resources,
             .resource_actions = self.resource_cache_plan.actions,
             .glyph_atlas_entries = self.glyph_atlas_plan.entries,
@@ -2425,6 +2512,15 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
     const render_override_dirty_bounds = renderOverrideDirtyBounds(render_plan.commands, options.previous_render_overrides, options.render_overrides);
     render_plan.bounds = applyRenderOverrides(storage.render_commands[0..render_plan.commandCount()], options.render_overrides);
     const batch_plan = try render_plan.batchPlan(storage.render_batches);
+    const pipeline_cache_plan = if (storage.pipeline_cache_entries.len == 0 and storage.pipeline_cache_actions.len == 0)
+        RenderPipelineCachePlan{}
+    else
+        try batch_plan.cachePlan(
+            options.previous_pipeline_cache,
+            options.frame_index,
+            storage.pipeline_cache_entries,
+            storage.pipeline_cache_actions,
+        );
     const resource_plan = try next.resourcePlan(storage.resources);
     const resource_cache_plan = try resource_plan.cachePlan(
         options.previous_resource_cache,
@@ -2470,6 +2566,7 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .display_list = next,
         .render_plan = render_plan,
         .batch_plan = batch_plan,
+        .pipeline_cache_plan = pipeline_cache_plan,
         .resource_plan = resource_plan,
         .resource_cache_plan = resource_cache_plan,
         .glyph_atlas_plan = glyph_atlas_plan,
@@ -2674,6 +2771,74 @@ pub const RenderBatchPlanner = struct {
         self.len += 1;
     }
 };
+
+pub const RenderPipelineCachePlanner = struct {
+    entries: []RenderPipelineCacheEntry,
+    actions: []RenderPipelineCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []RenderPipelineCacheEntry, actions: []RenderPipelineCacheAction) RenderPipelineCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *RenderPipelineCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *RenderPipelineCachePlanner, batch_plan: RenderBatchPlan, previous: []const RenderPipelineCacheEntry, frame_index: u64) Error!RenderPipelineCachePlan {
+        self.reset();
+        for (batch_plan.batches, 0..) |batch, batch_index| {
+            if (findRenderPipelineCacheEntry(self.entries[0..self.entry_len], batch.pipeline) != null) continue;
+
+            const previous_index = findRenderPipelineCacheEntry(previous, batch.pipeline);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .pipeline = batch.pipeline,
+                .batch_index = batch_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .pipeline = batch.pipeline,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findRenderPipelineCacheEntry(self.entries[0..self.entry_len], entry.pipeline) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .pipeline = entry.pipeline,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *RenderPipelineCachePlanner, entry: RenderPipelineCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.RenderPipelineCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *RenderPipelineCachePlanner, action: RenderPipelineCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.RenderPipelineCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
+    }
+};
+
+fn findRenderPipelineCacheEntry(entries: []const RenderPipelineCacheEntry, pipeline: RenderPipelineKind) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (entry.pipeline == pipeline) return index;
+    }
+    return null;
+}
 
 pub const RenderResourcePlanner = struct {
     resources: []RenderResource,
@@ -6783,6 +6948,11 @@ fn writeCanvasRenderPassJson(pass: CanvasRenderPass, writer: anytype) !void {
         if (index > 0) try writer.writeByte(',');
         try writeRenderBatchJson(batch, writer);
     }
+    try writer.writeAll("],\"pipelineActions\":[");
+    for (pass.pipeline_actions, 0..) |action, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderPipelineCacheActionJson(action, writer);
+    }
     try writer.writeAll("],\"resources\":[");
     for (pass.resources, 0..) |resource, index| {
         if (index > 0) try writer.writeByte(',');
@@ -6839,6 +7009,18 @@ fn writeRenderBatchJson(batch: RenderBatch, writer: anytype) !void {
     try writeOptionalRectJson(batch.clip, writer);
     try writer.writeAll(",\"bounds\":");
     try writeRectJson(batch.bounds, writer);
+    try writer.writeByte('}');
+}
+
+fn writeRenderPipelineCacheActionJson(action: RenderPipelineCacheAction, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(action.kind));
+    try writer.writeAll(",\"pipeline\":");
+    try json.writeString(writer, @tagName(action.pipeline));
+    try writer.writeAll(",\"batchIndex\":");
+    try writeOptionalUsizeJson(action.batch_index, writer);
+    try writer.writeAll(",\"cacheIndex\":");
+    try writeOptionalUsizeJson(action.cache_index, writer);
     try writer.writeByte('}');
 }
 
@@ -9664,6 +9846,57 @@ test "render batch plan respects clip opacity and output limits" {
     try std.testing.expectError(error.RenderBatchListFull, render_plan.batchPlan(&empty_batches));
 }
 
+test "render pipeline cache plan uploads retains and evicts pipelines" {
+    const first_batches = [_]RenderBatch{
+        .{ .pipeline = .solid, .command_start = 0, .command_count = 1 },
+        .{ .pipeline = .linear_gradient, .command_start = 1, .command_count = 1 },
+        .{ .pipeline = .solid, .command_start = 2, .command_count = 1 },
+    };
+    var first_entries: [2]RenderPipelineCacheEntry = undefined;
+    var first_actions: [2]RenderPipelineCacheAction = undefined;
+    const first_cache = try (RenderBatchPlan{ .batches = &first_batches }).cachePlan(&.{}, 1, &first_entries, &first_actions);
+
+    try std.testing.expectEqual(@as(usize, 2), first_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), first_cache.actionCount());
+    try std.testing.expectEqual(@as(usize, 2), first_cache.uploadCount());
+    try std.testing.expectEqual(RenderPipelineKind.solid, first_cache.entries[0].pipeline);
+    try std.testing.expectEqual(RenderPipelineKind.linear_gradient, first_cache.entries[1].pipeline);
+    try std.testing.expectEqual(@as(u64, 1), first_cache.entries[0].last_used_frame);
+
+    const second_batches = [_]RenderBatch{
+        .{ .pipeline = .linear_gradient, .command_start = 0, .command_count = 1 },
+        .{ .pipeline = .glyph_run, .command_start = 1, .command_count = 1 },
+    };
+    var second_entries: [2]RenderPipelineCacheEntry = undefined;
+    var second_actions: [3]RenderPipelineCacheAction = undefined;
+    const second_cache = try (RenderBatchPlan{ .batches = &second_batches }).cachePlan(first_cache.entries, 2, &second_entries, &second_actions);
+
+    try std.testing.expectEqual(@as(usize, 2), second_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 3), second_cache.actionCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.evictCount());
+    try std.testing.expectEqual(RenderPipelineCacheActionKind.retain, second_cache.actions[0].kind);
+    try std.testing.expectEqual(RenderPipelineKind.linear_gradient, second_cache.actions[0].pipeline);
+    try std.testing.expectEqual(@as(usize, 0), second_cache.actions[0].batch_index.?);
+    try std.testing.expectEqual(@as(usize, 1), second_cache.actions[0].cache_index.?);
+    try std.testing.expectEqual(RenderPipelineCacheActionKind.upload, second_cache.actions[1].kind);
+    try std.testing.expectEqual(RenderPipelineKind.glyph_run, second_cache.actions[1].pipeline);
+    try std.testing.expectEqual(RenderPipelineCacheActionKind.evict, second_cache.actions[2].kind);
+    try std.testing.expectEqual(RenderPipelineKind.solid, second_cache.actions[2].pipeline);
+}
+
+test "render pipeline cache plan reports output overflow" {
+    const batches = [_]RenderBatch{.{ .pipeline = .solid, .command_start = 0, .command_count = 1 }};
+    var no_entries: [0]RenderPipelineCacheEntry = .{};
+    var actions: [1]RenderPipelineCacheAction = undefined;
+    try std.testing.expectError(error.RenderPipelineCacheListFull, (RenderBatchPlan{ .batches = &batches }).cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]RenderPipelineCacheEntry = undefined;
+    var no_actions: [0]RenderPipelineCacheAction = .{};
+    try std.testing.expectError(error.RenderPipelineCacheListFull, (RenderBatchPlan{ .batches = &batches }).cachePlan(&.{}, 1, &entries, &no_actions));
+}
+
 test "resource plan collects renderer cache inputs" {
     const stops = [_]GradientStop{
         .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
@@ -10052,6 +10285,8 @@ test "canvas frame plan builds first frame renderer packet" {
 
     var render_commands: [2]RenderCommand = undefined;
     var render_batches: [2]RenderBatch = undefined;
+    var pipeline_cache_entries: [2]RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [2]RenderPipelineCacheAction = undefined;
     var resources: [2]RenderResource = undefined;
     var resource_cache_entries: [2]RenderResourceCacheEntry = undefined;
     var resource_cache_actions: [2]RenderResourceCacheAction = undefined;
@@ -10071,6 +10306,8 @@ test "canvas frame plan builds first frame renderer packet" {
         .budget = .{
             .max_commands = 1,
             .max_batches = 2,
+            .max_pipelines = 2,
+            .max_pipeline_uploads = 1,
             .max_resources = 2,
             .max_resource_uploads = 1,
             .max_glyph_atlas_entries = 2,
@@ -10078,6 +10315,8 @@ test "canvas frame plan builds first frame renderer packet" {
     }, .{
         .render_commands = &render_commands,
         .render_batches = &render_batches,
+        .pipeline_cache_entries = &pipeline_cache_entries,
+        .pipeline_cache_actions = &pipeline_cache_actions,
         .resources = &resources,
         .resource_cache_entries = &resource_cache_entries,
         .resource_cache_actions = &resource_cache_actions,
@@ -10101,6 +10340,12 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), frame.batch_plan.batchCount());
     try std.testing.expectEqual(RenderPipelineKind.linear_gradient, frame.batch_plan.batches[0].pipeline);
     try std.testing.expectEqual(RenderPipelineKind.glyph_run, frame.batch_plan.batches[1].pipeline);
+    try std.testing.expectEqual(@as(usize, 2), frame.pipeline_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.pipeline_cache_plan.actionCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.pipeline_cache_plan.uploadCount());
+    try std.testing.expectEqual(RenderPipelineCacheActionKind.upload, frame.pipeline_cache_plan.actions[0].kind);
+    try std.testing.expectEqual(RenderPipelineKind.linear_gradient, frame.pipeline_cache_plan.actions[0].pipeline);
+    try std.testing.expectEqual(RenderPipelineKind.glyph_run, frame.pipeline_cache_plan.actions[1].pipeline);
     try std.testing.expectEqual(@as(usize, 2), frame.resource_plan.resourceCount());
     try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.actionCount());
@@ -10126,6 +10371,7 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(f32, 2), render_pass.scale);
     try std.testing.expectEqual(@as(usize, 2), render_pass.commandCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.batchCount());
+    try std.testing.expectEqual(@as(usize, 2), render_pass.pipelineActionCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.resourceCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.resourceActionCount());
     try std.testing.expectEqual(@as(usize, 2), render_pass.glyphAtlasEntryCount());
@@ -10133,6 +10379,7 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutCount());
     try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutLineCount());
     try std.testing.expectEqual(@as(usize, 1), render_pass.textLayoutActionCount());
+    try std.testing.expectEqual(RenderPipelineCacheActionKind.upload, render_pass.pipeline_actions[0].kind);
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, render_pass.resource_actions[0].kind);
     try std.testing.expectEqual(GlyphAtlasCacheActionKind.upload, render_pass.glyph_atlas_actions[0].kind);
     try std.testing.expectEqual(TextLayoutCacheActionKind.upload, render_pass.text_layout_actions[0].kind);
@@ -10146,6 +10393,7 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"scissorBounds\":[0,0,320,200]") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"commands\":[{\"index\":0,\"id\":1,\"opacity\":1,\"clip\":null,\"transform\":[1,0,0,1,0,0],\"localBounds\":[16,16,160,72],\"bounds\":[16,16,160,72],\"command\":{\"op\":\"fill_rounded_rect\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"batches\":[{\"pipeline\":\"linear_gradient\",\"commandStart\":0,\"commandCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"pipelineActions\":[{\"kind\":\"upload\",\"pipeline\":\"linear_gradient\",\"batchIndex\":0,\"cacheIndex\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resources\":[{\"kind\":\"linear_gradient\",\"commandIndex\":0,\"id\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resourceActions\":[{\"kind\":\"upload\",\"key\":{\"kind\":\"linear_gradient\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"glyphAtlasEntries\":[{\"key\":{\"fontId\":5,\"glyphId\":79") != null);
@@ -10157,6 +10405,10 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(u64, 7), diagnostics.frame_index);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.command_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.batch_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.pipeline_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.pipeline_upload_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.pipeline_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.pipeline_evict_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.resource_count);
     try std.testing.expectEqual(@as(usize, 2), diagnostics.resource_upload_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.resource_retain_count);
@@ -10177,28 +10429,30 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(!diagnostics.budgetOk());
     try std.testing.expect(diagnostics.budget_status.commands_over);
     try std.testing.expect(!diagnostics.budget_status.batches_over);
+    try std.testing.expect(!diagnostics.budget_status.pipelines_over);
+    try std.testing.expect(diagnostics.budget_status.pipeline_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.resources_over);
     try std.testing.expect(diagnostics.budget_status.resource_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.glyph_atlas_entries_over);
     try std.testing.expect(!diagnostics.budget_status.text_layouts_over);
     try std.testing.expect(!diagnostics.budget_status.text_layout_lines_over);
     try std.testing.expect(!diagnostics.budget_status.changes_over);
-    try std.testing.expectEqual(@as(usize, 2), diagnostics.budget_status.exceededCount());
-    try std.testing.expectEqual(@as(usize, 2), frame.budgetStatus().exceededCount());
+    try std.testing.expectEqual(@as(usize, 3), diagnostics.budget_status.exceededCount());
+    try std.testing.expectEqual(@as(usize, 3), frame.budgetStatus().exceededCount());
 
-    var diagnostics_json_buffer: [768]u8 = undefined;
+    var diagnostics_json_buffer: [1024]u8 = undefined;
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":2,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":3,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
-    var clean_json_buffer: [768]u8 = undefined;
+    var clean_json_buffer: [1024]u8 = undefined;
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }

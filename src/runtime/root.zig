@@ -20,6 +20,8 @@ pub const max_canvas_path_elements_per_view: usize = 128;
 pub const max_canvas_glyphs_per_view: usize = 256;
 pub const max_canvas_text_bytes_per_view: usize = 2048;
 const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
+const max_canvas_pipelines_per_view: usize = 8;
+const max_canvas_pipeline_cache_actions_per_view: usize = max_canvas_pipelines_per_view * 2;
 const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
 const max_canvas_text_layouts_per_view: usize = 16;
@@ -227,6 +229,8 @@ pub const Runtime = struct {
     widget_event_route_entries: [canvas.max_widget_depth * 2]canvas.WidgetEventRouteEntry = undefined,
     canvas_frame_render_commands: [max_canvas_commands_per_view]canvas.RenderCommand = undefined,
     canvas_frame_render_batches: [max_canvas_commands_per_view]canvas.RenderBatch = undefined,
+    canvas_frame_pipeline_cache_entries: [max_canvas_pipelines_per_view]canvas.RenderPipelineCacheEntry = undefined,
+    canvas_frame_pipeline_cache_actions: [max_canvas_pipeline_cache_actions_per_view]canvas.RenderPipelineCacheAction = undefined,
     canvas_frame_resources: [max_canvas_resources_per_view]canvas.RenderResource = undefined,
     canvas_frame_resource_cache_entries: [max_canvas_resources_per_view]canvas.RenderResourceCacheEntry = undefined,
     canvas_frame_resource_cache_actions: [max_canvas_resource_cache_actions_per_view]canvas.RenderResourceCacheAction = undefined,
@@ -685,6 +689,7 @@ pub const Runtime = struct {
             frame_options.budget = self.views[index].canvas_frame_budget;
         }
         frame_options.previous_resource_cache = self.views[index].canvasFrameResourceCache();
+        frame_options.previous_pipeline_cache = self.views[index].canvasFramePipelineCache();
         frame_options.previous_glyph_atlas_cache = self.views[index].canvasFrameGlyphAtlasCache();
         frame_options.previous_text_layout_cache = self.views[index].canvasFrameTextLayoutCache();
 
@@ -693,6 +698,15 @@ pub const Runtime = struct {
         const render_override_dirty_bounds = canvas.renderOverrideDirtyBounds(render_plan.commands, frame_options.previous_render_overrides, frame_options.render_overrides);
         render_plan.bounds = canvas.applyRenderOverrides(storage.render_commands[0..render_plan.commandCount()], frame_options.render_overrides);
         const batch_plan = try render_plan.batchPlan(storage.render_batches);
+        const pipeline_cache_plan = if (storage.pipeline_cache_entries.len == 0 and storage.pipeline_cache_actions.len == 0)
+            canvas.RenderPipelineCachePlan{}
+        else
+            try batch_plan.cachePlan(
+                frame_options.previous_pipeline_cache,
+                frame_options.frame_index,
+                storage.pipeline_cache_entries,
+                storage.pipeline_cache_actions,
+            );
         const resource_plan = try display_list.resourcePlan(storage.resources);
         const resource_cache_plan = try resource_plan.cachePlan(
             frame_options.previous_resource_cache,
@@ -740,6 +754,7 @@ pub const Runtime = struct {
             .display_list = display_list,
             .render_plan = render_plan,
             .batch_plan = batch_plan,
+            .pipeline_cache_plan = pipeline_cache_plan,
             .resource_plan = resource_plan,
             .resource_cache_plan = resource_cache_plan,
             .glyph_atlas_plan = glyph_atlas_plan,
@@ -750,6 +765,7 @@ pub const Runtime = struct {
             .dirty_bounds = dirty_bounds,
             .budget = frame_options.budget,
         };
+        try self.views[index].copyCanvasFramePipelineCache(canvas_frame.pipeline_cache_plan.entries);
         try self.views[index].copyCanvasFrameResourceCache(canvas_frame.resource_cache_plan.entries);
         try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
         try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
@@ -762,6 +778,8 @@ pub const Runtime = struct {
         return .{
             .render_commands = &self.canvas_frame_render_commands,
             .render_batches = &self.canvas_frame_render_batches,
+            .pipeline_cache_entries = &self.canvas_frame_pipeline_cache_entries,
+            .pipeline_cache_actions = &self.canvas_frame_pipeline_cache_actions,
             .resources = &self.canvas_frame_resources,
             .resource_cache_entries = &self.canvas_frame_resource_cache_entries,
             .resource_cache_actions = &self.canvas_frame_resource_cache_actions,
@@ -1471,6 +1489,10 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_requires_render = self.views[index].canvas_frame_requires_render;
                     enriched_frame_event.canvas_frame_full_repaint = self.views[index].canvas_frame_full_repaint;
                     enriched_frame_event.canvas_frame_batch_count = self.views[index].canvas_frame_batch_count;
+                    enriched_frame_event.canvas_frame_pipeline_count = self.views[index].canvas_frame_pipeline_count;
+                    enriched_frame_event.canvas_frame_pipeline_upload_count = self.views[index].canvas_frame_pipeline_upload_count;
+                    enriched_frame_event.canvas_frame_pipeline_retain_count = self.views[index].canvas_frame_pipeline_retain_count;
+                    enriched_frame_event.canvas_frame_pipeline_evict_count = self.views[index].canvas_frame_pipeline_evict_count;
                     enriched_frame_event.canvas_frame_resource_count = self.views[index].canvas_frame_resource_count;
                     enriched_frame_event.canvas_frame_resource_upload_count = self.views[index].canvas_frame_resource_upload_count;
                     enriched_frame_event.canvas_frame_resource_retain_count = self.views[index].canvas_frame_resource_retain_count;
@@ -4018,9 +4040,15 @@ const RuntimeView = struct {
     canvas_frame_glyph_atlas_cache_count: usize = 0,
     canvas_frame_text_layout_cache: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined,
     canvas_frame_text_layout_cache_count: usize = 0,
+    canvas_frame_pipeline_cache: [max_canvas_pipelines_per_view]canvas.RenderPipelineCacheEntry = undefined,
+    canvas_frame_pipeline_cache_count: usize = 0,
     canvas_frame_requires_render: bool = false,
     canvas_frame_full_repaint: bool = false,
     canvas_frame_batch_count: usize = 0,
+    canvas_frame_pipeline_count: usize = 0,
+    canvas_frame_pipeline_upload_count: usize = 0,
+    canvas_frame_pipeline_retain_count: usize = 0,
+    canvas_frame_pipeline_evict_count: usize = 0,
     canvas_frame_resource_count: usize = 0,
     canvas_frame_resource_upload_count: usize = 0,
     canvas_frame_resource_retain_count: usize = 0,
@@ -4090,6 +4118,10 @@ const RuntimeView = struct {
             .canvas_frame_requires_render = self.canvas_frame_requires_render,
             .canvas_frame_full_repaint = self.canvas_frame_full_repaint,
             .canvas_frame_batch_count = self.canvas_frame_batch_count,
+            .canvas_frame_pipeline_count = self.canvas_frame_pipeline_count,
+            .canvas_frame_pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
+            .canvas_frame_pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
+            .canvas_frame_pipeline_evict_count = self.canvas_frame_pipeline_evict_count,
             .canvas_frame_resource_count = self.canvas_frame_resource_count,
             .canvas_frame_resource_upload_count = self.canvas_frame_resource_upload_count,
             .canvas_frame_resource_retain_count = self.canvas_frame_resource_retain_count,
@@ -4141,6 +4173,10 @@ const RuntimeView = struct {
         return self.canvas_frame_resource_cache[0..self.canvas_frame_resource_cache_count];
     }
 
+    fn canvasFramePipelineCache(self: *const RuntimeView) []const canvas.RenderPipelineCacheEntry {
+        return self.canvas_frame_pipeline_cache[0..self.canvas_frame_pipeline_cache_count];
+    }
+
     fn canvasFrameGlyphAtlasCache(self: *const RuntimeView) []const canvas.GlyphAtlasCacheEntry {
         return self.canvas_frame_glyph_atlas_cache[0..self.canvas_frame_glyph_atlas_cache_count];
     }
@@ -4183,6 +4219,12 @@ const RuntimeView = struct {
         self.canvas_frame_resource_cache_count = entries.len;
     }
 
+    fn copyCanvasFramePipelineCache(self: *RuntimeView, entries: []const canvas.RenderPipelineCacheEntry) anyerror!void {
+        if (entries.len > self.canvas_frame_pipeline_cache.len) return error.RenderPipelineCacheListFull;
+        @memcpy(self.canvas_frame_pipeline_cache[0..entries.len], entries);
+        self.canvas_frame_pipeline_cache_count = entries.len;
+    }
+
     fn copyCanvasFrameGlyphAtlasCache(self: *RuntimeView, entries: []const canvas.GlyphAtlasCacheEntry) anyerror!void {
         if (entries.len > self.canvas_frame_glyph_atlas_cache.len) return error.GlyphAtlasListFull;
         @memcpy(self.canvas_frame_glyph_atlas_cache[0..entries.len], entries);
@@ -4199,6 +4241,10 @@ const RuntimeView = struct {
         self.canvas_frame_requires_render = frame.requiresRender();
         self.canvas_frame_full_repaint = frame.full_repaint;
         self.canvas_frame_batch_count = frame.batch_plan.batchCount();
+        self.canvas_frame_pipeline_count = frame.pipeline_cache_plan.entryCount();
+        self.canvas_frame_pipeline_upload_count = frame.pipeline_cache_plan.uploadCount();
+        self.canvas_frame_pipeline_retain_count = frame.pipeline_cache_plan.retainCount();
+        self.canvas_frame_pipeline_evict_count = frame.pipeline_cache_plan.evictCount();
         self.canvas_frame_resource_count = frame.resource_plan.resourceCount();
         self.canvas_frame_resource_upload_count = frame.resource_cache_plan.uploadCount();
         self.canvas_frame_resource_retain_count = frame.resource_cache_plan.retainCount();
@@ -4222,6 +4268,10 @@ const RuntimeView = struct {
         self.canvas_frame_budget_status = self.canvas_frame_budget.status(.{
             .command_count = self.canvas_command_count,
             .batch_count = self.canvas_frame_batch_count,
+            .pipeline_count = self.canvas_frame_pipeline_count,
+            .pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
+            .pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
+            .pipeline_evict_count = self.canvas_frame_pipeline_evict_count,
             .resource_count = self.canvas_frame_resource_count,
             .resource_upload_count = self.canvas_frame_resource_upload_count,
             .resource_retain_count = self.canvas_frame_resource_retain_count,
@@ -4827,6 +4877,8 @@ fn canvasDirtyBoundsFromChanges(changes: []const canvas.DiffChange) ?geometry.Re
 fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
     return budget.max_commands == 0 and
         budget.max_batches == 0 and
+        budget.max_pipelines == 0 and
+        budget.max_pipeline_uploads == 0 and
         budget.max_resources == 0 and
         budget.max_resource_uploads == 0 and
         budget.max_glyph_atlas_entries == 0 and
@@ -5488,7 +5540,7 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
     try json.writeString(writer, view.command);
     try writer.writeAll(",\"url\":");
     try json.writeString(writer, view.url);
-    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuWidth\":{d},\"gpuHeight\":{d},\"gpuScale\":{d},\"gpuFrame\":{d},\"gpuTimestampNs\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"canvasFrameRequiresRender\":{},\"canvasFrameFullRepaint\":{},\"canvasFrameBatchCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
+    try writer.print(",\"x\":{d},\"y\":{d},\"width\":{d},\"height\":{d},\"layer\":{d},\"visible\":{},\"enabled\":{},\"transparent\":{},\"bridge\":{},\"gpuWidth\":{d},\"gpuHeight\":{d},\"gpuScale\":{d},\"gpuFrame\":{d},\"gpuTimestampNs\":{d},\"gpuNonblank\":{},\"gpuSampleColor\":{d},\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"canvasFrameRequiresRender\":{},\"canvasFrameFullRepaint\":{},\"canvasFrameBatchCount\":{d}", .{
         view.frame.x,
         view.frame.y,
         view.frame.width,
@@ -5510,6 +5562,12 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_requires_render,
         view.canvas_frame_full_repaint,
         view.canvas_frame_batch_count,
+    });
+    try writer.print(",\"canvasFramePipelineCount\":{d},\"canvasFramePipelineUploadCount\":{d},\"canvasFramePipelineRetainCount\":{d},\"canvasFramePipelineEvictCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
+        view.canvas_frame_pipeline_count,
+        view.canvas_frame_pipeline_upload_count,
+        view.canvas_frame_pipeline_retain_count,
+        view.canvas_frame_pipeline_evict_count,
         view.canvas_frame_resource_count,
         view.canvas_frame_resource_upload_count,
         view.canvas_frame_resource_retain_count,

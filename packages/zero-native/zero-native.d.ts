@@ -192,6 +192,10 @@ export interface ZeroNativeViewInfo {
   canvasFrameRequiresRender: boolean;
   canvasFrameFullRepaint: boolean;
   canvasFrameBatchCount: number;
+  canvasFramePipelineCount: number;
+  canvasFramePipelineUploadCount: number;
+  canvasFramePipelineRetainCount: number;
+  canvasFramePipelineEvictCount: number;
   canvasFrameResourceCount: number;
   canvasFrameResourceUploadCount: number;
   canvasFrameResourceRetainCount: number;

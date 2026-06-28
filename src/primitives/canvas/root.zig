@@ -964,6 +964,10 @@ pub const WidgetState = struct {
     selected: bool = false,
 };
 
+pub const WidgetRenderState = struct {
+    focused_id: ?ObjectId = null,
+};
+
 pub const WidgetLayoutStyle = struct {
     padding: geometry.InsetsF = .{},
     gap: f32 = 0,
@@ -1191,6 +1195,10 @@ pub const WidgetLayoutTree = struct {
 
     pub fn emitDisplayList(self: WidgetLayoutTree, builder: *Builder, tokens: DesignTokens) Error!void {
         return emitWidgetLayout(builder, self, tokens);
+    }
+
+    pub fn emitDisplayListWithState(self: WidgetLayoutTree, builder: *Builder, tokens: DesignTokens, state: WidgetRenderState) Error!void {
+        return emitWidgetLayoutWithState(builder, self, tokens, state);
     }
 
     pub fn diff(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
@@ -1436,11 +1444,15 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
 }
 
 pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens) Error!void {
+    return emitWidgetLayoutWithState(builder, layout, tokens, .{});
+}
+
+fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens, state: WidgetRenderState) Error!void {
     var clip_stack_depths: [max_widget_depth]usize = undefined;
     var clip_stack_len: usize = 0;
 
     for (layout.nodes) |node| {
-        const widget = widgetWithFrame(node.widget, node.frame);
+        const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
         while (clip_stack_len > 0 and node.depth <= clip_stack_depths[clip_stack_len - 1]) {
             try builder.popClip();
             clip_stack_len -= 1;
@@ -3213,6 +3225,14 @@ fn isHitTarget(widget: Widget) bool {
 fn widgetWithFrame(widget: Widget, frame: geometry.RectF) Widget {
     var copy = widget;
     copy.frame = frame;
+    return copy;
+}
+
+fn widgetWithRenderState(widget: Widget, state: WidgetRenderState) Widget {
+    var copy = widget;
+    if (state.focused_id) |focused_id| {
+        copy.state.focused = copy.id != 0 and copy.id == focused_id;
+    }
     return copy;
 }
 
@@ -5648,6 +5668,48 @@ test "widget emitter applies button state tokens" {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "widget layout emission can render runtime focus state" {
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3) },
+        .stroke = .{ .focus = 3 },
+    };
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 0, 100, 32),
+            .text = "Run",
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 40, 100, 32),
+            .text = "Stop",
+            .state = .{ .focused = true },
+        },
+    };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 140, 100), &nodes);
+
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayListWithState(&builder, tokens, .{ .focused_id = 2 });
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    var saw_runtime_focus = false;
+    var saw_stale_focus = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == widgetPartId(2, 3)) saw_runtime_focus = true;
+            if (id == widgetPartId(3, 3)) saw_stale_focus = true;
+        }
+    }
+    try std.testing.expect(saw_runtime_focus);
+    try std.testing.expect(!saw_stale_focus);
 }
 
 test "widget emitter renders checkbox toggle and slider controls" {

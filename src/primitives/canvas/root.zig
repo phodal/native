@@ -478,6 +478,12 @@ pub const RenderCommand = struct {
     bounds: geometry.RectF,
 };
 
+pub const CanvasRenderOverride = struct {
+    id: ObjectId,
+    opacity: ?f32 = null,
+    transform: ?Affine = null,
+};
+
 pub const RenderPlan = struct {
     commands: []const RenderCommand = &.{},
     bounds: ?geometry.RectF = null,
@@ -621,6 +627,8 @@ pub const CanvasFrameOptions = struct {
     scale: f32 = 1,
     full_repaint: bool = false,
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
+    previous_render_overrides: []const CanvasRenderOverride = &.{},
+    render_overrides: []const CanvasRenderOverride = &.{},
 };
 
 pub const CanvasFrameStorage = struct {
@@ -1847,7 +1855,9 @@ pub fn applyTextInputEvent(state: TextEditState, event: TextInputEvent, output: 
 }
 
 pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
-    const render_plan = try next.renderPlan(storage.render_commands);
+    var render_plan = try next.renderPlan(storage.render_commands);
+    const render_override_dirty_bounds = renderOverrideDirtyBounds(render_plan.commands, options.previous_render_overrides, options.render_overrides);
+    render_plan.bounds = applyRenderOverrides(storage.render_commands[0..render_plan.commandCount()], options.render_overrides);
     const batch_plan = try render_plan.batchPlan(storage.render_batches);
     const resource_plan = try next.resourcePlan(storage.resources);
     const resource_cache_plan = try resource_plan.cachePlan(
@@ -1866,7 +1876,7 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         dirty_bounds = fullRepaintBounds(options.surface_size, render_plan.bounds);
     } else {
         changes = try DisplayList.diff(previous.?, next, storage.changes);
-        dirty_bounds = clippedDirtyBounds(dirtyBoundsFromChanges(changes), options.surface_size);
+        dirty_bounds = clippedDirtyBounds(unionOptionalBounds(dirtyBoundsFromChanges(changes), render_override_dirty_bounds), options.surface_size);
     }
 
     return .{
@@ -2253,6 +2263,82 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.image_id == b.image_id and
         a.font_id == b.font_id and
         a.fingerprint == b.fingerprint;
+}
+
+fn applyRenderOverrides(commands: []RenderCommand, overrides: []const CanvasRenderOverride) ?geometry.RectF {
+    var bounds: ?geometry.RectF = null;
+    for (commands) |*command| {
+        if (command.id) |id| {
+            if (findRenderOverride(overrides, id)) |override| {
+                applyRenderOverride(command, override);
+            }
+        }
+        bounds = unionOptionalBounds(bounds, command.bounds);
+    }
+    return bounds;
+}
+
+fn applyRenderOverride(command: *RenderCommand, override: CanvasRenderOverride) void {
+    if (override.opacity) |opacity| {
+        command.opacity *= std.math.clamp(opacity, 0, 1);
+    }
+    if (override.transform) |transform| {
+        command.transform = command.transform.multiply(transform);
+        if (renderCommandBoundsWithOverride(command.*, null)) |bounds| {
+            command.bounds = bounds;
+        } else {
+            command.bounds = geometry.RectF.zero();
+        }
+    }
+}
+
+fn renderOverrideDirtyBounds(commands: []const RenderCommand, previous: []const CanvasRenderOverride, next: []const CanvasRenderOverride) ?geometry.RectF {
+    if (previous.len == 0 and next.len == 0) return null;
+
+    var bounds: ?geometry.RectF = null;
+    for (commands) |command| {
+        const id = command.id orelse continue;
+        const previous_override = findRenderOverride(previous, id);
+        const next_override = findRenderOverride(next, id);
+        if (renderOverridesEqual(previous_override, next_override)) continue;
+        bounds = unionOptionalBounds(bounds, renderCommandBoundsWithOverride(command, previous_override));
+        bounds = unionOptionalBounds(bounds, renderCommandBoundsWithOverride(command, next_override));
+    }
+    return bounds;
+}
+
+fn renderCommandBoundsWithOverride(command: RenderCommand, override: ?CanvasRenderOverride) ?geometry.RectF {
+    const override_transform = if (override) |value| value.transform else null;
+    const transform = if (override_transform) |value| command.transform.multiply(value) else command.transform;
+    var bounds = transform.transformRect(command.local_bounds);
+    if (command.clip) |clip| {
+        bounds = geometry.RectF.intersection(bounds, clip);
+    }
+    const normalized = bounds.normalized();
+    return if (normalized.isEmpty()) null else normalized;
+}
+
+fn findRenderOverride(overrides: []const CanvasRenderOverride, id: ObjectId) ?CanvasRenderOverride {
+    for (overrides) |override| {
+        if (override.id == id) return override;
+    }
+    return null;
+}
+
+fn renderOverridesEqual(a: ?CanvasRenderOverride, b: ?CanvasRenderOverride) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    const left = a.?;
+    const right = b.?;
+    return left.id == right.id and
+        optionalF32Equal(left.opacity, right.opacity) and
+        optionalAffineEqual(left.transform, right.transform);
+}
+
+fn optionalAffineEqual(a: ?Affine, b: ?Affine) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return affinesEqual(a.?, b.?);
 }
 
 fn renderBatchCanExtend(batch: RenderBatch, command: RenderCommand, pipeline: RenderPipelineKind, index: usize) bool {
@@ -7876,6 +7962,80 @@ test "canvas frame plan leaves unchanged retained frame clean" {
     try std.testing.expect(render_pass.scissorBounds() == null);
     try std.testing.expectEqual(@as(usize, 1), render_pass.commandCount());
     try std.testing.expectEqual(@as(usize, 1), render_pass.batchCount());
+}
+
+test "canvas frame plan applies render overrides without display list changes" {
+    const commands = [_]CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 10, 10),
+        .fill = .{ .color = Color.rgb8(255, 0, 0) },
+    } }};
+    const overrides = [_]CanvasRenderOverride{.{
+        .id = 1,
+        .opacity = 0.5,
+        .transform = Affine.translate(10, 0),
+    }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [0]RenderResource = .{};
+    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [1]DiffChange = undefined;
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(.{ .commands = &commands }, .{
+        .surface_size = geometry.SizeF.init(40, 20),
+        .render_overrides = &overrides,
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expect(!frame.full_repaint);
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
+    try expectRect(geometry.RectF.init(0, 0, 20, 10), frame.dirty_bounds);
+    try std.testing.expectEqual(@as(usize, 1), frame.render_plan.commandCount());
+    try std.testing.expectEqual(@as(f32, 0.5), frame.render_plan.commands[0].opacity);
+    try std.testing.expectEqualDeep(Affine.translate(10, 0), frame.render_plan.commands[0].transform);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 0, 10, 10), frame.render_plan.commands[0].bounds);
+
+    const render_pass = frame.renderPass();
+    try std.testing.expectEqual(CanvasRenderPassLoadAction.load, render_pass.loadAction());
+    try expectRect(geometry.RectF.init(0, 0, 20, 10), render_pass.scissorBounds());
+
+    var pixels: [40 * 20 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(40, 20, &pixels);
+    surface.clear(Color.rgb8(0, 0, 0));
+    try surface.renderPass(render_pass, Color.rgb8(0, 0, 0));
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 5, 5);
+    try expectPixelRgba8(.{ 128, 0, 0, 255 }, surface, 15, 5);
+
+    var clean_render_commands: [1]RenderCommand = undefined;
+    var clean_render_batches: [1]RenderBatch = undefined;
+    var clean_changes: [1]DiffChange = undefined;
+    const clean_frame = try (DisplayList{ .commands = &commands }).framePlan(.{ .commands = &commands }, .{
+        .surface_size = geometry.SizeF.init(40, 20),
+        .previous_render_overrides = &overrides,
+        .render_overrides = &overrides,
+    }, .{
+        .render_commands = &clean_render_commands,
+        .render_batches = &clean_render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &clean_changes,
+    });
+
+    try std.testing.expect(!clean_frame.requiresRender());
+    try std.testing.expect(clean_frame.dirty_bounds == null);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 0, 10, 10), clean_frame.render_plan.commands[0].bounds);
 }
 
 test "reference renderer clears and fills solid rect render pass" {

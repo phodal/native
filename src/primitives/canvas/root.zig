@@ -497,6 +497,26 @@ pub const RenderResourceCachePlan = struct {
     pub fn actionCount(self: RenderResourceCachePlan) usize {
         return self.actions.len;
     }
+
+    pub fn uploadCount(self: RenderResourceCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: RenderResourceCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: RenderResourceCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: RenderResourceCachePlan, kind: RenderResourceCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
+    }
 };
 
 pub const CanvasFrameOptions = struct {
@@ -518,6 +538,21 @@ pub const CanvasFrameStorage = struct {
     changes: []DiffChange,
 };
 
+pub const CanvasFrameDiagnostics = struct {
+    frame_index: u64 = 0,
+    command_count: usize = 0,
+    batch_count: usize = 0,
+    resource_count: usize = 0,
+    resource_upload_count: usize = 0,
+    resource_retain_count: usize = 0,
+    resource_evict_count: usize = 0,
+    glyph_atlas_entry_count: usize = 0,
+    change_count: usize = 0,
+    full_repaint: bool = false,
+    requires_render: bool = false,
+    dirty_bounds: ?geometry.RectF = null,
+};
+
 pub const CanvasFrame = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
@@ -535,6 +570,23 @@ pub const CanvasFrame = struct {
 
     pub fn requiresRender(self: CanvasFrame) bool {
         return self.full_repaint or self.dirty_bounds != null;
+    }
+
+    pub fn diagnostics(self: CanvasFrame) CanvasFrameDiagnostics {
+        return .{
+            .frame_index = self.frame_index,
+            .command_count = self.render_plan.commandCount(),
+            .batch_count = self.batch_plan.batchCount(),
+            .resource_count = self.resource_plan.resourceCount(),
+            .resource_upload_count = self.resource_cache_plan.uploadCount(),
+            .resource_retain_count = self.resource_cache_plan.retainCount(),
+            .resource_evict_count = self.resource_cache_plan.evictCount(),
+            .glyph_atlas_entry_count = self.glyph_atlas_plan.entryCount(),
+            .change_count = self.changes.len,
+            .full_repaint = self.full_repaint,
+            .requires_render = self.requiresRender(),
+            .dirty_bounds = self.dirty_bounds,
+        };
     }
 };
 
@@ -5247,9 +5299,24 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.actionCount());
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, frame.resource_cache_plan.actions[0].kind);
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, frame.resource_cache_plan.actions[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), frame.resource_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try expectRect(geometry.RectF.init(0, 0, 320, 200), frame.dirty_bounds);
+
+    const diagnostics = frame.diagnostics();
+    try std.testing.expectEqual(@as(u64, 7), diagnostics.frame_index);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.command_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.batch_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.resource_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.resource_upload_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.resource_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.resource_evict_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.glyph_atlas_entry_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.change_count);
+    try std.testing.expect(diagnostics.full_repaint);
+    try std.testing.expect(diagnostics.requires_render);
+    try expectRect(geometry.RectF.init(0, 0, 320, 200), diagnostics.dirty_bounds);
 }
 
 test "canvas frame plan carries resource cache retain upload and evict actions" {
@@ -5322,6 +5389,9 @@ test "canvas frame plan carries resource cache retain upload and evict actions" 
 
     try std.testing.expectEqual(@as(usize, 2), next_frame.resource_cache_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 3), next_frame.resource_cache_plan.actionCount());
+    try std.testing.expectEqual(@as(usize, 1), next_frame.resource_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), next_frame.resource_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), next_frame.resource_cache_plan.evictCount());
     try std.testing.expectEqual(RenderResourceCacheActionKind.retain, next_frame.resource_cache_plan.actions[0].kind);
     try std.testing.expectEqual(RenderResourceKind.linear_gradient, next_frame.resource_cache_plan.actions[0].key.kind);
     try std.testing.expectEqual(RenderResourceCacheActionKind.upload, next_frame.resource_cache_plan.actions[1].kind);
@@ -5329,6 +5399,12 @@ test "canvas frame plan carries resource cache retain upload and evict actions" 
     try std.testing.expectEqual(RenderResourceCacheActionKind.evict, next_frame.resource_cache_plan.actions[2].kind);
     try std.testing.expectEqual(RenderResourceKind.image, next_frame.resource_cache_plan.actions[2].key.kind);
     try std.testing.expectEqual(@as(u64, 2), next_frame.resource_cache_plan.entries[0].last_used_frame);
+
+    const diagnostics = next_frame.diagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.resource_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.resource_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.resource_evict_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.change_count);
 }
 
 test "canvas frame plan clips incremental dirty bounds to surface" {

@@ -845,6 +845,7 @@ pub const ReferenceRenderSurface = struct {
             .stroke_rect => |value| try self.strokeRect(command, value, draw_bounds),
             .draw_line => |value| try self.drawLine(command, value, draw_bounds),
             .shadow => |value| try self.drawShadow(command, value, draw_bounds),
+            .draw_text => |value| try self.drawText(command, value, draw_bounds),
             else => return error.ReferenceRenderUnsupportedCommand,
         }
     }
@@ -936,6 +937,40 @@ pub const ReferenceRenderSurface = struct {
                 else
                     std.math.clamp(1 - distance / blur_radius, 0, 1);
                 if (alpha > 0) self.blendPixel(@intCast(x), @intCast(y), referenceScaleColorAlpha(value.color, alpha), command.opacity);
+            }
+        }
+    }
+
+    fn drawText(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF) Error!void {
+        if (value.size <= 0) return;
+        if (value.glyphs.len > 0) {
+            for (value.glyphs) |glyph| {
+                const width = estimatedGlyphAdvance(glyph, value.size);
+                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x, value.origin.y - value.size, width, value.size);
+                self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
+            }
+            return;
+        }
+
+        const advance = value.size * 0.5;
+        var index: usize = 0;
+        for (value.text) |byte| {
+            defer index += 1;
+            if (byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ') continue;
+            const x = value.origin.x + @as(f32, @floatFromInt(index)) * advance;
+            const glyph_rect = geometry.RectF.init(x, value.origin.y - value.size, advance, value.size);
+            self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
+        }
+    }
+
+    fn fillTextRect(self: ReferenceRenderSurface, rect: geometry.RectF, draw_bounds: geometry.RectF, color: Color, opacity: f32) void {
+        const clipped = geometry.RectF.intersection(rect, draw_bounds.normalized());
+        const pixel_rect = referencePixelRect(clipped, self.width, self.height) orelse return;
+        var y = pixel_rect.y;
+        while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
+            var x = pixel_rect.x;
+            while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
+                self.blendPixel(@intCast(x), @intCast(y), color, opacity);
             }
         }
     }
@@ -7606,6 +7641,45 @@ test "reference renderer draws soft shadows" {
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 0, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 128 }, surface, 1, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 3, 2);
+}
+
+test "reference renderer draws proxy text runs" {
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .size = 2,
+        .origin = geometry.PointF.init(1, 3),
+        .color = Color.rgb8(255, 0, 0),
+        .text = "A B",
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [3]GlyphAtlasEntry = undefined;
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(5, 4),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    var pixels: [5 * 4 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(5, 4, &pixels);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 2, 1);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 3);
 }
 
 test "reference renderer rejects unsupported images" {

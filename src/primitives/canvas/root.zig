@@ -794,6 +794,7 @@ pub const ReferenceRenderSurface = struct {
     width: usize,
     height: usize,
     pixels: []u8,
+    scratch: ?[]u8 = null,
 
     pub fn init(width: usize, height: usize, pixels: []u8) Error!ReferenceRenderSurface {
         const len = std.math.mul(usize, std.math.mul(usize, width, height) catch return error.ReferenceRenderSurfaceTooSmall, 4) catch return error.ReferenceRenderSurfaceTooSmall;
@@ -803,6 +804,13 @@ pub const ReferenceRenderSurface = struct {
             .height = height,
             .pixels = pixels[0..len],
         };
+    }
+
+    pub fn initWithScratch(width: usize, height: usize, pixels: []u8, scratch: []u8) Error!ReferenceRenderSurface {
+        var surface = try init(width, height, pixels);
+        if (scratch.len < surface.pixels.len) return error.ReferenceRenderSurfaceTooSmall;
+        surface.scratch = scratch[0..surface.pixels.len];
+        return surface;
     }
 
     pub fn clear(self: ReferenceRenderSurface, color: Color) void {
@@ -847,6 +855,7 @@ pub const ReferenceRenderSurface = struct {
             .fill_path => |value| try self.fillPath(command, value, draw_bounds),
             .stroke_path => |value| try self.strokePath(command, value, draw_bounds),
             .shadow => |value| try self.drawShadow(command, value, draw_bounds),
+            .blur => |value| try self.drawBlur(command, value, draw_bounds),
             .draw_text => |value| try self.drawText(command, value, draw_bounds),
             else => return error.ReferenceRenderUnsupportedCommand,
         }
@@ -970,6 +979,67 @@ pub const ReferenceRenderSurface = struct {
                 else
                     std.math.clamp(1 - distance / blur_radius, 0, 1);
                 if (alpha > 0) self.blendPixel(@intCast(x), @intCast(y), referenceScaleColorAlpha(value.color, alpha), command.opacity);
+            }
+        }
+    }
+
+    fn drawBlur(self: ReferenceRenderSurface, command: RenderCommand, value: Blur, draw_bounds: geometry.RectF) Error!void {
+        const scratch = self.scratch orelse return error.ReferenceRenderUnsupportedCommand;
+        const radius = nonNegative(value.radius) * referenceTransformScale(command.transform);
+        if (radius <= 0) return;
+
+        @memcpy(scratch[0..self.pixels.len], self.pixels);
+        const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return;
+        const kernel_radius: i64 = @intCast(@max(1, referenceCeil(radius)));
+        const width_i: i64 = @intCast(self.width);
+        const height_i: i64 = @intCast(self.height);
+        var y = pixel_rect.y;
+        while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
+            var x = pixel_rect.x;
+            while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
+                const x_i: i64 = @intCast(x);
+                const y_i: i64 = @intCast(y);
+                var total = [_]u64{0} ** 4;
+                var count: u64 = 0;
+
+                var dy: i64 = -kernel_radius;
+                while (dy <= kernel_radius) : (dy += 1) {
+                    const sample_y = y_i + dy;
+                    if (sample_y < 0 or sample_y >= height_i) continue;
+
+                    var dx: i64 = -kernel_radius;
+                    while (dx <= kernel_radius) : (dx += 1) {
+                        const sample_x = x_i + dx;
+                        if (sample_x < 0 or sample_x >= width_i) continue;
+
+                        const sample_index = (@as(usize, @intCast(sample_y)) * self.width + @as(usize, @intCast(sample_x))) * 4;
+                        total[0] += scratch[sample_index + 0];
+                        total[1] += scratch[sample_index + 1];
+                        total[2] += scratch[sample_index + 2];
+                        total[3] += scratch[sample_index + 3];
+                        count += 1;
+                    }
+                }
+
+                if (count == 0) continue;
+                const blurred = [4]u8{
+                    @intCast((total[0] + count / 2) / count),
+                    @intCast((total[1] + count / 2) / count),
+                    @intCast((total[2] + count / 2) / count),
+                    @intCast((total[3] + count / 2) / count),
+                };
+                const index = (y * self.width + x) * 4;
+                const dst = [4]u8{
+                    self.pixels[index + 0],
+                    self.pixels[index + 1],
+                    self.pixels[index + 2],
+                    self.pixels[index + 3],
+                };
+                const out = blendRgba8(dst, rgba8ToColor(blurred), command.opacity);
+                self.pixels[index + 0] = out[0];
+                self.pixels[index + 1] = out[1];
+                self.pixels[index + 2] = out[2];
+                self.pixels[index + 3] = out[3];
             }
         }
     }
@@ -4248,6 +4318,15 @@ fn colorToRgba8(color: Color) [4]u8 {
         colorChannelToByte(color.b),
         colorChannelToByte(color.a),
     };
+}
+
+fn rgba8ToColor(pixel: [4]u8) Color {
+    return Color.rgba(
+        @as(f32, @floatFromInt(pixel[0])) / 255.0,
+        @as(f32, @floatFromInt(pixel[1])) / 255.0,
+        @as(f32, @floatFromInt(pixel[2])) / 255.0,
+        @as(f32, @floatFromInt(pixel[3])) / 255.0,
+    );
 }
 
 fn blendRgba8(dst: [4]u8, src: Color, opacity: f32) [4]u8 {
@@ -7987,6 +8066,54 @@ test "reference renderer draws soft shadows" {
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 0, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 128 }, surface, 1, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 3, 2);
+}
+
+test "reference renderer blurs with caller scratch storage" {
+    const commands = [_]CanvasCommand{
+        .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 1, 1),
+            .fill = .{ .color = Color.rgb8(255, 0, 0) },
+        } },
+        .{ .fill_rect = .{
+            .id = 2,
+            .rect = geometry.RectF.init(2, 0, 1, 1),
+            .fill = .{ .color = Color.rgb8(0, 0, 255) },
+        } },
+        .{ .blur = .{
+            .id = 3,
+            .rect = geometry.RectF.init(0, 0, 3, 1),
+            .radius = 1,
+        } },
+    };
+
+    var render_commands: [3]RenderCommand = undefined;
+    var render_batches: [3]RenderBatch = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(3, 1),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    var pixels: [3 * 1 * 4]u8 = undefined;
+    var scratch: [3 * 1 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.initWithScratch(3, 1, &pixels, &scratch);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 128, 0, 0, 255 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 85, 0, 85, 255 }, surface, 1, 0);
+    try expectPixelRgba8(.{ 0, 0, 128, 255 }, surface, 2, 0);
 }
 
 test "reference renderer draws proxy text runs" {

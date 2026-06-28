@@ -16,6 +16,7 @@ const statusbar_height: f32 = 34;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_dashboard_overrides: usize = 2;
+const max_dashboard_widgets: usize = 10;
 const refresh_command = "dashboard.refresh";
 const mode_command = "dashboard.mode";
 
@@ -232,6 +233,7 @@ const GpuDashboardApp = struct {
         try buildDashboardDisplayList(&builder);
         const display_list = builder.displayList();
         _ = try runtime.setCanvasDisplayList(frame_event.window_id, "dashboard-canvas", display_list);
+        try installDashboardWidgetLayout(runtime, frame_event.window_id);
         self.animation_start_ns = frame_event.timestamp_ns;
         _ = try self.presentDashboardCanvas(runtime, frame_event, true);
         self.canvas_installed = true;
@@ -250,6 +252,7 @@ const GpuDashboardApp = struct {
         try buildDashboardDisplayList(&builder);
         const display_list = builder.displayList();
         _ = try runtime.setCanvasDisplayList(command.window_id, "dashboard-canvas", display_list);
+        try installDashboardWidgetLayout(runtime, command.window_id);
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, "dashboard-canvas");
         self.animation_start_ns = gpu_frame.timestamp_ns;
         self.previous_override_count = 0;
@@ -397,6 +400,64 @@ fn metricCard(builder: *canvas.Builder, comptime start_id: canvas.ObjectId, fram
     try builder.drawText(.{ .id = start_id + 4, .font_id = 1, .size = 20, .origin = pt(frame.x + 16, frame.y + 68), .color = color(18, 24, 38), .text = value });
     try builder.drawText(.{ .id = start_id + 5, .font_id = 1, .size = 11, .origin = pt(frame.x + 78, frame.y + 68), .color = accent, .text = delta });
     try builder.strokeRect(.{ .id = start_id + 6, .rect = frame, .radius = canvas.Radius.all(16), .stroke = .{ .fill = .{ .color = color(226, 232, 240) }, .width = 1 } });
+}
+
+fn installDashboardWidgetLayout(runtime: *zero_native.Runtime, window_id: zero_native.WindowId) anyerror!void {
+    var nodes: [max_dashboard_widgets]canvas.WidgetLayoutNode = undefined;
+    const layout = try buildDashboardWidgetLayout(&nodes);
+    _ = try runtime.setCanvasWidgetLayout(window_id, "dashboard-canvas", layout);
+}
+
+fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!canvas.WidgetLayoutTree {
+    const metric_items = [_]canvas.Widget{
+        .{ .id = 105, .kind = .list_item, .text = "ARR $12.8M, up 18.4%" },
+        .{ .id = 106, .kind = .list_item, .text = "Activation 74.2%, up 6.1%" },
+        .{ .id = 107, .kind = .list_item, .text = "Latency 8.6ms, down 2.4ms" },
+    };
+    const dashboard_widgets = [_]canvas.Widget{
+        .{
+            .id = 101,
+            .kind = .text,
+            .frame = rect(226, 54, 220, 28),
+            .text = "Revenue pulse",
+        },
+        .{
+            .id = 102,
+            .kind = .text,
+            .frame = rect(226, 88, 260, 18),
+            .text = "Retained canvas dashboard",
+        },
+        .{
+            .id = 103,
+            .kind = .button,
+            .frame = rect(522, 50, 128, 34),
+            .text = "Live render",
+            .command = mode_command,
+            .semantics = .{ .label = "Live render status" },
+        },
+        .{
+            .id = 104,
+            .kind = .grid,
+            .frame = rect(226, 128, 422, 96),
+            .layout = .{ .columns = 3, .gap = 16 },
+            .semantics = .{ .role = .list, .label = "Dashboard metrics" },
+            .children = &metric_items,
+        },
+        .{
+            .id = 108,
+            .kind = .panel,
+            .frame = rect(226, 248, 422, 190),
+            .semantics = .{ .label = "Conversion trend" },
+        },
+        .{
+            .id = 109,
+            .kind = .progress,
+            .frame = rect(250, 454, 256, 12),
+            .value = 0.68,
+            .semantics = .{ .label = "Conversion progress" },
+        },
+    };
+    return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &dashboard_widgets }, rect(0, 0, canvas_width, window_height - toolbar_height - statusbar_height), nodes);
 }
 
 fn dashboardFrame(display_list: canvas.DisplayList, previous: ?canvas.DisplayList, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) canvas.Error!canvas.CanvasFrame {
@@ -603,6 +664,17 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqual(@as(usize, 1440), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 1040), harness.null_platform.gpu_surface_present_height);
+
+    const widget_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
+    try std.testing.expectEqual(@as(usize, 10), widget_layout.nodeCount());
+    try std.testing.expectEqualStrings("Dashboard metrics", widget_layout.nodes[4].widget.semantics.label);
+
+    const snapshot = harness.runtime.automationSnapshot("Dashboard");
+    try std.testing.expectEqual(@as(usize, 9), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("button", snapshot.widgets[2].role);
+    try std.testing.expectEqualStrings("Live render status", snapshot.widgets[2].name);
+    try std.testing.expectEqualStrings("progressbar", snapshot.widgets[8].role);
+    try std.testing.expectEqualStrings("Conversion progress", snapshot.widgets[8].name);
 
     try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
         .label = "dashboard-canvas",

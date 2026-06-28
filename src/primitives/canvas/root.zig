@@ -1408,6 +1408,7 @@ pub const WidgetKind = enum {
     button,
     icon_button,
     text_field,
+    search_field,
     tooltip,
     menu_item,
     list_item,
@@ -1959,6 +1960,7 @@ fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens
             .button => try emitButtonWidget(builder, widget, tokens),
             .icon_button => try emitIconButtonWidget(builder, widget, tokens),
             .text_field => try emitTextFieldWidget(builder, widget, tokens),
+            .search_field => try emitSearchFieldWidget(builder, widget, tokens),
             .tooltip => try emitTooltipWidget(builder, widget, tokens),
             .menu_item => try emitMenuItemWidget(builder, widget, tokens),
             .list_item => try emitListItemWidget(builder, widget, tokens),
@@ -2673,6 +2675,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .button => try emitButtonWidget(builder, widget, tokens),
         .icon_button => try emitIconButtonWidget(builder, widget, tokens),
         .text_field => try emitTextFieldWidget(builder, widget, tokens),
+        .search_field => try emitSearchFieldWidget(builder, widget, tokens),
         .tooltip => try emitTooltipWidget(builder, widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, widget, tokens),
         .list_item => try emitListItemWidget(builder, widget, tokens),
@@ -2967,6 +2970,97 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             }
         }
     }
+}
+
+fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const radius = Radius.all(tokens.radius.md);
+    const text_size = tokens.typography.body_size;
+    const icon_size = @max(8, text_size - 2);
+    const text_inset = tokens.spacing.md + icon_size + tokens.spacing.sm;
+    const origin = textOrigin(widget.frame, text_size, text_inset);
+    const selection_range = widgetTextSelectionRange(widget);
+    const composition_range = widgetTextCompositionRange(widget);
+    const text_color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text;
+
+    try builder.fillRoundedRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+        .radius = radius,
+        .fill = .{ .color = if (widget.state.disabled) tokens.colors.disabled else tokens.colors.surface },
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = .{ .color = if (widget.state.focused) tokens.colors.focus_ring else tokens.colors.border },
+            .width = if (widget.state.focused) tokens.stroke.focus else tokens.stroke.regular,
+        },
+    });
+    try emitSearchFieldIcon(builder, widget, tokens, icon_size);
+    if (selection_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            try builder.fillRoundedRect(.{
+                .id = widgetPartId(widget.id, 8),
+                .rect = textRangeInlineRect(widget.text, widget.frame, range, text_size, text_inset),
+                .radius = Radius.all(tokens.radius.sm),
+                .fill = .{ .color = textSelectionFillColor(tokens) },
+            });
+        }
+    }
+    const visible_text = if (widget.text.len > 0) widget.text else widget.semantics.label;
+    if (visible_text.len > 0) {
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 9),
+            .font_id = tokens.typography.font_id,
+            .size = text_size,
+            .origin = origin,
+            .color = if (widget.text.len > 0) text_color else tokens.colors.text_muted,
+            .text = visible_text,
+        });
+    }
+    if (composition_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            const rect = textRangeInlineRect(widget.text, widget.frame, range, text_size, text_inset);
+            const y = rect.y + rect.height - 1;
+            try builder.drawLine(.{
+                .id = widgetPartId(widget.id, 10),
+                .from = geometry.PointF.init(rect.x, y),
+                .to = geometry.PointF.init(rect.x + rect.width, y),
+                .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = 1 },
+            });
+        }
+    }
+    if (widget.state.focused) {
+        if (selection_range) |range| {
+            if (range.isCollapsed(widget.text.len)) {
+                const x = origin.x + estimateTextOffsetX(widget.text, range.start, text_size);
+                try builder.drawLine(.{
+                    .id = widgetPartId(widget.id, 11),
+                    .from = geometry.PointF.init(x, origin.y - text_size),
+                    .to = geometry.PointF.init(x, origin.y + 2),
+                    .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = tokens.stroke.regular },
+                });
+            }
+        }
+    }
+}
+
+fn emitSearchFieldIcon(builder: *Builder, widget: Widget, tokens: DesignTokens, icon_size: f32) Error!void {
+    const left = widget.frame.x + tokens.spacing.md;
+    const top = widget.frame.y + @max(0, (widget.frame.height - icon_size) * 0.5);
+    const box = icon_size * 0.58;
+    const x0 = left;
+    const y0 = top;
+    const x1 = left + box;
+    const y1 = top + box;
+    const stroke = Stroke{ .fill = .{ .color = tokens.colors.text_muted }, .width = tokens.stroke.regular };
+
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 3), .from = geometry.PointF.init(x0, y0), .to = geometry.PointF.init(x1, y0), .stroke = stroke });
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 4), .from = geometry.PointF.init(x1, y0), .to = geometry.PointF.init(x1, y1), .stroke = stroke });
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 5), .from = geometry.PointF.init(x1, y1), .to = geometry.PointF.init(x0, y1), .stroke = stroke });
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 6), .from = geometry.PointF.init(x0, y1), .to = geometry.PointF.init(x0, y0), .stroke = stroke });
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 7), .from = geometry.PointF.init(x1, y1), .to = geometry.PointF.init(left + icon_size, top + icon_size), .stroke = stroke });
 }
 
 fn emitTooltipWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -3268,13 +3362,13 @@ fn iconGlyphSize(widget: Widget, tokens: DesignTokens) f32 {
 }
 
 fn widgetTextSelectionRange(widget: Widget) ?TextRange {
-    if (widget.kind != .text_field) return null;
+    if (widget.kind != .text_field and widget.kind != .search_field) return null;
     if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
     return null;
 }
 
 fn widgetTextCompositionRange(widget: Widget) ?TextRange {
-    if (widget.kind != .text_field) return null;
+    if (widget.kind != .text_field and widget.kind != .search_field) return null;
     if (widget.text_composition) |range| return snapTextRange(widget.text, range);
     return null;
 }
@@ -3370,7 +3464,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .icon, .button, .icon_button, .text_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
+        .text, .icon, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -3793,7 +3887,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .icon => .image,
         .button => .button,
         .icon_button => .button,
-        .text_field => .textbox,
+        .text_field, .search_field => .textbox,
         .tooltip => .tooltip,
         .menu_item => .menuitem,
         .list_item => .listitem,
@@ -3822,7 +3916,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .button, .icon_button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
+        .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -3836,7 +3930,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .list, .stack, .tooltip, .icon => false,
-        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
 
@@ -6289,6 +6383,56 @@ test "widget text fields expose textbox semantics and render focused chrome" {
     }
     switch (display_list.commands[2]) {
         .draw_text => |text| try std.testing.expectEqualStrings("search terms", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget search fields expose textbox semantics and render search chrome" {
+    const search_field = Widget{
+        .id = 10,
+        .kind = .search_field,
+        .frame = geometry.RectF.init(10, 12, 220, 36),
+        .text = "customers",
+        .text_selection = TextSelection.collapsed(9),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Search customers" },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(search_field, search_field.frame, &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 10), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(WidgetKind.search_field, layout.hitTest(geometry.PointF.init(20, 24)).?.kind);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
+    try std.testing.expectEqualStrings("Search customers", semantics[0].label);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expectEqualDeep(TextRange.init(9, 9), semantics[0].text_selection.?);
+
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3), .text_muted = Color.rgb8(90, 91, 92) },
+        .stroke = .{ .focus = 3 },
+    };
+    var commands: [9]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, search_field, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 3), stroke.stroke.width);
+            try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(10, 3)), line.id),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[7]) {
+        .draw_text => |text| try std.testing.expectEqualStrings("customers", text.text),
         else => return error.TestUnexpectedResult,
     }
 }

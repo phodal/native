@@ -6,10 +6,12 @@ pub const Error = error{
     DisplayListFull,
     DiffListFull,
     DuplicateObjectId,
+    DuplicateWidgetId,
     RenderListFull,
     RenderStackOverflow,
     RenderStackUnderflow,
     WidgetDepthExceeded,
+    WidgetInvalidationListFull,
     WidgetLayoutListFull,
     WidgetSemanticsListFull,
 };
@@ -523,6 +525,23 @@ pub const WidgetSemanticsNode = struct {
     parent_index: ?usize = null,
 };
 
+pub const WidgetInvalidationKind = enum {
+    added,
+    removed,
+    changed,
+};
+
+pub const WidgetInvalidation = struct {
+    kind: WidgetInvalidationKind,
+    id: ObjectId,
+    previous_index: ?usize = null,
+    next_index: ?usize = null,
+    dirty_bounds: ?geometry.RectF = null,
+    layout_dirty: bool = false,
+    paint_dirty: bool = false,
+    semantics_dirty: bool = false,
+};
+
 pub const WidgetLayoutTree = struct {
     nodes: []const WidgetLayoutNode = &.{},
 
@@ -548,6 +567,10 @@ pub const WidgetLayoutTree = struct {
 
     pub fn emitDisplayList(self: WidgetLayoutTree, builder: *Builder, tokens: DesignTokens) Error!void {
         return emitWidgetLayout(builder, self, tokens);
+    }
+
+    pub fn diff(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
+        return diffWidgetLayoutTrees(previous, next, output);
     }
 };
 
@@ -1186,6 +1209,136 @@ fn widgetWithFrame(widget: Widget, frame: geometry.RectF) Widget {
     return copy;
 }
 
+fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
+    try validateUniqueWidgetIds(previous);
+    try validateUniqueWidgetIds(next);
+
+    var len: usize = 0;
+    for (previous.nodes, 0..) |previous_node, previous_index| {
+        const id = previous_node.widget.id;
+        if (id == 0) continue;
+        const next_ref = findWidgetNodeById(next, id) orelse {
+            try appendWidgetInvalidation(output, &len, .{
+                .kind = .removed,
+                .id = id,
+                .previous_index = previous_index,
+                .dirty_bounds = previous_node.frame,
+                .layout_dirty = true,
+                .paint_dirty = true,
+                .semantics_dirty = true,
+            });
+            continue;
+        };
+
+        const change = widgetChange(previous_node, next_ref.node, previous_index, next_ref.index);
+        if (change.layout_dirty or change.paint_dirty or change.semantics_dirty) {
+            try appendWidgetInvalidation(output, &len, change);
+        }
+    }
+
+    for (next.nodes, 0..) |next_node, next_index| {
+        const id = next_node.widget.id;
+        if (id == 0) continue;
+        if (findWidgetNodeById(previous, id) == null) {
+            try appendWidgetInvalidation(output, &len, .{
+                .kind = .added,
+                .id = id,
+                .next_index = next_index,
+                .dirty_bounds = next_node.frame,
+                .layout_dirty = true,
+                .paint_dirty = true,
+                .semantics_dirty = true,
+            });
+        }
+    }
+
+    return output[0..len];
+}
+
+fn appendWidgetInvalidation(output: []WidgetInvalidation, len: *usize, invalidation: WidgetInvalidation) Error!void {
+    if (len.* >= output.len) return error.WidgetInvalidationListFull;
+    output[len.*] = invalidation;
+    len.* += 1;
+}
+
+const WidgetNodeRef = struct {
+    index: usize,
+    node: WidgetLayoutNode,
+};
+
+fn findWidgetNodeById(layout: WidgetLayoutTree, id: ObjectId) ?WidgetNodeRef {
+    if (id == 0) return null;
+    for (layout.nodes, 0..) |node, index| {
+        if (node.widget.id == id) return .{ .index = index, .node = node };
+    }
+    return null;
+}
+
+fn validateUniqueWidgetIds(layout: WidgetLayoutTree) Error!void {
+    for (layout.nodes, 0..) |node, index| {
+        const id = node.widget.id;
+        if (id == 0) continue;
+        var cursor = index + 1;
+        while (cursor < layout.nodes.len) : (cursor += 1) {
+            if (layout.nodes[cursor].widget.id == id) return error.DuplicateWidgetId;
+        }
+    }
+}
+
+fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_index: usize, next_index: usize) WidgetInvalidation {
+    const layout_dirty =
+        previous.widget.kind != next.widget.kind or
+        previous.depth != next.depth or
+        previous.parent_index != next.parent_index or
+        !rectsEqual(previous.frame, next.frame) or
+        !widgetLayoutStylesEqual(previous.widget.layout, next.widget.layout);
+    const content_dirty = !std.mem.eql(u8, previous.widget.text, next.widget.text) or previous.widget.value != next.widget.value;
+    const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
+    const semantics_dirty =
+        layout_dirty or
+        content_dirty or
+        state_dirty or
+        !widgetSemanticsEqual(previous.widget.semantics, next.widget.semantics);
+    const paint_dirty = layout_dirty or content_dirty or state_dirty;
+
+    return .{
+        .kind = .changed,
+        .id = previous.widget.id,
+        .previous_index = previous_index,
+        .next_index = next_index,
+        .dirty_bounds = if (layout_dirty or paint_dirty)
+            unionOptionalBounds(previous.frame, next.frame)
+        else
+            null,
+        .layout_dirty = layout_dirty,
+        .paint_dirty = paint_dirty,
+        .semantics_dirty = semantics_dirty,
+    };
+}
+
+fn widgetStatesEqual(a: WidgetState, b: WidgetState) bool {
+    return a.hovered == b.hovered and
+        a.pressed == b.pressed and
+        a.focused == b.focused and
+        a.disabled == b.disabled and
+        a.selected == b.selected;
+}
+
+fn widgetLayoutStylesEqual(a: WidgetLayoutStyle, b: WidgetLayoutStyle) bool {
+    return insetsEqual(a.padding, b.padding) and
+        a.gap == b.gap and
+        a.grow == b.grow and
+        sizesEqual(a.min_size, b.min_size);
+}
+
+fn widgetSemanticsEqual(a: WidgetSemantics, b: WidgetSemantics) bool {
+    return a.role == b.role and
+        std.mem.eql(u8, a.label, b.label) and
+        optionalF32Equal(a.value, b.value) and
+        a.hidden == b.hidden and
+        a.focusable == b.focusable;
+}
+
 fn diffDisplayLists(previous: DisplayList, next: DisplayList, output: []DiffChange) Error![]const DiffChange {
     try validateUniqueObjectIds(previous);
     try validateUniqueObjectIds(next);
@@ -1565,6 +1718,17 @@ fn optionalRectsEqual(a: ?geometry.RectF, b: ?geometry.RectF) bool {
     return b == null;
 }
 
+fn sizesEqual(a: geometry.SizeF, b: geometry.SizeF) bool {
+    return a.width == b.width and a.height == b.height;
+}
+
+fn insetsEqual(a: geometry.InsetsF, b: geometry.InsetsF) bool {
+    return a.top == b.top and
+        a.right == b.right and
+        a.bottom == b.bottom and
+        a.left == b.left;
+}
+
 fn pointsEqual(a: geometry.PointF, b: geometry.PointF) bool {
     return a.x == b.x and a.y == b.y;
 }
@@ -1591,6 +1755,14 @@ fn affinesEqual(a: Affine, b: Affine) bool {
         a.d == b.d and
         a.tx == b.tx and
         a.ty == b.ty;
+}
+
+fn optionalF32Equal(a: ?f32, b: ?f32) bool {
+    if (a) |left| {
+        if (b) |right| return left == right;
+        return false;
+    }
+    return b == null;
 }
 
 fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
@@ -1926,6 +2098,132 @@ test "widget layout reports fixed buffer errors" {
     const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 100, 100), &nodes);
     var small_semantics: [1]WidgetSemanticsNode = undefined;
     try std.testing.expectError(error.WidgetSemanticsListFull, layout.collectSemantics(&small_semantics));
+}
+
+test "widget layout diff tracks added removed and layout changes by id" {
+    const previous_children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 10, 100, 30),
+            .text = "Run",
+        },
+        .{
+            .id = 3,
+            .kind = .progress,
+            .frame = geometry.RectF.init(10, 50, 100, 8),
+            .value = 0.4,
+        },
+    };
+    const next_children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(20, 10, 100, 30),
+            .text = "Run",
+            .state = .{ .focused = true },
+        },
+        .{
+            .id = 4,
+            .kind = .text,
+            .frame = geometry.RectF.init(10, 50, 100, 20),
+            .text = "Done",
+        },
+    };
+
+    var previous_nodes: [4]WidgetLayoutNode = undefined;
+    var next_nodes: [4]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(.{ .id = 1, .kind = .stack, .children = &previous_children }, geometry.RectF.init(0, 0, 180, 100), &previous_nodes);
+    const next = try layoutWidgetTree(.{ .id = 1, .kind = .stack, .children = &next_children }, geometry.RectF.init(0, 0, 180, 100), &next_nodes);
+
+    var invalidations_buffer: [4]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, next, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 3), invalidations.len);
+
+    try std.testing.expectEqual(WidgetInvalidationKind.changed, invalidations[0].kind);
+    try std.testing.expectEqual(@as(ObjectId, 2), invalidations[0].id);
+    try std.testing.expect(invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expect(invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(10, 10, 110, 30), invalidations[0].dirty_bounds);
+
+    try std.testing.expectEqual(WidgetInvalidationKind.removed, invalidations[1].kind);
+    try std.testing.expectEqual(@as(ObjectId, 3), invalidations[1].id);
+    try expectRect(geometry.RectF.init(10, 50, 100, 8), invalidations[1].dirty_bounds);
+
+    try std.testing.expectEqual(WidgetInvalidationKind.added, invalidations[2].kind);
+    try std.testing.expectEqual(@as(ObjectId, 4), invalidations[2].id);
+    try expectRect(geometry.RectF.init(10, 50, 100, 20), invalidations[2].dirty_bounds);
+}
+
+test "widget layout diff separates paint and semantics dirtiness" {
+    const previous_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+    }};
+    const pressed_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+        .state = .{ .pressed = true },
+    }};
+    const semantic_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+        .semantics = .{ .label = "Run report" },
+    }};
+
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var pressed_nodes: [2]WidgetLayoutNode = undefined;
+    var semantic_nodes: [2]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &previous_child }, geometry.RectF.init(0, 0, 140, 80), &previous_nodes);
+    const pressed = try layoutWidgetTree(.{ .kind = .stack, .children = &pressed_child }, geometry.RectF.init(0, 0, 140, 80), &pressed_nodes);
+    const semantic = try layoutWidgetTree(.{ .kind = .stack, .children = &semantic_child }, geometry.RectF.init(0, 0, 140, 80), &semantic_nodes);
+
+    var invalidations_buffer: [2]WidgetInvalidation = undefined;
+    const pressed_invalidations = try WidgetLayoutTree.diff(previous, pressed, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), pressed_invalidations.len);
+    try std.testing.expect(!pressed_invalidations[0].layout_dirty);
+    try std.testing.expect(pressed_invalidations[0].paint_dirty);
+    try std.testing.expect(pressed_invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(10, 10, 100, 30), pressed_invalidations[0].dirty_bounds);
+
+    const semantic_invalidations = try WidgetLayoutTree.diff(previous, semantic, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantic_invalidations.len);
+    try std.testing.expect(!semantic_invalidations[0].layout_dirty);
+    try std.testing.expect(!semantic_invalidations[0].paint_dirty);
+    try std.testing.expect(semantic_invalidations[0].semantics_dirty);
+    try std.testing.expect(semantic_invalidations[0].dirty_bounds == null);
+}
+
+test "widget layout diff reports duplicate ids and output overflow" {
+    const duplicate_children = [_]Widget{
+        .{ .id = 2, .kind = .text, .text = "One" },
+        .{ .id = 2, .kind = .text, .text = "Two" },
+    };
+    const changed_children = [_]Widget{.{
+        .id = 3,
+        .kind = .text,
+        .text = "Changed",
+    }};
+
+    var duplicate_nodes: [3]WidgetLayoutNode = undefined;
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var next_nodes: [2]WidgetLayoutNode = undefined;
+    const duplicate = try layoutWidgetTree(.{ .kind = .stack, .children = &duplicate_children }, geometry.RectF.init(0, 0, 100, 100), &duplicate_nodes);
+    const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &.{.{ .id = 3, .kind = .text, .text = "Old" }} }, geometry.RectF.init(0, 0, 100, 100), &previous_nodes);
+    const next = try layoutWidgetTree(.{ .kind = .stack, .children = &changed_children }, geometry.RectF.init(0, 0, 100, 100), &next_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    try std.testing.expectError(error.DuplicateWidgetId, WidgetLayoutTree.diff(duplicate, next, &invalidations_buffer));
+
+    var empty_invalidations: [0]WidgetInvalidation = .{};
+    try std.testing.expectError(error.WidgetInvalidationListFull, WidgetLayoutTree.diff(previous, next, &empty_invalidations));
 }
 
 test "widget tree emits panel button text and progress commands" {

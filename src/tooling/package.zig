@@ -1282,6 +1282,10 @@ fn androidActivity() []const u8 {
     \\import android.view.MotionEvent
     \\import android.view.SurfaceHolder
     \\import android.view.SurfaceView
+    \\import android.view.View
+    \\import android.view.accessibility.AccessibilityEvent
+    \\import android.view.accessibility.AccessibilityNodeInfo
+    \\import android.view.accessibility.AccessibilityNodeProvider
     \\import android.webkit.WebView
     \\import android.widget.Button
     \\import android.widget.FrameLayout
@@ -1291,6 +1295,7 @@ fn androidActivity() []const u8 {
     \\class MainActivity : Activity(), SurfaceHolder.Callback {
     \\    private var nativeApp: Long = 0
     \\    private lateinit var statusLabel: TextView
+    \\    private lateinit var widgetSurface: WidgetSurfaceView
     \\    private var currentSurfaceHolder: SurfaceHolder? = null
     \\
     \\    data class WidgetSemantics(
@@ -1343,12 +1348,236 @@ fn androidActivity() []const u8 {
     \\        val compositionRectCount: Int,
     \\    )
     \\
+    \\    private inner class WidgetSurfaceView : SurfaceView(this@MainActivity) {
+    \\        private val provider = WidgetAccessibilityProvider(this)
+    \\
+    \\        init {
+    \\            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+    \\            isFocusable = true
+    \\        }
+    \\
+    \\        override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = provider
+    \\
+    \\        fun notifyWidgetSemanticsChanged() {
+    \\            invalidate()
+    \\            provider.notifyWidgetSemanticsChanged()
+    \\        }
+    \\    }
+    \\
+    \\    private inner class WidgetAccessibilityProvider(private val host: View) : AccessibilityNodeProvider() {
+    \\        private var accessibilityFocusedId: Long = 0
+    \\
+    \\        override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+    \\            val nodes = widgetSemanticsSnapshot()
+    \\            return if (virtualViewId == View.NO_ID) {
+    \\                createHostNode(nodes)
+    \\            } else {
+    \\                nodes.firstOrNull { it.id.toInt() == virtualViewId }?.let { createWidgetNode(it, nodes) }
+    \\            }
+    \\        }
+    \\
+    \\        override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+    \\            if (virtualViewId == View.NO_ID) return false
+    \\            val node = widgetSemanticsSnapshot().firstOrNull { it.id.toInt() == virtualViewId } ?: return false
+    \\            val id = node.id
+    \\            val handled = when (action) {
+    \\                AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+    \\                    accessibilityFocusedId = id
+    \\                    host.invalidate()
+    \\                    sendVirtualEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+    \\                    true
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
+    \\                    if (accessibilityFocusedId == id) accessibilityFocusedId = 0
+    \\                    host.invalidate()
+    \\                    sendVirtualEvent(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+    \\                    true
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_FOCUS -> {
+    \\                    if (widgetSupportsAction(node, WIDGET_ACTION_FOCUS)) dispatchWidgetAction(id, WIDGET_ACTION_KIND_FOCUS) else false
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_CLICK -> performWidgetClick(id)
+    \\                AccessibilityNodeInfo.ACTION_SELECT -> {
+    \\                    if (widgetSupportsAction(node, WIDGET_ACTION_SELECT)) dispatchWidgetAction(id, WIDGET_ACTION_KIND_SELECT) else false
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> {
+    \\                    if (widgetSupportsAction(node, WIDGET_ACTION_INCREMENT)) dispatchWidgetAction(id, WIDGET_ACTION_KIND_INCREMENT) else false
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> {
+    \\                    if (widgetSupportsAction(node, WIDGET_ACTION_DECREMENT)) dispatchWidgetAction(id, WIDGET_ACTION_KIND_DECREMENT) else false
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_SET_TEXT -> {
+    \\                    val text = arguments?.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)?.toString()
+    \\                    if (text != null && widgetSupportsAction(node, WIDGET_ACTION_SET_TEXT)) dispatchWidgetAction(id, WIDGET_ACTION_KIND_SET_TEXT, text) else false
+    \\                }
+    \\                AccessibilityNodeInfo.ACTION_SET_SELECTION -> {
+    \\                    val start = arguments?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1) ?: -1
+    \\                    val end = arguments?.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, -1) ?: -1
+    \\                    if (start >= 0 && end >= 0 && widgetSupportsAction(node, WIDGET_ACTION_SET_SELECTION)) {
+    \\                        dispatchWidgetAction(id, WIDGET_ACTION_KIND_SET_SELECTION, selectionAnchor = start.toLong(), selectionFocus = end.toLong(), hasSelection = true)
+    \\                    } else {
+    \\                        false
+    \\                    }
+    \\                }
+    \\                else -> false
+    \\            }
+    \\            if (handled) host.invalidate()
+    \\            return handled
+    \\        }
+    \\
+    \\        fun notifyWidgetSemanticsChanged() {
+    \\            val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    \\            event.setSource(host)
+    \\            event.packageName = packageName
+    \\            event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
+    \\            host.parent?.requestSendAccessibilityEvent(host, event)
+    \\        }
+    \\
+    \\        private fun createHostNode(nodes: List<WidgetSemantics>): AccessibilityNodeInfo {
+    \\            val info = AccessibilityNodeInfo.obtain(host)
+    \\            host.onInitializeAccessibilityNodeInfo(info)
+    \\            info.className = SurfaceView::class.java.name
+    \\            for (node in nodes.filter { it.parentId == 0L }) {
+    \\                info.addChild(host, node.id.toInt())
+    \\            }
+    \\            return info
+    \\        }
+    \\
+    \\        private fun createWidgetNode(node: WidgetSemantics, nodes: List<WidgetSemantics>): AccessibilityNodeInfo {
+    \\            val info = AccessibilityNodeInfo.obtain()
+    \\            val virtualId = node.id.toInt()
+    \\            val parentNode = nodes.firstOrNull { it.id == node.parentId }
+    \\            info.setSource(host, virtualId)
+    \\            if (parentNode != null) {
+    \\                info.setParent(host, parentNode.id.toInt())
+    \\            } else {
+    \\                info.setParent(host)
+    \\            }
+    \\            for (child in nodes.filter { it.parentId == node.id }) {
+    \\                info.addChild(host, child.id.toInt())
+    \\            }
+    \\            info.packageName = packageName
+    \\            info.className = widgetAccessibilityClassName(node)
+    \\            info.contentDescription = node.label.ifEmpty { node.text }
+    \\            if (node.text.isNotEmpty()) info.text = node.text
+    \\            info.isVisibleToUser = host.isShown
+    \\            info.isEnabled = (node.flags and WIDGET_FLAG_DISABLED) == 0
+    \\            info.isFocusable = (node.flags and WIDGET_FLAG_FOCUSABLE) != 0
+    \\            info.isFocused = (node.flags and WIDGET_FLAG_FOCUSED) != 0
+    \\            info.isAccessibilityFocused = accessibilityFocusedId == node.id
+    \\            info.isSelected = (node.flags and WIDGET_FLAG_SELECTED) != 0
+    \\            info.isCheckable = node.role == WIDGET_ROLE_CHECKBOX || node.role == WIDGET_ROLE_SWITCH
+    \\            info.isChecked = info.isCheckable && widgetValueSelected(node)
+    \\            info.isClickable = widgetSupportsAnyAction(node, WIDGET_ACTION_PRESS or WIDGET_ACTION_TOGGLE or WIDGET_ACTION_SELECT)
+    \\            info.isEditable = node.role == WIDGET_ROLE_TEXTBOX
+    \\            info.isScrollable = node.hasScroll
+    \\            if (node.value != null) {
+    \\                info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, 0f, 1f, node.value))
+    \\            }
+    \\            setCollectionInfo(info, node, nodes)
+    \\            setCollectionItemInfo(info, node)
+    \\            if (node.textSelectionStart >= 0 && node.textSelectionEnd >= 0) {
+    \\                info.setTextSelection(node.textSelectionStart.toInt(), node.textSelectionEnd.toInt())
+    \\            }
+    \\            if (accessibilityFocusedId == node.id) {
+    \\                info.addAction(AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+    \\            } else {
+    \\                info.addAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+    \\            }
+    \\            if (info.isFocusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS)
+    \\            if (info.isClickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK)
+    \\            if (widgetSupportsAction(node, WIDGET_ACTION_SELECT)) info.addAction(AccessibilityNodeInfo.ACTION_SELECT)
+    \\            if (widgetSupportsAction(node, WIDGET_ACTION_INCREMENT)) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+    \\            if (widgetSupportsAction(node, WIDGET_ACTION_DECREMENT)) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+    \\            if (widgetSupportsAction(node, WIDGET_ACTION_SET_TEXT)) info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT)
+    \\            if (widgetSupportsAction(node, WIDGET_ACTION_SET_SELECTION)) info.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION)
+    \\            info.setBoundsInParent(boundsInParent(node, parentNode))
+    \\            val location = IntArray(2)
+    \\            host.getLocationOnScreen(location)
+    \\            val screenBounds = Rect(node.x.toInt(), node.y.toInt(), (node.x + node.width).toInt(), (node.y + node.height).toInt())
+    \\            info.setBoundsInScreen(Rect(screenBounds.left + location[0], screenBounds.top + location[1], screenBounds.right + location[0], screenBounds.bottom + location[1]))
+    \\            return info
+    \\        }
+    \\
+    \\        private fun performWidgetClick(id: Long): Boolean {
+    \\            val node = widgetSemanticsSnapshot().firstOrNull { it.id == id } ?: return false
+    \\            return when {
+    \\                widgetSupportsAction(node, WIDGET_ACTION_TOGGLE) -> dispatchWidgetAction(id, WIDGET_ACTION_KIND_TOGGLE)
+    \\                widgetSupportsAction(node, WIDGET_ACTION_PRESS) -> dispatchWidgetAction(id, WIDGET_ACTION_KIND_PRESS)
+    \\                widgetSupportsAction(node, WIDGET_ACTION_SELECT) -> dispatchWidgetAction(id, WIDGET_ACTION_KIND_SELECT)
+    \\                else -> false
+    \\            }
+    \\        }
+    \\
+    \\        private fun setCollectionInfo(info: AccessibilityNodeInfo, node: WidgetSemantics, nodes: List<WidgetSemantics>) {
+    \\            if (node.role == WIDGET_ROLE_GRID && node.gridRowCount >= 0 && node.gridColumnCount >= 0) {
+    \\                info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(node.gridRowCount.toInt(), node.gridColumnCount.toInt(), false))
+    \\            } else if (node.role == WIDGET_ROLE_LIST) {
+    \\                val childCount = nodes.count { it.parentId == node.id && it.role == WIDGET_ROLE_LISTITEM }
+    \\                val itemCount = if (node.listItemCount >= 0) node.listItemCount.toInt() else childCount
+    \\                if (itemCount > 0) info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(itemCount, 1, false))
+    \\            }
+    \\        }
+    \\
+    \\        private fun setCollectionItemInfo(info: AccessibilityNodeInfo, node: WidgetSemantics) {
+    \\            if (node.gridRowIndex >= 0 && node.gridColumnIndex >= 0) {
+    \\                info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(node.gridRowIndex.toInt(), 1, node.gridColumnIndex.toInt(), 1, false, info.isSelected))
+    \\            } else if (node.listItemIndex >= 0) {
+    \\                info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(node.listItemIndex.toInt(), 1, 0, 1, false, info.isSelected))
+    \\            }
+    \\        }
+    \\
+    \\        private fun boundsInParent(node: WidgetSemantics, parent: WidgetSemantics?): Rect {
+    \\            val parentX = parent?.x ?: 0f
+    \\            val parentY = parent?.y ?: 0f
+    \\            return Rect(
+    \\                (node.x - parentX).toInt(),
+    \\                (node.y - parentY).toInt(),
+    \\                (node.x - parentX + node.width).toInt(),
+    \\                (node.y - parentY + node.height).toInt(),
+    \\            )
+    \\        }
+    \\
+    \\        private fun widgetValueSelected(node: WidgetSemantics): Boolean {
+    \\            return node.value != null && node.value >= 0.5f
+    \\        }
+    \\
+    \\        private fun sendVirtualEvent(id: Long, type: Int) {
+    \\            val event = AccessibilityEvent.obtain(type)
+    \\            event.setSource(host, id.toInt())
+    \\            event.packageName = packageName
+    \\            host.parent?.requestSendAccessibilityEvent(host, event)
+    \\        }
+    \\
+    \\        private fun widgetAccessibilityClassName(node: WidgetSemantics): String {
+    \\            return when (node.role) {
+    \\                WIDGET_ROLE_BUTTON, WIDGET_ROLE_MENUITEM -> "android.widget.Button"
+    \\                WIDGET_ROLE_TEXTBOX -> "android.widget.EditText"
+    \\                WIDGET_ROLE_CHECKBOX -> "android.widget.CheckBox"
+    \\                WIDGET_ROLE_SWITCH -> "android.widget.Switch"
+    \\                WIDGET_ROLE_SLIDER -> "android.widget.SeekBar"
+    \\                WIDGET_ROLE_PROGRESSBAR -> "android.widget.ProgressBar"
+    \\                WIDGET_ROLE_IMAGE -> "android.widget.ImageView"
+    \\                WIDGET_ROLE_LIST -> "android.widget.ListView"
+    \\                else -> "android.view.View"
+    \\            }
+    \\        }
+    \\
+    \\        private fun widgetSupportsAction(node: WidgetSemantics, action: Int): Boolean {
+    \\            return (node.actions and action) != 0
+    \\        }
+    \\
+    \\        private fun widgetSupportsAnyAction(node: WidgetSemantics, actions: Int): Boolean {
+    \\            return (node.actions and actions) != 0
+    \\        }
+    \\    }
+    \\
     \\    override fun onCreate(savedInstanceState: Bundle?) {
     \\        super.onCreate(savedInstanceState)
     \\        System.loadLibrary("zero_native_host")
     \\
-    \\        val surface = SurfaceView(this)
-    \\        surface.holder.addCallback(this)
+    \\        widgetSurface = WidgetSurfaceView()
+    \\        widgetSurface.holder.addCallback(this)
     \\
     \\        val header = LinearLayout(this).apply {
     \\            orientation = LinearLayout.VERTICAL
@@ -1389,7 +1618,7 @@ fn androidActivity() []const u8 {
     \\            loadWorkspace(this)
     \\        }
     \\        val content = FrameLayout(this)
-    \\        content.addView(surface, FrameLayout.LayoutParams(
+    \\        content.addView(widgetSurface, FrameLayout.LayoutParams(
     \\            FrameLayout.LayoutParams.MATCH_PARENT,
     \\            FrameLayout.LayoutParams.MATCH_PARENT,
     \\        ))
@@ -1568,12 +1797,18 @@ fn androidActivity() []const u8 {
     \\        hasSelection: Boolean = false,
     \\    ): Boolean {
     \\        if (nativeApp == 0L) return false
-    \\        return nativeWidgetAction(nativeApp, id, action, text, selectionAnchor, selectionFocus, hasSelection)
+    \\        val ok = nativeWidgetAction(nativeApp, id, action, text, selectionAnchor, selectionFocus, hasSelection)
+    \\        if (ok) {
+    \\            nativeFrame(nativeApp)
+    \\            refreshWidgetSemanticsStatus()
+    \\        }
+    \\        return ok
     \\    }
     \\
     \\    private fun refreshWidgetSemanticsStatus() {
     \\        if (nativeApp == 0L || !::statusLabel.isInitialized) return
     \\        statusLabel.contentDescription = "Retained widget semantics: ${widgetSemanticsSnapshot().size}"
+    \\        if (::widgetSurface.isInitialized) widgetSurface.notifyWidgetSemanticsChanged()
     \\    }
     \\
     \\    private fun sendViewport(width: Int, height: Int, surface: Any) {
@@ -1642,6 +1877,37 @@ fn androidActivity() []const u8 {
     \\    external fun nativeWidgetAction(app: Long, id: Long, action: Int, text: String?, selectionAnchor: Long, selectionFocus: Long, hasSelection: Boolean): Boolean
     \\
     \\    companion object {
+    \\        private const val WIDGET_ROLE_BUTTON = 4
+    \\        private const val WIDGET_ROLE_TEXTBOX = 5
+    \\        private const val WIDGET_ROLE_MENUITEM = 9
+    \\        private const val WIDGET_ROLE_LIST = 10
+    \\        private const val WIDGET_ROLE_LISTITEM = 11
+    \\        private const val WIDGET_ROLE_GRID = 13
+    \\        private const val WIDGET_ROLE_IMAGE = 3
+    \\        private const val WIDGET_ROLE_CHECKBOX = 16
+    \\        private const val WIDGET_ROLE_SWITCH = 17
+    \\        private const val WIDGET_ROLE_SLIDER = 18
+    \\        private const val WIDGET_ROLE_PROGRESSBAR = 19
+    \\        private const val WIDGET_FLAG_FOCUSED = 1 shl 0
+    \\        private const val WIDGET_FLAG_SELECTED = 1 shl 3
+    \\        private const val WIDGET_FLAG_DISABLED = 1 shl 4
+    \\        private const val WIDGET_FLAG_FOCUSABLE = 1 shl 5
+    \\        private const val WIDGET_ACTION_FOCUS = 1 shl 0
+    \\        private const val WIDGET_ACTION_PRESS = 1 shl 1
+    \\        private const val WIDGET_ACTION_TOGGLE = 1 shl 2
+    \\        private const val WIDGET_ACTION_INCREMENT = 1 shl 3
+    \\        private const val WIDGET_ACTION_DECREMENT = 1 shl 4
+    \\        private const val WIDGET_ACTION_SET_TEXT = 1 shl 5
+    \\        private const val WIDGET_ACTION_SET_SELECTION = 1 shl 6
+    \\        private const val WIDGET_ACTION_SELECT = 1 shl 7
+    \\        private const val WIDGET_ACTION_KIND_FOCUS = 0
+    \\        private const val WIDGET_ACTION_KIND_PRESS = 1
+    \\        private const val WIDGET_ACTION_KIND_TOGGLE = 2
+    \\        private const val WIDGET_ACTION_KIND_INCREMENT = 3
+    \\        private const val WIDGET_ACTION_KIND_DECREMENT = 4
+    \\        private const val WIDGET_ACTION_KIND_SET_TEXT = 5
+    \\        private const val WIDGET_ACTION_KIND_SET_SELECTION = 6
+    \\        private const val WIDGET_ACTION_KIND_SELECT = 10
     \\        private const val html = """
     \\            <!doctype html>
     \\            <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2563,6 +2829,10 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetSemanticsFields") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetTextGeometry") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetAction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "AccessibilityNodeProvider") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "WidgetSurfaceView") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "createAccessibilityNodeInfo") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "performAction(virtualViewId") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "rootWindowInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "keyboardBottomInset") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "if (currentSurfaceHolder == holder) currentSurfaceHolder = null") != null);

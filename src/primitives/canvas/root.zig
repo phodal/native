@@ -2436,11 +2436,16 @@ pub const ReferenceRenderSurface = struct {
         }
 
         const advance = value.size * 0.5;
-        var index: usize = 0;
-        for (value.text) |byte| {
-            defer index += 1;
-            if (byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ') continue;
-            const x = value.origin.x + @as(f32, @floatFromInt(index)) * advance;
+        var text_offset: usize = 0;
+        var scalar_index: usize = 0;
+        while (text_offset < value.text.len) {
+            const next_offset = nextTextOffset(value.text, text_offset);
+            defer {
+                text_offset = next_offset;
+                scalar_index += 1;
+            }
+            if (isReferenceTextSpace(value.text[text_offset])) continue;
+            const x = value.origin.x + @as(f32, @floatFromInt(scalar_index)) * advance;
             const glyph_rect = geometry.RectF.init(x, value.origin.y - value.size, advance, value.size);
             self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
         }
@@ -7490,6 +7495,10 @@ fn referenceSampleFill(fill: Fill, transform: Affine, point: geometry.PointF) Co
         .color => |color| color,
         .linear_gradient => |gradient| referenceSampleLinearGradient(gradient, transform, point),
     };
+}
+
+fn isReferenceTextSpace(byte: u8) bool {
+    return byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ';
 }
 
 fn referenceSampleLinearGradient(gradient: LinearGradient, transform: Affine, point: geometry.PointF) Color {
@@ -14010,6 +14019,48 @@ test "reference renderer draws proxy text runs" {
     try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 3);
+}
+
+test "reference renderer advances proxy text by utf8 scalars" {
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .size = 2,
+        .origin = geometry.PointF.init(1, 3),
+        .color = Color.rgb8(255, 0, 0),
+        .text = "é B",
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [4]GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [4]GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [4]GlyphAtlasCacheAction = undefined;
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(5, 4),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .glyph_atlas_cache_entries = &glyph_cache_entries,
+        .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .changes = &changes,
+    });
+
+    var pixels: [5 * 4 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(5, 4, &pixels);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 2, 1);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
 }
 
 test "reference renderer draws image resources" {

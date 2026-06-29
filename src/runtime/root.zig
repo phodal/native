@@ -24,8 +24,16 @@ const max_canvas_render_animations_per_view: usize = max_canvas_commands_per_vie
 const max_canvas_render_overrides_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_pipelines_per_view: usize = 8;
 const max_canvas_pipeline_cache_actions_per_view: usize = max_canvas_pipelines_per_view * 2;
+const max_canvas_path_geometries_per_view: usize = max_canvas_commands_per_view;
+const max_canvas_path_geometry_cache_actions_per_view: usize = max_canvas_path_geometries_per_view * 2;
+const max_canvas_images_per_view: usize = max_canvas_commands_per_view;
+const max_canvas_image_cache_actions_per_view: usize = max_canvas_images_per_view * 2;
+const max_canvas_layers_per_view: usize = max_canvas_commands_per_view;
+const max_canvas_layer_cache_actions_per_view: usize = max_canvas_layers_per_view * 2;
 const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
+const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_view;
+const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
 const max_canvas_text_layouts_per_view: usize = 16;
 const max_canvas_surface_extent_pixels: f32 = 16_384;
 pub const max_canvas_widget_nodes_per_view: usize = 16;
@@ -233,9 +241,21 @@ pub const Runtime = struct {
     canvas_frame_render_batches: [max_canvas_commands_per_view]canvas.RenderBatch = undefined,
     canvas_frame_pipeline_cache_entries: [max_canvas_pipelines_per_view]canvas.RenderPipelineCacheEntry = undefined,
     canvas_frame_pipeline_cache_actions: [max_canvas_pipeline_cache_actions_per_view]canvas.RenderPipelineCacheAction = undefined,
+    canvas_frame_path_geometries: [max_canvas_path_geometries_per_view]canvas.RenderPathGeometry = undefined,
+    canvas_frame_path_geometry_cache_entries: [max_canvas_path_geometries_per_view]canvas.RenderPathGeometryCacheEntry = undefined,
+    canvas_frame_path_geometry_cache_actions: [max_canvas_path_geometry_cache_actions_per_view]canvas.RenderPathGeometryCacheAction = undefined,
+    canvas_frame_images: [max_canvas_images_per_view]canvas.RenderImage = undefined,
+    canvas_frame_image_cache_entries: [max_canvas_images_per_view]canvas.RenderImageCacheEntry = undefined,
+    canvas_frame_image_cache_actions: [max_canvas_image_cache_actions_per_view]canvas.RenderImageCacheAction = undefined,
+    canvas_frame_layers: [max_canvas_layers_per_view]canvas.RenderLayer = undefined,
+    canvas_frame_layer_cache_entries: [max_canvas_layers_per_view]canvas.RenderLayerCacheEntry = undefined,
+    canvas_frame_layer_cache_actions: [max_canvas_layer_cache_actions_per_view]canvas.RenderLayerCacheAction = undefined,
     canvas_frame_resources: [max_canvas_resources_per_view]canvas.RenderResource = undefined,
     canvas_frame_resource_cache_entries: [max_canvas_resources_per_view]canvas.RenderResourceCacheEntry = undefined,
     canvas_frame_resource_cache_actions: [max_canvas_resource_cache_actions_per_view]canvas.RenderResourceCacheAction = undefined,
+    canvas_frame_visual_effects: [max_canvas_visual_effects_per_view]canvas.VisualEffect = undefined,
+    canvas_frame_visual_effect_cache_entries: [max_canvas_visual_effects_per_view]canvas.VisualEffectCacheEntry = undefined,
+    canvas_frame_visual_effect_cache_actions: [max_canvas_visual_effect_cache_actions_per_view]canvas.VisualEffectCacheAction = undefined,
     canvas_frame_glyph_atlas_entries: [max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined,
     canvas_frame_glyph_atlas_cache_entries: [max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined,
     canvas_frame_glyph_atlas_cache_actions: [max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined,
@@ -723,6 +743,10 @@ pub const Runtime = struct {
         }
         frame_options.previous_resource_cache = self.views[index].canvasFrameResourceCache();
         frame_options.previous_pipeline_cache = self.views[index].canvasFramePipelineCache();
+        frame_options.previous_path_geometry_cache = self.views[index].canvasFramePathGeometryCache();
+        frame_options.previous_image_cache = self.views[index].canvasFrameImageCache();
+        frame_options.previous_layer_cache = self.views[index].canvasFrameLayerCache();
+        frame_options.previous_visual_effect_cache = self.views[index].canvasFrameVisualEffectCache();
         frame_options.previous_glyph_atlas_cache = self.views[index].canvasFrameGlyphAtlasCache();
         frame_options.previous_text_layout_cache = self.views[index].canvasFrameTextLayoutCache();
         const scheduled_render_overrides = try self.views[index].sampleCanvasRenderAnimations(
@@ -873,7 +897,11 @@ pub const Runtime = struct {
         };
         if (record) {
             try self.views[index].copyCanvasFramePipelineCache(canvas_frame.pipeline_cache_plan.entries);
+            try self.views[index].copyCanvasFramePathGeometryCache(canvas_frame.path_geometry_cache_plan.entries);
+            try self.views[index].copyCanvasFrameImageCache(canvas_frame.image_cache_plan.entries);
+            try self.views[index].copyCanvasFrameLayerCache(canvas_frame.layer_cache_plan.entries);
             try self.views[index].copyCanvasFrameResourceCache(canvas_frame.resource_cache_plan.entries);
+            try self.views[index].copyCanvasFrameVisualEffectCache(canvas_frame.visual_effect_cache_plan.entries);
             try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
             try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
             try self.views[index].copyPresentedCanvasSummary(display_list);
@@ -894,9 +922,21 @@ pub const Runtime = struct {
             .render_batches = &self.canvas_frame_render_batches,
             .pipeline_cache_entries = &self.canvas_frame_pipeline_cache_entries,
             .pipeline_cache_actions = &self.canvas_frame_pipeline_cache_actions,
+            .path_geometries = &self.canvas_frame_path_geometries,
+            .path_geometry_cache_entries = &self.canvas_frame_path_geometry_cache_entries,
+            .path_geometry_cache_actions = &self.canvas_frame_path_geometry_cache_actions,
+            .images = &self.canvas_frame_images,
+            .image_cache_entries = &self.canvas_frame_image_cache_entries,
+            .image_cache_actions = &self.canvas_frame_image_cache_actions,
+            .layers = &self.canvas_frame_layers,
+            .layer_cache_entries = &self.canvas_frame_layer_cache_entries,
+            .layer_cache_actions = &self.canvas_frame_layer_cache_actions,
             .resources = &self.canvas_frame_resources,
             .resource_cache_entries = &self.canvas_frame_resource_cache_entries,
             .resource_cache_actions = &self.canvas_frame_resource_cache_actions,
+            .visual_effects = &self.canvas_frame_visual_effects,
+            .visual_effect_cache_entries = &self.canvas_frame_visual_effect_cache_entries,
+            .visual_effect_cache_actions = &self.canvas_frame_visual_effect_cache_actions,
             .glyph_atlas_entries = &self.canvas_frame_glyph_atlas_entries,
             .glyph_atlas_cache_entries = &self.canvas_frame_glyph_atlas_cache_entries,
             .glyph_atlas_cache_actions = &self.canvas_frame_glyph_atlas_cache_actions,
@@ -1617,10 +1657,33 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_pipeline_upload_count = preview_frame.pipeline_cache_plan.uploadCount();
                     enriched_frame_event.canvas_frame_pipeline_retain_count = preview_frame.pipeline_cache_plan.retainCount();
                     enriched_frame_event.canvas_frame_pipeline_evict_count = preview_frame.pipeline_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_path_geometry_count = preview_frame.path_geometry_plan.geometryCount();
+                    enriched_frame_event.canvas_frame_path_geometry_vertex_count = preview_frame.path_geometry_plan.vertexCount();
+                    enriched_frame_event.canvas_frame_path_geometry_index_count = preview_frame.path_geometry_plan.indexCount();
+                    enriched_frame_event.canvas_frame_path_geometry_upload_count = preview_frame.path_geometry_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_path_geometry_retain_count = preview_frame.path_geometry_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_path_geometry_evict_count = preview_frame.path_geometry_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_image_count = preview_frame.image_plan.imageCount();
+                    enriched_frame_event.canvas_frame_image_upload_count = preview_frame.image_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_image_retain_count = preview_frame.image_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_image_evict_count = preview_frame.image_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_layer_count = preview_frame.layer_plan.layerCount();
+                    enriched_frame_event.canvas_frame_layer_opacity_count = preview_frame.layer_plan.opacityLayerCount();
+                    enriched_frame_event.canvas_frame_layer_clip_count = preview_frame.layer_plan.clipLayerCount();
+                    enriched_frame_event.canvas_frame_layer_transform_count = preview_frame.layer_plan.transformLayerCount();
+                    enriched_frame_event.canvas_frame_layer_upload_count = preview_frame.layer_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_layer_retain_count = preview_frame.layer_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_layer_evict_count = preview_frame.layer_cache_plan.evictCount();
                     enriched_frame_event.canvas_frame_resource_count = preview_frame.resource_plan.resourceCount();
                     enriched_frame_event.canvas_frame_resource_upload_count = preview_frame.resource_cache_plan.uploadCount();
                     enriched_frame_event.canvas_frame_resource_retain_count = preview_frame.resource_cache_plan.retainCount();
                     enriched_frame_event.canvas_frame_resource_evict_count = preview_frame.resource_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_visual_effect_count = preview_frame.visual_effect_plan.effectCount();
+                    enriched_frame_event.canvas_frame_visual_effect_shadow_count = preview_frame.visual_effect_plan.shadowCount();
+                    enriched_frame_event.canvas_frame_visual_effect_blur_count = preview_frame.visual_effect_plan.blurCount();
+                    enriched_frame_event.canvas_frame_visual_effect_upload_count = preview_frame.visual_effect_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_visual_effect_retain_count = preview_frame.visual_effect_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_visual_effect_evict_count = preview_frame.visual_effect_cache_plan.evictCount();
                     enriched_frame_event.canvas_frame_glyph_atlas_entry_count = preview_frame.glyph_atlas_plan.entryCount();
                     enriched_frame_event.canvas_frame_glyph_atlas_upload_count = preview_frame.glyph_atlas_cache_plan.uploadCount();
                     enriched_frame_event.canvas_frame_glyph_atlas_retain_count = preview_frame.glyph_atlas_cache_plan.retainCount();
@@ -4172,8 +4235,16 @@ const RuntimeView = struct {
     canvas_render_animation_count: usize = 0,
     canvas_frame_render_overrides: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
     canvas_frame_render_override_count: usize = 0,
+    canvas_frame_path_geometry_cache: [max_canvas_path_geometries_per_view]canvas.RenderPathGeometryCacheEntry = undefined,
+    canvas_frame_path_geometry_cache_count: usize = 0,
+    canvas_frame_image_cache: [max_canvas_images_per_view]canvas.RenderImageCacheEntry = undefined,
+    canvas_frame_image_cache_count: usize = 0,
+    canvas_frame_layer_cache: [max_canvas_layers_per_view]canvas.RenderLayerCacheEntry = undefined,
+    canvas_frame_layer_cache_count: usize = 0,
     canvas_frame_resource_cache: [max_canvas_resources_per_view]canvas.RenderResourceCacheEntry = undefined,
     canvas_frame_resource_cache_count: usize = 0,
+    canvas_frame_visual_effect_cache: [max_canvas_visual_effects_per_view]canvas.VisualEffectCacheEntry = undefined,
+    canvas_frame_visual_effect_cache_count: usize = 0,
     canvas_frame_glyph_atlas_cache: [max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined,
     canvas_frame_glyph_atlas_cache_count: usize = 0,
     canvas_frame_text_layout_cache: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined,
@@ -4191,10 +4262,33 @@ const RuntimeView = struct {
     canvas_frame_pipeline_upload_count: usize = 0,
     canvas_frame_pipeline_retain_count: usize = 0,
     canvas_frame_pipeline_evict_count: usize = 0,
+    canvas_frame_path_geometry_count: usize = 0,
+    canvas_frame_path_geometry_vertex_count: usize = 0,
+    canvas_frame_path_geometry_index_count: usize = 0,
+    canvas_frame_path_geometry_upload_count: usize = 0,
+    canvas_frame_path_geometry_retain_count: usize = 0,
+    canvas_frame_path_geometry_evict_count: usize = 0,
+    canvas_frame_image_count: usize = 0,
+    canvas_frame_image_upload_count: usize = 0,
+    canvas_frame_image_retain_count: usize = 0,
+    canvas_frame_image_evict_count: usize = 0,
+    canvas_frame_layer_count: usize = 0,
+    canvas_frame_layer_opacity_count: usize = 0,
+    canvas_frame_layer_clip_count: usize = 0,
+    canvas_frame_layer_transform_count: usize = 0,
+    canvas_frame_layer_upload_count: usize = 0,
+    canvas_frame_layer_retain_count: usize = 0,
+    canvas_frame_layer_evict_count: usize = 0,
     canvas_frame_resource_count: usize = 0,
     canvas_frame_resource_upload_count: usize = 0,
     canvas_frame_resource_retain_count: usize = 0,
     canvas_frame_resource_evict_count: usize = 0,
+    canvas_frame_visual_effect_count: usize = 0,
+    canvas_frame_visual_effect_shadow_count: usize = 0,
+    canvas_frame_visual_effect_blur_count: usize = 0,
+    canvas_frame_visual_effect_upload_count: usize = 0,
+    canvas_frame_visual_effect_retain_count: usize = 0,
+    canvas_frame_visual_effect_evict_count: usize = 0,
     canvas_frame_glyph_atlas_entry_count: usize = 0,
     canvas_frame_glyph_atlas_upload_count: usize = 0,
     canvas_frame_glyph_atlas_retain_count: usize = 0,
@@ -4272,10 +4366,33 @@ const RuntimeView = struct {
             .canvas_frame_pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
             .canvas_frame_pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
             .canvas_frame_pipeline_evict_count = self.canvas_frame_pipeline_evict_count,
+            .canvas_frame_path_geometry_count = self.canvas_frame_path_geometry_count,
+            .canvas_frame_path_geometry_vertex_count = self.canvas_frame_path_geometry_vertex_count,
+            .canvas_frame_path_geometry_index_count = self.canvas_frame_path_geometry_index_count,
+            .canvas_frame_path_geometry_upload_count = self.canvas_frame_path_geometry_upload_count,
+            .canvas_frame_path_geometry_retain_count = self.canvas_frame_path_geometry_retain_count,
+            .canvas_frame_path_geometry_evict_count = self.canvas_frame_path_geometry_evict_count,
+            .canvas_frame_image_count = self.canvas_frame_image_count,
+            .canvas_frame_image_upload_count = self.canvas_frame_image_upload_count,
+            .canvas_frame_image_retain_count = self.canvas_frame_image_retain_count,
+            .canvas_frame_image_evict_count = self.canvas_frame_image_evict_count,
+            .canvas_frame_layer_count = self.canvas_frame_layer_count,
+            .canvas_frame_layer_opacity_count = self.canvas_frame_layer_opacity_count,
+            .canvas_frame_layer_clip_count = self.canvas_frame_layer_clip_count,
+            .canvas_frame_layer_transform_count = self.canvas_frame_layer_transform_count,
+            .canvas_frame_layer_upload_count = self.canvas_frame_layer_upload_count,
+            .canvas_frame_layer_retain_count = self.canvas_frame_layer_retain_count,
+            .canvas_frame_layer_evict_count = self.canvas_frame_layer_evict_count,
             .canvas_frame_resource_count = self.canvas_frame_resource_count,
             .canvas_frame_resource_upload_count = self.canvas_frame_resource_upload_count,
             .canvas_frame_resource_retain_count = self.canvas_frame_resource_retain_count,
             .canvas_frame_resource_evict_count = self.canvas_frame_resource_evict_count,
+            .canvas_frame_visual_effect_count = self.canvas_frame_visual_effect_count,
+            .canvas_frame_visual_effect_shadow_count = self.canvas_frame_visual_effect_shadow_count,
+            .canvas_frame_visual_effect_blur_count = self.canvas_frame_visual_effect_blur_count,
+            .canvas_frame_visual_effect_upload_count = self.canvas_frame_visual_effect_upload_count,
+            .canvas_frame_visual_effect_retain_count = self.canvas_frame_visual_effect_retain_count,
+            .canvas_frame_visual_effect_evict_count = self.canvas_frame_visual_effect_evict_count,
             .canvas_frame_glyph_atlas_entry_count = self.canvas_frame_glyph_atlas_entry_count,
             .canvas_frame_glyph_atlas_upload_count = self.canvas_frame_glyph_atlas_upload_count,
             .canvas_frame_glyph_atlas_retain_count = self.canvas_frame_glyph_atlas_retain_count,
@@ -4321,6 +4438,22 @@ const RuntimeView = struct {
 
     fn canvasFrameResourceCache(self: *const RuntimeView) []const canvas.RenderResourceCacheEntry {
         return self.canvas_frame_resource_cache[0..self.canvas_frame_resource_cache_count];
+    }
+
+    fn canvasFramePathGeometryCache(self: *const RuntimeView) []const canvas.RenderPathGeometryCacheEntry {
+        return self.canvas_frame_path_geometry_cache[0..self.canvas_frame_path_geometry_cache_count];
+    }
+
+    fn canvasFrameImageCache(self: *const RuntimeView) []const canvas.RenderImageCacheEntry {
+        return self.canvas_frame_image_cache[0..self.canvas_frame_image_cache_count];
+    }
+
+    fn canvasFrameLayerCache(self: *const RuntimeView) []const canvas.RenderLayerCacheEntry {
+        return self.canvas_frame_layer_cache[0..self.canvas_frame_layer_cache_count];
+    }
+
+    fn canvasFrameVisualEffectCache(self: *const RuntimeView) []const canvas.VisualEffectCacheEntry {
+        return self.canvas_frame_visual_effect_cache[0..self.canvas_frame_visual_effect_cache_count];
     }
 
     fn canvasRenderAnimations(self: *const RuntimeView) []const canvas.CanvasRenderAnimation {
@@ -4377,6 +4510,30 @@ const RuntimeView = struct {
         self.canvas_frame_resource_cache_count = entries.len;
     }
 
+    fn copyCanvasFramePathGeometryCache(self: *RuntimeView, entries: []const canvas.RenderPathGeometryCacheEntry) anyerror!void {
+        if (entries.len > self.canvas_frame_path_geometry_cache.len) return error.PathGeometryListFull;
+        @memcpy(self.canvas_frame_path_geometry_cache[0..entries.len], entries);
+        self.canvas_frame_path_geometry_cache_count = entries.len;
+    }
+
+    fn copyCanvasFrameImageCache(self: *RuntimeView, entries: []const canvas.RenderImageCacheEntry) anyerror!void {
+        if (entries.len > self.canvas_frame_image_cache.len) return error.ImageListFull;
+        @memcpy(self.canvas_frame_image_cache[0..entries.len], entries);
+        self.canvas_frame_image_cache_count = entries.len;
+    }
+
+    fn copyCanvasFrameLayerCache(self: *RuntimeView, entries: []const canvas.RenderLayerCacheEntry) anyerror!void {
+        if (entries.len > self.canvas_frame_layer_cache.len) return error.LayerListFull;
+        @memcpy(self.canvas_frame_layer_cache[0..entries.len], entries);
+        self.canvas_frame_layer_cache_count = entries.len;
+    }
+
+    fn copyCanvasFrameVisualEffectCache(self: *RuntimeView, entries: []const canvas.VisualEffectCacheEntry) anyerror!void {
+        if (entries.len > self.canvas_frame_visual_effect_cache.len) return error.VisualEffectListFull;
+        @memcpy(self.canvas_frame_visual_effect_cache[0..entries.len], entries);
+        self.canvas_frame_visual_effect_cache_count = entries.len;
+    }
+
     fn copyCanvasRenderAnimations(self: *RuntimeView, animations: []const canvas.CanvasRenderAnimation) anyerror!void {
         if (animations.len > self.canvas_render_animations.len) return error.RenderAnimationListFull;
         @memcpy(self.canvas_render_animations[0..animations.len], animations);
@@ -4431,10 +4588,33 @@ const RuntimeView = struct {
         self.canvas_frame_pipeline_upload_count = frame.pipeline_cache_plan.uploadCount();
         self.canvas_frame_pipeline_retain_count = frame.pipeline_cache_plan.retainCount();
         self.canvas_frame_pipeline_evict_count = frame.pipeline_cache_plan.evictCount();
+        self.canvas_frame_path_geometry_count = frame.path_geometry_plan.geometryCount();
+        self.canvas_frame_path_geometry_vertex_count = frame.path_geometry_plan.vertexCount();
+        self.canvas_frame_path_geometry_index_count = frame.path_geometry_plan.indexCount();
+        self.canvas_frame_path_geometry_upload_count = frame.path_geometry_cache_plan.uploadCount();
+        self.canvas_frame_path_geometry_retain_count = frame.path_geometry_cache_plan.retainCount();
+        self.canvas_frame_path_geometry_evict_count = frame.path_geometry_cache_plan.evictCount();
+        self.canvas_frame_image_count = frame.image_plan.imageCount();
+        self.canvas_frame_image_upload_count = frame.image_cache_plan.uploadCount();
+        self.canvas_frame_image_retain_count = frame.image_cache_plan.retainCount();
+        self.canvas_frame_image_evict_count = frame.image_cache_plan.evictCount();
+        self.canvas_frame_layer_count = frame.layer_plan.layerCount();
+        self.canvas_frame_layer_opacity_count = frame.layer_plan.opacityLayerCount();
+        self.canvas_frame_layer_clip_count = frame.layer_plan.clipLayerCount();
+        self.canvas_frame_layer_transform_count = frame.layer_plan.transformLayerCount();
+        self.canvas_frame_layer_upload_count = frame.layer_cache_plan.uploadCount();
+        self.canvas_frame_layer_retain_count = frame.layer_cache_plan.retainCount();
+        self.canvas_frame_layer_evict_count = frame.layer_cache_plan.evictCount();
         self.canvas_frame_resource_count = frame.resource_plan.resourceCount();
         self.canvas_frame_resource_upload_count = frame.resource_cache_plan.uploadCount();
         self.canvas_frame_resource_retain_count = frame.resource_cache_plan.retainCount();
         self.canvas_frame_resource_evict_count = frame.resource_cache_plan.evictCount();
+        self.canvas_frame_visual_effect_count = frame.visual_effect_plan.effectCount();
+        self.canvas_frame_visual_effect_shadow_count = frame.visual_effect_plan.shadowCount();
+        self.canvas_frame_visual_effect_blur_count = frame.visual_effect_plan.blurCount();
+        self.canvas_frame_visual_effect_upload_count = frame.visual_effect_cache_plan.uploadCount();
+        self.canvas_frame_visual_effect_retain_count = frame.visual_effect_cache_plan.retainCount();
+        self.canvas_frame_visual_effect_evict_count = frame.visual_effect_cache_plan.evictCount();
         self.canvas_frame_glyph_atlas_entry_count = frame.glyph_atlas_plan.entryCount();
         self.canvas_frame_glyph_atlas_upload_count = frame.glyph_atlas_cache_plan.uploadCount();
         self.canvas_frame_glyph_atlas_retain_count = frame.glyph_atlas_cache_plan.retainCount();
@@ -4462,10 +4642,33 @@ const RuntimeView = struct {
             .pipeline_upload_count = self.canvas_frame_pipeline_upload_count,
             .pipeline_retain_count = self.canvas_frame_pipeline_retain_count,
             .pipeline_evict_count = self.canvas_frame_pipeline_evict_count,
+            .path_geometry_count = self.canvas_frame_path_geometry_count,
+            .path_geometry_vertex_count = self.canvas_frame_path_geometry_vertex_count,
+            .path_geometry_index_count = self.canvas_frame_path_geometry_index_count,
+            .path_geometry_upload_count = self.canvas_frame_path_geometry_upload_count,
+            .path_geometry_retain_count = self.canvas_frame_path_geometry_retain_count,
+            .path_geometry_evict_count = self.canvas_frame_path_geometry_evict_count,
+            .image_count = self.canvas_frame_image_count,
+            .image_upload_count = self.canvas_frame_image_upload_count,
+            .image_retain_count = self.canvas_frame_image_retain_count,
+            .image_evict_count = self.canvas_frame_image_evict_count,
+            .layer_count = self.canvas_frame_layer_count,
+            .layer_opacity_count = self.canvas_frame_layer_opacity_count,
+            .layer_clip_count = self.canvas_frame_layer_clip_count,
+            .layer_transform_count = self.canvas_frame_layer_transform_count,
+            .layer_upload_count = self.canvas_frame_layer_upload_count,
+            .layer_retain_count = self.canvas_frame_layer_retain_count,
+            .layer_evict_count = self.canvas_frame_layer_evict_count,
             .resource_count = self.canvas_frame_resource_count,
             .resource_upload_count = self.canvas_frame_resource_upload_count,
             .resource_retain_count = self.canvas_frame_resource_retain_count,
             .resource_evict_count = self.canvas_frame_resource_evict_count,
+            .visual_effect_count = self.canvas_frame_visual_effect_count,
+            .visual_effect_shadow_count = self.canvas_frame_visual_effect_shadow_count,
+            .visual_effect_blur_count = self.canvas_frame_visual_effect_blur_count,
+            .visual_effect_upload_count = self.canvas_frame_visual_effect_upload_count,
+            .visual_effect_retain_count = self.canvas_frame_visual_effect_retain_count,
+            .visual_effect_evict_count = self.canvas_frame_visual_effect_evict_count,
             .glyph_atlas_entry_count = self.canvas_frame_glyph_atlas_entry_count,
             .glyph_atlas_upload_count = self.canvas_frame_glyph_atlas_upload_count,
             .glyph_atlas_retain_count = self.canvas_frame_glyph_atlas_retain_count,
@@ -5815,7 +6018,7 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_full_repaint,
         view.canvas_frame_batch_count,
     });
-    try writer.print(",\"canvasFrameEncoderCommandCount\":{d},\"canvasFrameEncoderCacheActionCount\":{d},\"canvasFrameEncoderBindPipelineCount\":{d},\"canvasFrameEncoderDrawBatchCount\":{d},\"canvasFramePipelineCount\":{d},\"canvasFramePipelineUploadCount\":{d},\"canvasFramePipelineRetainCount\":{d},\"canvasFramePipelineEvictCount\":{d},\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
+    try writer.print(",\"canvasFrameEncoderCommandCount\":{d},\"canvasFrameEncoderCacheActionCount\":{d},\"canvasFrameEncoderBindPipelineCount\":{d},\"canvasFrameEncoderDrawBatchCount\":{d},\"canvasFramePipelineCount\":{d},\"canvasFramePipelineUploadCount\":{d},\"canvasFramePipelineRetainCount\":{d},\"canvasFramePipelineEvictCount\":{d}", .{
         view.canvas_frame_encoder_command_count,
         view.canvas_frame_encoder_cache_action_count,
         view.canvas_frame_encoder_bind_pipeline_count,
@@ -5824,10 +6027,39 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_pipeline_upload_count,
         view.canvas_frame_pipeline_retain_count,
         view.canvas_frame_pipeline_evict_count,
+    });
+    try writer.print(",\"canvasFramePathGeometryCount\":{d},\"canvasFramePathGeometryVertexCount\":{d},\"canvasFramePathGeometryIndexCount\":{d},\"canvasFramePathGeometryUploadCount\":{d},\"canvasFramePathGeometryRetainCount\":{d},\"canvasFramePathGeometryEvictCount\":{d},\"canvasFrameImageCount\":{d},\"canvasFrameImageUploadCount\":{d},\"canvasFrameImageRetainCount\":{d},\"canvasFrameImageEvictCount\":{d}", .{
+        view.canvas_frame_path_geometry_count,
+        view.canvas_frame_path_geometry_vertex_count,
+        view.canvas_frame_path_geometry_index_count,
+        view.canvas_frame_path_geometry_upload_count,
+        view.canvas_frame_path_geometry_retain_count,
+        view.canvas_frame_path_geometry_evict_count,
+        view.canvas_frame_image_count,
+        view.canvas_frame_image_upload_count,
+        view.canvas_frame_image_retain_count,
+        view.canvas_frame_image_evict_count,
+    });
+    try writer.print(",\"canvasFrameLayerCount\":{d},\"canvasFrameLayerOpacityCount\":{d},\"canvasFrameLayerClipCount\":{d},\"canvasFrameLayerTransformCount\":{d},\"canvasFrameLayerUploadCount\":{d},\"canvasFrameLayerRetainCount\":{d},\"canvasFrameLayerEvictCount\":{d}", .{
+        view.canvas_frame_layer_count,
+        view.canvas_frame_layer_opacity_count,
+        view.canvas_frame_layer_clip_count,
+        view.canvas_frame_layer_transform_count,
+        view.canvas_frame_layer_upload_count,
+        view.canvas_frame_layer_retain_count,
+        view.canvas_frame_layer_evict_count,
+    });
+    try writer.print(",\"canvasFrameResourceCount\":{d},\"canvasFrameResourceUploadCount\":{d},\"canvasFrameResourceRetainCount\":{d},\"canvasFrameResourceEvictCount\":{d},\"canvasFrameVisualEffectCount\":{d},\"canvasFrameVisualEffectShadowCount\":{d},\"canvasFrameVisualEffectBlurCount\":{d},\"canvasFrameVisualEffectUploadCount\":{d},\"canvasFrameVisualEffectRetainCount\":{d},\"canvasFrameVisualEffectEvictCount\":{d},\"canvasFrameGlyphAtlasEntryCount\":{d},\"canvasFrameGlyphAtlasUploadCount\":{d},\"canvasFrameGlyphAtlasRetainCount\":{d},\"canvasFrameGlyphAtlasEvictCount\":{d}", .{
         view.canvas_frame_resource_count,
         view.canvas_frame_resource_upload_count,
         view.canvas_frame_resource_retain_count,
         view.canvas_frame_resource_evict_count,
+        view.canvas_frame_visual_effect_count,
+        view.canvas_frame_visual_effect_shadow_count,
+        view.canvas_frame_visual_effect_blur_count,
+        view.canvas_frame_visual_effect_upload_count,
+        view.canvas_frame_visual_effect_retain_count,
+        view.canvas_frame_visual_effect_evict_count,
         view.canvas_frame_glyph_atlas_entry_count,
         view.canvas_frame_glyph_atlas_upload_count,
         view.canvas_frame_glyph_atlas_retain_count,
@@ -7528,6 +7760,239 @@ test "runtime next canvas frame tracks presented state and resource cache" {
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 60, 40), moved_frame.dirty_bounds.?);
     try std.testing.expectEqual(@as(usize, 1), moved_frame.resource_cache_plan.retainCount());
     try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].presented_canvas_revision);
+}
+
+test "runtime next canvas frame retains renderer cache families" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-render-caches", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    const path_elements = [_]canvas.PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(4, 4), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(24, 4), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(14, 20), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const commands = [_]canvas.CanvasCommand{
+        .{ .fill_path = .{
+            .id = 1,
+            .elements = &path_elements,
+            .fill = .{ .color = canvas.Color.rgb8(14, 165, 233) },
+        } },
+        .{ .draw_image = .{
+            .id = 2,
+            .image_id = 42,
+            .dst = geometry.RectF.init(32, 4, 18, 18),
+        } },
+        .{ .shadow = .{
+            .id = 3,
+            .rect = geometry.RectF.init(58, 8, 20, 14),
+            .radius = canvas.Radius.all(5),
+            .blur = 8,
+            .color = canvas.Color.rgba8(15, 23, 42, 80),
+        } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    const overrides = [_]canvas.CanvasRenderOverride{.{
+        .id = 1,
+        .opacity = 0.5,
+    }};
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 1,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .render_overrides = &overrides,
+    }, harness.runtime.canvasFrameScratchStorage());
+    try std.testing.expect(first_frame.full_repaint);
+    try std.testing.expectEqual(@as(usize, 1), first_frame.path_geometry_plan.geometryCount());
+    try std.testing.expect(first_frame.path_geometry_plan.vertexCount() > 0);
+    try std.testing.expect(first_frame.path_geometry_plan.indexCount() > 0);
+    try std.testing.expectEqual(@as(usize, 1), first_frame.path_geometry_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.image_plan.imageCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.image_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.layer_plan.layerCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.layer_plan.opacityLayerCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.layer_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.visual_effect_plan.effectCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.visual_effect_plan.shadowCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.visual_effect_cache_plan.uploadCount());
+
+    const first_info = harness.runtime.views[0].info();
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_path_geometry_count);
+    try std.testing.expect(first_info.canvas_frame_path_geometry_vertex_count > 0);
+    try std.testing.expect(first_info.canvas_frame_path_geometry_index_count > 0);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_path_geometry_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_image_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_image_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_layer_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_layer_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_count);
+    try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_upload_count);
+
+    const first_gpu_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_path_geometry_count);
+    try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_image_count);
+    try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_layer_count);
+    try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_visual_effect_count);
+
+    var view_json_buffer: [8192]u8 = undefined;
+    const view_json = try writeViewJson(first_info, &view_json_buffer);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFramePathGeometryCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameImageCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameLayerCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameVisualEffectCount\":1") != null);
+
+    const retained_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 2,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .render_overrides = &overrides,
+    }, harness.runtime.canvasFrameScratchStorage());
+    try std.testing.expect(!retained_frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 0), retained_frame.path_geometry_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), retained_frame.path_geometry_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), retained_frame.image_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), retained_frame.image_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), retained_frame.layer_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), retained_frame.layer_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), retained_frame.visual_effect_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), retained_frame.visual_effect_cache_plan.retainCount());
+
+    const retained_info = harness.runtime.views[0].info();
+    try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_path_geometry_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_image_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_layer_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_visual_effect_retain_count);
+}
+
+test "runtime GPU surface frame event exposes renderer cache family counters" {
+    const TestApp = struct {
+        frame_count: u32 = 0,
+        last_path_geometry_count: usize = 0,
+        last_path_geometry_upload_count: usize = 0,
+        last_image_count: usize = 0,
+        last_image_upload_count: usize = 0,
+        last_layer_count: usize = 0,
+        last_layer_upload_count: usize = 0,
+        last_visual_effect_count: usize = 0,
+        last_visual_effect_upload_count: usize = 0,
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .gpu_surface_frame => |frame_event| {
+                    self.frame_count += 1;
+                    self.last_path_geometry_count = frame_event.canvas_frame_path_geometry_count;
+                    self.last_path_geometry_upload_count = frame_event.canvas_frame_path_geometry_upload_count;
+                    self.last_image_count = frame_event.canvas_frame_image_count;
+                    self.last_image_upload_count = frame_event.canvas_frame_image_upload_count;
+                    self.last_layer_count = frame_event.canvas_frame_layer_count;
+                    self.last_layer_upload_count = frame_event.canvas_frame_layer_upload_count;
+                    self.last_visual_effect_count = frame_event.canvas_frame_visual_effect_count;
+                    self.last_visual_effect_upload_count = frame_event.canvas_frame_visual_effect_upload_count;
+                },
+                else => {},
+            }
+        }
+
+        fn app(self: *@This()) App {
+            return .{
+                .context = self,
+                .name = "gpu-canvas-frame-event-render-caches",
+                .source = platform.WebViewSource.html("<h1>Hello</h1>"),
+                .event_fn = event,
+            };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    const path_elements = [_]canvas.PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(4, 4), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(24, 4), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(14, 20), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const commands = [_]canvas.CanvasCommand{
+        .{ .fill_path = .{
+            .id = 1,
+            .elements = &path_elements,
+            .fill = .{ .color = canvas.Color.rgb8(14, 165, 233) },
+        } },
+        .{ .draw_image = .{
+            .id = 2,
+            .image_id = 42,
+            .dst = geometry.RectF.init(32, 4, 18, 18),
+        } },
+        .{ .shadow = .{
+            .id = 3,
+            .rect = geometry.RectF.init(58, 8, 20, 14),
+            .radius = canvas.Radius.all(5),
+            .blur = 8,
+            .color = canvas.Color.rgba8(15, 23, 42, 80),
+        } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+    const animations = [_]canvas.CanvasRenderAnimation{.{
+        .id = 1,
+        .start_ns = 0,
+        .duration_ms = 1000,
+        .from_opacity = 0.5,
+        .to_opacity = 1,
+    }};
+    _ = try harness.runtime.setCanvasRenderAnimations(1, "canvas", &animations);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(96, 48),
+        .scale_factor = 1,
+        .frame_index = 7,
+        .timestamp_ns = 500_000_000,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.frame_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_path_geometry_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_path_geometry_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_image_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_image_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_layer_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_layer_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_visual_effect_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_visual_effect_upload_count);
+
+    const frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_path_geometry_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_image_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_layer_count);
+    try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_visual_effect_count);
 }
 
 test "runtime next canvas frame retains and evicts glyph atlas cache" {

@@ -979,6 +979,10 @@ pub const GpuSurfaceInputKind = enum {
     scroll,
     key_down,
     key_up,
+    text_input,
+    ime_set_composition,
+    ime_commit_composition,
+    ime_cancel_composition,
 };
 
 pub const GpuSurfaceInputEvent = struct {
@@ -995,6 +999,7 @@ pub const GpuSurfaceInputEvent = struct {
     delta_y: f32 = 0,
     key: []const u8 = "",
     text: []const u8 = "",
+    composition_cursor: ?usize = null,
     modifiers: ShortcutModifiers = .{},
 };
 

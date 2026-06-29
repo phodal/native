@@ -38,6 +38,7 @@ Select a simulator or device and run the `ZeroNativeIOSExample` scheme.
 - `SceneDelegate` forwards activation and resignation with `zero_native_app_activate` and `zero_native_app_deactivate`.
 - `viewDidLayoutSubviews` forwards the current WebView size, screen scale, safe-area insets, and keyboard inset with `zero_native_app_viewport`, then requests a frame.
 - Keyboard frame changes adjust the `WKWebView` bottom constraint while also forwarding the keyboard inset to zero-native.
+- The embedded C ABI exposes hardware key, committed text, and IME composition entry points for GPU/widget text fields.
 - The native Back and Refresh buttons call `zero_native_app_command` with stable mobile command IDs, update status from `zero_native_app_last_command_count`, and request a frame.
 - Controller teardown stops and destroys the app.
 

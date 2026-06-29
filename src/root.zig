@@ -142,6 +142,18 @@ pub export fn zero_native_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: 
     embed.zero_native_app_touch(app, id, phase, x, y, pressure);
 }
 
+pub export fn zero_native_app_key(app: ?*anyopaque, phase: c_int, key: ?[*]const u8, key_len: usize, text: ?[*]const u8, text_len: usize, modifiers_mask: u32) void {
+    embed.zero_native_app_key(app, phase, key, key_len, text, text_len, modifiers_mask);
+}
+
+pub export fn zero_native_app_text(app: ?*anyopaque, text: ?[*]const u8, len: usize) void {
+    embed.zero_native_app_text(app, text, len);
+}
+
+pub export fn zero_native_app_ime(app: ?*anyopaque, kind: c_int, text: ?[*]const u8, len: usize, cursor: isize) void {
+    embed.zero_native_app_ime(app, kind, text, len, cursor);
+}
+
 pub export fn zero_native_app_command(app: ?*anyopaque, name: ?[*]const u8, len: usize) void {
     embed.zero_native_app_command(app, name, len);
 }

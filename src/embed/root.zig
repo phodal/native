@@ -4,6 +4,7 @@ const runtime = @import("../runtime/root.zig");
 const platform = @import("../platform/root.zig");
 
 const max_mobile_command_name_bytes: usize = 128;
+const max_mobile_input_text_bytes: usize = 512;
 const max_mobile_asset_root_bytes: usize = platform.max_webview_url_bytes;
 const max_mobile_asset_entry_bytes: usize = platform.max_window_source_bytes;
 const mobile_gpu_surface_label = "mobile-surface";
@@ -57,6 +58,39 @@ pub const EmbeddedApp = struct {
         } });
     }
 
+    pub fn key(self: *EmbeddedApp, phase: c_int, key_value: []const u8, text_value: []const u8, modifiers_mask: u32) anyerror!void {
+        try self.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = mobile_gpu_surface_label,
+            .kind = try mobileKeyKindFromPhase(phase),
+            .timestamp_ns = nowNanoseconds(),
+            .key = key_value,
+            .text = text_value,
+            .modifiers = mobileModifiersFromMask(modifiers_mask),
+        } });
+    }
+
+    pub fn text(self: *EmbeddedApp, text_value: []const u8) anyerror!void {
+        try self.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = mobile_gpu_surface_label,
+            .kind = .text_input,
+            .timestamp_ns = nowNanoseconds(),
+            .text = text_value,
+        } });
+    }
+
+    pub fn ime(self: *EmbeddedApp, kind: c_int, text_value: []const u8, cursor: isize) anyerror!void {
+        try self.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = mobile_gpu_surface_label,
+            .kind = try mobileImeKindFromInt(kind),
+            .timestamp_ns = nowNanoseconds(),
+            .text = text_value,
+            .composition_cursor = if (cursor >= 0) @intCast(cursor) else null,
+        } });
+    }
+
     pub fn frame(self: *EmbeddedApp) anyerror!void {
         try self.runtime.dispatchPlatformEvent(self.app, .frame_requested);
     }
@@ -86,6 +120,7 @@ const MobileHostApp = struct {
     mobile_surface_width: f32 = 0,
     mobile_surface_height: f32 = 0,
     mobile_surface_scale: f32 = 1,
+    input_count: usize = 0,
     touch_count: usize = 0,
     last_touch_id: u64 = 0,
     last_touch_kind: platform.GpuSurfaceInputKind = .pointer_up,
@@ -93,6 +128,14 @@ const MobileHostApp = struct {
     last_touch_x: f32 = 0,
     last_touch_y: f32 = 0,
     last_touch_pressure: f32 = 0,
+    last_input_kind: platform.GpuSurfaceInputKind = .pointer_up,
+    last_input_timestamp_ns: u64 = 0,
+    last_input_key: [max_mobile_input_text_bytes]u8 = undefined,
+    last_input_key_len: usize = 0,
+    last_input_text: [max_mobile_input_text_bytes]u8 = undefined,
+    last_input_text_len: usize = 0,
+    last_input_composition_cursor: ?usize = null,
+    last_input_modifiers: platform.ShortcutModifiers = .{},
     asset_root: [max_mobile_asset_root_bytes]u8 = undefined,
     asset_root_len: usize = 0,
     asset_entry: [max_mobile_asset_entry_bytes]u8 = undefined,
@@ -111,6 +154,7 @@ const MobileHostApp = struct {
         self.mobile_surface_width = 0;
         self.mobile_surface_height = 0;
         self.mobile_surface_scale = 1;
+        self.input_count = 0;
         self.touch_count = 0;
         self.last_touch_id = 0;
         self.last_touch_kind = .pointer_up;
@@ -118,6 +162,14 @@ const MobileHostApp = struct {
         self.last_touch_x = 0;
         self.last_touch_y = 0;
         self.last_touch_pressure = 0;
+        self.last_input_kind = .pointer_up;
+        self.last_input_timestamp_ns = 0;
+        self.last_input_key = undefined;
+        self.last_input_key_len = 0;
+        self.last_input_text = undefined;
+        self.last_input_text_len = 0;
+        self.last_input_composition_cursor = null;
+        self.last_input_modifiers = .{};
         self.asset_root = undefined;
         self.asset_root_len = 0;
         self.asset_entry = undefined;
@@ -168,13 +220,25 @@ const MobileHostApp = struct {
             },
             .gpu_surface_input => |input| {
                 if (!std.mem.eql(u8, input.label, mobile_gpu_surface_label)) return;
-                self.touch_count += 1;
-                self.last_touch_id = input.pointer_id;
-                self.last_touch_kind = input.kind;
-                self.last_touch_timestamp_ns = input.timestamp_ns;
-                self.last_touch_x = input.x;
-                self.last_touch_y = input.y;
-                self.last_touch_pressure = input.pressure;
+                self.input_count += 1;
+                self.last_input_kind = input.kind;
+                self.last_input_timestamp_ns = input.timestamp_ns;
+                self.last_input_key_len = copyInputText(&self.last_input_key, input.key);
+                self.last_input_text_len = copyInputText(&self.last_input_text, input.text);
+                self.last_input_composition_cursor = input.composition_cursor;
+                self.last_input_modifiers = input.modifiers;
+                switch (input.kind) {
+                    .pointer_down, .pointer_up, .pointer_cancel, .pointer_move, .pointer_drag, .scroll => {
+                        self.touch_count += 1;
+                        self.last_touch_id = input.pointer_id;
+                        self.last_touch_kind = input.kind;
+                        self.last_touch_timestamp_ns = input.timestamp_ns;
+                        self.last_touch_x = input.x;
+                        self.last_touch_y = input.y;
+                        self.last_touch_pressure = input.pressure;
+                    },
+                    else => {},
+                }
             },
             else => {},
         }
@@ -285,6 +349,49 @@ pub fn zero_native_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: f32, y:
     self.last_error = null;
 }
 
+pub fn zero_native_app_key(app: ?*anyopaque, phase: c_int, key: ?[*]const u8, key_len: usize, text: ?[*]const u8, text_len: usize, modifiers_mask: u32) void {
+    const self = mobileApp(app) orelse return;
+    const key_value = inputSlice(key, key_len) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    const text_value = inputSlice(text, text_len) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.embedded.key(phase, key_value, text_value, modifiers_mask) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.last_error = null;
+}
+
+pub fn zero_native_app_text(app: ?*anyopaque, text: ?[*]const u8, len: usize) void {
+    const self = mobileApp(app) orelse return;
+    const text_value = inputSlice(text, len) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.embedded.text(text_value) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.last_error = null;
+}
+
+pub fn zero_native_app_ime(app: ?*anyopaque, kind: c_int, text: ?[*]const u8, len: usize, cursor: isize) void {
+    const self = mobileApp(app) orelse return;
+    const text_value = inputSlice(text, len) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.embedded.ime(kind, text_value, cursor) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.last_error = null;
+}
+
 pub fn zero_native_app_command(app: ?*anyopaque, name: ?[*]const u8, len: usize) void {
     const self = mobileApp(app) orelse return;
     const ptr = name orelse {
@@ -359,6 +466,45 @@ fn mobileTouchKindFromPhase(phase: c_int) anyerror!platform.GpuSurfaceInputKind 
         3 => .pointer_cancel,
         else => error.InvalidTouchPhase,
     };
+}
+
+fn mobileKeyKindFromPhase(phase: c_int) anyerror!platform.GpuSurfaceInputKind {
+    return switch (phase) {
+        0 => .key_down,
+        1 => .key_up,
+        else => error.InvalidKeyPhase,
+    };
+}
+
+fn mobileImeKindFromInt(kind: c_int) anyerror!platform.GpuSurfaceInputKind {
+    return switch (kind) {
+        0 => .ime_set_composition,
+        1 => .ime_commit_composition,
+        2 => .ime_cancel_composition,
+        else => error.InvalidImeKind,
+    };
+}
+
+fn mobileModifiersFromMask(mask: u32) platform.ShortcutModifiers {
+    return .{
+        .primary = (mask & 1) != 0,
+        .command = (mask & 2) != 0,
+        .control = (mask & 4) != 0,
+        .option = (mask & 8) != 0,
+        .shift = (mask & 16) != 0,
+    };
+}
+
+fn inputSlice(pointer: ?[*]const u8, len: usize) anyerror![]const u8 {
+    if (len == 0) return "";
+    const value = pointer orelse return error.InvalidCommand;
+    return value[0..len];
+}
+
+fn copyInputText(buffer: []u8, value: []const u8) usize {
+    const count = @min(buffer.len, value.len);
+    @memcpy(buffer[0..count], value[0..count]);
+    return count;
 }
 
 fn nowNanoseconds() u64 {
@@ -500,6 +646,47 @@ test "mobile C ABI forwards surface resize and touch input" {
     zero_native_app_touch(app, 42, 99, 13, 25, 0);
     try std.testing.expectEqual(@as(usize, 3), self.touch_count);
     try std.testing.expectEqualStrings("InvalidTouchPhase", std.mem.span(zero_native_app_last_error_name(app)));
+}
+
+test "mobile C ABI forwards key text and IME input" {
+    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer zero_native_app_destroy(app);
+
+    const self = mobileApp(app).?;
+    zero_native_app_key(app, 0, "enter", "enter".len, "", 0, 17);
+    try std.testing.expectEqual(@as(usize, 1), self.input_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.key_down, self.last_input_kind);
+    try std.testing.expectEqualStrings("enter", self.last_input_key[0..self.last_input_key_len]);
+    try std.testing.expect(self.last_input_modifiers.primary);
+    try std.testing.expect(self.last_input_modifiers.shift);
+    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+
+    zero_native_app_text(app, "é", "é".len);
+    try std.testing.expectEqual(@as(usize, 2), self.input_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.text_input, self.last_input_kind);
+    try std.testing.expectEqualStrings("é", self.last_input_text[0..self.last_input_text_len]);
+
+    zero_native_app_ime(app, 0, "かな", "かな".len, "かな".len);
+    try std.testing.expectEqual(@as(usize, 3), self.input_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_set_composition, self.last_input_kind);
+    try std.testing.expectEqualStrings("かな", self.last_input_text[0..self.last_input_text_len]);
+    try std.testing.expectEqual(@as(?usize, "かな".len), self.last_input_composition_cursor);
+
+    zero_native_app_ime(app, 1, "", 0, -1);
+    try std.testing.expectEqual(@as(usize, 4), self.input_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_commit_composition, self.last_input_kind);
+
+    zero_native_app_ime(app, 2, "", 0, -1);
+    try std.testing.expectEqual(@as(usize, 5), self.input_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_cancel_composition, self.last_input_kind);
+
+    zero_native_app_key(app, 99, "enter", "enter".len, "", 0, 0);
+    try std.testing.expectEqual(@as(usize, 5), self.input_count);
+    try std.testing.expectEqualStrings("InvalidKeyPhase", std.mem.span(zero_native_app_last_error_name(app)));
+
+    zero_native_app_ime(app, 99, "", 0, -1);
+    try std.testing.expectEqual(@as(usize, 5), self.input_count);
+    try std.testing.expectEqualStrings("InvalidImeKind", std.mem.span(zero_native_app_last_error_name(app)));
 }
 
 test "mobile C ABI dispatches native commands through embedded runtime" {

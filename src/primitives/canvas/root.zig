@@ -3061,9 +3061,11 @@ pub const WidgetKeyboardEvent = struct {
     focused_id: ?ObjectId = null,
     key: []const u8 = "",
     text: []const u8 = "",
+    edit: ?TextInputEvent = null,
     modifiers: WidgetKeyboardModifiers = .{},
 
     pub fn textEditEvent(self: WidgetKeyboardEvent) ?TextInputEvent {
+        if (self.edit) |edit| return edit;
         return widgetKeyboardTextEditEvent(self);
     }
 };

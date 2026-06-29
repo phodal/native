@@ -388,6 +388,9 @@ fn embedHeader() []const u8 {
     \\void zero_native_app_resize(void *app, float width, float height, float scale, void *surface);
     \\void zero_native_app_viewport(void *app, float width, float height, float scale, void *surface, float safe_top, float safe_right, float safe_bottom, float safe_left, float keyboard_top, float keyboard_right, float keyboard_bottom, float keyboard_left);
     \\void zero_native_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
+    \\void zero_native_app_key(void *app, int phase, const char *key, uintptr_t key_len, const char *text, uintptr_t text_len, uint32_t modifiers_mask);
+    \\void zero_native_app_text(void *app, const char *text, uintptr_t len);
+    \\void zero_native_app_ime(void *app, int kind, const char *text, uintptr_t len, intptr_t cursor);
     \\void zero_native_app_command(void *app, const char *name, uintptr_t len);
     \\void zero_native_app_frame(void *app);
     \\void zero_native_app_set_asset_root(void *app, const char *path, uintptr_t len);
@@ -1178,6 +1181,9 @@ fn androidActivity() []const u8 {
     \\    external fun nativeResize(app: Long, width: Float, height: Float, scale: Float, surface: Any)
     \\    external fun nativeViewport(app: Long, width: Float, height: Float, scale: Float, surface: Any, safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float, keyboardTop: Float, keyboardRight: Float, keyboardBottom: Float, keyboardLeft: Float)
     \\    external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
+    \\    external fun nativeKey(app: Long, phase: Int, key: String, text: String, modifiers: Int)
+    \\    external fun nativeText(app: Long, text: String)
+    \\    external fun nativeIme(app: Long, kind: Int, text: String, cursor: Long)
     \\    external fun nativeCommand(app: Long, command: String): Int
     \\    external fun nativeFrame(app: Long)
     \\
@@ -1215,6 +1221,9 @@ fn androidJni() []const u8 {
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeResize(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface) { (void)env; (void)self; zero_native_app_resize((void*)app, w, h, scale, surface); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeViewport(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface, jfloat safe_top, jfloat safe_right, jfloat safe_bottom, jfloat safe_left, jfloat keyboard_top, jfloat keyboard_right, jfloat keyboard_bottom, jfloat keyboard_left) { (void)env; (void)self; zero_native_app_viewport((void*)app, w, h, scale, surface, safe_top, safe_right, safe_bottom, safe_left, keyboard_top, keyboard_right, keyboard_bottom, keyboard_left); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeTouch(JNIEnv *env, jobject self, jlong app, jlong id, jint phase, jfloat x, jfloat y, jfloat pressure) { (void)env; (void)self; zero_native_app_touch((void*)app, (uint64_t)id, phase, x, y, pressure); }
+    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeKey(JNIEnv *env, jobject self, jlong app, jint phase, jstring key, jstring text, jint modifiers) { (void)self; const char *key_chars = key ? (*env)->GetStringUTFChars(env, key, NULL) : NULL; const char *text_chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_app_key((void*)app, phase, key_chars, key_chars ? strlen(key_chars) : 0, text_chars, text_chars ? strlen(text_chars) : 0, (uint32_t)modifiers); if (key_chars) (*env)->ReleaseStringUTFChars(env, key, key_chars); if (text_chars) (*env)->ReleaseStringUTFChars(env, text, text_chars); }
+    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeText(JNIEnv *env, jobject self, jlong app, jstring text) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, text, NULL); if (!chars) return; zero_native_app_text((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, text, chars); }
+    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeIme(JNIEnv *env, jobject self, jlong app, jint kind, jstring text, jlong cursor) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_app_ime((void*)app, kind, chars, chars ? strlen(chars) : 0, (intptr_t)cursor); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); }
     \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; zero_native_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)zero_native_app_last_command_count((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeFrame(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_frame((void*)app); }
     \\
@@ -2067,6 +2076,9 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "WebView(this)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeViewport(nativeApp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeKey") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeText") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeIme") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "rootWindowInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "keyboardBottomInset") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "if (currentSurfaceHolder == holder) currentSurfaceHolder = null") != null);
@@ -2081,6 +2093,9 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_root") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_entry") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_key") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_ime") != null);
 }
 
 test "android shell config escapes Kotlin string interpolation" {

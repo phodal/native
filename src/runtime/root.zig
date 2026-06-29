@@ -6574,6 +6574,10 @@ fn canvasWidgetPointerEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?canv
         .scroll => .wheel,
         .key_down,
         .key_up,
+        .text_input,
+        .ime_set_composition,
+        .ime_commit_composition,
+        .ime_cancel_composition,
         => return null,
     };
     return .{
@@ -6593,6 +6597,10 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
         .pointer_move,
         .pointer_drag,
         .scroll,
+        .text_input,
+        .ime_set_composition,
+        .ime_commit_composition,
+        .ime_cancel_composition,
         => return null,
     };
     return .{
@@ -6605,14 +6613,35 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
 }
 
 fn canvasWidgetTextInputEventFromGpuInput(input_event: GpuSurfaceInputEvent, focused_id: canvas.ObjectId) ?canvas.WidgetKeyboardEvent {
-    if (input_event.kind != .key_down or input_event.text.len == 0) return null;
-    if (gpuInputHasTextCommandModifier(input_event)) return null;
+    const edit = canvasWidgetTextEditEventFromGpuInput(input_event) orelse return null;
     return .{
         .phase = .text_input,
         .focused_id = focused_id,
         .key = input_event.key,
         .text = input_event.text,
+        .edit = edit,
         .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
+    };
+}
+
+fn canvasWidgetTextEditEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?canvas.TextInputEvent {
+    return switch (input_event.kind) {
+        .key_down => blk: {
+            if (input_event.text.len == 0 or gpuInputHasTextCommandModifier(input_event)) break :blk null;
+            break :blk .{ .insert_text = input_event.text };
+        },
+        .text_input => if (input_event.text.len > 0 and !gpuInputHasTextCommandModifier(input_event)) .{ .insert_text = input_event.text } else null,
+        .ime_set_composition => .{ .set_composition = .{ .text = input_event.text, .cursor = input_event.composition_cursor } },
+        .ime_commit_composition => .commit_composition,
+        .ime_cancel_composition => .cancel_composition,
+        .key_up,
+        .pointer_down,
+        .pointer_up,
+        .pointer_cancel,
+        .pointer_move,
+        .pointer_drag,
+        .scroll,
+        => null,
     };
 }
 
@@ -15357,6 +15386,116 @@ test "runtime routes captured canvas pointer drags without outside release activ
         .y = 28,
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
+}
+
+test "runtime applies GPU text and IME input to focused canvas text fields" {
+    const TestApp = struct {
+        widget_keyboard_count: u32 = 0,
+        last_keyboard_phase: canvas.WidgetKeyboardPhase = .key_up,
+        last_keyboard_target_id: canvas.ObjectId = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-mobile-text-ime", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_keyboard => |keyboard_event| {
+                    self.widget_keyboard_count += 1;
+                    self.last_keyboard_phase = keyboard_event.keyboard.phase;
+                    if (keyboard_event.target) |target| self.last_keyboard_target_id = target.id;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .text_field,
+            .frame = geometry.RectF.init(10, 10, 160, 32),
+            .text = "hello",
+            .text_selection = canvas.TextSelection{ .anchor = 1, .focus = 4 },
+        },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    harness.runtime.views[0].focused = true;
+    harness.runtime.views[0].canvas_widget_focused_id = 2;
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .text_input,
+        .text = "a",
+    } });
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    var field = retained.findById(2).?.widget;
+    try std.testing.expectEqualStrings("hao", field.text);
+    try std.testing.expectEqual(@as(usize, 2), field.text_selection.?.focus);
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(canvas.WidgetKeyboardPhase.text_input, app_state.last_keyboard_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .ime_set_composition,
+        .text = "é",
+        .composition_cursor = 2,
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    field = retained.findById(2).?.widget;
+    try std.testing.expectEqualStrings("haéo", field.text);
+    try std.testing.expect(field.text_composition != null);
+    try std.testing.expectEqual(@as(u32, 2), app_state.widget_keyboard_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .ime_commit_composition,
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    field = retained.findById(2).?.widget;
+    try std.testing.expectEqualStrings("haéo", field.text);
+    try std.testing.expect(field.text_composition == null);
+    try std.testing.expectEqual(@as(u32, 3), app_state.widget_keyboard_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .ime_set_composition,
+        .text = "ll",
+        .composition_cursor = 2,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .ime_cancel_composition,
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    field = retained.findById(2).?.widget;
+    try std.testing.expectEqualStrings("haéo", field.text);
+    try std.testing.expect(field.text_composition == null);
+    try std.testing.expectEqual(@as(u32, 5), app_state.widget_keyboard_count);
 }
 
 test "runtime dispatches opted-in canvas widget drag events" {

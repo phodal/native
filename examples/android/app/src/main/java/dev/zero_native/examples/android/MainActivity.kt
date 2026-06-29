@@ -211,6 +211,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     external fun nativeResize(app: Long, width: Float, height: Float, scale: Float, surface: Any)
     external fun nativeViewport(app: Long, width: Float, height: Float, scale: Float, surface: Any, safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float, keyboardTop: Float, keyboardRight: Float, keyboardBottom: Float, keyboardLeft: Float)
     external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
+    external fun nativeKey(app: Long, phase: Int, key: String, text: String, modifiers: Int)
+    external fun nativeText(app: Long, text: String)
+    external fun nativeIme(app: Long, kind: Int, text: String, cursor: Long)
     external fun nativeCommand(app: Long, command: String): Int
     external fun nativeFrame(app: Long)
 

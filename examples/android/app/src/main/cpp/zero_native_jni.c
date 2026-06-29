@@ -58,6 +58,30 @@ JNIEXPORT void JNICALL Java_dev_zero_1native_examples_android_MainActivity_nativ
     zero_native_app_touch((void *)app, (uint64_t)id, phase, x, y, pressure);
 }
 
+JNIEXPORT void JNICALL Java_dev_zero_1native_examples_android_MainActivity_nativeKey(JNIEnv *env, jobject self, jlong app, jint phase, jstring key, jstring text, jint modifiers) {
+    (void)self;
+    const char *key_chars = key ? (*env)->GetStringUTFChars(env, key, NULL) : NULL;
+    const char *text_chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL;
+    zero_native_app_key((void *)app, phase, key_chars, key_chars ? strlen(key_chars) : 0, text_chars, text_chars ? strlen(text_chars) : 0, (uint32_t)modifiers);
+    if (key_chars) (*env)->ReleaseStringUTFChars(env, key, key_chars);
+    if (text_chars) (*env)->ReleaseStringUTFChars(env, text, text_chars);
+}
+
+JNIEXPORT void JNICALL Java_dev_zero_1native_examples_android_MainActivity_nativeText(JNIEnv *env, jobject self, jlong app, jstring text) {
+    (void)self;
+    const char *text_chars = (*env)->GetStringUTFChars(env, text, NULL);
+    if (!text_chars) return;
+    zero_native_app_text((void *)app, text_chars, strlen(text_chars));
+    (*env)->ReleaseStringUTFChars(env, text, text_chars);
+}
+
+JNIEXPORT void JNICALL Java_dev_zero_1native_examples_android_MainActivity_nativeIme(JNIEnv *env, jobject self, jlong app, jint kind, jstring text, jlong cursor) {
+    (void)self;
+    const char *text_chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL;
+    zero_native_app_ime((void *)app, kind, text_chars, text_chars ? strlen(text_chars) : 0, (intptr_t)cursor);
+    if (text_chars) (*env)->ReleaseStringUTFChars(env, text, text_chars);
+}
+
 JNIEXPORT jint JNICALL Java_dev_zero_1native_examples_android_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) {
     (void)self;
     const char *command_chars = (*env)->GetStringUTFChars(env, command, NULL);

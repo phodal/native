@@ -9,6 +9,8 @@ Both hosts leave keyboard avoidance in the native layout system while forwarding
 
 Android orientation and screen-size changes stay in the same activity so the embedded runtime survives rotation while resize/frame events update the content surface.
 
+The embedded ABI also includes hardware key, committed text, and IME composition entry points for future GPU/widget text fields.
+
 Use those platform folders when building or running the example.
 
 The shared mobile metadata in `app.zon` records the intended platforms, capabilities, command IDs, and shell view tree. Package generation maps that shell metadata to native host config for the header labels, command buttons, and WebView workspace while each mobile host still owns safe areas, keyboard behavior, and platform lifecycle.

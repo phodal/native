@@ -303,6 +303,11 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)requestRetainedCanvasFrame" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "zero_native_appkit_set_view_cursor" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSCursor pointingHandCursor" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-accessibility-actions", "Verify AppKit GPU widget accessibility actions route to the runtime", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityPerformPress" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "emitWidgetAccessibilityActionWithId" },

@@ -38,6 +38,7 @@ static uint32_t ZeroNativeModifierFlagsForEvent(NSEvent *event);
 static uint64_t ZeroNativeTimestampNanoseconds(void);
 static NSAccessibilityRole ZeroNativeAccessibilityRoleForNativeViewKind(NSInteger kind);
 static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger role);
+static NSCursor *ZeroNativeCursorForKind(NSInteger kind);
 static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteger length);
 static NSString *ZeroNativeSubstringForRange(NSString *value, NSRange range);
 
@@ -149,6 +150,17 @@ static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger ro
     }
 }
 
+static NSCursor *ZeroNativeCursorForKind(NSInteger kind) {
+    switch (kind) {
+        case ZERO_NATIVE_APPKIT_CURSOR_POINTING_HAND: return [NSCursor pointingHandCursor];
+        case ZERO_NATIVE_APPKIT_CURSOR_TEXT: return [NSCursor IBeamCursor];
+        case ZERO_NATIVE_APPKIT_CURSOR_RESIZE_HORIZONTAL: return [NSCursor resizeLeftRightCursor];
+        case ZERO_NATIVE_APPKIT_CURSOR_ARROW:
+        default:
+            return [NSCursor arrowCursor];
+    }
+}
+
 static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteger length) {
     NSUInteger clampedStart = MIN(start, length);
     NSUInteger clampedEnd = MIN(end, length);
@@ -218,6 +230,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) NSUInteger canvasTextureWidth;
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
+@property(nonatomic, strong) NSCursor *surfaceCursor;
 @property(nonatomic, strong) NSArray<NSAccessibilityElement *> *widgetAccessibilityElements;
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
@@ -231,6 +244,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
+- (void)setSurfaceCursor:(NSCursor *)cursor;
 @end
 
 @interface ZeroNativeAssetSchemeHandler : NSObject <WKURLSchemeHandler>
@@ -310,6 +324,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)closeNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
 - (void)closeNativeViewsInWindow:(uint64_t)windowId;
 - (BOOL)createWebViewInWindow:(uint64_t)windowId label:(NSString *)label url:(NSString *)url x:(double)x y:(double)y width:(double)width height:(double)height layer:(NSInteger)layer transparent:(BOOL)transparent bridgeEnabled:(BOOL)bridgeEnabled;
+- (BOOL)setNativeViewCursorInWindow:(uint64_t)windowId label:(NSString *)label cursor:(NSInteger)cursor;
 - (BOOL)setWebViewFrameInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height;
 - (BOOL)navigateWebViewInWindow:(uint64_t)windowId label:(NSString *)label url:(NSString *)url;
 - (BOOL)setWebViewZoomInWindow:(uint64_t)windowId label:(NSString *)label zoom:(double)zoom;
@@ -528,6 +543,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     self.layer = _metalLayer;
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     self.accessibilityRole = NSAccessibilityGroupRole;
+    self.surfaceCursor = [NSCursor arrowCursor];
 
     [self updateDrawableSize];
     _displayTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0) target:self selector:@selector(renderFrame) userInfo:nil repeats:YES];
@@ -827,6 +843,17 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 - (BOOL)acceptsFirstResponder {
     return YES;
+}
+
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    [self addCursorRect:self.bounds cursor:self.surfaceCursor ?: [NSCursor arrowCursor]];
+}
+
+- (void)setSurfaceCursor:(NSCursor *)cursor {
+    self.surfaceCursor = cursor ?: [NSCursor arrowCursor];
+    [self.window invalidateCursorRectsForView:self];
+    [self.surfaceCursor set];
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -1524,6 +1551,14 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
     return [(ZeroNativeMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale rgba8:rgba8 byteLength:byteLength];
+}
+
+- (BOOL)setNativeViewCursorInWindow:(uint64_t)windowId label:(NSString *)label cursor:(NSInteger)cursor {
+    NSString *key = [self nativeViewKeyForWindow:windowId label:label];
+    NSView *view = self.nativeViews[key];
+    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
+    [(ZeroNativeMetalSurfaceView *)view setSurfaceCursor:ZeroNativeCursorForKind(cursor)];
+    return YES;
 }
 
 - (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count {
@@ -2948,6 +2983,12 @@ int zero_native_appkit_set_view_visible(zero_native_appkit_host_t *host, uint64_
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setNativeViewVisibleInWindow:window_id label:labelString ?: @"" visible:(visible != 0)] ? 1 : 0;
+}
+
+int zero_native_appkit_set_view_cursor(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int cursor) {
+    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+    NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
+    return [object setNativeViewCursorInWindow:window_id label:labelString ?: @"" cursor:cursor] ? 1 : 0;
 }
 
 int zero_native_appkit_focus_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {

@@ -1256,6 +1256,7 @@ pub const PlatformServices = struct {
     update_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, patch: ViewPatch) anyerror!void = null,
     set_view_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, frame: geometry.RectF) anyerror!void = null,
     set_view_visible_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, visible: bool) anyerror!void = null,
+    set_view_cursor_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, cursor: Cursor) anyerror!void = null,
     focus_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void = null,
     close_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void = null,
     create_webview_fn: ?*const fn (context: ?*anyopaque, options: WebViewOptions) anyerror!void = null,
@@ -1372,6 +1373,11 @@ pub const PlatformServices = struct {
     pub fn setViewVisible(self: PlatformServices, window_id: WindowId, label: []const u8, visible: bool) anyerror!void {
         const set_fn = self.set_view_visible_fn orelse return error.UnsupportedViewKind;
         return set_fn(self.context, window_id, label, visible);
+    }
+
+    pub fn setViewCursor(self: PlatformServices, window_id: WindowId, label: []const u8, cursor: Cursor) anyerror!void {
+        const set_fn = self.set_view_cursor_fn orelse return;
+        return set_fn(self.context, window_id, label, cursor);
     }
 
     pub fn focusView(self: PlatformServices, window_id: WindowId, label: []const u8) anyerror!void {
@@ -1662,6 +1668,11 @@ pub const NullPlatform = struct {
     gpu_surface_present_byte_len: usize = 0,
     gpu_surface_present_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
     gpu_surface_present_count: usize = 0,
+    view_cursor_window_id: WindowId = 0,
+    view_cursor_label_storage: [max_view_label_bytes]u8 = undefined,
+    view_cursor_label_len: usize = 0,
+    view_cursor: Cursor = .arrow,
+    view_cursor_count: usize = 0,
 
     pub fn init(surface_value: Surface) NullPlatform {
         return .{ .surface_value = surface_value };
@@ -1700,6 +1711,7 @@ pub const NullPlatform = struct {
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
                 .set_view_visible_fn = setViewVisible,
+                .set_view_cursor_fn = setViewCursor,
                 .focus_view_fn = focusView,
                 .close_view_fn = closeView,
                 .create_webview_fn = createWebView,
@@ -1965,6 +1977,17 @@ pub const NullPlatform = struct {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         self.views[index].visible = visible;
+    }
+
+    fn setViewCursor(context: ?*anyopaque, window_id: WindowId, label: []const u8, cursor: Cursor) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.UnsupportedViewKind;
+        self.view_cursor_window_id = window_id;
+        self.view_cursor_label_storage = undefined;
+        self.view_cursor_label_len = (try copyInto(&self.view_cursor_label_storage, label)).len;
+        self.view_cursor = cursor;
+        self.view_cursor_count += 1;
     }
 
     fn focusView(context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void {

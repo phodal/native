@@ -100,6 +100,7 @@ extern fn zero_native_appkit_create_view(host: *AppKitHost, window_id: u64, labe
 extern fn zero_native_appkit_update_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, has_frame: c_int, x: f64, y: f64, width: f64, height: f64, has_layer: c_int, layer: c_int, has_visible: c_int, visible: c_int, has_enabled: c_int, enabled: c_int, has_role: c_int, role: [*]const u8, role_len: usize, has_accessibility_label: c_int, accessibility_label: [*]const u8, accessibility_label_len: usize, has_text: c_int, text: [*]const u8, text_len: usize, has_command: c_int, command: [*]const u8, command_len: usize) c_int;
 extern fn zero_native_appkit_set_view_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
 extern fn zero_native_appkit_set_view_visible(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, visible: c_int) c_int;
+extern fn zero_native_appkit_set_view_cursor(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, cursor: c_int) c_int;
 extern fn zero_native_appkit_focus_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn zero_native_appkit_close_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn zero_native_appkit_present_gpu_surface_pixels(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, width: usize, height: usize, scale: f64, rgba8: [*]const u8, rgba8_len: usize) c_int;
@@ -291,6 +292,7 @@ pub const MacPlatform = struct {
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
                 .set_view_visible_fn = setViewVisible,
+                .set_view_cursor_fn = setViewCursor,
                 .focus_view_fn = focusView,
                 .close_view_fn = closeView,
                 .create_webview_fn = createWebView,
@@ -689,6 +691,12 @@ fn setViewVisible(context: ?*anyopaque, window_id: platform_mod.WindowId, label:
     if (zero_native_appkit_set_view_visible(self.host, window_id, label.ptr, label.len, if (visible) 1 else 0) == 0) return error.ViewNotFound;
 }
 
+fn setViewCursor(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, cursor: platform_mod.Cursor) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedViewKind;
+    if (zero_native_appkit_set_view_cursor(self.host, window_id, label.ptr, label.len, appKitCursor(cursor)) == 0) return error.ViewNotFound;
+}
+
 fn focusView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewFocus;
@@ -794,6 +802,15 @@ fn widgetActionFlags(actions: platform_mod.WidgetAccessibilityActions) u32 {
     if (actions.set_selection) flags |= widget_action_set_selection;
     if (actions.select) flags |= widget_action_select;
     return flags;
+}
+
+fn appKitCursor(cursor: platform_mod.Cursor) c_int {
+    return switch (cursor) {
+        .arrow => 0,
+        .pointing_hand => 1,
+        .text => 2,
+        .resize_horizontal => 3,
+    };
 }
 
 fn createWebView(context: ?*anyopaque, options: platform_mod.WebViewOptions) anyerror!void {

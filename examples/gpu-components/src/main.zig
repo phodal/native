@@ -600,6 +600,32 @@ fn resetComponentDirty(runtime: *zero_native.Runtime) void {
     runtime.dirty_region_count = 0;
 }
 
+fn componentWidgetCenter(runtime: *const zero_native.Runtime, id: canvas.ObjectId) !geometry.PointF {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    const node = layout.findById(id) orelse return error.TestUnexpectedResult;
+    return node.frame.center();
+}
+
+fn dispatchComponentPointerClick(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId) !void {
+    const point = try componentWidgetCenter(runtime, id);
+    try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_down,
+        .x = point.x,
+        .y = point.y,
+        .button = 0,
+    } });
+    try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_up,
+        .x = point.x,
+        .y = point.y,
+        .button = 0,
+    } });
+}
+
 fn color(r: u8, g: u8, b: u8) canvas.Color {
     return canvas.Color.rgb8(r, g, b);
 }
@@ -984,6 +1010,78 @@ test "gpu components app registers component lab on first gpu frame" {
 
     const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Component") != null);
+}
+
+test "gpu components pointer clicks update retained controls" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    const app_handle = app.app();
+    try harness.start(app_handle);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(componentSnapshotWidget(snapshot, 113).?.selected);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 114).?.selected);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.62), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 121).?.selected);
+    try std.testing.expect(!componentSnapshotWidget(snapshot, 156).?.selected);
+
+    resetComponentDirty(&harness.runtime);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 113);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(!componentSnapshotWidget(snapshot, 113).?.selected);
+    try std.testing.expect(harness.runtime.invalidated);
+
+    resetComponentDirty(&harness.runtime);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 114);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(!componentSnapshotWidget(snapshot, 114).?.selected);
+    try std.testing.expectEqual(@as(?f32, 0), componentSnapshotWidget(snapshot, 114).?.value);
+
+    const slider = (try harness.runtime.canvasWidgetLayout(1, canvas_label)).findById(115).?;
+    const slider_point = geometry.PointF.init(slider.frame.x + slider.frame.width * 0.25, slider.frame.center().y);
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_down,
+        .x = slider_point.x,
+        .y = slider_point.y,
+        .button = 0,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_up,
+        .x = slider_point.x,
+        .y = slider_point.y,
+        .button = 0,
+    } });
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
+
+    resetComponentDirty(&harness.runtime);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 156);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(componentSnapshotWidget(snapshot, 156).?.selected);
+
+    resetComponentDirty(&harness.runtime);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 104);
+    try std.testing.expectEqual(@as(u32, 1), app.refresh_count);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(componentSnapshotWidget(snapshot, 104).?.focused);
 }
 
 fn expectComponentTextCommand(display_list: canvas.DisplayList, id: canvas.ObjectId, text: []const u8) !void {

@@ -1063,7 +1063,9 @@ pub const Runtime = struct {
             previous_layout.renderStateDirtyBounds(previous_render_state, next_render_state)
         else
             null;
+        const previous_cursor = self.views[index].canvas_widget_cursor;
         try self.views[index].copyWidgetLayoutTree(reconciled_layout);
+        if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
         self.invalidateForWidgetInvalidations(self.views[index].frame, invalidations);
         if (render_state_changed) self.invalidateForCanvasWidgetRenderStateDirty(index, render_state_dirty);
         try self.refreshCanvasWidgetDisplayListIfOwned(index);
@@ -1120,7 +1122,9 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
 
         const dirty = try self.views[index].stepCanvasWidgetKineticScroll(dt_ms) orelse return self.views[index].info();
+        const previous_cursor = self.views[index].canvas_widget_cursor;
         self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+        if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
         try self.invalidateForCanvasWidgetDirty(index, dirty);
         try self.refreshCanvasWidgetDisplayListIfOwned(index);
         return self.views[index].info();
@@ -1469,13 +1473,25 @@ pub const Runtime = struct {
 
         const interaction_changed = self.views[index].canvas_widget_hovered_id != next_hovered_id or
             self.views[index].canvas_widget_pressed_id != next_pressed_id;
-        if (!interaction_changed and self.views[index].canvas_widget_cursor == next_cursor) return;
+        const cursor_changed = self.views[index].canvas_widget_cursor != next_cursor;
+        if (!interaction_changed and !cursor_changed) return;
 
         const previous_state = self.views[index].canvasWidgetRenderState();
         self.views[index].canvas_widget_hovered_id = next_hovered_id;
         self.views[index].canvas_widget_pressed_id = next_pressed_id;
         self.views[index].canvas_widget_cursor = next_cursor;
+        if (cursor_changed) try self.syncCanvasWidgetCursorForView(index);
         if (interaction_changed) try self.invalidateForCanvasWidgetRenderStateChange(index, previous_state, self.views[index].canvasWidgetRenderState());
+    }
+
+    fn syncCanvasWidgetCursorForView(self: *Runtime, view_index: usize) anyerror!void {
+        if (view_index >= self.view_count) return;
+        if (self.views[view_index].kind != .gpu_surface) return;
+        try self.options.platform.services.setViewCursor(
+            self.views[view_index].window_id,
+            self.views[view_index].label,
+            self.views[view_index].canvas_widget_cursor,
+        );
     }
 
     fn invalidateForCanvasWidgetRenderStateChange(self: *Runtime, view_index: usize, previous: canvas.WidgetRenderState, next: canvas.WidgetRenderState) anyerror!void {
@@ -1518,7 +1534,9 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
 
         const dirty = try self.views[index].applyCanvasWidgetScrollRoute(pointer_event.route, pointer_event.pointer.delta.dy, .wheel) orelse return;
+        const previous_cursor = self.views[index].canvas_widget_cursor;
         self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(pointer_event.pointer.point);
+        if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -1589,7 +1607,9 @@ pub const Runtime = struct {
         const target = keyboard_event.target orelse return;
 
         const dirty = try self.views[index].applyCanvasWidgetControlKeyboard(target.id, keyboard_event.keyboard) orelse return;
+        const previous_cursor = self.views[index].canvas_widget_cursor;
         if (target.kind == .scroll_view) self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+        if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -16419,14 +16439,21 @@ test "runtime tracks retained canvas widget cursor intent" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
     var snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.view_cursor_count);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 24 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.pointing_hand, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.null_platform.view_cursor);
+    try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.view_cursor_window_id);
+    try std.testing.expectEqualStrings("canvas", harness.null_platform.view_cursor_label_storage[0..harness.null_platform.view_cursor_label_len]);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 64 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.text, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(platform.Cursor.text, harness.null_platform.view_cursor);
 
     const disabled_children = [_]canvas.Widget{
         .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 12, 96, 32), .text = "Run" },
@@ -16438,11 +16465,15 @@ test "runtime tracks retained canvas widget cursor intent" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", disabled_layout);
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 3), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 108 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     const canvas_view = testViewByLabel(snapshot.views, "canvas").?;
     try std.testing.expectEqual(platform.Cursor.resize_horizontal, canvas_view.cursor);
+    try std.testing.expectEqual(@as(usize, 4), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
 
     var view_json_buffer: [3072]u8 = undefined;
     const view_json = try writeViewJson(canvas_view, &view_json_buffer);
@@ -16451,6 +16482,8 @@ test "runtime tracks retained canvas widget cursor intent" {
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 220, .y = 148 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 5), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
 }
 
 test "runtime dispatches routed canvas widget pointer events" {

@@ -39,6 +39,13 @@ typedef enum {
 } zero_native_appkit_gpu_input_kind_t;
 
 typedef enum {
+    ZERO_NATIVE_APPKIT_CURSOR_ARROW = 0,
+    ZERO_NATIVE_APPKIT_CURSOR_POINTING_HAND = 1,
+    ZERO_NATIVE_APPKIT_CURSOR_TEXT = 2,
+    ZERO_NATIVE_APPKIT_CURSOR_RESIZE_HORIZONTAL = 3,
+} zero_native_appkit_cursor_t;
+
+typedef enum {
     ZERO_NATIVE_APPKIT_VIEW_WEBVIEW = 0,
     ZERO_NATIVE_APPKIT_VIEW_TOOLBAR = 1,
     ZERO_NATIVE_APPKIT_VIEW_TITLEBAR_ACCESSORY = 2,
@@ -216,6 +223,7 @@ int zero_native_appkit_create_view(zero_native_appkit_host_t *host, uint64_t win
 int zero_native_appkit_update_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len);
 int zero_native_appkit_set_view_frame(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height);
 int zero_native_appkit_set_view_visible(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int visible);
+int zero_native_appkit_set_view_cursor(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int cursor);
 int zero_native_appkit_focus_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len);
 int zero_native_appkit_close_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len);
 int zero_native_appkit_present_gpu_surface_pixels(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, const uint8_t *rgba8, size_t rgba8_len);

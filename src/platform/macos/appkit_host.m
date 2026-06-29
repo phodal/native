@@ -555,7 +555,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     self.layer = _metalLayer;
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     self.accessibilityRole = NSAccessibilityGroupRole;
-    self.surfaceCursor = [NSCursor arrowCursor];
+    _surfaceCursor = [NSCursor arrowCursor];
     self.markedText = @"";
     self.markedTextRange = NSMakeRange(NSNotFound, 0);
     self.selectedTextRange = NSMakeRange(0, 0);
@@ -866,9 +866,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (void)setSurfaceCursor:(NSCursor *)cursor {
-    self.surfaceCursor = cursor ?: [NSCursor arrowCursor];
+    _surfaceCursor = cursor ?: [NSCursor arrowCursor];
     [self.window invalidateCursorRectsForView:self];
-    [self.surfaceCursor set];
+    [_surfaceCursor set];
 }
 
 - (void)mouseDown:(NSEvent *)event {

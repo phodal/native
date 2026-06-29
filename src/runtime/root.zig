@@ -967,16 +967,27 @@ pub const Runtime = struct {
         try validateViewLabel(label);
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        const previous_layout = self.views[index].widgetLayoutTree();
+        var reconciled_nodes: [max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined;
+        var previous_text_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined;
+        var previous_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
+        const reconciled_layout = try canvasWidgetLayoutTreeWithRuntimeReconcileState(
+            previous_layout,
+            layout,
+            &reconciled_nodes,
+            &previous_text_entries,
+            &previous_text_bytes,
+        );
         var widget_invalidations: [max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined;
-        const invalidations = try canvas.WidgetLayoutTree.diff(self.views[index].widgetLayoutTree(), layout, &widget_invalidations);
+        const invalidations = try canvas.WidgetLayoutTree.diff(previous_layout, reconciled_layout, &widget_invalidations);
         const previous_render_state = self.views[index].canvasWidgetRenderState();
-        const next_render_state = canvasWidgetRenderStateAfterLayout(previous_render_state, layout);
+        const next_render_state = canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);
         const render_state_changed = !canvasWidgetRenderStatesEqual(previous_render_state, next_render_state);
         const render_state_dirty = if (render_state_changed)
-            self.views[index].widgetLayoutTree().renderStateDirtyBounds(previous_render_state, next_render_state)
+            previous_layout.renderStateDirtyBounds(previous_render_state, next_render_state)
         else
             null;
-        try self.views[index].copyWidgetLayoutTree(layout);
+        try self.views[index].copyWidgetLayoutTree(reconciled_layout);
         self.invalidateForWidgetInvalidations(self.views[index].frame, invalidations);
         if (render_state_changed) self.invalidateForCanvasWidgetRenderStateDirty(index, render_state_dirty);
         try self.refreshCanvasWidgetDisplayListIfOwned(index);
@@ -4325,6 +4336,29 @@ fn canvasWidgetLayoutNodeWithTextReconcileState(
         break;
     }
     return copy;
+}
+
+fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
+    previous: canvas.WidgetLayoutTree,
+    next: canvas.WidgetLayoutTree,
+    node_buffer: []canvas.WidgetLayoutNode,
+    text_entries: []CanvasWidgetTextReconcileEntry,
+    text_storage: []u8,
+) anyerror!canvas.WidgetLayoutTree {
+    if (next.nodes.len > node_buffer.len) return error.WidgetNodeLimitReached;
+
+    var text_len: usize = 0;
+    const previous_text_states = try collectCanvasWidgetTextReconcileEntries(
+        previous.nodes,
+        text_entries,
+        text_storage,
+        &text_len,
+    );
+
+    for (next.nodes, 0..) |node, index| {
+        node_buffer[index] = canvasWidgetLayoutNodeWithTextReconcileState(node, next, index, previous_text_states);
+    }
+    return .{ .nodes = node_buffer[0..next.nodes.len] };
 }
 
 fn appendWidgetTextStorageRange(buffer: []u8, len: *usize, value: []const u8) anyerror!WidgetTextStorageRange {
@@ -10098,6 +10132,67 @@ test "runtime reconciles canvas text edit state across layout replacement" {
     try std.testing.expectEqualStrings("Reset", retained.nodes[1].widget.text);
     try std.testing.expect(retained.nodes[1].widget.text_selection == null);
     try std.testing.expect(retained.nodes[1].widget.text_composition == null);
+}
+
+test "runtime avoids dirty regions for reconciled canvas text edit layout replacement" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-text-reconcile-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 260, 140),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 160, 36),
+        .text = "Cafe",
+        .semantics = .{ .label = "Name" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 260, 140), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_selection = .{ .anchor = 1, .focus = 4 } });
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = "af\xc3\xa9", .cursor = 4 } });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(1, 5), retained.nodes[1].widget.text_composition.?);
+
+    const refreshed_text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 160, 36),
+        .text = "Caf\xc3\xa9",
+        .semantics = .{ .label = "Name" },
+    };
+    var refreshed_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const refreshed_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{refreshed_text_field} }, geometry.RectF.init(0, 0, 260, 140), &refreshed_nodes);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", refreshed_layout);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(1, 5), retained.nodes[1].widget.text_composition.?);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
 }
 
 test "runtime drops canvas text edit state when layout replacement disables text field" {

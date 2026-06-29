@@ -728,6 +728,25 @@ fn dashboardRoundedRectCommandWidth(display_list: canvas.DisplayList, id: canvas
     };
 }
 
+fn resetDashboardDirty(runtime: *zero_native.Runtime) void {
+    runtime.invalidated = false;
+    runtime.dirty_region_count = 0;
+}
+
+fn expectCompactDashboardDirty(runtime: *const zero_native.Runtime, max_width: f32, max_height: f32) !void {
+    const regions = runtime.pendingDirtyRegions();
+    try std.testing.expect(regions.len > 0);
+
+    var dirty_area: f32 = 0;
+    for (regions) |region| {
+        const dirty = region.normalized();
+        try std.testing.expect(dirty.width > 0);
+        try std.testing.expect(dirty.height > 0);
+        dirty_area += dirty.width * dirty.height;
+    }
+    try std.testing.expect(dirty_area < max_width * max_height);
+}
+
 fn color(r: u8, g: u8, b: u8) canvas.Color {
     return canvas.Color.rgb8(r, g, b);
 }
@@ -1009,7 +1028,9 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqualStrings("menuitem", menu_item.role);
     try std.testing.expectEqualStrings("Last 30 days", menu_item.name);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 103 press");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     try std.testing.expectEqual(@as(u32, 1), app.mode_count);
 
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 112 select");
@@ -1022,7 +1043,9 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expect(display_list.findCommandById(overview_fill_command_id) == null);
     try std.testing.expect(display_list.findCommandById(customers_fill_command_id) != null);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 131 set-text $14.1M");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const updated_forecast = dashboardSnapshotWidget(snapshot, 131).?;
     try std.testing.expectEqualStrings("$14.1M", updated_forecast.text_value);
@@ -1031,20 +1054,26 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try expectDashboardTextCommand(display_list, forecast_text_command_id, "$14.1M");
     const activity_y_before_scroll = try dashboardTextCommandOriginY(display_list, activity_first_text_command_id);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 133 toggle");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const disabled_auto_refresh = dashboardSnapshotWidget(snapshot, 133).?;
     try std.testing.expectEqual(@as(?f32, 0), disabled_auto_refresh.value);
     try std.testing.expect(!disabled_auto_refresh.selected);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 134 increment");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const updated_confidence = dashboardSnapshotWidget(snapshot, 134).?;
     try std.testing.expectApproxEqAbs(@as(f32, 0.67), updated_confidence.value.?, 0.001);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try std.testing.expectApproxEqAbs(@as(f32, 26.8), try dashboardRoundedRectCommandWidth(display_list, confidence_active_command_id), 0.001);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 120 increment");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
     try std.testing.expectEqual(@as(f32, 40), scrolled_layout.findById(120).?.widget.value);
     snapshot = harness.runtime.automationSnapshot("Dashboard");
@@ -1053,7 +1082,9 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     const activity_y_after_increment = try dashboardTextCommandOriginY(display_list, activity_first_text_command_id);
     try std.testing.expect(activity_y_after_increment < activity_y_before_scroll);
 
+    resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 120 decrement");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
     try std.testing.expectEqual(@as(f32, 5), scrolled_layout.findById(120).?.widget.value);
     snapshot = harness.runtime.automationSnapshot("Dashboard");

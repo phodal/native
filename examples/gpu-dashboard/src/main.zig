@@ -235,8 +235,16 @@ const GpuDashboardApp = struct {
             return;
         }
 
-        _ = try self.presentDashboardCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
+        if (!frame_event.canvas_frame_requires_render) {
+            try self.reportFrameStatus(runtime, frame_event);
+            return;
+        }
 
+        _ = try self.presentDashboardCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
+        try self.reportFrameStatus(runtime, frame_event);
+    }
+
+    fn reportFrameStatus(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
         if (!self.reported_planned_frame and frame_event.canvas_command_count > 0) {
             self.reported_planned_frame = true;
             var status_buffer: [192]u8 = undefined;

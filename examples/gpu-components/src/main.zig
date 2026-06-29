@@ -158,13 +158,13 @@ const GpuComponentsApp = struct {
             return;
         }
 
-        _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
-        if (!self.reported_planned_frame and frame_event.canvas_command_count > 0) {
-            self.reported_planned_frame = true;
-            var status_buffer: [160]u8 = undefined;
-            const status = try componentFrameStatus(&status_buffer, frame_event);
-            try self.updateStatus(runtime, frame_event.window_id, status);
+        if (!frame_event.canvas_frame_requires_render) {
+            try self.reportFrameStatus(runtime, frame_event);
+            return;
         }
+
+        _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
+        try self.reportFrameStatus(runtime, frame_event);
     }
 
     fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
@@ -210,6 +210,14 @@ const GpuComponentsApp = struct {
     fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
         _ = self;
         _ = try runtime.updateView(window_id, "status-label", .{ .text = text });
+    }
+
+    fn reportFrameStatus(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
+        if (self.reported_planned_frame or frame_event.canvas_command_count == 0) return;
+        self.reported_planned_frame = true;
+        var status_buffer: [160]u8 = undefined;
+        const status = try componentFrameStatus(&status_buffer, frame_event);
+        try self.updateStatus(runtime, frame_event.window_id, status);
     }
 
     fn frameStorage(self: *@This()) canvas.CanvasFrameStorage {
@@ -789,6 +797,20 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqual(@as(usize, 1944), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 1352), harness.null_platform.gpu_surface_present_height);
+
+    try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 2,
+        .timestamp_ns = 1_016_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    const clean_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!clean_frame.canvas_frame_requires_render);
+    try std.testing.expect(!clean_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_profile_work_units);
 
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expect(widget_layout.nodeCount() >= 26);

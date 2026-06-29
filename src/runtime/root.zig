@@ -797,6 +797,29 @@ pub const Runtime = struct {
         frame_options.render_overrides = render_overrides;
 
         const display_list = self.views[index].canvasDisplayList();
+        const canvas_changed = self.views[index].canvas_revision != self.views[index].presented_canvas_revision;
+        const canvas_surface_changed = !sizesEqual(self.views[index].presented_canvas_surface_size, frame_options.surface_size) or
+            self.views[index].presented_canvas_scale != frame_options.scale;
+        if (!frame_options.full_repaint and
+            self.views[index].presented_canvas_valid and
+            !canvas_changed and
+            !canvas_surface_changed and
+            frame_options.previous_render_overrides.len == 0 and
+            frame_options.render_overrides.len == 0)
+        {
+            const canvas_frame = canvas.CanvasFrame{
+                .frame_index = frame_options.frame_index,
+                .timestamp_ns = frame_options.timestamp_ns,
+                .surface_size = frame_options.surface_size,
+                .scale = frame_options.scale,
+                .display_list = display_list,
+                .changes = storage.changes[0..0],
+                .budget = frame_options.budget,
+            };
+            self.views[index].recordCanvasFrame(canvas_frame);
+            return canvas_frame;
+        }
+
         var render_plan = try display_list.renderPlan(storage.render_commands);
         const render_override_dirty_bounds = canvas.renderOverrideDirtyBounds(render_plan.commands, frame_options.previous_render_overrides, frame_options.render_overrides);
         render_plan.bounds = canvas.applyRenderOverrides(storage.render_commands[0..render_plan.commandCount()], frame_options.render_overrides);
@@ -889,9 +912,9 @@ pub const Runtime = struct {
                 storage.text_layout_cache_actions,
             );
 
-        const canvas_changed = self.views[index].canvas_revision != self.views[index].presented_canvas_revision;
         const full_repaint = frame_options.full_repaint or
             !self.views[index].presented_canvas_valid or
+            canvas_surface_changed or
             (canvas_changed and (self.views[index].presented_canvas_has_unkeyed or self.views[index].currentCanvasHasUnkeyed()));
         const changes = if (full_repaint)
             storage.changes[0..0]
@@ -939,7 +962,7 @@ pub const Runtime = struct {
             try self.views[index].copyCanvasFrameVisualEffectCache(canvas_frame.visual_effect_cache_plan.entries);
             try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
             try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
-            try self.views[index].copyPresentedCanvasSummary(display_list);
+            try self.views[index].copyPresentedCanvasSummary(display_list, canvas_frame.surface_size, canvas_frame.scale);
             self.views[index].recordCanvasFrame(canvas_frame);
             try self.views[index].copyCanvasFrameRenderOverrides(frame_options.render_overrides);
             if (self.views[index].pruneCompletedNoopCanvasRenderAnimations(frame_options.timestamp_ns)) {
@@ -1872,6 +1895,9 @@ pub const Runtime = struct {
             .gpu_surface_frame => |frame_event| {
                 var enriched_frame_event = frame_event;
                 if (self.findViewIndex(frame_event.window_id, frame_event.label)) |index| {
+                    if (!sizesEqual(self.views[index].gpu_size, frame_event.size) or self.views[index].gpu_scale_factor != frame_event.scale_factor) {
+                        self.views[index].presented_canvas_valid = false;
+                    }
                     self.views[index].gpu_size = frame_event.size;
                     self.views[index].gpu_scale_factor = frame_event.scale_factor;
                     self.views[index].gpu_frame_index = frame_event.frame_index;
@@ -1969,6 +1995,7 @@ pub const Runtime = struct {
                     self.views[index].frame = resize_event.frame;
                     self.views[index].gpu_size = resize_event.frame.size();
                     self.views[index].gpu_scale_factor = resize_event.scale_factor;
+                    self.views[index].presented_canvas_valid = false;
                     if (self.views[index].gpu_status == .unavailable) self.views[index].gpu_status = .ready;
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_resized = resize_event });
@@ -5071,6 +5098,8 @@ const RuntimeView = struct {
     canvas_widget_display_list_reserved_count: usize = 0,
     presented_canvas_valid: bool = false,
     presented_canvas_revision: u64 = 0,
+    presented_canvas_surface_size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    presented_canvas_scale: f32 = 1,
     presented_canvas_commands: [max_canvas_commands_per_view]PresentedCanvasCommand = undefined,
     presented_canvas_command_count: usize = 0,
     presented_canvas_has_unkeyed: bool = false,
@@ -5601,10 +5630,12 @@ const RuntimeView = struct {
         });
     }
 
-    fn copyPresentedCanvasSummary(self: *RuntimeView, display_list: canvas.DisplayList) anyerror!void {
+    fn copyPresentedCanvasSummary(self: *RuntimeView, display_list: canvas.DisplayList, surface_size: geometry.SizeF, scale: f32) anyerror!void {
         _ = try CanvasResourceCounts.fromDisplayList(display_list);
 
         self.presented_canvas_valid = true;
+        self.presented_canvas_surface_size = surface_size;
+        self.presented_canvas_scale = scale;
         self.presented_canvas_command_count = 0;
         self.presented_canvas_has_unkeyed = false;
 
@@ -5625,6 +5656,8 @@ const RuntimeView = struct {
         self.presented_canvas_valid = source.presented_canvas_valid;
         self.presented_canvas_command_count = source.presented_canvas_command_count;
         self.presented_canvas_revision = source.presented_canvas_revision;
+        self.presented_canvas_surface_size = source.presented_canvas_surface_size;
+        self.presented_canvas_scale = source.presented_canvas_scale;
         self.presented_canvas_has_unkeyed = source.presented_canvas_has_unkeyed;
         @memcpy(self.presented_canvas_commands[0..source.presented_canvas_command_count], source.presented_canvas_commands[0..source.presented_canvas_command_count]);
     }
@@ -6349,6 +6382,10 @@ fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
 fn canvasFullRepaintBounds(surface_size: geometry.SizeF, render_bounds: ?geometry.RectF) ?geometry.RectF {
     if (canvasSurfaceRect(surface_size)) |surface| return surface;
     return render_bounds;
+}
+
+fn sizesEqual(a: geometry.SizeF, b: geometry.SizeF) bool {
+    return a.width == b.width and a.height == b.height;
 }
 
 pub const CanvasPixelSize = struct {
@@ -9051,8 +9088,12 @@ test "runtime next canvas frame tracks presented state and resource cache" {
     const clean_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
     try std.testing.expect(!clean_frame.full_repaint);
     try std.testing.expect(!clean_frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.render_plan.commandCount());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.batch_plan.batchCount());
     try std.testing.expectEqual(@as(usize, 0), clean_frame.changes.len);
-    try std.testing.expectEqual(@as(usize, 1), clean_frame.resource_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.resource_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_resource_cache_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_profile_work_units);
 
     const moved_commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
         .id = 1,
@@ -9073,6 +9114,66 @@ test "runtime next canvas frame tracks presented state and resource cache" {
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 60, 40), moved_frame.dirty_bounds.?);
     try std.testing.expectEqual(@as(usize, 1), moved_frame.resource_cache_plan.retainCount());
     try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].presented_canvas_revision);
+}
+
+test "runtime next canvas frame repaints when retained surface size changes" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-next-frame-resize", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 40, 40),
+        .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var render_commands: [2]canvas.RenderCommand = undefined;
+    var render_batches: [2]canvas.RenderBatch = undefined;
+    var resources: [1]canvas.RenderResource = undefined;
+    var resource_cache_entries: [1]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [2]canvas.RenderResourceCacheAction = undefined;
+    var glyphs: [1]canvas.GlyphAtlasEntry = undefined;
+    var changes: [2]canvas.DiffChange = undefined;
+    const frame_storage = canvas.CanvasFrameStorage{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    };
+
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 1,
+        .surface_size = geometry.SizeF.init(320, 240),
+    }, frame_storage);
+    try std.testing.expect(first_frame.full_repaint);
+
+    const resized_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 2,
+        .surface_size = geometry.SizeF.init(640, 360),
+    }, frame_storage);
+    try std.testing.expect(resized_frame.full_repaint);
+    try std.testing.expect(resized_frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 1), resized_frame.render_plan.commandCount());
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), resized_frame.dirty_bounds.?);
 }
 
 test "runtime next canvas frame retains renderer cache families" {
@@ -9396,13 +9497,15 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
 
     const clean_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
     try std.testing.expectEqual(@as(usize, 0), clean_frame.glyph_atlas_cache_plan.uploadCount());
-    try std.testing.expectEqual(@as(usize, 1), clean_frame.glyph_atlas_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.glyph_atlas_cache_plan.retainCount());
     try std.testing.expectEqual(@as(usize, 0), clean_frame.glyph_atlas_cache_plan.evictCount());
-    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_glyph_atlas_cache_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_glyph_atlas_retain_count);
     try std.testing.expectEqual(@as(usize, 0), clean_frame.text_layout_cache_plan.uploadCount());
-    try std.testing.expectEqual(@as(usize, 1), clean_frame.text_layout_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), clean_frame.text_layout_cache_plan.retainCount());
     try std.testing.expectEqual(@as(usize, 0), clean_frame.text_layout_cache_plan.evictCount());
-    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_retain_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_text_layout_retain_count);
 
     const next_commands = [_]canvas.CanvasCommand{.{ .draw_text = .{
         .id = 1,

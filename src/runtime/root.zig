@@ -1219,8 +1219,7 @@ pub const Runtime = struct {
         const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
         if (self.views[index].kind != .gpu_surface) return;
 
-        const scroll_index = self.views[index].nearestCanvasWidgetScrollIndex(pointer_event.route) orelse return;
-        const dirty = try self.views[index].applyCanvasWidgetScroll(scroll_index, pointer_event.pointer.delta.dy, .wheel) orelse return;
+        const dirty = try self.views[index].applyCanvasWidgetScrollRoute(pointer_event.route, pointer_event.pointer.delta.dy, .wheel) orelse return;
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -4818,13 +4817,25 @@ const RuntimeView = struct {
         return platformCursorFromCanvas(canvas.cursorForWidgetTarget(node.widget.kind, node.widget.state));
     }
 
-    fn nearestCanvasWidgetScrollIndex(self: *const RuntimeView, route: []const canvas.WidgetEventRouteEntry) ?usize {
+    fn applyCanvasWidgetScrollRoute(self: *RuntimeView, route: []const canvas.WidgetEventRouteEntry, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
+        var depth_limit: ?usize = null;
+        while (self.deepestCanvasWidgetScrollIndex(route, depth_limit)) |scroll_index| {
+            if (try self.applyCanvasWidgetScroll(scroll_index, delta_y, source)) |dirty| return dirty;
+            depth_limit = self.widget_layout_nodes[scroll_index].depth;
+        }
+        return null;
+    }
+
+    fn deepestCanvasWidgetScrollIndex(self: *const RuntimeView, route: []const canvas.WidgetEventRouteEntry, depth_limit: ?usize) ?usize {
         var result: ?usize = null;
         var result_depth: usize = 0;
         for (route) |entry| {
             if (entry.kind != .scroll_view or entry.node_index >= self.widget_layout_node_count) continue;
             const depth = self.widget_layout_nodes[entry.node_index].depth;
-            if (result == null or depth >= result_depth) {
+            if (depth_limit) |limit| {
+                if (depth >= limit) continue;
+            }
+            if (result == null or depth > result_depth) {
                 result = entry.node_index;
                 result_depth = depth;
             }
@@ -9021,6 +9032,97 @@ test "runtime wheel input scrolls retained canvas scroll views" {
     try std.testing.expectEqual(@as(u64, 4), idle.widget_revision);
     try std.testing.expect(!harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime chains wheel input from saturated nested canvas scroll views" {
+    const TestApp = struct {
+        widget_pointer_count: u32 = 0,
+        last_phase: canvas.WidgetPointerPhase = .hover,
+        last_target_id: canvas.ObjectId = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-scroll-chain", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_pointer => |pointer_event| {
+                    self.widget_pointer_count += 1;
+                    self.last_phase = pointer_event.pointer.phase;
+                    self.last_target_id = if (pointer_event.target) |target| target.id else 0;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 180, 80),
+    });
+
+    const inner_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Inner one" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Inner two" },
+    };
+    const outer_children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .scroll_view,
+            .frame = geometry.RectF.init(0, 0, 0, 40),
+            .value = 36,
+            .children = &inner_children,
+        },
+        .{ .id = 5, .kind = .button, .frame = geometry.RectF.init(0, 120, 0, 32), .text = "Outer footer" },
+    };
+    const outer = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .children = &outer_children,
+    };
+
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(outer, geometry.RectF.init(0, 0, 180, 80), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .scroll,
+        .x = 20,
+        .y = 20,
+        .delta_y = 24,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    try std.testing.expectEqual(canvas.WidgetPointerPhase.wheel, app_state.last_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), app_state.last_target_id);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 180, 80), harness.runtime.pendingDirtyRegions()[0]);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 24), retained.nodes[0].widget.value);
+    try std.testing.expectEqual(@as(f32, 36), retained.nodes[1].widget.value);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -24, 180, 40), retained.nodes[1].frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -60, 180, 32), retained.nodes[2].frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -16, 180, 32), retained.nodes[3].frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 96, 180, 32), retained.nodes[4].frame);
+    try std.testing.expect(harness.runtime.views[0].widget_scroll_states[0].velocity > 0);
+    try std.testing.expectEqual(@as(f32, 0), harness.runtime.views[0].widget_scroll_states[1].velocity);
 }
 
 test "runtime leaves virtualized canvas scroll views app driven" {

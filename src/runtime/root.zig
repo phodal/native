@@ -12043,6 +12043,69 @@ test "runtime accepts larger retained widget shells for automation" {
     try std.testing.expectEqual(@as(u32, 24), snapshot.widgets[24].list.item_count);
 }
 
+test "runtime automation snapshot retains widgets from multiple canvas surfaces" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-multi-surface-snapshot", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "left-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 320),
+    });
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "right-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(250, 0, 240, 320),
+    });
+
+    var left_items: [40]canvas.Widget = undefined;
+    var right_items: [40]canvas.Widget = undefined;
+    for (&left_items, &right_items, 0..) |*left, *right, index| {
+        const y = @as(f32, @floatFromInt(index)) * 7;
+        left.* = .{
+            .id = 100 + @as(canvas.ObjectId, @intCast(index)),
+            .kind = .button,
+            .frame = geometry.RectF.init(8, y, 120, 6),
+            .text = "Left",
+        };
+        right.* = .{
+            .id = 200 + @as(canvas.ObjectId, @intCast(index)),
+            .kind = .button,
+            .frame = geometry.RectF.init(8, y, 120, 6),
+            .text = "Right",
+        };
+    }
+
+    var left_nodes: [41]canvas.WidgetLayoutNode = undefined;
+    var right_nodes: [41]canvas.WidgetLayoutNode = undefined;
+    const left_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &left_items }, geometry.RectF.init(0, 0, 240, 320), &left_nodes);
+    const right_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &right_items }, geometry.RectF.init(0, 0, 240, 320), &right_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "left-canvas", left_layout);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "right-canvas", right_layout);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 80), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("left-canvas", snapshot.widgets[0].view_label);
+    try std.testing.expectEqual(@as(u64, 100), snapshot.widgets[0].id);
+    try std.testing.expectEqualStrings("left-canvas", snapshot.widgets[39].view_label);
+    try std.testing.expectEqual(@as(u64, 139), snapshot.widgets[39].id);
+    try std.testing.expectEqualStrings("right-canvas", snapshot.widgets[40].view_label);
+    try std.testing.expectEqual(@as(u64, 200), snapshot.widgets[40].id);
+    try std.testing.expectEqualStrings("right-canvas", snapshot.widgets[79].view_label);
+    try std.testing.expectEqual(@as(u64, 239), snapshot.widgets[79].id);
+}
+
 test "runtime validates canvas widget layout targets and limits" {
     const TestApp = struct {
         fn app(self: *@This()) App {

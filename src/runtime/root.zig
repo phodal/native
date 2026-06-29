@@ -10999,6 +10999,44 @@ test "runtime clips canvas widget text edit dirty bounds to scroll ancestors" {
     try std.testing.expectError(error.InvalidCommand, harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "!" }));
 }
 
+test "runtime clips canvas widget control dirty bounds to scroll ancestors" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-clipped-control-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 160, 48),
+    });
+
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .list_item,
+        .frame = geometry.RectF.init(0, 40, 0, 32),
+        .text = "Partially visible",
+    }};
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .children = &children },
+        geometry.RectF.init(0, 0, 160, 48),
+        &nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const dirty = try harness.runtime.views[0].setCanvasWidgetSelected(2, true);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 40, 160, 8), dirty.?);
+}
+
 test "runtime reconciles canvas text edit state across layout replacement" {
     const TestApp = struct {
         fn app(self: *@This()) App {

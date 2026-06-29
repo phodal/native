@@ -1015,6 +1015,14 @@ pub const Runtime = struct {
         return self.views[index].widgetLayoutTree();
     }
 
+    pub fn canvasWidgetSemantics(self: *const Runtime, window_id: platform.WindowId, label: []const u8) anyerror![]const canvas.WidgetSemanticsNode {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        return self.views[index].widgetSemantics();
+    }
+
     pub fn stepCanvasWidgetKineticScroll(self: *Runtime, window_id: platform.WindowId, label: []const u8, dt_ms: f32) anyerror!platform.ViewInfo {
         try self.validateViewParent(window_id);
         try validateViewLabel(label);

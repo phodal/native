@@ -138,6 +138,8 @@ pub fn build(b: *std.Build) void {
         "zero_native_app_last_command_count",
         "zero_native_app_last_command_name",
         "zero_native_app_last_error_name",
+        "zero_native_app_widget_semantics_count",
+        "zero_native_app_widget_semantics_at",
     };
     const desktop_tests = testArtifact(b, desktop_mod);
 

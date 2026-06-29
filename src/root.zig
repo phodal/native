@@ -181,3 +181,11 @@ pub export fn zero_native_app_last_command_name(app: ?*anyopaque) [*:0]const u8 
 pub export fn zero_native_app_last_error_name(app: ?*anyopaque) [*:0]const u8 {
     return embed.zero_native_app_last_error_name(app);
 }
+
+pub export fn zero_native_app_widget_semantics_count(app: ?*anyopaque) usize {
+    return embed.zero_native_app_widget_semantics_count(app);
+}
+
+pub export fn zero_native_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: ?*embed.MobileWidgetSemantics) c_int {
+    return embed.zero_native_app_widget_semantics_at(app, index, out);
+}

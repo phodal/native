@@ -1,5 +1,6 @@
 const std = @import("std");
 const geometry = @import("geometry");
+const canvas = @import("canvas");
 const runtime = @import("../runtime/root.zig");
 const platform = @import("../platform/root.zig");
 
@@ -8,6 +9,83 @@ const max_mobile_input_text_bytes: usize = 512;
 const max_mobile_asset_root_bytes: usize = platform.max_webview_url_bytes;
 const max_mobile_asset_entry_bytes: usize = platform.max_window_source_bytes;
 const mobile_gpu_surface_label = "mobile-surface";
+
+pub const MobileWidgetRole = enum(c_int) {
+    none = 0,
+    group = 1,
+    text = 2,
+    image = 3,
+    button = 4,
+    textbox = 5,
+    tooltip = 6,
+    dialog = 7,
+    menu = 8,
+    menuitem = 9,
+    list = 10,
+    listitem = 11,
+    row = 12,
+    grid = 13,
+    gridcell = 14,
+    tab = 15,
+    checkbox = 16,
+    switch_control = 17,
+    slider = 18,
+    progressbar = 19,
+};
+
+pub const MobileWidgetFlag = enum(u32) {
+    focused = 1 << 0,
+    hovered = 1 << 1,
+    pressed = 1 << 2,
+    selected = 1 << 3,
+    disabled = 1 << 4,
+    focusable = 1 << 5,
+};
+
+pub const MobileWidgetAction = enum(u32) {
+    focus = 1 << 0,
+    press = 1 << 1,
+    toggle = 1 << 2,
+    increment = 1 << 3,
+    decrement = 1 << 4,
+    set_text = 1 << 5,
+    set_selection = 1 << 6,
+    select = 1 << 7,
+    drag = 1 << 8,
+    drop_files = 1 << 9,
+};
+
+pub const MobileWidgetSemantics = extern struct {
+    id: u64 = 0,
+    parent_id: u64 = 0,
+    role: c_int = @intFromEnum(MobileWidgetRole.none),
+    flags: u32 = 0,
+    actions: u32 = 0,
+    x: f32 = 0,
+    y: f32 = 0,
+    width: f32 = 0,
+    height: f32 = 0,
+    value: f32 = 0,
+    has_value: c_int = 0,
+    label: ?[*]const u8 = null,
+    label_len: usize = 0,
+    text: ?[*]const u8 = null,
+    text_len: usize = 0,
+    text_selection_start: isize = -1,
+    text_selection_end: isize = -1,
+    text_composition_start: isize = -1,
+    text_composition_end: isize = -1,
+    grid_row_index: isize = -1,
+    grid_column_index: isize = -1,
+    grid_row_count: isize = -1,
+    grid_column_count: isize = -1,
+    list_item_index: isize = -1,
+    list_item_count: isize = -1,
+    scroll_offset: f32 = 0,
+    scroll_viewport_extent: f32 = 0,
+    scroll_content_extent: f32 = 0,
+    has_scroll: c_int = 0,
+};
 
 pub const EmbeddedApp = struct {
     app: runtime.App,
@@ -102,6 +180,10 @@ pub const EmbeddedApp = struct {
             .window_id = 1,
             .view_label = "mobile-header",
         });
+    }
+
+    pub fn widgetSemantics(self: *const EmbeddedApp) anyerror![]const canvas.WidgetSemanticsNode {
+        return self.runtime.canvasWidgetSemantics(1, mobile_gpu_surface_label);
     }
 
     pub fn stop(self: *EmbeddedApp) anyerror!void {
@@ -458,6 +540,31 @@ pub fn zero_native_app_last_error_name(app: ?*anyopaque) [*:0]const u8 {
     return @errorName(err);
 }
 
+pub fn zero_native_app_widget_semantics_count(app: ?*anyopaque) usize {
+    const self = mobileApp(app) orelse return 0;
+    const semantics = self.embedded.widgetSemantics() catch return 0;
+    return semantics.len;
+}
+
+pub fn zero_native_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: ?*MobileWidgetSemantics) c_int {
+    const self = mobileApp(app) orelse return 0;
+    const output = out orelse {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    };
+    const semantics = self.embedded.widgetSemantics() catch |err| {
+        recordError(self, err);
+        return 0;
+    };
+    if (index >= semantics.len) {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    }
+    output.* = mobileWidgetSemanticsFromNode(semantics, index);
+    self.last_error = null;
+    return 1;
+}
+
 fn mobileTouchKindFromPhase(phase: c_int) anyerror!platform.GpuSurfaceInputKind {
     return switch (phase) {
         0, 5 => .pointer_down,
@@ -505,6 +612,132 @@ fn copyInputText(buffer: []u8, value: []const u8) usize {
     const count = @min(buffer.len, value.len);
     @memcpy(buffer[0..count], value[0..count]);
     return count;
+}
+
+fn mobileWidgetSemanticsFromNode(nodes: []const canvas.WidgetSemanticsNode, index: usize) MobileWidgetSemantics {
+    const node = nodes[index];
+    const label = mobileOptionalString(node.label);
+    const text = mobileOptionalString(node.text_value);
+    return .{
+        .id = node.id,
+        .parent_id = mobileWidgetSemanticParentId(nodes, node.parent_index),
+        .role = @intFromEnum(mobileWidgetRole(node.role)),
+        .flags = mobileWidgetFlags(node),
+        .actions = mobileWidgetActions(node.actions),
+        .x = node.bounds.x,
+        .y = node.bounds.y,
+        .width = node.bounds.width,
+        .height = node.bounds.height,
+        .value = node.value orelse 0,
+        .has_value = if (node.value != null) 1 else 0,
+        .label = label.ptr,
+        .label_len = label.len,
+        .text = text.ptr,
+        .text_len = text.len,
+        .text_selection_start = mobileTextRangeStart(node.text_selection),
+        .text_selection_end = mobileTextRangeEnd(node.text_selection),
+        .text_composition_start = mobileTextRangeStart(node.text_composition),
+        .text_composition_end = mobileTextRangeEnd(node.text_composition),
+        .grid_row_index = mobileOptionalIndex(node.grid_row_index),
+        .grid_column_index = mobileOptionalIndex(node.grid_column_index),
+        .grid_row_count = mobileOptionalIndex(node.grid_row_count),
+        .grid_column_count = mobileOptionalIndex(node.grid_column_count),
+        .list_item_index = if (node.list.present) mobileU32Index(node.list.item_index) else -1,
+        .list_item_count = if (node.list.present) mobileU32Index(node.list.item_count) else -1,
+        .scroll_offset = node.scroll.offset,
+        .scroll_viewport_extent = node.scroll.viewport_extent,
+        .scroll_content_extent = node.scroll.content_extent,
+        .has_scroll = if (node.scroll.present) 1 else 0,
+    };
+}
+
+fn mobileWidgetSemanticParentId(nodes: []const canvas.WidgetSemanticsNode, parent_index: ?usize) u64 {
+    const index = parent_index orelse return 0;
+    if (index >= nodes.len) return 0;
+    return nodes[index].id;
+}
+
+const MobileStringView = struct {
+    ptr: ?[*]const u8,
+    len: usize,
+};
+
+fn mobileOptionalString(value: []const u8) MobileStringView {
+    return .{
+        .ptr = if (value.len > 0) value.ptr else null,
+        .len = value.len,
+    };
+}
+
+fn mobileWidgetRole(role: canvas.WidgetRole) MobileWidgetRole {
+    return switch (role) {
+        .none => .none,
+        .group => .group,
+        .text => .text,
+        .image => .image,
+        .button => .button,
+        .textbox => .textbox,
+        .tooltip => .tooltip,
+        .dialog => .dialog,
+        .menu => .menu,
+        .menuitem => .menuitem,
+        .list => .list,
+        .listitem => .listitem,
+        .row => .row,
+        .grid => .grid,
+        .gridcell => .gridcell,
+        .tab => .tab,
+        .checkbox => .checkbox,
+        .switch_control => .switch_control,
+        .slider => .slider,
+        .progressbar => .progressbar,
+    };
+}
+
+fn mobileWidgetFlags(node: canvas.WidgetSemanticsNode) u32 {
+    var flags: u32 = 0;
+    if (node.state.focused) flags |= @intFromEnum(MobileWidgetFlag.focused);
+    if (node.state.hovered) flags |= @intFromEnum(MobileWidgetFlag.hovered);
+    if (node.state.pressed) flags |= @intFromEnum(MobileWidgetFlag.pressed);
+    if (node.state.selected) flags |= @intFromEnum(MobileWidgetFlag.selected);
+    if (node.state.disabled) flags |= @intFromEnum(MobileWidgetFlag.disabled);
+    if (node.focusable) flags |= @intFromEnum(MobileWidgetFlag.focusable);
+    return flags;
+}
+
+fn mobileWidgetActions(actions: canvas.WidgetActions) u32 {
+    var flags: u32 = 0;
+    if (actions.focus) flags |= @intFromEnum(MobileWidgetAction.focus);
+    if (actions.press) flags |= @intFromEnum(MobileWidgetAction.press);
+    if (actions.toggle) flags |= @intFromEnum(MobileWidgetAction.toggle);
+    if (actions.increment) flags |= @intFromEnum(MobileWidgetAction.increment);
+    if (actions.decrement) flags |= @intFromEnum(MobileWidgetAction.decrement);
+    if (actions.set_text) flags |= @intFromEnum(MobileWidgetAction.set_text);
+    if (actions.set_selection) flags |= @intFromEnum(MobileWidgetAction.set_selection);
+    if (actions.select) flags |= @intFromEnum(MobileWidgetAction.select);
+    if (actions.drag) flags |= @intFromEnum(MobileWidgetAction.drag);
+    if (actions.drop_files) flags |= @intFromEnum(MobileWidgetAction.drop_files);
+    return flags;
+}
+
+fn mobileOptionalIndex(value: ?usize) isize {
+    const index = value orelse return -1;
+    if (index > @as(usize, @intCast(std.math.maxInt(isize)))) return std.math.maxInt(isize);
+    return @intCast(index);
+}
+
+fn mobileU32Index(value: u32) isize {
+    return @intCast(value);
+}
+
+fn mobileTextRangeStart(range: ?canvas.TextRange) isize {
+    const value = range orelse return -1;
+    return mobileOptionalIndex(value.start);
+}
+
+fn mobileTextRangeEnd(range: ?canvas.TextRange) isize {
+    const value = range orelse return -1;
+    return mobileOptionalIndex(value.end);
 }
 
 fn nowNanoseconds() u64 {
@@ -687,6 +920,85 @@ test "mobile C ABI forwards key text and IME input" {
     zero_native_app_ime(app, 99, "", 0, -1);
     try std.testing.expectEqual(@as(usize, 5), self.input_count);
     try std.testing.expectEqualStrings("InvalidImeKind", std.mem.span(zero_native_app_last_error_name(app)));
+}
+
+test "mobile C ABI exposes GPU widget accessibility semantics" {
+    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer zero_native_app_destroy(app);
+
+    const self = mobileApp(app).?;
+    self.null_platform.gpu_surfaces = true;
+    zero_native_app_start(app);
+    _ = try self.embedded.runtime.createView(.{
+        .window_id = 1,
+        .label = mobile_gpu_surface_label,
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 180),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 16, 96, 32),
+            .text = "Run",
+            .semantics = .{ .label = "Run report" },
+        },
+        .{
+            .id = 3,
+            .kind = .text_field,
+            .frame = geometry.RectF.init(12, 56, 160, 32),
+            .text = "Draft",
+            .text_selection = canvas.TextSelection{ .anchor = 1, .focus = 4 },
+            .state = .{ .focused = true },
+            .semantics = .{ .label = "Report title" },
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{
+        .id = 1,
+        .kind = .stack,
+        .children = &children,
+        .semantics = .{ .label = "Mobile canvas widgets" },
+    }, geometry.RectF.init(0, 0, 320, 180), &nodes);
+    _ = try self.embedded.runtime.setCanvasWidgetLayout(1, mobile_gpu_surface_label, layout);
+
+    try std.testing.expectEqual(@as(usize, 3), zero_native_app_widget_semantics_count(app));
+
+    var root_node: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 0, &root_node));
+    try std.testing.expectEqual(@as(u64, 1), root_node.id);
+    try std.testing.expectEqual(@as(u64, 0), root_node.parent_id);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.group), root_node.role);
+    try std.testing.expectEqualStrings("Mobile canvas widgets", root_node.label.?[0..root_node.label_len]);
+
+    var button_node: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 1, &button_node));
+    try std.testing.expectEqual(@as(u64, 2), button_node.id);
+    try std.testing.expectEqual(@as(u64, 1), button_node.parent_id);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.button), button_node.role);
+    try std.testing.expectEqualStrings("Run report", button_node.label.?[0..button_node.label_len]);
+    try std.testing.expect((button_node.flags & @intFromEnum(MobileWidgetFlag.focusable)) != 0);
+    try std.testing.expect((button_node.actions & @intFromEnum(MobileWidgetAction.press)) != 0);
+    try std.testing.expectEqual(@as(f32, 12), button_node.x);
+    try std.testing.expectEqual(@as(f32, 16), button_node.y);
+    try std.testing.expectEqual(@as(f32, 96), button_node.width);
+    try std.testing.expectEqual(@as(f32, 32), button_node.height);
+
+    var text_node: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 2, &text_node));
+    try std.testing.expectEqual(@as(u64, 3), text_node.id);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.textbox), text_node.role);
+    try std.testing.expectEqualStrings("Report title", text_node.label.?[0..text_node.label_len]);
+    try std.testing.expectEqualStrings("Draft", text_node.text.?[0..text_node.text_len]);
+    try std.testing.expectEqual(@as(isize, 1), text_node.text_selection_start);
+    try std.testing.expectEqual(@as(isize, 4), text_node.text_selection_end);
+    try std.testing.expect((text_node.flags & @intFromEnum(MobileWidgetFlag.focused)) != 0);
+    try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_text)) != 0);
+    try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_selection)) != 0);
+
+    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_at(app, 99, &text_node));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
 }
 
 test "mobile C ABI dispatches native commands through embedded runtime" {

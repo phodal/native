@@ -44,6 +44,8 @@ pub const ObjectId = u64;
 pub const ImageId = u64;
 pub const FontId = u64;
 
+const max_reference_text_layout_lines: usize = 64;
+
 pub const Color = struct {
     r: f32 = 0,
     g: f32 = 0,
@@ -340,6 +342,7 @@ pub const DrawText = struct {
     color: Color,
     text: []const u8 = "",
     glyphs: []const Glyph = &.{},
+    text_layout: ?TextLayoutOptions = null,
 };
 
 pub const TextWrap = enum {
@@ -2422,27 +2425,62 @@ pub const ReferenceRenderSurface = struct {
 
     fn drawText(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF) Error!void {
         if (value.size <= 0) return;
-        if (value.glyphs.len > 0) {
-            for (value.glyphs) |glyph| {
+
+        if (value.text_layout) |options| {
+            if (self.drawTextLayout(command, value, draw_bounds, options)) {
+                return;
+            } else |err| switch (err) {
+                error.TextLayoutLineListFull => {},
+                else => return err,
+            }
+        }
+
+        const line_height = value.size * 1.25;
+        const baseline = value.origin.y;
+        try self.drawTextLine(command, value, draw_bounds, .{
+            .text_start = 0,
+            .text_len = value.text.len,
+            .glyph_start = 0,
+            .glyph_len = value.glyphs.len,
+            .bounds = textLineBounds(value, 0, value.text.len, 0, value.glyphs.len, baseline, line_height),
+            .baseline = baseline,
+        });
+    }
+
+    fn drawTextLayout(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF, options: TextLayoutOptions) Error!void {
+        var lines: [max_reference_text_layout_lines]TextLine = undefined;
+        const layout = try layoutTextRun(value, options, &lines);
+        for (layout.lines) |line| {
+            try self.drawTextLine(command, value, draw_bounds, line);
+        }
+    }
+
+    fn drawTextLine(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF, line: TextLine) Error!void {
+        if (line.glyph_len > 0 and line.glyph_start < value.glyphs.len) {
+            const glyph_end = @min(value.glyphs.len, line.glyph_start + line.glyph_len);
+            const raw_bounds = textLineBounds(value, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
+            const dx = line.bounds.x - raw_bounds.x;
+            for (value.glyphs[line.glyph_start..glyph_end]) |glyph| {
                 const width = estimatedGlyphAdvance(glyph, value.size);
-                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x, value.origin.y + glyph.y - value.size, width, value.size);
+                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x + dx, line.baseline + glyph.y - value.size, width, value.size);
                 self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
             }
             return;
         }
 
+        const end = @min(value.text.len, line.text_start + line.text_len);
         const advance = value.size * 0.5;
-        var text_offset: usize = 0;
+        var text_offset: usize = line.text_start;
         var scalar_index: usize = 0;
-        while (text_offset < value.text.len) {
+        while (text_offset < end) {
             const next_offset = nextTextOffset(value.text, text_offset);
             defer {
                 text_offset = next_offset;
                 scalar_index += 1;
             }
             if (isReferenceTextSpace(value.text[text_offset])) continue;
-            const x = value.origin.x + @as(f32, @floatFromInt(scalar_index)) * advance;
-            const glyph_rect = geometry.RectF.init(x, value.origin.y - value.size, advance, value.size);
+            const x = line.bounds.x + @as(f32, @floatFromInt(scalar_index)) * advance;
+            const glyph_rect = geometry.RectF.init(x, line.baseline - value.size, advance, value.size);
             self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
         }
     }
@@ -4918,7 +4956,12 @@ fn drawTextFingerprint(text: DrawText) u64 {
         hash = resourceHashF32(hash, glyph.y);
         hash = resourceHashF32(hash, glyph.advance);
     }
+    hash = resourceHashOptionalTextLayoutOptions(hash, text.text_layout);
     return hash;
+}
+
+fn textLayoutOptionsForDrawText(frame_options: TextLayoutOptions, text: DrawText) TextLayoutOptions {
+    return text.text_layout orelse frame_options;
 }
 
 fn textLayoutKey(text: DrawText, options: TextLayoutOptions) TextLayoutKey {
@@ -5048,6 +5091,18 @@ fn resourceHashOptionalRect(hash: u64, rect: ?geometry.RectF) u64 {
 
 fn resourceHashOptionalObjectId(hash: u64, id: ?ObjectId) u64 {
     if (id) |value| return resourceHashU64(resourceHashU8(hash, 1), value);
+    return resourceHashU8(hash, 0);
+}
+
+fn resourceHashOptionalTextLayoutOptions(hash: u64, options: ?TextLayoutOptions) u64 {
+    if (options) |value| {
+        var next = resourceHashU8(hash, 1);
+        next = resourceHashF32(next, nonNegative(value.max_width));
+        next = resourceHashF32(next, nonNegative(value.line_height));
+        next = resourceHashEnum(next, @intFromEnum(value.wrap));
+        next = resourceHashEnum(next, @intFromEnum(value.alignment));
+        return next;
+    }
     return resourceHashU8(hash, 0);
 }
 
@@ -5331,7 +5386,7 @@ pub const TextLayoutPlanner = struct {
 
     fn consumeText(self: *TextLayoutPlanner, text: DrawText, options: TextLayoutOptions) Error!void {
         if (self.plan_len >= self.plans.len) return error.TextLayoutPlanListFull;
-        const plan = try layoutTextRunPlan(text, options, self.lines[self.line_len..]);
+        const plan = try layoutTextRunPlan(text, textLayoutOptionsForDrawText(options, text), self.lines[self.line_len..]);
         self.plans[self.plan_len] = plan;
         self.plan_len += 1;
         self.line_len += plan.lineCount();
@@ -5803,9 +5858,15 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .id = widgetPartId(widget.id, 1),
         .font_id = tokens.typography.font_id,
         .size = tokens.typography.body_size,
-        .origin = alignedTextOrigin(widget.frame, widget.text, tokens.typography.body_size, 0, widget.text_alignment),
+        .origin = textOrigin(widget.frame, tokens.typography.body_size, 0),
         .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
         .text = widget.text,
+        .text_layout = .{
+            .max_width = widget.frame.width,
+            .line_height = tokens.typography.body_size * 1.25,
+            .wrap = .word,
+            .alignment = widget.text_alignment,
+        },
     });
 }
 
@@ -8920,6 +8981,12 @@ fn pathBounds(elements: []const PathElement) ?geometry.RectF {
 
 fn textBounds(value: DrawText) ?geometry.RectF {
     if (value.glyphs.len == 0 and value.text.len == 0) return null;
+    if (value.text_layout) |options| {
+        var lines: [max_reference_text_layout_lines]TextLine = undefined;
+        if (layoutTextRun(value, options, &lines)) |layout| {
+            if (layout.bounds) |bounds| return bounds;
+        } else |_| {}
+    }
 
     var min_x = value.origin.x;
     var min_y = value.origin.y - value.size;
@@ -9478,7 +9545,23 @@ fn drawTextsEqual(a: DrawText, b: DrawText) bool {
         pointsEqual(a.origin, b.origin) and
         colorsEqual(a.color, b.color) and
         std.mem.eql(u8, a.text, b.text) and
-        glyphsEqual(a.glyphs, b.glyphs);
+        glyphsEqual(a.glyphs, b.glyphs) and
+        optionalTextLayoutOptionsEqual(a.text_layout, b.text_layout);
+}
+
+fn optionalTextLayoutOptionsEqual(a: ?TextLayoutOptions, b: ?TextLayoutOptions) bool {
+    if (a) |left| {
+        if (b) |right| return textLayoutOptionsEqual(left, right);
+        return false;
+    }
+    return b == null;
+}
+
+fn textLayoutOptionsEqual(a: TextLayoutOptions, b: TextLayoutOptions) bool {
+    return nonNegative(a.max_width) == nonNegative(b.max_width) and
+        nonNegative(a.line_height) == nonNegative(b.line_height) and
+        a.wrap == b.wrap and
+        a.alignment == b.alignment;
 }
 
 fn shadowsEqual(a: Shadow, b: Shadow) bool {
@@ -9699,6 +9782,10 @@ fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
             try json.writeString(writer, value.text);
             try writer.writeAll(",\"glyphs\":");
             try writeGlyphsJson(value.glyphs, writer);
+            if (value.text_layout) |options| {
+                try writer.writeAll(",\"layout\":");
+                try writeTextLayoutOptionsJson(options, writer);
+            }
         },
         .shadow => |value| {
             try writer.print(",\"id\":{d},\"rect\":", .{value.id});
@@ -9714,6 +9801,17 @@ fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
             try writer.print(",\"radius\":{d}", .{value.radius});
         },
     }
+    try writer.writeByte('}');
+}
+
+fn writeTextLayoutOptionsJson(options: TextLayoutOptions, writer: anytype) !void {
+    try writer.print("{{\"maxWidth\":{d},\"lineHeight\":{d},\"wrap\":", .{
+        nonNegative(options.max_width),
+        nonNegative(options.line_height),
+    });
+    try json.writeString(writer, @tagName(options.wrap));
+    try writer.writeAll(",\"align\":");
+    try json.writeString(writer, @tagName(options.alignment));
     try writer.writeByte('}');
 }
 
@@ -10314,7 +10412,7 @@ test "widget layout aligns row children on main and cross axes" {
     try expectLayoutFrame(spaced_layout, 6, geometry.RectF.init(100, 0, 20, 16));
 }
 
-test "widget text alignment shifts emitted text origins" {
+test "widget text alignment emits local text layout options" {
     const tokens = DesignTokens{
         .typography = .{ .font_id = 1, .body_size = 10 },
     };
@@ -10332,8 +10430,11 @@ test "widget text alignment shifts emitted text origins" {
     switch (center_builder.displayList().commands[0]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 1)), text.id);
-            try std.testing.expectApproxEqAbs(@as(f32, 55), text.origin.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 10), text.origin.x, 0.001);
             try std.testing.expectApproxEqAbs(@as(f32, 32.5), text.origin.y, 0.001);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectEqual(@as(f32, 100), text.text_layout.?.max_width);
+            try std.testing.expectEqual(TextAlign.center, text.text_layout.?.alignment);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -10349,7 +10450,11 @@ test "widget text alignment shifts emitted text origins" {
     var end_builder = Builder.init(&end_commands);
     try emitWidgetTree(&end_builder, end, tokens);
     switch (end_builder.displayList().commands[0]) {
-        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 100), text.origin.x, 0.001),
+        .draw_text => |text| {
+            try std.testing.expectApproxEqAbs(@as(f32, 10), text.origin.x, 0.001);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectEqual(TextAlign.end, text.text_layout.?.alignment);
+        },
         else => return error.TestUnexpectedResult,
     }
 }
@@ -16724,6 +16829,34 @@ test "text bounds follow utf8 scalar fallback and shaped y offsets" {
     }));
 }
 
+test "text bounds and reference renderer honor per-run wrapping" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(255, 255, 255),
+        .text = "ABCD",
+        .text_layout = .{ .max_width = 10, .line_height = 12, .wrap = .character },
+    };
+    try expectRect(geometry.RectF.init(0, 0, 10, 24), textBounds(text));
+
+    const commands = [_]CanvasCommand{.{ .draw_text = text }};
+    var render_commands: [1]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    try std.testing.expectEqual(@as(usize, 1), render_plan.commandCount());
+    try expectRect(geometry.RectF.init(0, 0, 10, 24), render_plan.commands[0].bounds);
+
+    var pixels: [16 * 32 * 4]u8 = [_]u8{0} ** (16 * 32 * 4);
+    const surface = try ReferenceRenderSurface.init(16, 32, &pixels);
+    try surface.renderPass(.{
+        .commands = render_plan.commands,
+        .surface_size = geometry.SizeF.init(16, 32),
+        .full_repaint = true,
+    }, Color.rgb8(0, 0, 0));
+    try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 1, 1);
+    try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 1, 13);
+}
+
 test "text layout wraps words into deterministic line boxes" {
     const text = DrawText{
         .font_id = 1,
@@ -16921,6 +17054,40 @@ test "display list text layout plan caches multiple text runs" {
     const retained = try plan_set.cachePlan(first.entries, 2, &retained_entries, &retained_actions);
     try std.testing.expectEqual(@as(usize, 2), retained.retainCount());
     try std.testing.expectEqual(@as(usize, 0), retained.evictCount());
+}
+
+test "display list text layout plan honors per-run options" {
+    const commands = [_]CanvasCommand{
+        .{ .draw_text = .{
+            .id = 1,
+            .font_id = 1,
+            .size = 10,
+            .origin = geometry.PointF.init(2, 18),
+            .color = Color.rgb8(0, 0, 0),
+            .text = "Alpha beta",
+            .text_layout = .{ .max_width = 30, .line_height = 14, .wrap = .word, .alignment = .end },
+        } },
+        .{ .draw_text = .{
+            .id = 2,
+            .font_id = 1,
+            .size = 10,
+            .origin = geometry.PointF.init(2, 42),
+            .color = Color.rgb8(0, 0, 0),
+            .text = "Gamma",
+        } },
+    };
+
+    var plans: [2]TextLayoutPlan = undefined;
+    var lines: [4]TextLine = undefined;
+    const plan_set = try (DisplayList{ .commands = &commands }).textLayoutPlan(.{ .max_width = 80, .line_height = 20, .alignment = .center }, &plans, &lines);
+    try std.testing.expectEqual(@as(usize, 2), plan_set.planCount());
+    try std.testing.expectEqual(@as(f32, 30), plan_set.plans[0].key.max_width);
+    try std.testing.expectEqual(@as(f32, 14), plan_set.plans[0].key.line_height);
+    try std.testing.expectEqual(TextAlign.end, plan_set.plans[0].key.alignment);
+    try std.testing.expectEqual(@as(f32, 80), plan_set.plans[1].key.max_width);
+    try std.testing.expectEqual(@as(f32, 20), plan_set.plans[1].key.line_height);
+    try std.testing.expectEqual(TextAlign.center, plan_set.plans[1].key.alignment);
+    try std.testing.expect(plan_set.plans[0].key.fingerprint != plan_set.plans[1].key.fingerprint);
 }
 
 test "text layout cache reports capacity overflow" {
@@ -17145,6 +17312,26 @@ test "display list serializes deterministically" {
     const expected =
         "{\"commands\":[{\"op\":\"fill_rect\",\"id\":10,\"rect\":[0,0,360,180],\"fill\":{\"kind\":\"linear_gradient\",\"start\":[0,0],\"end\":[360,180],\"stops\":[{\"offset\":0,\"color\":[1,1,1,1]},{\"offset\":1,\"color\":[0.23137255,0.50980395,0.9647059,1]}]}},{\"op\":\"shadow\",\"id\":11,\"rect\":[24,24,220,96],\"radius\":[16,16,16,16],\"offset\":[0,18],\"blur\":42,\"spread\":-8,\"color\":[0.05882353,0.09019608,0.16470589,0.1882353]},{\"op\":\"draw_text\",\"id\":12,\"font\":7,\"size\":17,\"origin\":[32,52],\"color\":[0.05882353,0.09019608,0.16470589,1],\"text\":\"Hi\",\"glyphs\":[{\"id\":42,\"x\":12,\"y\":28,\"advance\":9},{\"id\":43,\"x\":21,\"y\":28,\"advance\":8}]}]}";
     try std.testing.expectEqualStrings(expected, writer.buffered());
+}
+
+test "display list serializes per-run text layout options" {
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 3,
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Wrapped",
+        .text_layout = .{ .max_width = 42, .line_height = 14, .wrap = .character, .alignment = .center },
+    } }};
+
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try (DisplayList{ .commands = &commands }).writeJson(&writer);
+    try std.testing.expectEqualStrings(
+        "{\"commands\":[{\"op\":\"draw_text\",\"id\":3,\"font\":1,\"size\":10,\"origin\":[4,20],\"color\":[0,0,0,1],\"text\":\"Wrapped\",\"glyphs\":[],\"layout\":{\"maxWidth\":42,\"lineHeight\":14,\"wrap\":\"character\",\"align\":\"center\"}}]}",
+        writer.buffered(),
+    );
 }
 
 fn expectRect(expected: geometry.RectF, actual: ?geometry.RectF) !void {

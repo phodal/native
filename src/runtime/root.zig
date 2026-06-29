@@ -7526,7 +7526,7 @@ test "runtime retains canvas display lists on GPU surface views" {
     try std.testing.expectEqual(@as(u64, 1), canvas_view.canvas_revision);
     try std.testing.expectEqual(@as(usize, 3), canvas_view.canvas_command_count);
 
-    var buffer: [1536]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     try automation.snapshot.writeText(snapshot, &writer);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_revision=1") != null);

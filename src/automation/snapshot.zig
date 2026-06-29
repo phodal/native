@@ -149,7 +149,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.gpu_frame_nonblank,
                 view.gpu_sample_color,
             });
-            try writer.print(" canvas_revision={d} canvas_commands={d} canvas_frame_requires_render={any} canvas_frame_full_repaint={any} canvas_frame_batches={d} canvas_frame_encoder_commands={d} canvas_frame_encoder_cache_actions={d} canvas_frame_encoder_pipeline_binds={d} canvas_frame_encoder_draws={d} canvas_frame_pipelines={d} canvas_frame_pipeline_uploads={d} canvas_frame_pipeline_retains={d} canvas_frame_pipeline_evicts={d} canvas_frame_resources={d} canvas_frame_uploads={d} canvas_frame_retains={d} canvas_frame_evicts={d} canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
+            try writer.print(" canvas_revision={d} canvas_commands={d} canvas_frame_requires_render={any} canvas_frame_full_repaint={any} canvas_frame_batches={d} canvas_frame_encoder_commands={d} canvas_frame_encoder_cache_actions={d} canvas_frame_encoder_pipeline_binds={d} canvas_frame_encoder_draws={d} canvas_frame_pipelines={d} canvas_frame_pipeline_uploads={d} canvas_frame_pipeline_retains={d} canvas_frame_pipeline_evicts={d}", .{
                 view.canvas_revision,
                 view.canvas_command_count,
                 view.canvas_frame_requires_render,
@@ -163,14 +163,50 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.canvas_frame_pipeline_upload_count,
                 view.canvas_frame_pipeline_retain_count,
                 view.canvas_frame_pipeline_evict_count,
+            });
+            try writer.print(" canvas_frame_path_geometries={d} canvas_frame_path_vertices={d} canvas_frame_path_indices={d} canvas_frame_path_uploads={d} canvas_frame_path_retains={d} canvas_frame_path_evicts={d} canvas_frame_images={d} canvas_frame_image_uploads={d} canvas_frame_image_retains={d} canvas_frame_image_evicts={d}", .{
+                view.canvas_frame_path_geometry_count,
+                view.canvas_frame_path_geometry_vertex_count,
+                view.canvas_frame_path_geometry_index_count,
+                view.canvas_frame_path_geometry_upload_count,
+                view.canvas_frame_path_geometry_retain_count,
+                view.canvas_frame_path_geometry_evict_count,
+                view.canvas_frame_image_count,
+                view.canvas_frame_image_upload_count,
+                view.canvas_frame_image_retain_count,
+                view.canvas_frame_image_evict_count,
+            });
+            try writer.print(" canvas_frame_layers={d} canvas_frame_opacity_layers={d} canvas_frame_clip_layers={d} canvas_frame_transform_layers={d} canvas_frame_layer_uploads={d} canvas_frame_layer_retains={d} canvas_frame_layer_evicts={d}", .{
+                view.canvas_frame_layer_count,
+                view.canvas_frame_layer_opacity_count,
+                view.canvas_frame_layer_clip_count,
+                view.canvas_frame_layer_transform_count,
+                view.canvas_frame_layer_upload_count,
+                view.canvas_frame_layer_retain_count,
+                view.canvas_frame_layer_evict_count,
+            });
+            try writer.print(" canvas_frame_resources={d} canvas_frame_uploads={d} canvas_frame_retains={d} canvas_frame_evicts={d} canvas_frame_effects={d} canvas_frame_shadows={d} canvas_frame_blurs={d} canvas_frame_effect_uploads={d} canvas_frame_effect_retains={d} canvas_frame_effect_evicts={d}", .{
                 view.canvas_frame_resource_count,
                 view.canvas_frame_resource_upload_count,
                 view.canvas_frame_resource_retain_count,
                 view.canvas_frame_resource_evict_count,
+                view.canvas_frame_visual_effect_count,
+                view.canvas_frame_visual_effect_shadow_count,
+                view.canvas_frame_visual_effect_blur_count,
+                view.canvas_frame_visual_effect_upload_count,
+                view.canvas_frame_visual_effect_retain_count,
+                view.canvas_frame_visual_effect_evict_count,
+            });
+            try writer.print(" canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_text_layouts={d} canvas_frame_text_lines={d} canvas_frame_text_uploads={d} canvas_frame_text_retains={d} canvas_frame_text_evicts={d} canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
                 view.canvas_frame_glyph_atlas_entry_count,
                 view.canvas_frame_glyph_atlas_upload_count,
                 view.canvas_frame_glyph_atlas_retain_count,
                 view.canvas_frame_glyph_atlas_evict_count,
+                view.canvas_frame_text_layout_count,
+                view.canvas_frame_text_layout_line_count,
+                view.canvas_frame_text_layout_upload_count,
+                view.canvas_frame_text_layout_retain_count,
+                view.canvas_frame_text_layout_evict_count,
                 view.canvas_frame_change_count,
                 view.canvas_frame_budget_exceeded_count,
                 view.canvas_frame_budget_ok,
@@ -409,10 +445,78 @@ test "accessibility snapshot prefers explicit accessibility label" {
 }
 
 test "snapshot emits GPU surface frame proof" {
-    var buffer: [1536]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
-    const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .gpu_size = geometry.SizeF.init(320, 180), .gpu_scale_factor = 2, .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_status = .ready, .gpu_frame_index = 4, .gpu_timestamp_ns = 99, .gpu_frame_nonblank = true, .gpu_sample_color = 0xff336699, .canvas_revision = 2, .canvas_command_count = 5, .canvas_frame_requires_render = true, .canvas_frame_full_repaint = true, .canvas_frame_batch_count = 3, .canvas_frame_encoder_command_count = 8, .canvas_frame_encoder_cache_action_count = 2, .canvas_frame_encoder_bind_pipeline_count = 3, .canvas_frame_encoder_draw_batch_count = 3, .canvas_frame_pipeline_count = 2, .canvas_frame_pipeline_upload_count = 1, .canvas_frame_pipeline_retain_count = 1, .canvas_frame_pipeline_evict_count = 0, .canvas_frame_resource_count = 2, .canvas_frame_resource_upload_count = 1, .canvas_frame_resource_retain_count = 1, .canvas_frame_resource_evict_count = 0, .canvas_frame_glyph_atlas_entry_count = 4, .canvas_frame_change_count = 0, .canvas_frame_budget_exceeded_count = 2, .canvas_frame_budget_ok = false, .canvas_frame_dirty_bounds = geometry.RectF.init(0, 0, 320, 180), .cursor = .text }};
+    const views = [_]platform.ViewInfo{.{
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 100, 100),
+        .gpu_size = geometry.SizeF.init(320, 180),
+        .gpu_scale_factor = 2,
+        .gpu_backend = .metal,
+        .gpu_pixel_format = .bgra8_unorm,
+        .gpu_present_mode = .timer,
+        .gpu_status = .ready,
+        .gpu_frame_index = 4,
+        .gpu_timestamp_ns = 99,
+        .gpu_frame_nonblank = true,
+        .gpu_sample_color = 0xff336699,
+        .canvas_revision = 2,
+        .canvas_command_count = 5,
+        .canvas_frame_requires_render = true,
+        .canvas_frame_full_repaint = true,
+        .canvas_frame_batch_count = 3,
+        .canvas_frame_encoder_command_count = 8,
+        .canvas_frame_encoder_cache_action_count = 2,
+        .canvas_frame_encoder_bind_pipeline_count = 3,
+        .canvas_frame_encoder_draw_batch_count = 3,
+        .canvas_frame_pipeline_count = 2,
+        .canvas_frame_pipeline_upload_count = 1,
+        .canvas_frame_pipeline_retain_count = 1,
+        .canvas_frame_pipeline_evict_count = 0,
+        .canvas_frame_path_geometry_count = 3,
+        .canvas_frame_path_geometry_vertex_count = 18,
+        .canvas_frame_path_geometry_index_count = 24,
+        .canvas_frame_path_geometry_upload_count = 2,
+        .canvas_frame_path_geometry_retain_count = 1,
+        .canvas_frame_path_geometry_evict_count = 0,
+        .canvas_frame_image_count = 2,
+        .canvas_frame_image_upload_count = 1,
+        .canvas_frame_image_retain_count = 1,
+        .canvas_frame_image_evict_count = 0,
+        .canvas_frame_layer_count = 3,
+        .canvas_frame_layer_opacity_count = 1,
+        .canvas_frame_layer_clip_count = 1,
+        .canvas_frame_layer_transform_count = 1,
+        .canvas_frame_layer_upload_count = 2,
+        .canvas_frame_layer_retain_count = 1,
+        .canvas_frame_layer_evict_count = 0,
+        .canvas_frame_resource_count = 2,
+        .canvas_frame_resource_upload_count = 1,
+        .canvas_frame_resource_retain_count = 1,
+        .canvas_frame_resource_evict_count = 0,
+        .canvas_frame_visual_effect_count = 3,
+        .canvas_frame_visual_effect_shadow_count = 2,
+        .canvas_frame_visual_effect_blur_count = 1,
+        .canvas_frame_visual_effect_upload_count = 2,
+        .canvas_frame_visual_effect_retain_count = 1,
+        .canvas_frame_visual_effect_evict_count = 0,
+        .canvas_frame_glyph_atlas_entry_count = 4,
+        .canvas_frame_glyph_atlas_upload_count = 2,
+        .canvas_frame_glyph_atlas_retain_count = 2,
+        .canvas_frame_glyph_atlas_evict_count = 0,
+        .canvas_frame_text_layout_count = 2,
+        .canvas_frame_text_layout_line_count = 4,
+        .canvas_frame_text_layout_upload_count = 1,
+        .canvas_frame_text_layout_retain_count = 1,
+        .canvas_frame_text_layout_evict_count = 0,
+        .canvas_frame_change_count = 0,
+        .canvas_frame_budget_exceeded_count = 2,
+        .canvas_frame_budget_ok = false,
+        .canvas_frame_dirty_bounds = geometry.RectF.init(0, 0, 320, 180),
+        .cursor = .text,
+    }};
     try writeText(.{
         .windows = &windows,
         .views = &views,
@@ -436,11 +540,35 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_encoder_pipeline_binds=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_pipelines=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_pipeline_uploads=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_path_geometries=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_path_vertices=18") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_path_indices=24") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_path_uploads=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_path_retains=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_images=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_image_uploads=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_image_retains=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_layers=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_opacity_layers=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_clip_layers=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_transform_layers=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_layer_uploads=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_resources=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_uploads=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_retains=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_evicts=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_effects=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_shadows=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_blurs=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_effect_uploads=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_effect_retains=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_glyphs=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_glyph_uploads=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_glyph_retains=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_layouts=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_lines=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_uploads=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_retains=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_changes=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_exceeded=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_ok=false") != null);
@@ -449,7 +577,7 @@ test "snapshot emits GPU surface frame proof" {
 }
 
 test "snapshot emits widget semantics" {
-    var buffer: [2048]u8 = undefined;
+    var buffer: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
     const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .role = "canvas" }};

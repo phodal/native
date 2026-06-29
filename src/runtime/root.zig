@@ -669,7 +669,7 @@ pub const Runtime = struct {
         try validateViewLabel(label);
         const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
-        return try self.planCanvasFrameForView(index, options, storage);
+        return try self.planCanvasFrameForView(index, options, storage, true);
     }
 
     pub fn presentCanvasFramePixels(
@@ -713,7 +713,7 @@ pub const Runtime = struct {
         return canvas_frame;
     }
 
-    fn planCanvasFrameForView(self: *Runtime, index: usize, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) anyerror!canvas.CanvasFrame {
+    fn planCanvasFrameForView(self: *Runtime, index: usize, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage, record: bool) anyerror!canvas.CanvasFrame {
         var frame_options = options;
         if (frame_options.surface_size.isEmpty()) {
             frame_options.surface_size = if (self.views[index].gpu_size.isEmpty()) self.views[index].frame.size() else self.views[index].gpu_size;
@@ -871,15 +871,19 @@ pub const Runtime = struct {
             .dirty_bounds = dirty_bounds,
             .budget = frame_options.budget,
         };
-        try self.views[index].copyCanvasFramePipelineCache(canvas_frame.pipeline_cache_plan.entries);
-        try self.views[index].copyCanvasFrameResourceCache(canvas_frame.resource_cache_plan.entries);
-        try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
-        try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
-        try self.views[index].copyPresentedCanvasSummary(display_list);
-        self.views[index].recordCanvasFrame(canvas_frame);
-        try self.views[index].copyCanvasFrameRenderOverrides(frame_options.render_overrides);
-        if (self.views[index].canvasRenderAnimationsActive(frame_options.timestamp_ns)) {
-            self.invalidateFor(.state, self.views[index].frame);
+        if (record) {
+            try self.views[index].copyCanvasFramePipelineCache(canvas_frame.pipeline_cache_plan.entries);
+            try self.views[index].copyCanvasFrameResourceCache(canvas_frame.resource_cache_plan.entries);
+            try self.views[index].copyCanvasFrameGlyphAtlasCache(canvas_frame.glyph_atlas_cache_plan.entries);
+            try self.views[index].copyCanvasFrameTextLayoutCache(canvas_frame.text_layout_cache_plan.entries);
+            try self.views[index].copyPresentedCanvasSummary(display_list);
+            self.views[index].recordCanvasFrame(canvas_frame);
+            try self.views[index].copyCanvasFrameRenderOverrides(frame_options.render_overrides);
+            if (self.views[index].canvasRenderAnimationsActive(frame_options.timestamp_ns)) {
+                self.invalidateFor(.state, self.views[index].frame);
+            }
+        } else {
+            self.views[index].recordCanvasFrame(canvas_frame);
         }
         return canvas_frame;
     }
@@ -1592,42 +1596,44 @@ pub const Runtime = struct {
                     self.views[index].gpu_pixel_format = frame_event.pixel_format;
                     self.views[index].gpu_present_mode = frame_event.present_mode;
                     self.views[index].gpu_status = frame_event.status;
-                    _ = try self.planCanvasFrameForView(index, .{
+                    const preview_frame = try self.planCanvasFrameForView(index, .{
                         .frame_index = frame_event.frame_index,
                         .timestamp_ns = frame_event.timestamp_ns,
                         .surface_size = frame_event.size,
                         .scale = frame_event.scale_factor,
-                    }, self.canvasFrameScratchStorage());
+                    }, self.canvasFrameScratchStorage(), false);
+                    const preview_render_pass = preview_frame.renderPass();
+                    const preview_budget_status = preview_frame.budgetStatus();
                     enriched_frame_event.canvas_revision = self.views[index].canvas_revision;
                     enriched_frame_event.canvas_command_count = self.views[index].canvas_command_count;
-                    enriched_frame_event.canvas_frame_requires_render = self.views[index].canvas_frame_requires_render;
-                    enriched_frame_event.canvas_frame_full_repaint = self.views[index].canvas_frame_full_repaint;
-                    enriched_frame_event.canvas_frame_batch_count = self.views[index].canvas_frame_batch_count;
-                    enriched_frame_event.canvas_frame_encoder_command_count = self.views[index].canvas_frame_encoder_command_count;
-                    enriched_frame_event.canvas_frame_encoder_cache_action_count = self.views[index].canvas_frame_encoder_cache_action_count;
-                    enriched_frame_event.canvas_frame_encoder_bind_pipeline_count = self.views[index].canvas_frame_encoder_bind_pipeline_count;
-                    enriched_frame_event.canvas_frame_encoder_draw_batch_count = self.views[index].canvas_frame_encoder_draw_batch_count;
-                    enriched_frame_event.canvas_frame_pipeline_count = self.views[index].canvas_frame_pipeline_count;
-                    enriched_frame_event.canvas_frame_pipeline_upload_count = self.views[index].canvas_frame_pipeline_upload_count;
-                    enriched_frame_event.canvas_frame_pipeline_retain_count = self.views[index].canvas_frame_pipeline_retain_count;
-                    enriched_frame_event.canvas_frame_pipeline_evict_count = self.views[index].canvas_frame_pipeline_evict_count;
-                    enriched_frame_event.canvas_frame_resource_count = self.views[index].canvas_frame_resource_count;
-                    enriched_frame_event.canvas_frame_resource_upload_count = self.views[index].canvas_frame_resource_upload_count;
-                    enriched_frame_event.canvas_frame_resource_retain_count = self.views[index].canvas_frame_resource_retain_count;
-                    enriched_frame_event.canvas_frame_resource_evict_count = self.views[index].canvas_frame_resource_evict_count;
-                    enriched_frame_event.canvas_frame_glyph_atlas_entry_count = self.views[index].canvas_frame_glyph_atlas_entry_count;
-                    enriched_frame_event.canvas_frame_glyph_atlas_upload_count = self.views[index].canvas_frame_glyph_atlas_upload_count;
-                    enriched_frame_event.canvas_frame_glyph_atlas_retain_count = self.views[index].canvas_frame_glyph_atlas_retain_count;
-                    enriched_frame_event.canvas_frame_glyph_atlas_evict_count = self.views[index].canvas_frame_glyph_atlas_evict_count;
-                    enriched_frame_event.canvas_frame_text_layout_count = self.views[index].canvas_frame_text_layout_count;
-                    enriched_frame_event.canvas_frame_text_layout_line_count = self.views[index].canvas_frame_text_layout_line_count;
-                    enriched_frame_event.canvas_frame_text_layout_upload_count = self.views[index].canvas_frame_text_layout_upload_count;
-                    enriched_frame_event.canvas_frame_text_layout_retain_count = self.views[index].canvas_frame_text_layout_retain_count;
-                    enriched_frame_event.canvas_frame_text_layout_evict_count = self.views[index].canvas_frame_text_layout_evict_count;
-                    enriched_frame_event.canvas_frame_change_count = self.views[index].canvas_frame_change_count;
-                    enriched_frame_event.canvas_frame_budget_exceeded_count = self.views[index].canvas_frame_budget_status.exceededCount();
-                    enriched_frame_event.canvas_frame_budget_ok = self.views[index].canvas_frame_budget_status.ok();
-                    enriched_frame_event.canvas_frame_dirty_bounds = self.views[index].canvas_frame_dirty_bounds;
+                    enriched_frame_event.canvas_frame_requires_render = preview_frame.requiresRender();
+                    enriched_frame_event.canvas_frame_full_repaint = preview_frame.full_repaint;
+                    enriched_frame_event.canvas_frame_batch_count = preview_frame.batch_plan.batchCount();
+                    enriched_frame_event.canvas_frame_encoder_command_count = preview_render_pass.encoderCommandCount();
+                    enriched_frame_event.canvas_frame_encoder_cache_action_count = preview_render_pass.encoderCacheActionCount();
+                    enriched_frame_event.canvas_frame_encoder_bind_pipeline_count = preview_render_pass.encoderBindPipelineCount();
+                    enriched_frame_event.canvas_frame_encoder_draw_batch_count = preview_render_pass.encoderDrawBatchCount();
+                    enriched_frame_event.canvas_frame_pipeline_count = preview_frame.pipeline_cache_plan.entryCount();
+                    enriched_frame_event.canvas_frame_pipeline_upload_count = preview_frame.pipeline_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_pipeline_retain_count = preview_frame.pipeline_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_pipeline_evict_count = preview_frame.pipeline_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_resource_count = preview_frame.resource_plan.resourceCount();
+                    enriched_frame_event.canvas_frame_resource_upload_count = preview_frame.resource_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_resource_retain_count = preview_frame.resource_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_resource_evict_count = preview_frame.resource_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_glyph_atlas_entry_count = preview_frame.glyph_atlas_plan.entryCount();
+                    enriched_frame_event.canvas_frame_glyph_atlas_upload_count = preview_frame.glyph_atlas_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_glyph_atlas_retain_count = preview_frame.glyph_atlas_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_glyph_atlas_evict_count = preview_frame.glyph_atlas_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_text_layout_count = preview_frame.text_layout_plan.planCount();
+                    enriched_frame_event.canvas_frame_text_layout_line_count = preview_frame.text_layout_plan.lineCount();
+                    enriched_frame_event.canvas_frame_text_layout_upload_count = preview_frame.text_layout_cache_plan.uploadCount();
+                    enriched_frame_event.canvas_frame_text_layout_retain_count = preview_frame.text_layout_cache_plan.retainCount();
+                    enriched_frame_event.canvas_frame_text_layout_evict_count = preview_frame.text_layout_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_change_count = preview_frame.changes.len;
+                    enriched_frame_event.canvas_frame_budget_exceeded_count = preview_budget_status.exceededCount();
+                    enriched_frame_event.canvas_frame_budget_ok = preview_budget_status.ok();
+                    enriched_frame_event.canvas_frame_dirty_bounds = preview_frame.dirty_bounds;
                     enriched_frame_event.widget_revision = self.views[index].widget_revision;
                     enriched_frame_event.widget_node_count = self.views[index].widget_layout_node_count;
                     enriched_frame_event.widget_semantics_count = self.views[index].widget_semantics_node_count;
@@ -11230,32 +11236,32 @@ test "runtime dispatches GPU surface events" {
         .sample_color = 0xff336699,
     } });
     try std.testing.expectEqual(@as(u32, 2), app_state.frame_count);
-    try std.testing.expect(!app_state.last_canvas_frame_requires_render);
-    try std.testing.expect(!app_state.last_canvas_frame_full_repaint);
+    try std.testing.expect(app_state.last_canvas_frame_requires_render);
+    try std.testing.expect(app_state.last_canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_batch_count);
-    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_command_count);
-    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_cache_action_count);
-    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_bind_pipeline_count);
-    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_encoder_draw_batch_count);
+    try std.testing.expectEqual(@as(usize, 6), app_state.last_canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_draw_batch_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_change_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
-    try std.testing.expect(app_state.last_canvas_frame_dirty_bounds == null);
-    const clean_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
-    try std.testing.expectEqual(@as(u64, 8), clean_frame.frame_index);
-    try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, clean_frame.backend);
-    try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, clean_frame.pixel_format);
-    try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, clean_frame.present_mode);
-    try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, clean_frame.status);
-    try std.testing.expect(!clean_frame.canvas_frame_requires_render);
-    try std.testing.expect(!clean_frame.canvas_frame_full_repaint);
-    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_command_count);
-    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_cache_action_count);
-    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_bind_pipeline_count);
-    try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_encoder_draw_batch_count);
-    try std.testing.expectEqual(@as(usize, 1), clean_frame.canvas_frame_budget_exceeded_count);
-    try std.testing.expect(!clean_frame.canvas_frame_budget_ok);
-    try std.testing.expect(clean_frame.canvas_frame_dirty_bounds == null);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), app_state.last_canvas_frame_dirty_bounds.?);
+    const preview_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expectEqual(@as(u64, 8), preview_frame.frame_index);
+    try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, preview_frame.backend);
+    try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, preview_frame.pixel_format);
+    try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, preview_frame.present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, preview_frame.status);
+    try std.testing.expect(preview_frame.canvas_frame_requires_render);
+    try std.testing.expect(preview_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(@as(usize, 6), preview_frame.canvas_frame_encoder_command_count);
+    try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_bind_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_draw_batch_count);
+    try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_budget_exceeded_count);
+    try std.testing.expect(!preview_frame.canvas_frame_budget_ok);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), preview_frame.canvas_frame_dirty_bounds.?);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
         .window_id = 1,

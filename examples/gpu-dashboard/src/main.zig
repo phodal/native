@@ -16,7 +16,6 @@ const statusbar_height: f32 = 34;
 const max_dashboard_pipelines: usize = 8;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
-const max_dashboard_overrides: usize = 2;
 const max_dashboard_widgets: usize = 10;
 const refresh_command = "dashboard.refresh";
 const mode_command = "dashboard.mode";
@@ -145,11 +144,6 @@ const GpuDashboardApp = struct {
     mode_count: u32 = 0,
     canvas_installed: bool = false,
     reported_planned_frame: bool = false,
-    animation_start_ns: u64 = 0,
-    previous_override_count: usize = 0,
-    render_override_count: usize = 0,
-    previous_overrides: [max_dashboard_overrides]canvas.CanvasRenderOverride = undefined,
-    render_overrides: [max_dashboard_overrides]canvas.CanvasRenderOverride = undefined,
     pixels: ?[]u8 = null,
     scratch: ?[]u8 = null,
     render_commands: [max_dashboard_commands]canvas.RenderCommand = undefined,
@@ -190,8 +184,6 @@ const GpuDashboardApp = struct {
         if (self.scratch) |scratch| std.heap.page_allocator.free(scratch);
         self.pixels = null;
         self.scratch = null;
-        self.previous_override_count = 0;
-        self.render_override_count = 0;
     }
 
     fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
@@ -249,7 +241,7 @@ const GpuDashboardApp = struct {
         const display_list = builder.displayList();
         _ = try runtime.setCanvasDisplayList(frame_event.window_id, "dashboard-canvas", display_list);
         try installDashboardWidgetLayout(runtime, frame_event.window_id);
-        self.animation_start_ns = frame_event.timestamp_ns;
+        try self.scheduleDashboardAnimations(runtime, frame_event.window_id, frame_event.timestamp_ns);
         _ = try self.presentDashboardCanvas(runtime, frame_event, true);
         self.canvas_installed = true;
     }
@@ -269,8 +261,7 @@ const GpuDashboardApp = struct {
         _ = try runtime.setCanvasDisplayList(command.window_id, "dashboard-canvas", display_list);
         try installDashboardWidgetLayout(runtime, command.window_id);
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, "dashboard-canvas");
-        self.animation_start_ns = gpu_frame.timestamp_ns;
-        self.previous_override_count = 0;
+        try self.scheduleDashboardAnimations(runtime, command.window_id, gpu_frame.timestamp_ns);
         _ = try self.presentDashboardCanvas(runtime, gpuFrameEvent(gpu_frame), true);
 
         var status_buffer: [160]u8 = undefined;
@@ -289,8 +280,7 @@ const GpuDashboardApp = struct {
         const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, window_height - toolbar_height - statusbar_height) else frame_event.size;
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
         try self.ensurePixelBuffers(surface_size, scale_factor);
-        const overrides = try self.sampleRenderOverrides(frame_event.timestamp_ns);
-        const frame = try runtime.presentNextCanvasFramePixels(
+        return try runtime.presentNextCanvasFramePixels(
             frame_event.window_id,
             "dashboard-canvas",
             .{
@@ -299,24 +289,20 @@ const GpuDashboardApp = struct {
                 .surface_size = surface_size,
                 .scale = scale_factor,
                 .full_repaint = full_repaint,
-                .previous_render_overrides = self.previous_overrides[0..self.previous_override_count],
-                .render_overrides = overrides,
             },
             self.frameStorage(),
             self.pixels.?,
             self.scratch.?,
             color(246, 248, 252),
         );
-        self.rememberRenderOverrides(overrides);
-        return frame;
     }
 
-    fn sampleRenderOverrides(self: *@This(), timestamp_ns: u64) anyerror![]const canvas.CanvasRenderOverride {
-        if (self.animation_start_ns == 0) self.animation_start_ns = timestamp_ns;
+    fn scheduleDashboardAnimations(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, start_ns: u64) anyerror!void {
+        _ = self;
         const animations = [_]canvas.CanvasRenderAnimation{
             .{
                 .id = 16,
-                .start_ns = self.animation_start_ns,
+                .start_ns = start_ns,
                 .duration_ms = 900,
                 .from_opacity = 0.72,
                 .to_opacity = 1,
@@ -325,7 +311,7 @@ const GpuDashboardApp = struct {
             },
             .{
                 .id = 17,
-                .start_ns = self.animation_start_ns,
+                .start_ns = start_ns,
                 .duration_ms = 900,
                 .from_opacity = 0.72,
                 .to_opacity = 1,
@@ -333,16 +319,7 @@ const GpuDashboardApp = struct {
                 .to_transform = canvas.Affine.identity(),
             },
         };
-        const sampled = try canvas.sampleCanvasRenderAnimations(&animations, timestamp_ns, &self.render_overrides);
-        self.render_override_count = sampled.len;
-        return self.render_overrides[0..self.render_override_count];
-    }
-
-    fn rememberRenderOverrides(self: *@This(), overrides: []const canvas.CanvasRenderOverride) void {
-        self.previous_override_count = @min(overrides.len, self.previous_overrides.len);
-        for (overrides[0..self.previous_override_count], 0..) |override, index| {
-            self.previous_overrides[index] = override;
-        }
+        _ = try runtime.setCanvasRenderAnimations(window_id, "dashboard-canvas", &animations);
     }
 
     fn frameStorage(self: *@This()) canvas.CanvasFrameStorage {
@@ -784,6 +761,10 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqual(@as(usize, 1440), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 1040), harness.null_platform.gpu_surface_present_height);
+    const animations = try harness.runtime.canvasRenderAnimations(1, "dashboard-canvas");
+    try std.testing.expectEqual(@as(usize, 2), animations.len);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 16), animations[0].id);
+    try std.testing.expectEqual(@as(u64, 1_000_000_000), animations[0].start_ns);
 
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
     try std.testing.expectEqual(@as(usize, 10), widget_layout.nodeCount());

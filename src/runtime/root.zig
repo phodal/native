@@ -6452,6 +6452,55 @@ fn shellViewOptions(window_id: platform.WindowId, view: app_manifest.ShellView, 
         .command = view.command orelse "",
         .url = view.url orelse "",
         .bridge_enabled = view.kind == .webview,
+        .gpu_surface = shellGpuSurfaceOptions(view),
+    };
+}
+
+fn shellGpuSurfaceOptions(view: app_manifest.ShellView) platform.GpuSurfaceOptions {
+    var options = platform.GpuSurfaceOptions{};
+    if (view.gpu_backend) |value| options.backend = shellGpuSurfaceBackend(value);
+    if (view.gpu_pixel_format) |value| options.pixel_format = shellGpuSurfacePixelFormat(value);
+    if (view.gpu_present_mode) |value| options.present_mode = shellGpuSurfacePresentMode(value);
+    if (view.gpu_alpha_mode) |value| options.alpha_mode = shellGpuSurfaceAlphaMode(value);
+    if (view.gpu_color_space) |value| options.color_space = shellGpuSurfaceColorSpace(value);
+    if (view.gpu_vsync) |value| options.vsync = value;
+    return options;
+}
+
+fn shellGpuSurfaceBackend(value: app_manifest.GpuSurfaceBackend) platform.GpuSurfaceBackend {
+    return switch (value) {
+        .none => .none,
+        .metal => .metal,
+    };
+}
+
+fn shellGpuSurfacePixelFormat(value: app_manifest.GpuSurfacePixelFormat) platform.GpuSurfacePixelFormat {
+    return switch (value) {
+        .none => .none,
+        .bgra8_unorm => .bgra8_unorm,
+    };
+}
+
+fn shellGpuSurfacePresentMode(value: app_manifest.GpuSurfacePresentMode) platform.GpuSurfacePresentMode {
+    return switch (value) {
+        .none => .none,
+        .timer => .timer,
+    };
+}
+
+fn shellGpuSurfaceAlphaMode(value: app_manifest.GpuSurfaceAlphaMode) platform.GpuSurfaceAlphaMode {
+    return switch (value) {
+        .none => .none,
+        .@"opaque" => .@"opaque",
+        .premultiplied => .premultiplied,
+    };
+}
+
+fn shellGpuSurfaceColorSpace(value: app_manifest.GpuSurfaceColorSpace) platform.GpuSurfaceColorSpace {
+    return switch (value) {
+        .none => .none,
+        .srgb => .srgb,
+        .display_p3 => .display_p3,
     };
 }
 
@@ -13969,6 +14018,46 @@ test "runtime rolls back shell views when a later view fails" {
     const views = harness.runtime.listViews(1, &views_buffer);
     try std.testing.expectEqual(@as(usize, 1), views.len);
     try std.testing.expectEqualStrings("main", views[0].label);
+}
+
+test "runtime applies GPU shell view presentation options" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-gpu-options", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    const shell_views = [_]app_manifest.ShellView{.{
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .width = 320,
+        .height = 240,
+        .gpu_backend = .metal,
+        .gpu_pixel_format = .bgra8_unorm,
+        .gpu_present_mode = .timer,
+        .gpu_alpha_mode = .@"opaque",
+        .gpu_color_space = .srgb,
+        .gpu_vsync = true,
+    }};
+
+    try harness.runtime.createShellViews(1, &shell_views, geometry.RectF.init(0, 0, 800, 600));
+
+    var views_buffer: [2]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    const canvas_view = testViewByLabel(views, "canvas").?;
+    try std.testing.expectEqual(platform.ViewKind.gpu_surface, canvas_view.kind);
+    try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, canvas_view.gpu_backend);
+    try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, canvas_view.gpu_pixel_format);
+    try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, canvas_view.gpu_present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", canvas_view.gpu_alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, canvas_view.gpu_color_space);
+    try std.testing.expect(canvas_view.gpu_vsync);
 }
 
 test "runtime restores main webview state when shell creation fails after main update" {

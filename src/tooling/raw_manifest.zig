@@ -116,6 +116,12 @@ pub const RawShellView = struct {
     url: ?[]const u8 = null,
     text: ?[]const u8 = null,
     command: ?[]const u8 = null,
+    gpu_backend: ?[]const u8 = null,
+    gpu_pixel_format: ?[]const u8 = null,
+    gpu_present_mode: ?[]const u8 = null,
+    gpu_alpha_mode: ?[]const u8 = null,
+    gpu_color_space: ?[]const u8 = null,
+    gpu_vsync: ?bool = null,
 };
 
 pub const RawShortcut = struct {

@@ -95,6 +95,11 @@ pub const Metadata = struct {
                 if (view.url) |url| allocator.free(url);
                 if (view.text) |text| allocator.free(text);
                 if (view.command) |command| allocator.free(command);
+                if (view.gpu_backend) |gpu_backend| allocator.free(gpu_backend);
+                if (view.gpu_pixel_format) |gpu_pixel_format| allocator.free(gpu_pixel_format);
+                if (view.gpu_present_mode) |gpu_present_mode| allocator.free(gpu_present_mode);
+                if (view.gpu_alpha_mode) |gpu_alpha_mode| allocator.free(gpu_alpha_mode);
+                if (view.gpu_color_space) |gpu_color_space| allocator.free(gpu_color_space);
             }
             if (window.views.len > 0) allocator.free(window.views);
         }
@@ -197,6 +202,12 @@ pub const ShellViewMetadata = struct {
     url: ?[]const u8 = null,
     text: ?[]const u8 = null,
     command: ?[]const u8 = null,
+    gpu_backend: ?[]const u8 = null,
+    gpu_pixel_format: ?[]const u8 = null,
+    gpu_present_mode: ?[]const u8 = null,
+    gpu_alpha_mode: ?[]const u8 = null,
+    gpu_color_space: ?[]const u8 = null,
+    gpu_vsync: ?bool = null,
 };
 
 pub const ShortcutMetadata = struct {
@@ -513,6 +524,12 @@ fn convertRawShellViews(allocator: std.mem.Allocator, views: []const RawShellVie
             .url = try duplicateOptionalString(allocator, view.url),
             .text = try duplicateOptionalString(allocator, view.text),
             .command = try duplicateOptionalString(allocator, view.command),
+            .gpu_backend = try duplicateOptionalString(allocator, view.gpu_backend),
+            .gpu_pixel_format = try duplicateOptionalString(allocator, view.gpu_pixel_format),
+            .gpu_present_mode = try duplicateOptionalString(allocator, view.gpu_present_mode),
+            .gpu_alpha_mode = try duplicateOptionalString(allocator, view.gpu_alpha_mode),
+            .gpu_color_space = try duplicateOptionalString(allocator, view.gpu_color_space),
+            .gpu_vsync = view.gpu_vsync,
         };
     }
     return converted;
@@ -730,6 +747,12 @@ fn parseShellViews(allocator: std.mem.Allocator, values: []const ShellViewMetada
             .url = view.url,
             .text = view.text,
             .command = view.command,
+            .gpu_backend = if (view.gpu_backend) |value| try parseGpuSurfaceBackend(value) else null,
+            .gpu_pixel_format = if (view.gpu_pixel_format) |value| try parseGpuSurfacePixelFormat(value) else null,
+            .gpu_present_mode = if (view.gpu_present_mode) |value| try parseGpuSurfacePresentMode(value) else null,
+            .gpu_alpha_mode = if (view.gpu_alpha_mode) |value| try parseGpuSurfaceAlphaMode(value) else null,
+            .gpu_color_space = if (view.gpu_color_space) |value| try parseGpuSurfaceColorSpace(value) else null,
+            .gpu_vsync = view.gpu_vsync,
         };
     }
     return views;
@@ -1007,6 +1030,38 @@ fn parseViewKind(value: []const u8) !app_manifest.ViewKind {
     return error.InvalidViewKind;
 }
 
+fn parseGpuSurfaceBackend(value: []const u8) !app_manifest.GpuSurfaceBackend {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "metal")) return .metal;
+    return error.InvalidViewKind;
+}
+
+fn parseGpuSurfacePixelFormat(value: []const u8) !app_manifest.GpuSurfacePixelFormat {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "bgra8_unorm")) return .bgra8_unorm;
+    return error.InvalidViewKind;
+}
+
+fn parseGpuSurfacePresentMode(value: []const u8) !app_manifest.GpuSurfacePresentMode {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "timer")) return .timer;
+    return error.InvalidViewKind;
+}
+
+fn parseGpuSurfaceAlphaMode(value: []const u8) !app_manifest.GpuSurfaceAlphaMode {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "opaque")) return .@"opaque";
+    if (std.mem.eql(u8, value, "premultiplied")) return .premultiplied;
+    return error.InvalidViewKind;
+}
+
+fn parseGpuSurfaceColorSpace(value: []const u8) !app_manifest.GpuSurfaceColorSpace {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "srgb")) return .srgb;
+    if (std.mem.eql(u8, value, "display_p3")) return .display_p3;
+    return error.InvalidViewKind;
+}
+
 fn parseShellEdge(value: []const u8) !app_manifest.ShellEdge {
     if (std.mem.eql(u8, value, "top")) return .top;
     if (std.mem.eql(u8, value, "right")) return .right;
@@ -1222,6 +1277,7 @@ test "manifest metadata parser reads shell windows and views" {
         \\          .{ .label = "mode", .kind = "segmented_control", .parent = "toolbar", .text = "List|Grid", .command = "app.view.mode" },
         \\          .{ .label = "syncing", .kind = "progress_indicator", .parent = "toolbar", .role = "Syncing" },
         \\          .{ .label = "nav-row", .kind = "list_item", .parent = "toolbar-stack", .text = "Inbox", .command = "app.open.inbox" },
+        \\          .{ .label = "canvas", .kind = "gpu_surface", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
         \\        },
         \\      },
         \\    },
@@ -1247,6 +1303,13 @@ test "manifest metadata parser reads shell windows and views" {
     try std.testing.expectEqualStrings("segmented_control", metadata.shell.windows[0].views[6].kind);
     try std.testing.expectEqualStrings("progress_indicator", metadata.shell.windows[0].views[7].kind);
     try std.testing.expectEqualStrings("list_item", metadata.shell.windows[0].views[8].kind);
+    try std.testing.expectEqualStrings("gpu_surface", metadata.shell.windows[0].views[9].kind);
+    try std.testing.expectEqualStrings("metal", metadata.shell.windows[0].views[9].gpu_backend.?);
+    try std.testing.expectEqualStrings("bgra8_unorm", metadata.shell.windows[0].views[9].gpu_pixel_format.?);
+    try std.testing.expectEqualStrings("timer", metadata.shell.windows[0].views[9].gpu_present_mode.?);
+    try std.testing.expectEqualStrings("opaque", metadata.shell.windows[0].views[9].gpu_alpha_mode.?);
+    try std.testing.expectEqualStrings("srgb", metadata.shell.windows[0].views[9].gpu_color_space.?);
+    try std.testing.expect(metadata.shell.windows[0].views[9].gpu_vsync.?);
 
     const shell = try parseShell(std.testing.allocator, metadata.shell);
     defer deinitParsedShell(std.testing.allocator, shell);
@@ -1262,6 +1325,13 @@ test "manifest metadata parser reads shell windows and views" {
     try std.testing.expectEqual(app_manifest.ViewKind.segmented_control, shell.windows[0].views[6].kind);
     try std.testing.expectEqual(app_manifest.ViewKind.progress_indicator, shell.windows[0].views[7].kind);
     try std.testing.expectEqual(app_manifest.ViewKind.list_item, shell.windows[0].views[8].kind);
+    try std.testing.expectEqual(app_manifest.ViewKind.gpu_surface, shell.windows[0].views[9].kind);
+    try std.testing.expectEqual(app_manifest.GpuSurfaceBackend.metal, shell.windows[0].views[9].gpu_backend.?);
+    try std.testing.expectEqual(app_manifest.GpuSurfacePixelFormat.bgra8_unorm, shell.windows[0].views[9].gpu_pixel_format.?);
+    try std.testing.expectEqual(app_manifest.GpuSurfacePresentMode.timer, shell.windows[0].views[9].gpu_present_mode.?);
+    try std.testing.expectEqual(app_manifest.GpuSurfaceAlphaMode.@"opaque", shell.windows[0].views[9].gpu_alpha_mode.?);
+    try std.testing.expectEqual(app_manifest.GpuSurfaceColorSpace.srgb, shell.windows[0].views[9].gpu_color_space.?);
+    try std.testing.expect(shell.windows[0].views[9].gpu_vsync.?);
     try std.testing.expectEqual(app_manifest.ShellEdge.top, shell.windows[0].views[0].edge.?);
     try app_manifest.validateManifest(.{
         .identity = .{ .id = metadata.id, .name = metadata.name },

@@ -288,6 +288,33 @@ pub const ViewKind = enum {
     progress_indicator,
 };
 
+pub const GpuSurfaceBackend = enum {
+    none,
+    metal,
+};
+
+pub const GpuSurfacePixelFormat = enum {
+    none,
+    bgra8_unorm,
+};
+
+pub const GpuSurfacePresentMode = enum {
+    none,
+    timer,
+};
+
+pub const GpuSurfaceAlphaMode = enum {
+    none,
+    @"opaque",
+    premultiplied,
+};
+
+pub const GpuSurfaceColorSpace = enum {
+    none,
+    srgb,
+    display_p3,
+};
+
 pub const ShellEdge = enum {
     top,
     right,
@@ -323,6 +350,21 @@ pub const ShellView = struct {
     url: ?[]const u8 = null,
     text: ?[]const u8 = null,
     command: ?[]const u8 = null,
+    gpu_backend: ?GpuSurfaceBackend = null,
+    gpu_pixel_format: ?GpuSurfacePixelFormat = null,
+    gpu_present_mode: ?GpuSurfacePresentMode = null,
+    gpu_alpha_mode: ?GpuSurfaceAlphaMode = null,
+    gpu_color_space: ?GpuSurfaceColorSpace = null,
+    gpu_vsync: ?bool = null,
+
+    pub fn hasGpuSurfaceOptions(self: ShellView) bool {
+        return self.gpu_backend != null or
+            self.gpu_pixel_format != null or
+            self.gpu_present_mode != null or
+            self.gpu_alpha_mode != null or
+            self.gpu_color_space != null or
+            self.gpu_vsync != null;
+    }
 };
 
 pub const ShellWindow = struct {
@@ -544,6 +586,7 @@ fn validateShellViews(views: []const ShellView) ValidationError!void {
         } else if (view.kind == .webview) {
             return error.MissingRequiredField;
         }
+        if (view.kind != .gpu_surface and view.hasGpuSurfaceOptions()) return error.InvalidViewKind;
     }
     try validateShellViewParentGraph(views);
 }
@@ -1190,6 +1233,14 @@ test "manifest validates shell windows and views" {
         .identity = .{ .id = "com.example.app", .name = "example" },
         .version = .{ .major = 1, .minor = 0, .patch = 0 },
         .shell = .{ .windows = &native_url_window },
+    }));
+
+    const native_gpu_options_views = [_]ShellView{.{ .label = "save", .kind = .button, .gpu_backend = .metal, .command = "app.save" }};
+    const native_gpu_options_window = [_]ShellWindow{.{ .views = &native_gpu_options_views }};
+    try std.testing.expectError(error.InvalidViewKind, validateManifest(.{
+        .identity = .{ .id = "com.example.app", .name = "example" },
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+        .shell = .{ .windows = &native_gpu_options_window },
     }));
 
     const orphan_views = [_]ShellView{.{ .label = "save", .kind = .button, .parent = "missing", .command = "app.save" }};

@@ -709,6 +709,42 @@ fn iosViewController() []const u8 {
     \\    private var webViewBottomConstraint: NSLayoutConstraint?
     \\    private var nativeApp: UnsafeMutableRawPointer?
     \\    private var keyboardBottomInset: CGFloat = 0
+    \\    private var widgetAccessibilityElements: [UIAccessibilityElement] = []
+    \\
+    \\    private struct WidgetSemantics {
+    \\        let id: UInt64
+    \\        let parentId: UInt64
+    \\        let role: Int32
+    \\        let flags: UInt32
+    \\        let actions: UInt32
+    \\        let bounds: CGRect
+    \\        let value: Float?
+    \\        let label: String
+    \\        let text: String
+    \\        let textSelectionStart: Int
+    \\        let textSelectionEnd: Int
+    \\        let textCompositionStart: Int
+    \\        let textCompositionEnd: Int
+    \\        let gridRowIndex: Int
+    \\        let gridColumnIndex: Int
+    \\        let gridRowCount: Int
+    \\        let gridColumnCount: Int
+    \\        let listItemIndex: Int
+    \\        let listItemCount: Int
+    \\        let scrollOffset: Float
+    \\        let scrollViewportExtent: Float
+    \\        let scrollContentExtent: Float
+    \\        let hasScroll: Bool
+    \\    }
+    \\
+    \\    private struct WidgetTextGeometry {
+    \\        let id: UInt64
+    \\        let caretBounds: CGRect?
+    \\        let selectionBounds: CGRect?
+    \\        let selectionRectCount: Int
+    \\        let compositionBounds: CGRect?
+    \\        let compositionRectCount: Int
+    \\    }
     \\
     \\    override func viewDidLoad() {
     \\        super.viewDidLoad()
@@ -738,6 +774,7 @@ fn iosViewController() []const u8 {
     \\        if let nativeApp {
     \\            configureNativeAssetRoot(nativeApp)
     \\            zero_native_app_start(nativeApp)
+    \\            refreshWidgetAccessibility()
     \\        }
     \\        loadWorkspace()
     \\    }
@@ -828,6 +865,7 @@ fn iosViewController() []const u8 {
     \\        let name = String(cString: zero_native_app_last_command_name(nativeApp))
     \\        statusLabel.text = "\(name) #\(count)"
     \\        zero_native_app_frame(nativeApp)
+    \\        refreshWidgetAccessibility()
     \\    }
     \\
     \\    @objc private func keyboardFrameWillChange(_ notification: Notification) {
@@ -858,6 +896,151 @@ fn iosViewController() []const u8 {
     \\        let safe = view.safeAreaInsets
     \\        zero_native_app_viewport(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil, Float(safe.top), Float(safe.right), Float(safe.bottom), Float(safe.left), 0, 0, Float(keyboardBottomInset), 0)
     \\        zero_native_app_frame(nativeApp)
+    \\        refreshWidgetAccessibility()
+    \\    }
+    \\
+    \\    private func widgetSemanticsSnapshot() -> [WidgetSemantics] {
+    \\        guard let nativeApp else { return [] }
+    \\        let count = Int(zero_native_app_widget_semantics_count(nativeApp))
+    \\        var nodes: [WidgetSemantics] = []
+    \\        nodes.reserveCapacity(count)
+    \\        for index in 0..<count {
+    \\            if let node = widgetSemantics(at: index) {
+    \\                nodes.append(node)
+    \\            }
+    \\        }
+    \\        return nodes
+    \\    }
+    \\
+    \\    private func widgetSemantics(at index: Int) -> WidgetSemantics? {
+    \\        guard let nativeApp else { return nil }
+    \\        var node = zero_native_widget_semantics_t()
+    \\        guard zero_native_app_widget_semantics_at(nativeApp, UInt(index), &node) != 0 else { return nil }
+    \\        return WidgetSemantics(
+    \\            id: node.id,
+    \\            parentId: node.parent_id,
+    \\            role: Int32(node.role),
+    \\            flags: node.flags,
+    \\            actions: node.actions,
+    \\            bounds: CGRect(x: CGFloat(node.x), y: CGFloat(node.y), width: CGFloat(node.width), height: CGFloat(node.height)),
+    \\            value: node.has_value != 0 ? node.value : nil,
+    \\            label: Self.utf8String(node.label, length: node.label_len),
+    \\            text: Self.utf8String(node.text, length: node.text_len),
+    \\            textSelectionStart: Int(node.text_selection_start),
+    \\            textSelectionEnd: Int(node.text_selection_end),
+    \\            textCompositionStart: Int(node.text_composition_start),
+    \\            textCompositionEnd: Int(node.text_composition_end),
+    \\            gridRowIndex: Int(node.grid_row_index),
+    \\            gridColumnIndex: Int(node.grid_column_index),
+    \\            gridRowCount: Int(node.grid_row_count),
+    \\            gridColumnCount: Int(node.grid_column_count),
+    \\            listItemIndex: Int(node.list_item_index),
+    \\            listItemCount: Int(node.list_item_count),
+    \\            scrollOffset: node.scroll_offset,
+    \\            scrollViewportExtent: node.scroll_viewport_extent,
+    \\            scrollContentExtent: node.scroll_content_extent,
+    \\            hasScroll: node.has_scroll != 0
+    \\        )
+    \\    }
+    \\
+    \\    private func widgetTextGeometry(id: UInt64) -> WidgetTextGeometry? {
+    \\        guard let nativeApp else { return nil }
+    \\        var geometry = zero_native_widget_text_geometry_t()
+    \\        guard zero_native_app_widget_text_geometry(nativeApp, id, &geometry) != 0 else { return nil }
+    \\        return WidgetTextGeometry(
+    \\            id: id,
+    \\            caretBounds: geometry.has_caret_bounds != 0 ? CGRect(x: CGFloat(geometry.caret_x), y: CGFloat(geometry.caret_y), width: CGFloat(geometry.caret_width), height: CGFloat(geometry.caret_height)) : nil,
+    \\            selectionBounds: geometry.has_selection_bounds != 0 ? CGRect(x: CGFloat(geometry.selection_x), y: CGFloat(geometry.selection_y), width: CGFloat(geometry.selection_width), height: CGFloat(geometry.selection_height)) : nil,
+    \\            selectionRectCount: Int(geometry.selection_rect_count),
+    \\            compositionBounds: geometry.has_composition_bounds != 0 ? CGRect(x: CGFloat(geometry.composition_x), y: CGFloat(geometry.composition_y), width: CGFloat(geometry.composition_width), height: CGFloat(geometry.composition_height)) : nil,
+    \\            compositionRectCount: Int(geometry.composition_rect_count)
+    \\        )
+    \\    }
+    \\
+    \\    @discardableResult
+    \\    private func dispatchWidgetAction(
+    \\        id: UInt64,
+    \\        action: Int32,
+    \\        text: String? = nil,
+    \\        selectionAnchor: UInt = 0,
+    \\        selectionFocus: UInt = 0,
+    \\        hasSelection: Bool = false
+    \\    ) -> Bool {
+    \\        guard let nativeApp else { return false }
+    \\        var request = zero_native_widget_action_t()
+    \\        request.id = id
+    \\        request.action = action
+    \\        request.selection_anchor = selectionAnchor
+    \\        request.selection_focus = selectionFocus
+    \\        request.has_selection = hasSelection ? 1 : 0
+    \\        let ok: Int32
+    \\        if let text {
+    \\            ok = text.withCString { pointer in
+    \\                request.text = pointer
+    \\                request.text_len = UInt(text.utf8.count)
+    \\                return zero_native_app_widget_action(nativeApp, &request)
+    \\            }
+    \\        } else {
+    \\            request.text = nil
+    \\            request.text_len = 0
+    \\            ok = zero_native_app_widget_action(nativeApp, &request)
+    \\        }
+    \\        if ok != 0 {
+    \\            zero_native_app_frame(nativeApp)
+    \\            refreshWidgetAccessibility()
+    \\        }
+    \\        return ok != 0
+    \\    }
+    \\
+    \\    private func refreshWidgetAccessibility() {
+    \\        let semantics = widgetSemanticsSnapshot()
+    \\        statusLabel.accessibilityValue = "Retained widget semantics: \(semantics.count)"
+    \\        widgetAccessibilityElements = semantics.map { node in
+    \\            let element = UIAccessibilityElement(accessibilityContainer: webView)
+    \\            element.accessibilityIdentifier = "zero-native-widget-\(node.id)"
+    \\            element.accessibilityLabel = node.label.isEmpty ? node.text : node.label
+    \\            element.accessibilityValue = widgetAccessibilityValue(node)
+    \\            element.accessibilityFrameInContainerSpace = node.bounds
+    \\            element.accessibilityTraits = widgetAccessibilityTraits(node)
+    \\            return element
+    \\        }
+    \\        webView.accessibilityElements = widgetAccessibilityElements.isEmpty ? nil : widgetAccessibilityElements as [Any]
+    \\    }
+    \\
+    \\    private func widgetAccessibilityValue(_ node: WidgetSemantics) -> String? {
+    \\        if let value = node.value { return "\(value)" }
+    \\        return node.text.isEmpty ? nil : node.text
+    \\    }
+    \\
+    \\    private func widgetAccessibilityTraits(_ node: WidgetSemantics) -> UIAccessibilityTraits {
+    \\        var traits: UIAccessibilityTraits = []
+    \\        switch node.role {
+    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_BUTTON), Int32(ZERO_NATIVE_WIDGET_ROLE_MENUITEM):
+    \\            traits.insert(.button)
+    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_CHECKBOX), Int32(ZERO_NATIVE_WIDGET_ROLE_SWITCH), Int32(ZERO_NATIVE_WIDGET_ROLE_TAB):
+    \\            traits.insert(.button)
+    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_SLIDER):
+    \\            traits.insert(.adjustable)
+    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_IMAGE):
+    \\            traits.insert(.image)
+    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_TEXT), Int32(ZERO_NATIVE_WIDGET_ROLE_PROGRESSBAR):
+    \\            traits.insert(.staticText)
+    \\        default:
+    \\            break
+    \\        }
+    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_SELECTED)) != 0 {
+    \\            traits.insert(.selected)
+    \\        }
+    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_DISABLED)) != 0 {
+    \\            traits.insert(.notEnabled)
+    \\        }
+    \\        return traits
+    \\    }
+    \\
+    \\    private static func utf8String(_ pointer: UnsafePointer<CChar>?, length: UInt) -> String {
+    \\        guard let pointer, length > 0 else { return "" }
+    \\        let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self), count: Int(length))
+    \\        return String(decoding: bytes, as: UTF8.self)
     \\    }
     \\
     \\    deinit {
@@ -2351,6 +2534,12 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "appendingPathComponent(\"Resources\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "keyboardWillChangeFrameNotification") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetSemantics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetTextGeometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_semantics_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_text_geometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_action") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "UIAccessibilityElement(accessibilityContainer: webView)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "view.safeAreaInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, iosDefaultShellConfig(), "primaryCommand = \"mobile.back\"") != null);
 

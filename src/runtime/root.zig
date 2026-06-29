@@ -1055,9 +1055,17 @@ pub const Runtime = struct {
     pub fn routeCanvasWidgetPointerInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetPointerEvent {
         try self.validateViewParent(input_event.window_id);
         try validateViewLabel(input_event.label);
-        const pointer = canvasWidgetPointerEventFromGpuInput(input_event) orelse return null;
+        var pointer = canvasWidgetPointerEventFromGpuInput(input_event) orelse return null;
         const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        switch (pointer.phase) {
+            .move, .up, .cancel => {
+                if (self.views[index].canvas_widget_pressed_id != 0) {
+                    pointer.captured_id = self.views[index].canvas_widget_pressed_id;
+                }
+            },
+            .hover, .down, .wheel => {},
+        }
 
         const route = try self.views[index].widgetLayoutTree().routePointerEvent(pointer, output);
         return .{
@@ -1178,14 +1186,17 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
 
         const target_id: canvas.ObjectId = if (pointer_event.target) |target| target.id else 0;
+        const hit_target = self.views[index].widgetLayoutTree().hitTest(pointer_event.pointer.point);
+        const hit_target_id: canvas.ObjectId = if (hit_target) |target| target.id else 0;
+        const hit_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(hit_target));
         var next_hovered_id = self.views[index].canvas_widget_hovered_id;
         var next_pressed_id = self.views[index].canvas_widget_pressed_id;
         var next_cursor = self.views[index].canvas_widget_cursor;
 
         switch (pointer_event.pointer.phase) {
             .hover, .move => {
-                next_hovered_id = target_id;
-                next_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(pointer_event.target));
+                next_hovered_id = hit_target_id;
+                next_cursor = hit_cursor;
             },
             .down => {
                 next_hovered_id = target_id;
@@ -1193,9 +1204,9 @@ pub const Runtime = struct {
                 next_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(pointer_event.target));
             },
             .up => {
-                next_hovered_id = target_id;
+                next_hovered_id = hit_target_id;
                 next_pressed_id = 0;
-                next_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(pointer_event.target));
+                next_cursor = hit_cursor;
             },
             .cancel => {
                 next_hovered_id = 0;
@@ -1315,6 +1326,7 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
         const target = pointer_event.target orelse return;
         if (self.views[index].canvas_widget_pressed_id != target.id) return;
+        if (!target.bounds.normalized().containsPoint(pointer_event.pointer.point)) return;
         if (!canvasWidgetCommandable(target.kind)) return;
         const command = self.views[index].canvasWidgetCommand(target.id) orelse return;
         try self.dispatchCommand(app, .{
@@ -5079,6 +5091,7 @@ const RuntimeView = struct {
                 if (pressed_id == 0) break :blk null;
                 if (try self.applyCanvasWidgetSliderValue(pressed_id, pointer.point)) |dirty| break :blk dirty;
                 const hit = target orelse break :blk null;
+                if (!hit.bounds.normalized().containsPoint(pointer.point)) break :blk null;
                 if (hit.id != pressed_id) break :blk null;
                 break :blk try self.toggleCanvasWidgetBooleanControl(pressed_id);
             },
@@ -12304,6 +12317,121 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_keyboard_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_keyboard_target_kind);
     try std.testing.expect(app_state.last_keyboard_shift);
+}
+
+test "runtime routes captured canvas pointer drags without outside release activation" {
+    const TestApp = struct {
+        command_count: u32 = 0,
+        widget_pointer_count: u32 = 0,
+        last_phase: canvas.WidgetPointerPhase = .hover,
+        last_target_id: canvas.ObjectId = 0,
+        last_route_len: usize = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-pointer-capture", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .command => self.command_count += 1,
+                .canvas_widget_pointer => |pointer_event| {
+                    self.widget_pointer_count += 1;
+                    self.last_phase = pointer_event.pointer.phase;
+                    self.last_route_len = pointer_event.route.len;
+                    self.last_target_id = if (pointer_event.target) |target| target.id else 0;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 16, 96, 32),
+            .text = "Run",
+            .command = "widget.run",
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 64, 96, 32),
+            .text = "Stop",
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 28,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_drag,
+        .x = 220,
+        .y = 28,
+        .delta_x = 200,
+    } });
+    try std.testing.expectEqual(canvas.WidgetPointerPhase.move, app_state.last_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_target_id);
+    try std.testing.expectEqual(@as(usize, 3), app_state.last_route_len);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), harness.runtime.views[0].canvas_widget_hovered_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 220,
+        .y = 28,
+    } });
+    try std.testing.expectEqual(canvas.WidgetPointerPhase.up, app_state.last_phase);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_target_id);
+    try std.testing.expectEqual(@as(usize, 3), app_state.last_route_len);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_pressed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(u32, 0), app_state.command_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 28,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 20,
+        .y = 28,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
 }
 
 test "runtime dispatches opted-in canvas widget drag events" {

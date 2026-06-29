@@ -1015,7 +1015,7 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
 
         const dirty = try self.views[index].stepCanvasWidgetKineticScroll(dt_ms) orelse return self.views[index].info();
-        self.views[index].reconcileCanvasWidgetInteractionAfterScroll(null);
+        self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
         try self.invalidateForCanvasWidgetDirty(index, dirty);
         try self.refreshCanvasWidgetDisplayListIfOwned(index);
         return self.views[index].info();
@@ -1313,7 +1313,7 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
 
         const dirty = try self.views[index].applyCanvasWidgetScrollRoute(pointer_event.route, pointer_event.pointer.delta.dy, .wheel) orelse return;
-        self.views[index].reconcileCanvasWidgetInteractionAfterScroll(pointer_event.pointer.point);
+        self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(pointer_event.pointer.point);
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -1384,6 +1384,7 @@ pub const Runtime = struct {
         const target = keyboard_event.target orelse return;
 
         const dirty = try self.views[index].applyCanvasWidgetControlKeyboard(target.id, keyboard_event.keyboard) orelse return;
+        if (target.kind == .scroll_view) self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -5331,8 +5332,12 @@ const RuntimeView = struct {
         };
     }
 
-    fn reconcileCanvasWidgetInteractionAfterScroll(self: *RuntimeView, point: ?geometry.PointF) void {
+    fn reconcileCanvasWidgetRenderStateAfterScroll(self: *RuntimeView, point: ?geometry.PointF) void {
         const layout = self.widgetLayoutTree();
+        if (self.canvas_widget_focused_id != 0 and layout.focusTargetById(self.canvas_widget_focused_id) == null) {
+            self.canvas_widget_focused_id = 0;
+        }
+
         var next_hovered_id = self.canvas_widget_hovered_id;
         var next_cursor = self.canvas_widget_cursor;
 
@@ -10084,6 +10089,103 @@ test "runtime refreshes hovered canvas widget after scroll clipping" {
     snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expect(!snapshot.widgets[1].hovered);
     try std.testing.expect(snapshot.widgets[2].hovered);
+}
+
+test "runtime clears focused canvas widget after scroll clipping" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-scroll-focus", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 160, 40),
+    });
+
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Two" },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .children = &children },
+        geometry.RectF.init(0, 0, 160, 40),
+        &nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 2;
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    var route_buffer: [4]canvas.WidgetEventRouteEntry = undefined;
+    const initial_route = try harness.runtime.routeCanvasWidgetKeyboardInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    }, &route_buffer);
+    try std.testing.expect(initial_route != null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), initial_route.?.target.?.id);
+
+    var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_focus_ring = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == testCanvasWidgetPartId(2, 3)) saw_focus_ring = true;
+        }
+    }
+    try std.testing.expect(saw_focus_ring);
+
+    var snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[1].focused);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .scroll,
+        .x = 12,
+        .y = 12,
+        .delta_y = 40,
+    } });
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -40, 160, 32), retained.findById(2).?.frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 8, 160, 32), retained.findById(3).?.frame);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expect(try harness.runtime.routeCanvasWidgetKeyboardInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    }, &route_buffer) == null);
+
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    saw_focus_ring = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == testCanvasWidgetPartId(2, 3)) saw_focus_ring = true;
+        }
+    }
+    try std.testing.expect(!saw_focus_ring);
+
+    snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(!snapshot.widgets[1].focused);
+    try std.testing.expect(!snapshot.widgets[2].focused);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect(harness.runtime.pendingDirtyRegions().len >= 1);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 160, 40), harness.runtime.pendingDirtyRegions()[0]);
 }
 
 test "runtime reconciles canvas widget scroll momentum across layout replacement" {

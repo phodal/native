@@ -3041,6 +3041,7 @@ pub const Widget = struct {
     transform: Affine = .{},
     backdrop_blur: f32 = 0,
     text: []const u8 = "",
+    text_alignment: TextAlign = .start,
     command: []const u8 = "",
     image_id: ImageId = 0,
     image_src: ?geometry.RectF = null,
@@ -5802,7 +5803,7 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .id = widgetPartId(widget.id, 1),
         .font_id = tokens.typography.font_id,
         .size = tokens.typography.body_size,
-        .origin = textOrigin(widget.frame, tokens.typography.body_size, 0),
+        .origin = alignedTextOrigin(widget.frame, widget.text, tokens.typography.body_size, 0, widget.text_alignment),
         .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
         .text = widget.text,
     });
@@ -6378,9 +6379,19 @@ fn textOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.PointF {
 }
 
 fn centeredTextOrigin(frame: geometry.RectF, text: []const u8, size: f32) geometry.PointF {
+    return alignedTextOrigin(frame, text, size, 0, .center);
+}
+
+fn alignedTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, inset: f32, alignment: TextAlign) geometry.PointF {
     const width = estimateTextWidth(text, size);
+    const available_width = @max(0, frame.width - inset * 2);
+    const offset = switch (alignment) {
+        .start => 0,
+        .center => @max(0, (available_width - width) * 0.5),
+        .end => @max(0, available_width - width),
+    };
     return geometry.PointF.init(
-        frame.x + @max(0, (frame.width - width) * 0.5),
+        frame.x + inset + offset,
         frame.y + @max(size, (frame.height + size * 0.5) * 0.5),
     );
 }
@@ -7730,7 +7741,8 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
     const behavior_dirty = !std.mem.eql(u8, previous.widget.command, next.widget.command);
     const visual_dirty = previous.widget.opacity != next.widget.opacity or
         !affinesEqual(previous.widget.transform, next.widget.transform) or
-        previous.widget.backdrop_blur != next.widget.backdrop_blur;
+        previous.widget.backdrop_blur != next.widget.backdrop_blur or
+        previous.widget.text_alignment != next.widget.text_alignment;
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const visibility_dirty = previous.widget.semantics.hidden != next.widget.semantics.hidden;
     const layer_dirty = previous.widget.layer != next.widget.layer;
@@ -10300,6 +10312,46 @@ test "widget layout aligns row children on main and cross axes" {
     const spaced_layout = try layoutWidgetTree(spaced, geometry.RectF.init(0, 0, 120, 40), &spaced_nodes);
     try expectLayoutFrame(spaced_layout, 5, geometry.RectF.init(0, 0, 40, 12));
     try expectLayoutFrame(spaced_layout, 6, geometry.RectF.init(100, 0, 20, 16));
+}
+
+test "widget text alignment shifts emitted text origins" {
+    const tokens = DesignTokens{
+        .typography = .{ .font_id = 1, .body_size = 10 },
+    };
+
+    const centered = Widget{
+        .id = 1,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 20, 100, 20),
+        .text = "Hi",
+        .text_alignment = .center,
+    };
+    var center_commands: [1]CanvasCommand = undefined;
+    var center_builder = Builder.init(&center_commands);
+    try emitWidgetTree(&center_builder, centered, tokens);
+    switch (center_builder.displayList().commands[0]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 1)), text.id);
+            try std.testing.expectApproxEqAbs(@as(f32, 55), text.origin.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 32.5), text.origin.y, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const end = Widget{
+        .id = 2,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 20, 100, 20),
+        .text = "Hi",
+        .text_alignment = .end,
+    };
+    var end_commands: [1]CanvasCommand = undefined;
+    var end_builder = Builder.init(&end_commands);
+    try emitWidgetTree(&end_builder, end, tokens);
+    switch (end_builder.displayList().commands[0]) {
+        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 100), text.origin.x, 0.001),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget opacity wraps subtree display list commands" {
@@ -12926,6 +12978,35 @@ test "widget layout diff marks axis alignment changes as layout dirty" {
     try std.testing.expect(invalidations[1].layout_dirty);
     try std.testing.expectEqual(@as(ObjectId, 3), invalidations[2].id);
     try std.testing.expect(invalidations[2].layout_dirty);
+}
+
+test "widget layout diff marks text alignment changes as paint dirty" {
+    const previous_text = Widget{
+        .id = 1,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 12, 120, 24),
+        .text = "Status",
+    };
+    const next_text = Widget{
+        .id = 1,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 12, 120, 24),
+        .text = "Status",
+        .text_alignment = .end,
+    };
+
+    var previous_nodes: [1]WidgetLayoutNode = undefined;
+    var next_nodes: [1]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(previous_text, previous_text.frame, &previous_nodes);
+    const next = try layoutWidgetTree(next_text, next_text.frame, &next_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, next, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expect(!invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expect(!invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(10, 12, 120, 24), invalidations[0].dirty_bounds);
 }
 
 test "widget layout diff marks opacity changes as subtree paint dirty" {

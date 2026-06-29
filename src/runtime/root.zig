@@ -5093,7 +5093,8 @@ const RuntimeView = struct {
                 const hit = target orelse break :blk null;
                 if (!hit.bounds.normalized().containsPoint(pointer.point)) break :blk null;
                 if (hit.id != pressed_id) break :blk null;
-                break :blk try self.toggleCanvasWidgetBooleanControl(pressed_id);
+                if (try self.toggleCanvasWidgetBooleanControl(pressed_id)) |dirty| break :blk dirty;
+                break :blk try self.setCanvasWidgetSelected(pressed_id, true);
             },
             .hover, .cancel, .wheel => null,
         };
@@ -5112,6 +5113,10 @@ const RuntimeView = struct {
                 null,
             .slider => if (canvasWidgetSliderKeyboardValue(widget.value, keyboard)) |next_value|
                 try self.setCanvasWidgetValue(index, next_value)
+            else
+                null,
+            .list_item, .data_cell, .segmented_control => if (isCanvasWidgetActivationKey(keyboard.key))
+                try self.setCanvasWidgetSelected(id, true)
             else
                 null,
             .scroll_view => if (canvasWidgetScrollKeyboardDelta(widget, keyboard)) |delta|
@@ -9828,6 +9833,125 @@ test "runtime applies pointer values to canvas controls" {
     }
     try std.testing.expect(saw_checkbox_check);
     try std.testing.expect(saw_empty_slider_active);
+}
+
+test "runtime selects canvas widgets from pointer and keyboard activation" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-select-controls", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 150),
+    });
+
+    const controls = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .list_item,
+            .frame = geometry.RectF.init(10, 10, 120, 32),
+            .text = "Inbox",
+        },
+        .{
+            .id = 3,
+            .kind = .segmented_control,
+            .frame = geometry.RectF.init(10, 52, 120, 32),
+            .text = "Grid",
+        },
+        .{
+            .id = 4,
+            .kind = .data_cell,
+            .frame = geometry.RectF.init(10, 94, 120, 32),
+            .text = "Edge API",
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &controls }, geometry.RectF.init(0, 0, 240, 150), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 20,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 20,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(2).?.widget.value);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 62,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 220,
+        .y = 62,
+    } });
+    try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(3).?.widget.state.selected);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 4;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "space",
+    } });
+    try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+        .modifiers = .{ .option = true },
+    } });
+    try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(3).?.widget.state.selected);
+    try std.testing.expect(retained.findById(4).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(4).?.widget.value);
+
+    const semantics = harness.runtime.views[0].widgetSemantics();
+    try std.testing.expectEqual(@as(usize, 3), semantics.len);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[0].value);
+    try std.testing.expectEqual(@as(?f32, 0), semantics[1].value);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[2].value);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[0].selected);
+    try std.testing.expect(!snapshot.widgets[1].selected);
+    try std.testing.expect(snapshot.widgets[2].selected);
 }
 
 test "runtime applies keyboard values to focused canvas controls" {

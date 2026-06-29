@@ -155,6 +155,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)isAvailable;
 - (void)updateDrawableSize;
 - (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
+- (void)stopDisplayTimer;
 - (void)renderFrame;
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
@@ -429,7 +430,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (void)dealloc {
-    [_displayTimer invalidate];
+    [self stopDisplayTimer];
 }
 
 - (BOOL)isAvailable {
@@ -509,8 +510,14 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
                           bytesPerRow:width * 4];
     self.hasCanvasTexture = YES;
     self.lastScale = scale > 0 ? scale : self.lastScale;
+    [self stopDisplayTimer];
     [self renderFrame];
     return YES;
+}
+
+- (void)stopDisplayTimer {
+    [self.displayTimer invalidate];
+    self.displayTimer = nil;
 }
 
 - (void)renderFrame {

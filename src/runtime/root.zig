@@ -870,9 +870,10 @@ pub const Runtime = struct {
                 storage.visual_effect_cache_actions,
             );
         const glyph_atlas_plan = try display_list.glyphAtlasPlan(storage.glyph_atlas_entries);
-        const glyph_atlas_cache_plan = try glyph_atlas_plan.cachePlan(
+        const glyph_atlas_cache_plan = try glyph_atlas_plan.cachePlanWithRetention(
             frame_options.previous_glyph_atlas_cache,
             frame_options.frame_index,
+            frame_options.glyph_atlas_cache_retention_frames,
             storage.glyph_atlas_cache_entries,
             storage.glyph_atlas_cache_actions,
         );
@@ -880,9 +881,10 @@ pub const Runtime = struct {
         const text_layout_cache_plan = if (storage.text_layout_cache_entries.len == 0 and storage.text_layout_cache_actions.len == 0)
             canvas.TextLayoutCachePlan{}
         else
-            try text_layout_plan.cachePlan(
+            try text_layout_plan.cachePlanWithRetention(
                 frame_options.previous_text_layout_cache,
                 frame_options.frame_index,
+                frame_options.text_layout_cache_retention_frames,
                 storage.text_layout_cache_entries,
                 storage.text_layout_cache_actions,
             );
@@ -9419,6 +9421,97 @@ test "runtime next canvas frame retains and evicts glyph atlas cache" {
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_upload_count);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_evict_count);
+}
+
+test "runtime next canvas frame keeps recent unused text caches warm" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-text-cache-retention", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 80),
+    });
+
+    const first_commands = [_]canvas.CanvasCommand{
+        .{ .draw_text = .{
+            .id = 1,
+            .font_id = 5,
+            .size = 14,
+            .origin = geometry.PointF.init(12, 32),
+            .color = canvas.Color.rgb8(15, 23, 42),
+            .text = "A",
+        } },
+        .{ .draw_text = .{
+            .id = 2,
+            .font_id = 5,
+            .size = 14,
+            .origin = geometry.PointF.init(32, 32),
+            .color = canvas.Color.rgb8(15, 23, 42),
+            .text = "B",
+        } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &first_commands });
+
+    var render_commands: [2]canvas.RenderCommand = undefined;
+    var render_batches: [2]canvas.RenderBatch = undefined;
+    var resources: [2]canvas.RenderResource = undefined;
+    var resource_cache_entries: [2]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [4]canvas.RenderResourceCacheAction = undefined;
+    var glyphs: [2]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [2]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [4]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [2]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [2]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [2]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [4]canvas.TextLayoutCacheAction = undefined;
+    var changes: [2]canvas.DiffChange = undefined;
+    const frame_storage = canvas.CanvasFrameStorage{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .glyph_atlas_cache_entries = &glyph_cache_entries,
+        .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .text_layout_plans = &text_layout_plans,
+        .text_layout_lines = &text_layout_lines,
+        .text_layout_cache_entries = &text_layout_cache_entries,
+        .text_layout_cache_actions = &text_layout_cache_actions,
+        .changes = &changes,
+    };
+
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 1 }, frame_storage);
+    try std.testing.expectEqual(@as(usize, 2), first_frame.glyph_atlas_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 2), first_frame.text_layout_cache_plan.uploadCount());
+
+    const second_commands = [_]canvas.CanvasCommand{first_commands[0]};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &second_commands });
+    const second_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
+    try std.testing.expect(second_frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 2), second_frame.glyph_atlas_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 0), second_frame.glyph_atlas_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 2), second_frame.glyph_atlas_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), second_frame.glyph_atlas_cache_plan.evictCount());
+    try std.testing.expectEqual(@as(u64, 2), second_frame.glyph_atlas_cache_plan.entries[0].last_used_frame);
+    try std.testing.expectEqual(@as(u64, 1), second_frame.glyph_atlas_cache_plan.entries[1].last_used_frame);
+    try std.testing.expectEqual(@as(usize, 2), second_frame.text_layout_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 0), second_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 2), second_frame.text_layout_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), second_frame.text_layout_cache_plan.evictCount());
+    try std.testing.expectEqual(@as(u64, 2), second_frame.text_layout_cache_plan.entries[0].last_used_frame);
+    try std.testing.expectEqual(@as(u64, 1), second_frame.text_layout_cache_plan.entries[1].last_used_frame);
 }
 
 test "runtime next canvas frame applies render override dirty regions" {

@@ -1279,8 +1279,8 @@ pub const Runtime = struct {
     fn canvasWidgetRenderStateAfterLayout(previous: canvas.WidgetRenderState, layout: canvas.WidgetLayoutTree) canvas.WidgetRenderState {
         return .{
             .focused_id = if (previous.focused_id) |id| if (layout.focusTargetById(id) != null) id else null else null,
-            .hovered_id = if (previous.hovered_id) |id| if (layout.findById(id) != null) id else null else null,
-            .pressed_id = if (previous.pressed_id) |id| if (layout.findById(id) != null) id else null else null,
+            .hovered_id = if (previous.hovered_id) |id| if (canvasWidgetInteractionTargetExists(layout, id)) id else null else null,
+            .pressed_id = if (previous.pressed_id) |id| if (canvasWidgetInteractionTargetExists(layout, id)) id else null else null,
         };
     }
 
@@ -4207,6 +4207,39 @@ const CanvasWidgetScrollReconcileEntry = struct {
     state: canvas.ScrollState = .{},
 };
 
+fn canvasWidgetInteractionTargetExists(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) bool {
+    const index = canvasWidgetLayoutNodeIndexById(layout, id) orelse return false;
+    if (canvasWidgetLayoutNodeHidden(layout, index)) return false;
+    return canvasWidgetRuntimeHitTarget(layout.nodes[index].widget);
+}
+
+fn canvasWidgetLayoutNodeIndexById(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) ?usize {
+    if (id == 0) return null;
+    for (layout.nodes, 0..) |node, index| {
+        if (node.widget.id == id) return index;
+    }
+    return null;
+}
+
+fn canvasWidgetLayoutNodeHidden(layout: canvas.WidgetLayoutTree, node_index: usize) bool {
+    var current: ?usize = node_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return false;
+        const node = layout.nodes[index];
+        if (node.widget.semantics.hidden) return true;
+        current = node.parent_index;
+    }
+    return false;
+}
+
+fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
+    if (widget.id == 0 or widget.state.disabled) return false;
+    return switch (widget.kind) {
+        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon => false,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
+    };
+}
+
 fn collectCanvasWidgetScrollReconcileEntries(
     nodes: []const canvas.WidgetLayoutNode,
     states: []const canvas.ScrollState,
@@ -4960,10 +4993,10 @@ const RuntimeView = struct {
         if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
             self.canvas_widget_focused_id = 0;
         }
-        if (self.canvas_widget_hovered_id != 0 and self.widgetLayoutTree().findById(self.canvas_widget_hovered_id) == null) {
+        if (self.canvas_widget_hovered_id != 0 and !canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), self.canvas_widget_hovered_id)) {
             self.canvas_widget_hovered_id = 0;
         }
-        if (self.canvas_widget_pressed_id != 0 and self.widgetLayoutTree().findById(self.canvas_widget_pressed_id) == null) {
+        if (self.canvas_widget_pressed_id != 0 and !canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), self.canvas_widget_pressed_id)) {
             self.canvas_widget_pressed_id = 0;
         }
         self.canvas_widget_cursor = self.canvasWidgetCursorForId(self.canvas_widget_hovered_id);
@@ -9099,6 +9132,79 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
         }
     }
     try std.testing.expect(!saw_stale_focused_ring);
+}
+
+test "runtime clears canvas widget interaction state when layout replacement disables it" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-disabled-interaction", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(40, 50, 220, 120),
+    });
+
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 12, 96, 32),
+        .text = "Run",
+    }};
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 220, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 24,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
+    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+
+    const disabled_children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 12, 96, 32),
+        .text = "Run",
+        .state = .{ .disabled = true },
+    }};
+    var disabled_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const disabled_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &disabled_children }, geometry.RectF.init(0, 0, 220, 120), &disabled_nodes);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", disabled_layout);
+
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_pressed_id);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect(harness.runtime.pendingDirtyRegions().len >= 1);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
+    try std.testing.expect(!snapshot.widgets[0].enabled);
+    try std.testing.expect(!snapshot.widgets[0].focused);
+    try std.testing.expect(!snapshot.widgets[0].hovered);
+    try std.testing.expect(!snapshot.widgets[0].pressed);
 }
 
 test "runtime retains canvas widget design tokens" {

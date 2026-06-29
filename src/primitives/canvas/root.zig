@@ -6559,6 +6559,7 @@ fn widgetPointerTargetById(layout: WidgetLayoutTree, id: ObjectId) ?WidgetHit {
     const node = layout.nodes[index];
     if (!isHitTarget(node.widget)) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     return widgetHitFromNode(node, index);
 }
 
@@ -6603,6 +6604,7 @@ fn widgetDragSourceIndex(layout: WidgetLayoutTree, id: ObjectId) ?usize {
     const node = layout.nodes[index];
     if (!isDragSource(node.widget)) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     return index;
 }
 
@@ -10265,6 +10267,46 @@ test "widget pointer route honors captured target for drag lifecycle" {
     try std.testing.expectEqual(@as(ObjectId, 2), cancel_route.target.?.id);
 }
 
+test "widget pointer route skips scroll clipped captured targets" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Hidden" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Visible" },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 40,
+        .children = &children,
+    };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 48), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, -40, 120, 32));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 8, 120, 32));
+
+    var hidden_entries: [0]WidgetEventRouteEntry = .{};
+    const hidden_route = try layout.routePointerEvent(.{
+        .phase = .move,
+        .point = geometry.PointF.init(180, 80),
+        .captured_id = 2,
+    }, &hidden_entries);
+    try std.testing.expect(hidden_route.target == null);
+    try std.testing.expectEqual(@as(usize, 0), hidden_route.entries.len);
+
+    var visible_entries: [3]WidgetEventRouteEntry = undefined;
+    const visible_route = try layout.routePointerEvent(.{
+        .phase = .move,
+        .point = geometry.PointF.init(180, 80),
+        .captured_id = 3,
+    }, &visible_entries);
+    try std.testing.expect(visible_route.target != null);
+    try std.testing.expectEqual(@as(ObjectId, 3), visible_route.target.?.id);
+    try std.testing.expectEqual(@as(usize, 3), visible_route.entries.len);
+    try expectRouteEntry(visible_route.entries[0], .capture, 1);
+    try expectRouteEntry(visible_route.entries[1], .target, 3);
+    try expectRouteEntry(visible_route.entries[2], .bubble, 1);
+}
+
 test "widget pointer capture does not retarget hover down or wheel" {
     const root = Widget{
         .id = 1,
@@ -10523,6 +10565,46 @@ test "widget drag route ignores missing disabled and non-drag sources" {
     }, &empty_entries);
     try std.testing.expect(plain.target == null);
     try std.testing.expectEqual(@as(usize, 0), plain.entries.len);
+}
+
+test "widget drag route skips scroll clipped sources" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Hidden", .semantics = .{ .actions = .{ .drag = true } } },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Visible", .semantics = .{ .actions = .{ .drag = true } } },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 40,
+        .children = &children,
+    };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 48), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, -40, 120, 32));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 8, 120, 32));
+
+    var hidden_entries: [0]WidgetEventRouteEntry = .{};
+    const hidden = try layout.routeDragEvent(.{
+        .source_id = 2,
+        .point = geometry.PointF.init(180, 80),
+        .delta = geometry.OffsetF.init(12, 0),
+    }, &hidden_entries);
+    try std.testing.expect(hidden.target == null);
+    try std.testing.expectEqual(@as(usize, 0), hidden.entries.len);
+
+    var visible_entries: [3]WidgetEventRouteEntry = undefined;
+    const visible = try layout.routeDragEvent(.{
+        .source_id = 3,
+        .point = geometry.PointF.init(180, 80),
+        .delta = geometry.OffsetF.init(12, 0),
+    }, &visible_entries);
+    try std.testing.expect(visible.target != null);
+    try std.testing.expectEqual(@as(ObjectId, 3), visible.target.?.id);
+    try std.testing.expectEqual(@as(usize, 3), visible.entries.len);
+    try expectRouteEntry(visible.entries[0], .capture, 1);
+    try expectRouteEntry(visible.entries[1], .target, 3);
+    try expectRouteEntry(visible.entries[2], .bubble, 1);
 }
 
 test "widget keyboard route uses focused target and ancestors" {

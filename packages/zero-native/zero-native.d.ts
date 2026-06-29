@@ -167,6 +167,7 @@ export type ZeroNativeGpuSurfaceAlphaMode = "none" | "opaque" | "premultiplied";
 export type ZeroNativeGpuSurfaceColorSpace = "none" | "srgb" | "display_p3";
 export type ZeroNativeGpuSurfaceStatus = "unavailable" | "initializing" | "ready" | "lost";
 export type ZeroNativeCursor = "arrow" | "pointing_hand" | "text" | "resize_horizontal";
+export type ZeroNativeCanvasFrameProfileRisk = "idle" | "low" | "moderate" | "high";
 
 export interface ZeroNativeViewInfo {
   /** Stable runtime view id for this window/view lifetime. */
@@ -260,6 +261,11 @@ export interface ZeroNativeViewInfo {
   canvasFrameBudgetExceededCount: number;
   canvasFrameBudgetOk: boolean;
   canvasFrameDirtyBounds: ZeroNativeRect | null;
+  canvasFrameProfileWorkUnits: number;
+  canvasFrameProfileRisk: ZeroNativeCanvasFrameProfileRisk;
+  canvasFrameProfileSurfaceArea: number;
+  canvasFrameProfileDirtyArea: number;
+  canvasFrameProfileDirtyRatio: number;
   widgetRevision: number;
   widgetNodeCount: number;
   widgetSemanticsCount: number;

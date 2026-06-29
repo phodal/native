@@ -59,6 +59,14 @@ function platformCursorTags() {
     .filter((line) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(line));
 }
 
+function platformEnumTags(enumName) {
+  const body = sliceBetween(platformSource, `pub const ${enumName} = enum {`, '};');
+  return body
+    .split('\n')
+    .map((line) => line.trim().replace(/,$/, ''))
+    .filter((line) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(line));
+}
+
 function typeUnionTags(typeName) {
   const match = typeSource.match(new RegExp(`export type ${typeName} = ([^;]+);`));
   if (!match) {
@@ -86,6 +94,19 @@ for (const tag of cursorTags) {
 for (const tag of typeCursorTags) {
   if (!cursorTags.includes(tag)) {
     addError(`ZeroNativeCursor includes unknown platform cursor "${tag}"`);
+  }
+}
+
+const profileRiskTags = platformEnumTags('CanvasFrameProfileRisk');
+const typeProfileRiskTags = typeUnionTags('ZeroNativeCanvasFrameProfileRisk');
+for (const tag of profileRiskTags) {
+  if (!typeProfileRiskTags.includes(tag)) {
+    addError(`ZeroNativeCanvasFrameProfileRisk is missing platform risk "${tag}"`);
+  }
+}
+for (const tag of typeProfileRiskTags) {
+  if (!profileRiskTags.includes(tag)) {
+    addError(`ZeroNativeCanvasFrameProfileRisk includes unknown platform risk "${tag}"`);
   }
 }
 

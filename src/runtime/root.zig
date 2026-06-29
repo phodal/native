@@ -1916,6 +1916,12 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_budget_exceeded_count = preview_budget_status.exceededCount();
                     enriched_frame_event.canvas_frame_budget_ok = preview_budget_status.ok();
                     enriched_frame_event.canvas_frame_dirty_bounds = preview_frame.dirty_bounds;
+                    const preview_profile = preview_frame.profile();
+                    enriched_frame_event.canvas_frame_profile_work_units = preview_profile.work_units;
+                    enriched_frame_event.canvas_frame_profile_risk = platformCanvasFrameProfileRisk(preview_profile.risk);
+                    enriched_frame_event.canvas_frame_profile_surface_area = preview_profile.surface_area;
+                    enriched_frame_event.canvas_frame_profile_dirty_area = preview_profile.dirty_area;
+                    enriched_frame_event.canvas_frame_profile_dirty_ratio = preview_profile.dirty_ratio;
                     enriched_frame_event.widget_revision = self.views[index].widget_revision;
                     enriched_frame_event.widget_node_count = self.views[index].widget_layout_node_count;
                     enriched_frame_event.widget_semantics_count = self.views[index].widget_semantics_node_count;
@@ -5084,6 +5090,11 @@ const RuntimeView = struct {
     canvas_frame_budget: canvas.CanvasFrameBudget = .{},
     canvas_frame_budget_status: canvas.CanvasFrameBudgetStatus = .{},
     canvas_frame_dirty_bounds: ?geometry.RectF = null,
+    canvas_frame_profile_work_units: usize = 0,
+    canvas_frame_profile_risk: platform.CanvasFrameProfileRisk = .idle,
+    canvas_frame_profile_surface_area: f32 = 0,
+    canvas_frame_profile_dirty_area: f32 = 0,
+    canvas_frame_profile_dirty_ratio: f32 = 0,
     widget_layout_nodes: [max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
     widget_layout_node_count: usize = 0,
     widget_semantics_nodes: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined,
@@ -5196,6 +5207,11 @@ const RuntimeView = struct {
             .canvas_frame_budget_exceeded_count = self.canvas_frame_budget_status.exceededCount(),
             .canvas_frame_budget_ok = self.canvas_frame_budget_status.ok(),
             .canvas_frame_dirty_bounds = self.canvas_frame_dirty_bounds,
+            .canvas_frame_profile_work_units = self.canvas_frame_profile_work_units,
+            .canvas_frame_profile_risk = self.canvas_frame_profile_risk,
+            .canvas_frame_profile_surface_area = self.canvas_frame_profile_surface_area,
+            .canvas_frame_profile_dirty_area = self.canvas_frame_profile_dirty_area,
+            .canvas_frame_profile_dirty_ratio = self.canvas_frame_profile_dirty_ratio,
             .widget_revision = self.widget_revision,
             .widget_node_count = self.widget_layout_node_count,
             .widget_semantics_count = self.widget_semantics_node_count,
@@ -5443,6 +5459,12 @@ const RuntimeView = struct {
         self.canvas_frame_budget = frame.budget;
         self.canvas_frame_budget_status = frame.budgetStatus();
         self.canvas_frame_dirty_bounds = frame.dirty_bounds;
+        const profile = frame.profile();
+        self.canvas_frame_profile_work_units = profile.work_units;
+        self.canvas_frame_profile_risk = platformCanvasFrameProfileRisk(profile.risk);
+        self.canvas_frame_profile_surface_area = profile.surface_area;
+        self.canvas_frame_profile_dirty_area = profile.dirty_area;
+        self.canvas_frame_profile_dirty_ratio = profile.dirty_ratio;
     }
 
     fn refreshCanvasFrameBudgetStatus(self: *RuntimeView) void {
@@ -6831,6 +6853,15 @@ fn canvasRenderAnimationActive(animation: canvas.CanvasRenderAnimation, timestam
     return timestamp_ns - animation.start_ns < duration_ns;
 }
 
+fn platformCanvasFrameProfileRisk(risk: canvas.CanvasFrameProfileRisk) platform.CanvasFrameProfileRisk {
+    return switch (risk) {
+        .idle => .idle,
+        .low => .low,
+        .moderate => .moderate,
+        .high => .high,
+    };
+}
+
 fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
     return switch (role) {
         .none => "none",
@@ -7087,6 +7118,13 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_budget_ok,
     });
     try writeOptionalRectJson(view.canvas_frame_dirty_bounds, writer);
+    try writer.print(",\"canvasFrameProfileWorkUnits\":{d},\"canvasFrameProfileRisk\":", .{view.canvas_frame_profile_work_units});
+    try json.writeString(writer, @tagName(view.canvas_frame_profile_risk));
+    try writer.print(",\"canvasFrameProfileSurfaceArea\":{d},\"canvasFrameProfileDirtyArea\":{d},\"canvasFrameProfileDirtyRatio\":{d}", .{
+        view.canvas_frame_profile_surface_area,
+        view.canvas_frame_profile_dirty_area,
+        view.canvas_frame_profile_dirty_ratio,
+    });
     try writer.print(",\"widgetRevision\":{d},\"widgetNodeCount\":{d},\"widgetSemanticsCount\":{d},\"cursor\":", .{
         view.widget_revision,
         view.widget_node_count,
@@ -8977,12 +9015,22 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_layer_upload_count);
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_count);
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_upload_count);
+    try std.testing.expect(first_info.canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, first_info.canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 4608), first_info.canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 4608), first_info.canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), first_info.canvas_frame_profile_dirty_ratio);
 
     const first_gpu_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_path_geometry_count);
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_image_count);
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_layer_count);
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_visual_effect_count);
+    try std.testing.expect(first_gpu_frame.canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, first_gpu_frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 4608), first_gpu_frame.canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 4608), first_gpu_frame.canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), first_gpu_frame.canvas_frame_profile_dirty_ratio);
 
     var view_json_buffer: [8192]u8 = undefined;
     const view_json = try writeViewJson(first_info, &view_json_buffer);
@@ -8990,6 +9038,11 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameImageCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameLayerCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameVisualEffectCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileWorkUnits\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileRisk\":\"high\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileSurfaceArea\":4608") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileDirtyArea\":4608") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileDirtyRatio\":1") != null);
 
     const retained_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
         .frame_index = 2,
@@ -9011,6 +9064,8 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_image_retain_count);
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_layer_retain_count);
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_visual_effect_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_profile_work_units);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.idle, retained_info.canvas_frame_profile_risk);
 }
 
 test "runtime GPU surface frame event exposes renderer cache family counters" {
@@ -14932,6 +14987,11 @@ test "runtime dispatches GPU surface events" {
         last_canvas_frame_budget_exceeded_count: usize = 0,
         last_canvas_frame_budget_ok: bool = true,
         last_canvas_frame_dirty_bounds: ?geometry.RectF = null,
+        last_canvas_frame_profile_work_units: usize = 0,
+        last_canvas_frame_profile_risk: platform.CanvasFrameProfileRisk = .idle,
+        last_canvas_frame_profile_surface_area: f32 = 0,
+        last_canvas_frame_profile_dirty_area: f32 = 0,
+        last_canvas_frame_profile_dirty_ratio: f32 = 0,
         last_input_timestamp_ns: u64 = 0,
         last_input_latency_ns: u64 = 0,
         last_input_latency_budget_ns: u64 = 0,
@@ -14977,6 +15037,11 @@ test "runtime dispatches GPU surface events" {
                     self.last_canvas_frame_budget_exceeded_count = frame_event.canvas_frame_budget_exceeded_count;
                     self.last_canvas_frame_budget_ok = frame_event.canvas_frame_budget_ok;
                     self.last_canvas_frame_dirty_bounds = frame_event.canvas_frame_dirty_bounds;
+                    self.last_canvas_frame_profile_work_units = frame_event.canvas_frame_profile_work_units;
+                    self.last_canvas_frame_profile_risk = frame_event.canvas_frame_profile_risk;
+                    self.last_canvas_frame_profile_surface_area = frame_event.canvas_frame_profile_surface_area;
+                    self.last_canvas_frame_profile_dirty_area = frame_event.canvas_frame_profile_dirty_area;
+                    self.last_canvas_frame_profile_dirty_ratio = frame_event.canvas_frame_profile_dirty_ratio;
                     self.last_input_timestamp_ns = frame_event.input_timestamp_ns;
                     self.last_input_latency_ns = frame_event.input_latency_ns;
                     self.last_input_latency_budget_ns = frame_event.input_latency_budget_ns;
@@ -15108,6 +15173,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), app_state.last_canvas_frame_dirty_bounds.?);
+    try std.testing.expect(app_state.last_canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, app_state.last_canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 230400), app_state.last_canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 230400), app_state.last_canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), app_state.last_canvas_frame_profile_dirty_ratio);
     try std.testing.expectEqual(@as(u64, 1), app_state.last_widget_revision);
     try std.testing.expectEqual(@as(usize, 2), app_state.last_widget_node_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_widget_semantics_count);
@@ -15153,6 +15223,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_budget_exceeded_count);
     try std.testing.expect(!frame.canvas_frame_budget_ok);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), frame.canvas_frame_dirty_bounds.?);
+    try std.testing.expect(frame.canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 230400), frame.canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 230400), frame.canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), frame.canvas_frame_profile_dirty_ratio);
     try std.testing.expectEqual(@as(u64, 1), frame.widget_revision);
     try std.testing.expectEqual(@as(usize, 2), frame.widget_node_count);
     try std.testing.expectEqual(@as(usize, 1), frame.widget_semantics_count);
@@ -15193,6 +15268,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameBudgetExceededCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameBudgetOk\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameDirtyBounds\":{\"x\":0,\"y\":0,\"width\":640,\"height\":360}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileWorkUnits\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileRisk\":\"high\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileSurfaceArea\":230400") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileDirtyArea\":230400") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileDirtyRatio\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"cursor\":\"arrow\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
@@ -15217,6 +15297,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), app_state.last_canvas_frame_dirty_bounds.?);
+    try std.testing.expect(app_state.last_canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, app_state.last_canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 230400), app_state.last_canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 230400), app_state.last_canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), app_state.last_canvas_frame_profile_dirty_ratio);
     const preview_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expectEqual(@as(u64, 8), preview_frame.frame_index);
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, preview_frame.backend);
@@ -15235,6 +15320,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_budget_exceeded_count);
     try std.testing.expect(!preview_frame.canvas_frame_budget_ok);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), preview_frame.canvas_frame_dirty_bounds.?);
+    try std.testing.expect(preview_frame.canvas_frame_profile_work_units > 0);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, preview_frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(f32, 230400), preview_frame.canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(@as(f32, 230400), preview_frame.canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(@as(f32, 1), preview_frame.canvas_frame_profile_dirty_ratio);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
         .window_id = 1,

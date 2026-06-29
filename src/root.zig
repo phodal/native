@@ -52,6 +52,7 @@ pub const GpuSurfacePresentMode = platform.GpuSurfacePresentMode;
 pub const GpuSurfaceAlphaMode = platform.GpuSurfaceAlphaMode;
 pub const GpuSurfaceColorSpace = platform.GpuSurfaceColorSpace;
 pub const GpuSurfaceStatus = platform.GpuSurfaceStatus;
+pub const CanvasFrameProfileRisk = platform.CanvasFrameProfileRisk;
 pub const AppInfo = platform.AppInfo;
 pub const Platform = platform.Platform;
 pub const NullPlatform = platform.NullPlatform;

@@ -700,6 +700,11 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_budget_exceeded_count = frame.canvas_frame_budget_exceeded_count,
         .canvas_frame_budget_ok = frame.canvas_frame_budget_ok,
         .canvas_frame_dirty_bounds = frame.canvas_frame_dirty_bounds,
+        .canvas_frame_profile_work_units = frame.canvas_frame_profile_work_units,
+        .canvas_frame_profile_risk = frame.canvas_frame_profile_risk,
+        .canvas_frame_profile_surface_area = frame.canvas_frame_profile_surface_area,
+        .canvas_frame_profile_dirty_area = frame.canvas_frame_profile_dirty_area,
+        .canvas_frame_profile_dirty_ratio = frame.canvas_frame_profile_dirty_ratio,
         .widget_revision = frame.widget_revision,
         .widget_node_count = frame.widget_node_count,
         .widget_semantics_count = frame.widget_semantics_count,
@@ -1272,6 +1277,11 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
         .canvas_frame_budget_exceeded_count = 0,
         .canvas_frame_budget_ok = true,
         .canvas_frame_dirty_bounds = rect(10, 20, 30, 40),
+        .canvas_frame_profile_work_units = 88,
+        .canvas_frame_profile_risk = .moderate,
+        .canvas_frame_profile_surface_area = 374400,
+        .canvas_frame_profile_dirty_area = 1200,
+        .canvas_frame_profile_dirty_ratio = 0.003205128,
         .widget_revision = 2,
         .widget_node_count = 10,
         .widget_semantics_count = 9,
@@ -1292,6 +1302,11 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
     try std.testing.expectEqual(frame.canvas_frame_visual_effect_shadow_count, event_value.canvas_frame_visual_effect_shadow_count);
     try std.testing.expectEqual(frame.canvas_frame_text_layout_retain_count, event_value.canvas_frame_text_layout_retain_count);
     try std.testing.expectEqualDeep(frame.canvas_frame_dirty_bounds.?, event_value.canvas_frame_dirty_bounds.?);
+    try std.testing.expectEqual(frame.canvas_frame_profile_work_units, event_value.canvas_frame_profile_work_units);
+    try std.testing.expectEqual(frame.canvas_frame_profile_risk, event_value.canvas_frame_profile_risk);
+    try std.testing.expectEqual(frame.canvas_frame_profile_surface_area, event_value.canvas_frame_profile_surface_area);
+    try std.testing.expectEqual(frame.canvas_frame_profile_dirty_area, event_value.canvas_frame_profile_dirty_area);
+    try std.testing.expectEqual(frame.canvas_frame_profile_dirty_ratio, event_value.canvas_frame_profile_dirty_ratio);
     try std.testing.expectEqual(frame.widget_semantics_count, event_value.widget_semantics_count);
 }
 

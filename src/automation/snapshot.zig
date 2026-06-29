@@ -225,6 +225,13 @@ pub fn writeText(input: Input, writer: anytype) !void {
             } else {
                 try writer.writeAll(" canvas_frame_dirty=null");
             }
+            try writer.print(" canvas_frame_profile_work_units={d} canvas_frame_profile_risk={s} canvas_frame_profile_surface_area={d} canvas_frame_profile_dirty_area={d} canvas_frame_profile_dirty_ratio={d}", .{
+                view.canvas_frame_profile_work_units,
+                @tagName(view.canvas_frame_profile_risk),
+                view.canvas_frame_profile_surface_area,
+                view.canvas_frame_profile_dirty_area,
+                view.canvas_frame_profile_dirty_ratio,
+            });
             try writer.print(" widget_revision={d} widget_nodes={d} widget_semantics={d}", .{
                 view.widget_revision,
                 view.widget_node_count,
@@ -534,6 +541,11 @@ test "snapshot emits GPU surface frame proof" {
         .canvas_frame_budget_exceeded_count = 2,
         .canvas_frame_budget_ok = false,
         .canvas_frame_dirty_bounds = geometry.RectF.init(0, 0, 320, 180),
+        .canvas_frame_profile_work_units = 42,
+        .canvas_frame_profile_risk = .high,
+        .canvas_frame_profile_surface_area = 57600,
+        .canvas_frame_profile_dirty_area = 32000,
+        .canvas_frame_profile_dirty_ratio = 0.5555556,
         .cursor = .text,
     }};
     try writeText(.{
@@ -600,6 +612,10 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_exceeded=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_ok=false") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_dirty=(0,0 320x180)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_work_units=42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_risk=high") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_surface_area=57600") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_dirty_area=32000") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "widget_cursor=text") != null);
 }
 

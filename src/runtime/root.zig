@@ -1053,6 +1053,7 @@ pub const Runtime = struct {
 
         const dirty = try self.views[index].applyCanvasWidgetTextEdit(id, edit) orelse return self.views[index].info();
         try self.invalidateForCanvasWidgetDirty(index, dirty);
+        try self.refreshCanvasWidgetDisplayListIfOwned(index);
         return self.views[index].info();
     }
 
@@ -10961,9 +10962,29 @@ test "runtime applies ime composition edits to canvas text fields" {
     var nodes: [2]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
 
     _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_selection = .{ .anchor = 3, .focus = 4 } });
     try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+    var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_selected_text = false;
+    var saw_selection_fill = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .fill_rounded_rect => |fill| {
+                if (fill.id == testCanvasWidgetPartId(2, 3)) saw_selection_fill = true;
+            },
+            .draw_text => |text| {
+                if (text.id == testCanvasWidgetPartId(2, 4)) {
+                    try std.testing.expectEqualStrings("Cafe", text.text);
+                    saw_selected_text = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_selected_text);
+    try std.testing.expect(saw_selection_fill);
 
     _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = "\xc3\xa9", .cursor = 2 } });
     try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
@@ -10972,6 +10993,25 @@ test "runtime applies ime composition edits to canvas text fields" {
     try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
     try std.testing.expectEqualDeep(canvas.TextRange.init(3, 5), retained.nodes[1].widget.text_composition.?);
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_composed_text = false;
+    var saw_composition_underline = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                if (text.id == testCanvasWidgetPartId(2, 4)) {
+                    try std.testing.expectEqualStrings("Caf\xc3\xa9", text.text);
+                    saw_composed_text = true;
+                }
+            },
+            .draw_line => |line| {
+                if (line.id == testCanvasWidgetPartId(2, 5)) saw_composition_underline = true;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_composed_text);
+    try std.testing.expect(saw_composition_underline);
 
     var snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqualStrings("Name", snapshot.widgets[0].name);

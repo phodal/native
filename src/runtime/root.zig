@@ -12005,6 +12005,152 @@ test "runtime reconciles canvas control state across layout replacement" {
     try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 12).?.value);
 }
 
+test "runtime drives retained settings and data grid workflow" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-settings-grid-workflow", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(12, 18, 380, 300),
+    });
+
+    const mode_items = [_]canvas.Widget{
+        .{ .id = 22, .kind = .segmented_control, .frame = geometry.RectF.init(150, 18, 82, 30), .text = "List", .state = .{ .selected = true } },
+        .{ .id = 23, .kind = .segmented_control, .frame = geometry.RectF.init(238, 18, 82, 30), .text = "Grid" },
+    };
+    const header_cells = [_]canvas.Widget{
+        .{ .id = 32, .kind = .data_cell, .text = "Project", .layout = .{ .grow = 1 } },
+        .{ .id = 33, .kind = .data_cell, .text = "Status", .layout = .{ .grow = 1 } },
+    };
+    const edge_cells = [_]canvas.Widget{
+        .{ .id = 35, .kind = .data_cell, .text = "Edge API", .layout = .{ .grow = 1 } },
+        .{ .id = 36, .kind = .data_cell, .text = "Live", .layout = .{ .grow = 1 } },
+    };
+    const billing_cells = [_]canvas.Widget{
+        .{ .id = 38, .kind = .data_cell, .text = "Billing", .layout = .{ .grow = 1 } },
+        .{ .id = 39, .kind = .data_cell, .text = "Queued", .layout = .{ .grow = 1 } },
+    };
+    const rows = [_]canvas.Widget{
+        .{ .id = 31, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &header_cells },
+        .{ .id = 34, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &edge_cells },
+        .{ .id = 37, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &billing_cells },
+    };
+    const controls = [_]canvas.Widget{
+        .{ .id = 20, .kind = .checkbox, .frame = geometry.RectF.init(18, 18, 116, 28), .text = "Live data" },
+        .{ .id = 21, .kind = .toggle, .frame = geometry.RectF.init(18, 58, 116, 28), .text = "Compact", .state = .{ .selected = true } },
+        .{ .kind = .row, .frame = geometry.RectF.init(150, 18, 170, 30), .layout = .{ .gap = 6 }, .children = &mode_items },
+        .{ .id = 24, .kind = .search_field, .frame = geometry.RectF.init(150, 58, 170, 34), .text = "edge", .semantics = .{ .label = "Deployment search" } },
+        .{ .id = 30, .kind = .data_grid, .frame = geometry.RectF.init(18, 112, 330, 94), .text = "Deployments", .layout = .{ .gap = 3 }, .children = &rows },
+    };
+    const root = canvas.Widget{
+        .id = 10,
+        .kind = .panel,
+        .frame = geometry.RectF.init(0, 0, 360, 236),
+        .text = "Deployment settings",
+        .children = &controls,
+    };
+    var nodes: [20]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(root, geometry.RectF.init(0, 0, 360, 236), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 20, .action = .toggle });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 21, .action = .toggle });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 23, .action = .select });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 24, .action = .set_text, .value = "edge customers" });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 36, .action = .select });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(20).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(20).?.widget.value);
+    try std.testing.expect(!retained.findById(21).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(21).?.widget.value);
+    try std.testing.expect(!retained.findById(22).?.widget.state.selected);
+    try std.testing.expect(retained.findById(23).?.widget.state.selected);
+    try std.testing.expectEqualStrings("edge customers", retained.findById(24).?.widget.text);
+    try std.testing.expect(!retained.findById(35).?.widget.state.selected);
+    try std.testing.expect(retained.findById(36).?.widget.state.selected);
+
+    var semantics = harness.runtime.views[0].widgetSemantics();
+    try std.testing.expectEqual(canvas.WidgetRole.grid, canvasWidgetSemanticsById(semantics, 30).?.role);
+    try std.testing.expectEqual(@as(?usize, 3), canvasWidgetSemanticsById(semantics, 30).?.grid_row_count);
+    try std.testing.expectEqual(@as(?usize, 2), canvasWidgetSemanticsById(semantics, 30).?.grid_column_count);
+    try std.testing.expectEqualStrings("edge customers", canvasWidgetSemanticsById(semantics, 24).?.text_value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 20).?.value);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 21).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 23).?.value);
+    try std.testing.expectEqual(@as(?usize, 1), canvasWidgetSemanticsById(semantics, 36).?.grid_row_index);
+    try std.testing.expectEqual(@as(?usize, 1), canvasWidgetSemanticsById(semantics, 36).?.grid_column_index);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 36).?.value);
+
+    const snapshot = harness.runtime.automationSnapshot("Settings");
+    var a11y_buffer: [4096]u8 = undefined;
+    var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
+    try automation.snapshot.writeA11yText(snapshot, &a11y_writer);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#20 role=checkbox name=\"Live data\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#24 role=textbox name=\"Deployment search\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "text=\"edge customers\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#30 role=grid name=\"Deployments\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#36 role=gridcell name=\"Live\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "grid=[row_index=1,column_index=1,row_count=3,column_count=2]") != null);
+
+    const next_edge_cells = [_]canvas.Widget{
+        .{ .id = 35, .kind = .data_cell, .text = "Edge API", .layout = .{ .grow = 1 } },
+        .{ .id = 36, .kind = .data_cell, .text = "Ready", .layout = .{ .grow = 1 } },
+    };
+    const next_billing_cells = [_]canvas.Widget{
+        .{ .id = 38, .kind = .data_cell, .text = "Billing", .layout = .{ .grow = 1 } },
+        .{ .id = 39, .kind = .data_cell, .text = "Filtered", .layout = .{ .grow = 1 } },
+    };
+    const next_rows = [_]canvas.Widget{
+        .{ .id = 31, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &header_cells },
+        .{ .id = 34, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &next_edge_cells },
+        .{ .id = 37, .kind = .data_row, .frame = geometry.RectF.init(0, 0, 0, 28), .children = &next_billing_cells },
+    };
+    const next_controls = [_]canvas.Widget{
+        .{ .id = 20, .kind = .checkbox, .frame = geometry.RectF.init(18, 18, 116, 28), .text = "Live data" },
+        .{ .id = 21, .kind = .toggle, .frame = geometry.RectF.init(18, 58, 116, 28), .text = "Compact", .state = .{ .selected = true } },
+        .{ .kind = .row, .frame = geometry.RectF.init(150, 18, 170, 30), .layout = .{ .gap = 6 }, .children = &mode_items },
+        .{ .id = 24, .kind = .search_field, .frame = geometry.RectF.init(150, 58, 170, 34), .text = "edge customers", .semantics = .{ .label = "Deployment search" } },
+        .{ .id = 30, .kind = .data_grid, .frame = geometry.RectF.init(18, 112, 330, 94), .text = "Deployments", .layout = .{ .gap = 3 }, .children = &next_rows },
+    };
+    const next_root = canvas.Widget{
+        .id = 10,
+        .kind = .panel,
+        .frame = geometry.RectF.init(0, 0, 360, 236),
+        .text = "Deployment settings",
+        .children = &next_controls,
+    };
+    var next_nodes: [20]canvas.WidgetLayoutNode = undefined;
+    const next_layout = try canvas.layoutWidgetTree(next_root, geometry.RectF.init(0, 0, 360, 236), &next_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", next_layout);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(20).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(21).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(22).?.widget.state.selected);
+    try std.testing.expect(retained.findById(23).?.widget.state.selected);
+    try std.testing.expect(retained.findById(36).?.widget.state.selected);
+    try std.testing.expectEqualStrings("Ready", retained.findById(36).?.widget.text);
+
+    semantics = harness.runtime.views[0].widgetSemantics();
+    try std.testing.expectEqualStrings("Ready", canvasWidgetSemanticsById(semantics, 36).?.label);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 36).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 23).?.value);
+}
+
 test "runtime refreshes widget owned display list from canvas input" {
     const TestApp = struct {
         fn app(self: *@This()) App {

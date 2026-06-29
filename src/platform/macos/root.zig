@@ -395,6 +395,10 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
             .timestamp_ns = event.timestamp_ns,
             .nonblank = event.nonblank != 0,
             .sample_color = event.sample_color,
+            .backend = .metal,
+            .pixel_format = .bgra8_unorm,
+            .present_mode = .timer,
+            .status = .ready,
         } }),
         .gpu_surface_resize => state.emit(.{ .gpu_surface_resized = .{
             .window_id = event.window_id,

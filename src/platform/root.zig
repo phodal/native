@@ -397,6 +397,40 @@ pub const ViewKind = enum {
     progress_indicator,
 };
 
+pub const GpuSurfaceBackend = enum {
+    none,
+    metal,
+};
+
+pub const GpuSurfacePixelFormat = enum {
+    none,
+    bgra8_unorm,
+};
+
+pub const GpuSurfacePresentMode = enum {
+    none,
+    timer,
+};
+
+pub const GpuSurfaceStatus = enum {
+    unavailable,
+    initializing,
+    ready,
+    lost,
+};
+
+pub const GpuSurfaceOptions = struct {
+    backend: GpuSurfaceBackend = .metal,
+    pixel_format: GpuSurfacePixelFormat = .bgra8_unorm,
+    present_mode: GpuSurfacePresentMode = .timer,
+
+    pub fn isSupported(self: GpuSurfaceOptions) bool {
+        return self.backend == .metal and
+            self.pixel_format == .bgra8_unorm and
+            self.present_mode == .timer;
+    }
+};
+
 pub const ViewOptions = struct {
     window_id: WindowId = 1,
     label: []const u8,
@@ -413,6 +447,7 @@ pub const ViewOptions = struct {
     url: []const u8 = "",
     transparent: bool = false,
     bridge_enabled: bool = false,
+    gpu_surface: GpuSurfaceOptions = .{},
 
     pub fn webViewOptions(self: ViewOptions) WebViewOptions {
         return .{
@@ -469,6 +504,10 @@ pub const ViewInfo = struct {
     gpu_timestamp_ns: u64 = 0,
     gpu_frame_nonblank: bool = false,
     gpu_sample_color: u32 = 0,
+    gpu_backend: GpuSurfaceBackend = .none,
+    gpu_pixel_format: GpuSurfacePixelFormat = .none,
+    gpu_present_mode: GpuSurfacePresentMode = .none,
+    gpu_status: GpuSurfaceStatus = .unavailable,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,
@@ -518,6 +557,10 @@ pub const ViewInfo = struct {
             .timestamp_ns = self.gpu_timestamp_ns,
             .nonblank = self.gpu_frame_nonblank,
             .sample_color = self.gpu_sample_color,
+            .backend = self.gpu_backend,
+            .pixel_format = self.gpu_pixel_format,
+            .present_mode = self.gpu_present_mode,
+            .status = self.gpu_status,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
             .canvas_frame_requires_render = self.canvas_frame_requires_render,
@@ -719,6 +762,10 @@ pub const GpuFrame = struct {
     timestamp_ns: u64 = 0,
     nonblank: bool = false,
     sample_color: u32 = 0,
+    backend: GpuSurfaceBackend = .none,
+    pixel_format: GpuSurfacePixelFormat = .none,
+    present_mode: GpuSurfacePresentMode = .none,
+    status: GpuSurfaceStatus = .unavailable,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,
@@ -763,6 +810,10 @@ pub const GpuSurfaceFrameEvent = struct {
     timestamp_ns: u64 = 0,
     nonblank: bool = false,
     sample_color: u32 = 0,
+    backend: GpuSurfaceBackend = .metal,
+    pixel_format: GpuSurfacePixelFormat = .bgra8_unorm,
+    present_mode: GpuSurfacePresentMode = .timer,
+    status: GpuSurfaceStatus = .ready,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,
@@ -1577,6 +1628,11 @@ pub const NullPlatform = struct {
             .layer = options.layer,
             .visible = options.visible,
             .enabled = options.enabled,
+            .gpu_size = if (options.kind == .gpu_surface) options.frame.size() else geometry.SizeF.init(0, 0),
+            .gpu_backend = if (options.kind == .gpu_surface) options.gpu_surface.backend else .none,
+            .gpu_pixel_format = if (options.kind == .gpu_surface) options.gpu_surface.pixel_format else .none,
+            .gpu_present_mode = if (options.kind == .gpu_surface) options.gpu_surface.present_mode else .none,
+            .gpu_status = if (options.kind == .gpu_surface) .ready else .unavailable,
             .open = true,
         };
         try self.copyViewStrings(index, options.label, options.parent, options.role, options.accessibility_label, options.text, options.command);
@@ -1941,6 +1997,7 @@ pub const NullPlatform = struct {
         if (options.command.len > max_view_command_bytes) return error.InvalidCommand;
         if (!isValidViewFrame(options.frame)) return error.InvalidViewOptions;
         if (options.url.len > 0) return error.InvalidViewOptions;
+        if (options.kind == .gpu_surface and !options.gpu_surface.isSupported()) return error.UnsupportedViewKind;
         if (options.parent) |parent| {
             if (parent.len == 0 or parent.len > max_view_label_bytes) return error.InvalidViewOptions;
             if (std.mem.eql(u8, parent, options.label)) return error.InvalidViewOptions;
@@ -2196,6 +2253,11 @@ const NullView = struct {
     accessibility_label: []const u8 = "",
     text: []const u8 = "",
     command: []const u8 = "",
+    gpu_size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    gpu_backend: GpuSurfaceBackend = .none,
+    gpu_pixel_format: GpuSurfacePixelFormat = .none,
+    gpu_present_mode: GpuSurfacePresentMode = .none,
+    gpu_status: GpuSurfaceStatus = .unavailable,
     open: bool = false,
     label_storage: [max_view_label_bytes]u8 = undefined,
     parent_storage: [max_view_label_bytes]u8 = undefined,

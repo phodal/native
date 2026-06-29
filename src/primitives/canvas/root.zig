@@ -3373,7 +3373,7 @@ pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []T
     var len: usize = 0;
     var bounds: ?geometry.RectF = null;
     if (text.glyphs.len > 0) {
-        try appendTextLine(output, &len, text, 0, text.text.len, 0, text.glyphs.len, lineHeight(text, options), &bounds);
+        try appendGlyphTextLines(output, &len, text, options, &bounds);
         return .{
             .key = textLayoutKey(text, options),
             .layout = .{ .lines = output[0..len], .bounds = bounds },
@@ -8187,6 +8187,47 @@ fn nextTextLineEnd(text: []const u8, start: usize, size: f32, options: TextLayou
     return text.len;
 }
 
+fn appendGlyphTextLines(output: []TextLine, len: *usize, text: DrawText, options: TextLayoutOptions, bounds: *?geometry.RectF) Error!void {
+    const height = lineHeight(text, options);
+    const initial_len = len.*;
+    var glyph_start: usize = 0;
+    while (glyph_start < text.glyphs.len) {
+        while (options.wrap == .word and glyph_start < text.glyphs.len and isGlyphTextBreak(text, glyph_start)) glyph_start += 1;
+        if (glyph_start >= text.glyphs.len) break;
+
+        const glyph_end = nextGlyphLineEnd(text, glyph_start, options);
+        const range = textRangeForGlyphRange(text.text, glyph_start, glyph_end - glyph_start, text.glyphs.len);
+        try appendTextLine(output, len, text, range.start, range.byteLen(text.text.len), glyph_start, glyph_end - glyph_start, height, bounds);
+        glyph_start = glyph_end;
+    }
+    if (len.* == initial_len) try appendTextLine(output, len, text, 0, 0, 0, 0, height, bounds);
+}
+
+fn nextGlyphLineEnd(text: DrawText, start: usize, options: TextLayoutOptions) usize {
+    const max_width = if (options.max_width > 0) options.max_width else std.math.inf(f32);
+    if (options.wrap == .none or max_width == std.math.inf(f32)) return text.glyphs.len;
+
+    var index = start;
+    var width: f32 = 0;
+    var last_break: ?usize = null;
+    while (index < text.glyphs.len) {
+        if (isGlyphTextBreak(text, index)) last_break = index;
+        const next_width = width + estimatedGlyphAdvance(text.glyphs[index], text.size);
+        if (next_width > max_width) {
+            if (index == start) return index + 1;
+            if (options.wrap == .word) {
+                if (last_break) |break_index| {
+                    if (break_index > start) return break_index;
+                }
+            }
+            return index;
+        }
+        width = next_width;
+        index += 1;
+    }
+    return text.glyphs.len;
+}
+
 fn nextExplicitLineEnd(text: []const u8, start: usize) usize {
     var index = start;
     while (index < text.len) : (index += 1) {
@@ -8254,6 +8295,32 @@ fn estimateTextWidth(text: []const u8, size: f32) f32 {
 
 fn isTextBreakByte(byte: u8) bool {
     return byte == ' ' or byte == '\t';
+}
+
+fn isGlyphTextBreak(text: DrawText, glyph_index: usize) bool {
+    if (glyph_index >= text.glyphs.len) return false;
+    const range = textRangeForGlyphRange(text.text, glyph_index, 1, text.glyphs.len);
+    return range.start < range.end and isTextBreakByte(text.text[range.start]);
+}
+
+fn textRangeForGlyphRange(text: []const u8, glyph_start: usize, glyph_len: usize, glyph_count: usize) TextRange {
+    if (text.len == 0 or glyph_count == 0) return TextRange.init(0, 0);
+    const scalar_count = utf8ScalarCount(text);
+    if (scalar_count == 0) return TextRange.init(0, 0);
+
+    const glyph_end = @min(glyph_count, glyph_start + glyph_len);
+    const start_scalar = @min(scalar_count, (glyph_start * scalar_count) / glyph_count);
+    const end_scalar = @min(scalar_count, ((glyph_end * scalar_count) + glyph_count - 1) / glyph_count);
+    return TextRange.init(textOffsetForScalarIndex(text, start_scalar), textOffsetForScalarIndex(text, end_scalar));
+}
+
+fn textOffsetForScalarIndex(text: []const u8, scalar_index: usize) usize {
+    var offset: usize = 0;
+    var index: usize = 0;
+    while (offset < text.len and index < scalar_index) : (index += 1) {
+        offset = nextTextOffset(text, offset);
+    }
+    return offset;
 }
 
 fn utf8ScalarCount(text: []const u8) usize {
@@ -14518,6 +14585,96 @@ test "text layout handles newlines and shaped glyph runs" {
     try std.testing.expectEqual(@as(usize, 1), shaped.lineCount());
     try std.testing.expectEqual(@as(usize, 2), shaped.lines[0].glyph_len);
     try expectRect(geometry.RectF.init(3, 4, 19, 20), shaped.lines[0].bounds);
+}
+
+test "text layout wraps shaped glyph runs by glyph advances" {
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 8 },
+        .{ .id = 2, .x = 8, .y = 0, .advance = 7 },
+        .{ .id = 3, .x = 15, .y = 0, .advance = 6 },
+        .{ .id = 4, .x = 21, .y = 0, .advance = 9 },
+        .{ .id = 5, .x = 30, .y = 0, .advance = 5 },
+    };
+    var lines: [3]TextLine = undefined;
+    const layout = try layoutTextRun(.{
+        .font_id = 2,
+        .size = 12,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "abcde",
+        .glyphs = &glyphs,
+    }, .{ .max_width = 16, .line_height = 18, .wrap = .character }, &lines);
+
+    try std.testing.expectEqual(@as(usize, 3), layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].glyph_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[0].text_len);
+    try expectRect(geometry.RectF.init(4, 8, 15, 18), layout.lines[0].bounds);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[1].glyph_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[1].text_len);
+    try std.testing.expectEqual(@as(f32, 38), layout.lines[1].baseline);
+    try std.testing.expectEqual(@as(usize, 4), layout.lines[2].glyph_start);
+    try std.testing.expectEqual(@as(usize, 1), layout.lines[2].glyph_len);
+    try std.testing.expectEqual(@as(usize, 4), layout.lines[2].text_start);
+    try std.testing.expectEqual(@as(usize, 1), layout.lines[2].text_len);
+    try expectRect(geometry.RectF.init(4, 8, 15, 54), layout.bounds);
+}
+
+test "text layout word-wraps shaped glyph runs at mapped spaces" {
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 5 },
+        .{ .id = 2, .x = 5, .y = 0, .advance = 5 },
+        .{ .id = 3, .x = 10, .y = 0, .advance = 5 },
+        .{ .id = 4, .x = 15, .y = 0, .advance = 5 },
+        .{ .id = 5, .x = 20, .y = 0, .advance = 5 },
+        .{ .id = 6, .x = 25, .y = 0, .advance = 5 },
+    };
+    var lines: [2]TextLine = undefined;
+    const layout = try layoutTextRun(.{
+        .font_id = 2,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Hi all",
+        .glyphs = &glyphs,
+    }, .{ .max_width = 16, .line_height = 14, .wrap = .word }, &lines);
+
+    try std.testing.expectEqual(@as(usize, 2), layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].glyph_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
+    try std.testing.expectEqual(@as(usize, 2), layout.lines[0].text_len);
+    try expectRect(geometry.RectF.init(0, 0, 10, 14), layout.lines[0].bounds);
+    try std.testing.expectEqual(@as(usize, 3), layout.lines[1].glyph_start);
+    try std.testing.expectEqual(@as(usize, 3), layout.lines[1].glyph_len);
+    try std.testing.expectEqual(@as(usize, 3), layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 3), layout.lines[1].text_len);
+    try expectRect(geometry.RectF.init(0, 14, 15, 14), layout.lines[1].bounds);
+    try expectRect(geometry.RectF.init(0, 0, 15, 28), layout.bounds);
+}
+
+test "text layout keeps an empty line for shaped whitespace runs" {
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 5 },
+        .{ .id = 2, .x = 5, .y = 0, .advance = 5 },
+    };
+    var lines: [1]TextLine = undefined;
+    const layout = try layoutTextRun(.{
+        .font_id = 2,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "  ",
+        .glyphs = &glyphs,
+    }, .{ .max_width = 16, .line_height = 14, .wrap = .word }, &lines);
+
+    try std.testing.expectEqual(@as(usize, 1), layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].glyph_len);
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_len);
+    try expectRect(geometry.RectF.init(0, 0, 0, 14), layout.bounds);
 }
 
 test "text layout reports output overflow" {

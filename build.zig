@@ -409,6 +409,13 @@ pub fn build(b: *std.Build) void {
         .{ .path = "examples/android/app.zon", .pattern = ".id = \"mobile.refresh\"" },
         .{ .path = "examples/android/app.zon", .pattern = ".label = \"mobile-header\"" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-android-widget-ime", "Verify Android retained widget IME and action bridge", &.{
+        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "override fun onCreateInputConnection" },
+        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "nativeIme(nativeApp, kind, text, cursor)" },
+        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_KIND_SET_COMPOSITION = 7" },
+        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DRAG = 1 shl 8" },
+        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DROP_FILES = 1 shl 9" },
+    });
 
     const examples_step = b.step("test-examples", "Run all example tests and layout checks");
     examples_step.dependOn(frontend_examples_step);

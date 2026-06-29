@@ -1,10 +1,13 @@
 package dev.zero_native.examples.android
 
 import android.app.Activity
+import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.os.Bundle
+import android.text.InputType
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -12,6 +15,10 @@ import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
 import android.widget.Button
 import android.widget.FrameLayout
@@ -83,6 +90,44 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
 
         override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = provider
+        override fun onCheckIsTextEditor(): Boolean = true
+
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+            outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            outAttrs.imeOptions = EditorInfo.IME_ACTION_DONE
+            return object : BaseInputConnection(this, true) {
+                override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                    return dispatchCommittedWidgetText(text?.toString().orEmpty())
+                }
+
+                override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                    return dispatchWidgetIme(WIDGET_IME_SET_COMPOSITION, text?.toString().orEmpty(), newCursorPosition.toLong())
+                }
+
+                override fun finishComposingText(): Boolean {
+                    return dispatchWidgetIme(WIDGET_IME_COMMIT_COMPOSITION, "", 0)
+                }
+
+                override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                    if (beforeLength > 0 && afterLength == 0) return dispatchWidgetKey("backspace")
+                    if (afterLength > 0 && beforeLength == 0) return dispatchWidgetKey("delete")
+                    return super.deleteSurroundingText(beforeLength, afterLength)
+                }
+
+                override fun sendKeyEvent(event: KeyEvent): Boolean {
+                    if (event.action != KeyEvent.ACTION_DOWN) return super.sendKeyEvent(event)
+                    return when (event.keyCode) {
+                        KeyEvent.KEYCODE_DEL -> dispatchWidgetKey("backspace")
+                        KeyEvent.KEYCODE_FORWARD_DEL -> dispatchWidgetKey("delete")
+                        else -> super.sendKeyEvent(event)
+                    }
+                }
+            }
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            return handleWidgetTouch(event)
+        }
 
         fun notifyWidgetSemanticsChanged() {
             invalidate()
@@ -148,6 +193,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 else -> false
             }
             if (handled) host.invalidate()
+            if (handled) updateSoftKeyboardForFocusedWidget()
             return handled
         }
 
@@ -557,9 +603,67 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        nativeTouch(nativeApp, event.getPointerId(0).toLong(), event.actionMasked, event.x, event.y, event.pressure)
+        return handleWidgetTouch(event)
+    }
+
+    private fun handleWidgetTouch(event: MotionEvent): Boolean {
+        if (nativeApp == 0L || event.pointerCount == 0) return false
+        val pointerIndex = event.actionIndex.coerceIn(0, event.pointerCount - 1)
+        nativeTouch(
+            nativeApp,
+            event.getPointerId(pointerIndex).toLong(),
+            event.actionMasked,
+            event.getX(pointerIndex),
+            event.getY(pointerIndex),
+            event.getPressure(pointerIndex),
+        )
         nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
+        updateSoftKeyboardForFocusedWidget()
         return true
+    }
+
+    private fun dispatchCommittedWidgetText(text: String): Boolean {
+        if (nativeApp == 0L) return false
+        if (text.isEmpty()) return true
+        nativeText(nativeApp, text)
+        nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
+        return true
+    }
+
+    private fun dispatchWidgetIme(kind: Int, text: String, cursor: Long): Boolean {
+        if (nativeApp == 0L) return false
+        nativeIme(nativeApp, kind, text, cursor)
+        nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
+        return true
+    }
+
+    private fun dispatchWidgetKey(key: String): Boolean {
+        if (nativeApp == 0L) return false
+        nativeKey(nativeApp, 0, key, "", 0)
+        nativeKey(nativeApp, 1, key, "", 0)
+        nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
+        return true
+    }
+
+    private fun focusedTextWidget(): WidgetSemantics? {
+        return widgetSemanticsSnapshot().firstOrNull {
+            it.role == WIDGET_ROLE_TEXTBOX && (it.flags and WIDGET_FLAG_FOCUSED) != 0
+        }
+    }
+
+    private fun updateSoftKeyboardForFocusedWidget() {
+        if (!::widgetSurface.isInitialized) return
+        val input = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        if (focusedTextWidget() != null) {
+            widgetSurface.requestFocus()
+            input.showSoftInput(widgetSurface, InputMethodManager.SHOW_IMPLICIT)
+        } else {
+            input.hideSoftInputFromWindow(widgetSurface.windowToken, 0)
+        }
     }
 
     override fun onBackPressed() {
@@ -624,6 +728,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val WIDGET_ACTION_SET_TEXT = 1 shl 5
         private const val WIDGET_ACTION_SET_SELECTION = 1 shl 6
         private const val WIDGET_ACTION_SELECT = 1 shl 7
+        private const val WIDGET_ACTION_DRAG = 1 shl 8
+        private const val WIDGET_ACTION_DROP_FILES = 1 shl 9
         private const val WIDGET_ACTION_KIND_FOCUS = 0
         private const val WIDGET_ACTION_KIND_PRESS = 1
         private const val WIDGET_ACTION_KIND_TOGGLE = 2
@@ -631,7 +737,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         private const val WIDGET_ACTION_KIND_DECREMENT = 4
         private const val WIDGET_ACTION_KIND_SET_TEXT = 5
         private const val WIDGET_ACTION_KIND_SET_SELECTION = 6
+        private const val WIDGET_ACTION_KIND_SET_COMPOSITION = 7
+        private const val WIDGET_ACTION_KIND_COMMIT_COMPOSITION = 8
+        private const val WIDGET_ACTION_KIND_CANCEL_COMPOSITION = 9
         private const val WIDGET_ACTION_KIND_SELECT = 10
+        private const val WIDGET_ACTION_KIND_DRAG = 11
+        private const val WIDGET_ACTION_KIND_DROP_FILES = 12
+        private const val WIDGET_IME_SET_COMPOSITION = 0
+        private const val WIDGET_IME_COMMIT_COMPOSITION = 1
+        private const val WIDGET_IME_CANCEL_COMPOSITION = 2
         private const val html = """
             <!doctype html>
             <meta name="viewport" content="width=device-width, initial-scale=1">

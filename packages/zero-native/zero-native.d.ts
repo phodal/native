@@ -166,6 +166,7 @@ export type ZeroNativeGpuSurfacePresentMode = "none" | "timer";
 export type ZeroNativeGpuSurfaceAlphaMode = "none" | "opaque" | "premultiplied";
 export type ZeroNativeGpuSurfaceColorSpace = "none" | "srgb" | "display_p3";
 export type ZeroNativeGpuSurfaceStatus = "unavailable" | "initializing" | "ready" | "lost";
+export type ZeroNativeCursor = "arrow" | "pointing_hand" | "text" | "resize_horizontal";
 
 export interface ZeroNativeViewInfo {
   /** Stable runtime view id for this window/view lifetime. */
@@ -219,10 +220,33 @@ export interface ZeroNativeViewInfo {
   canvasFramePipelineUploadCount: number;
   canvasFramePipelineRetainCount: number;
   canvasFramePipelineEvictCount: number;
+  canvasFramePathGeometryCount: number;
+  canvasFramePathGeometryVertexCount: number;
+  canvasFramePathGeometryIndexCount: number;
+  canvasFramePathGeometryUploadCount: number;
+  canvasFramePathGeometryRetainCount: number;
+  canvasFramePathGeometryEvictCount: number;
+  canvasFrameImageCount: number;
+  canvasFrameImageUploadCount: number;
+  canvasFrameImageRetainCount: number;
+  canvasFrameImageEvictCount: number;
+  canvasFrameLayerCount: number;
+  canvasFrameLayerOpacityCount: number;
+  canvasFrameLayerClipCount: number;
+  canvasFrameLayerTransformCount: number;
+  canvasFrameLayerUploadCount: number;
+  canvasFrameLayerRetainCount: number;
+  canvasFrameLayerEvictCount: number;
   canvasFrameResourceCount: number;
   canvasFrameResourceUploadCount: number;
   canvasFrameResourceRetainCount: number;
   canvasFrameResourceEvictCount: number;
+  canvasFrameVisualEffectCount: number;
+  canvasFrameVisualEffectShadowCount: number;
+  canvasFrameVisualEffectBlurCount: number;
+  canvasFrameVisualEffectUploadCount: number;
+  canvasFrameVisualEffectRetainCount: number;
+  canvasFrameVisualEffectEvictCount: number;
   canvasFrameGlyphAtlasEntryCount: number;
   canvasFrameGlyphAtlasUploadCount: number;
   canvasFrameGlyphAtlasRetainCount: number;
@@ -236,6 +260,10 @@ export interface ZeroNativeViewInfo {
   canvasFrameBudgetExceededCount: number;
   canvasFrameBudgetOk: boolean;
   canvasFrameDirtyBounds: ZeroNativeRect | null;
+  widgetRevision: number;
+  widgetNodeCount: number;
+  widgetSemanticsCount: number;
+  cursor: ZeroNativeCursor;
   focused: boolean;
   command: string;
   open: boolean;

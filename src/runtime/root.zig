@@ -1699,12 +1699,20 @@ pub const Runtime = struct {
                     self.windows[index].info.scale_factor = surface_value.scale_factor;
                 }
                 self.relayoutShellViews(surface_value.id) catch |err| try self.log("shell.relayout_failed", @errorName(err), &.{trace.uint("window_id", surface_value.id)});
-                var detail_buffer: [160]u8 = undefined;
+                var detail_buffer: [512]u8 = undefined;
                 var detail_writer = std.Io.Writer.fixed(&detail_buffer);
-                try detail_writer.print("{{\"width\":{d},\"height\":{d},\"scale\":{d}}}", .{
+                try detail_writer.print("{{\"width\":{d},\"height\":{d},\"scale\":{d},\"safeAreaInsets\":{{\"top\":{d},\"right\":{d},\"bottom\":{d},\"left\":{d}}},\"keyboardInsets\":{{\"top\":{d},\"right\":{d},\"bottom\":{d},\"left\":{d}}}}}", .{
                     surface_value.size.width,
                     surface_value.size.height,
                     surface_value.scale_factor,
+                    surface_value.safe_area_insets.top,
+                    surface_value.safe_area_insets.right,
+                    surface_value.safe_area_insets.bottom,
+                    surface_value.safe_area_insets.left,
+                    surface_value.keyboard_insets.top,
+                    surface_value.keyboard_insets.right,
+                    surface_value.keyboard_insets.bottom,
+                    surface_value.keyboard_insets.left,
                 });
                 self.emitWindowEvent(surface_value.id, "resize", detail_writer.buffered()) catch |err| try self.log("window.resize.emit_failed", @errorName(err), &.{});
                 self.invalidateFor(.surface_resize, geometry.RectF.fromSize(surface_value.size));
@@ -2633,7 +2641,9 @@ pub const Runtime = struct {
     fn shellBoundsForWindow(self: *const Runtime, window_id: platform.WindowId) geometry.RectF {
         const index = self.findWindowIndexById(window_id) orelse return geometry.RectF.init(0, 0, 0, 0);
         const frame_value = self.windows[index].info.frame;
-        return geometry.RectF.init(0, 0, frame_value.width, frame_value.height);
+        const bounds = geometry.RectF.init(0, 0, frame_value.width, frame_value.height);
+        if (self.surface.id != window_id) return bounds;
+        return bounds.deflate(combinedViewportInsets(self.surface));
     }
 
     fn startupWindowFrame(native_frame: geometry.RectF, manifest_frame: geometry.RectF) geometry.RectF {
@@ -6197,7 +6207,7 @@ const ShellLayout = struct {
     parent_cursor_count: usize = 0,
 
     fn init(window_frame: geometry.RectF, views: []const app_manifest.ShellView) ShellLayout {
-        const base = geometry.RectF.init(0, 0, window_frame.width, window_frame.height);
+        const base = window_frame;
         var fill_rect = base;
         for (views) |view| {
             if (view.parent != null or view.fill) continue;
@@ -6952,6 +6962,15 @@ fn viewInfoFromWebView(webview: RuntimeWebView) platform.ViewInfo {
         .bridge_enabled = webview.bridge_enabled,
         .focused = webview.focused,
         .open = webview.open,
+    };
+}
+
+fn combinedViewportInsets(surface: platform.Surface) geometry.InsetsF {
+    return .{
+        .top = @max(surface.safe_area_insets.top, surface.keyboard_insets.top),
+        .right = @max(surface.safe_area_insets.right, surface.keyboard_insets.right),
+        .bottom = @max(surface.safe_area_insets.bottom, surface.keyboard_insets.bottom),
+        .left = @max(surface.safe_area_insets.left, surface.keyboard_insets.left),
     };
 }
 
@@ -13895,6 +13914,54 @@ test "runtime materializes manifest shell windows into laid out views" {
     try std.testing.expectEqual(@as(f32, 960), resized_content.frame.width);
     try std.testing.expectEqual(@as(f32, 720), resized_content.frame.height);
     try std.testing.expectEqual(@as(f32, 772), resized_statusbar.frame.y);
+}
+
+test "runtime applies mobile viewport insets to shell layout" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "mobile-viewport-shell-layout", .source = platform.WebViewSource.html("<h1>Mobile</h1>") };
+        }
+    };
+
+    const shell_views = [_]app_manifest.ShellView{
+        .{ .label = "mobile-header", .kind = .toolbar, .edge = .top, .height = 52 },
+        .{ .label = "main", .kind = .webview, .url = "zero://inline", .fill = true },
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{
+        .id = 1,
+        .size = geometry.SizeF.init(390, 844),
+        .scale_factor = 3,
+        .safe_area_insets = geometry.InsetsF.init(47, 0, 34, 0),
+    });
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+    try harness.runtime.createShellViews(1, &shell_views, harness.runtime.shellBoundsForWindow(1));
+
+    var views_buffer: [4]platform.ViewInfo = undefined;
+    var views = harness.runtime.listViews(1, &views_buffer);
+    var header = testViewByLabel(views, "mobile-header").?;
+    var main = testViewByLabel(views, "main").?;
+    try std.testing.expectEqual(@as(f32, 47), header.frame.y);
+    try std.testing.expectEqual(@as(f32, 390), header.frame.width);
+    try std.testing.expectEqual(@as(f32, 99), main.frame.y);
+    try std.testing.expectEqual(@as(f32, 711), main.frame.height);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .surface_resized = .{
+        .id = 1,
+        .size = geometry.SizeF.init(390, 844),
+        .scale_factor = 3,
+        .safe_area_insets = geometry.InsetsF.init(47, 0, 34, 0),
+        .keyboard_insets = geometry.InsetsF.init(0, 0, 320, 0),
+    } });
+
+    views = harness.runtime.listViews(1, &views_buffer);
+    header = testViewByLabel(views, "mobile-header").?;
+    main = testViewByLabel(views, "main").?;
+    try std.testing.expectEqual(@as(f32, 47), header.frame.y);
+    try std.testing.expectEqual(@as(f32, 99), main.frame.y);
+    try std.testing.expectEqual(@as(f32, 425), main.frame.height);
 }
 
 test "runtime lays out created shell windows with native returned bounds" {

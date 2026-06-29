@@ -11,6 +11,7 @@ final class ZeroNativeHostViewController: UIViewController {
     private let webView = WKWebView(frame: .zero)
     private var webViewBottomConstraint: NSLayoutConstraint?
     private var nativeApp: UnsafeMutableRawPointer?
+    private var keyboardBottomInset: CGFloat = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -128,13 +129,17 @@ final class ZeroNativeHostViewController: UIViewController {
         guard let frameValue = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
         let keyboardFrame = view.convert(frameValue.cgRectValue, from: nil)
         let overlap = max(0, view.bounds.maxY - keyboardFrame.minY)
+        keyboardBottomInset = overlap
         webViewBottomConstraint?.constant = -overlap
         animateKeyboardLayout(notification)
+        sendViewportUpdate()
     }
 
     @objc private func keyboardWillHide(_ notification: Notification) {
+        keyboardBottomInset = 0
         webViewBottomConstraint?.constant = 0
         animateKeyboardLayout(notification)
+        sendViewportUpdate()
     }
 
     private func animateKeyboardLayout(_ notification: Notification) {
@@ -149,9 +154,28 @@ final class ZeroNativeHostViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        sendViewportUpdate()
+    }
+
+    private func sendViewportUpdate() {
         guard let nativeApp else { return }
         let scale = Float(view.window?.screen.scale ?? UIScreen.main.scale)
-        zero_native_app_resize(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil)
+        let safe = view.safeAreaInsets
+        zero_native_app_viewport(
+            nativeApp,
+            Float(webView.bounds.width),
+            Float(webView.bounds.height),
+            scale,
+            nil,
+            Float(safe.top),
+            Float(safe.right),
+            Float(safe.bottom),
+            Float(safe.left),
+            0,
+            0,
+            Float(keyboardBottomInset),
+            0
+        )
         zero_native_app_frame(nativeApp)
     }
 

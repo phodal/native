@@ -41,7 +41,7 @@ Install on an emulator or device:
 
 - `onCreate` loads the JNI library, creates the native shell, then starts the zero-native app.
 - `onResume` and `onPause` forward activation lifecycle with `zero_native_app_activate` and `zero_native_app_deactivate`.
-- `surfaceChanged` forwards size, display density, and the Android `Surface`, then requests a frame.
+- `surfaceChanged` forwards size, display density, safe-area insets, keyboard inset, and the Android `Surface`, then requests a frame.
 - Orientation and screen-size changes stay in the same activity so the embedded runtime is not recreated during rotation.
 - The activity uses `windowSoftInputMode="adjustResize"` so Android owns keyboard avoidance and relayouts the content area.
 - The native Back and Refresh buttons call `nativeCommand` with stable mobile command IDs, update status from `zero_native_app_last_command_count`, and request a frame.
@@ -49,4 +49,4 @@ Install on an emulator or device:
 - `onTouchEvent` forwards pointer id, phase, position, and pressure.
 - `surfaceDestroyed` and `onDestroy` stop and destroy the app.
 
-The `app.zon` shell view tree describes this header and WebView workspace. Native mobile layout is still implemented in Kotlin so Android owns soft-keyboard relayout, Back handling, orientation changes, and activity lifecycle.
+The `app.zon` shell view tree describes this header and WebView workspace. Native mobile layout is still implemented in Kotlin so Android owns soft-keyboard relayout, Back handling, orientation changes, and activity lifecycle while zero-native receives the viewport metrics needed for GPU/widget layout.

@@ -386,6 +386,7 @@ fn embedHeader() []const u8 {
     \\void zero_native_app_deactivate(void *app);
     \\void zero_native_app_stop(void *app);
     \\void zero_native_app_resize(void *app, float width, float height, float scale, void *surface);
+    \\void zero_native_app_viewport(void *app, float width, float height, float scale, void *surface, float safe_top, float safe_right, float safe_bottom, float safe_left, float keyboard_top, float keyboard_right, float keyboard_bottom, float keyboard_left);
     \\void zero_native_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
     \\void zero_native_app_command(void *app, const char *name, uintptr_t len);
     \\void zero_native_app_frame(void *app);
@@ -583,6 +584,7 @@ fn iosViewController() []const u8 {
     \\    private let webView = WKWebView(frame: .zero)
     \\    private var webViewBottomConstraint: NSLayoutConstraint?
     \\    private var nativeApp: UnsafeMutableRawPointer?
+    \\    private var keyboardBottomInset: CGFloat = 0
     \\
     \\    override func viewDidLoad() {
     \\        super.viewDidLoad()
@@ -707,21 +709,30 @@ fn iosViewController() []const u8 {
     \\    @objc private func keyboardFrameWillChange(_ notification: Notification) {
     \\        guard let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
     \\        let keyboardFrame = view.convert(value.cgRectValue, from: nil)
-    \\        webViewBottomConstraint?.constant = -max(0, view.bounds.maxY - keyboardFrame.minY)
+    \\        keyboardBottomInset = max(0, view.bounds.maxY - keyboardFrame.minY)
+    \\        webViewBottomConstraint?.constant = -keyboardBottomInset
     \\        view.layoutIfNeeded()
+    \\        sendViewportUpdate()
     \\    }
     \\
     \\    @objc private func keyboardWillHide(_ notification: Notification) {
     \\        _ = notification
+    \\        keyboardBottomInset = 0
     \\        webViewBottomConstraint?.constant = 0
     \\        view.layoutIfNeeded()
+    \\        sendViewportUpdate()
     \\    }
     \\
     \\    override func viewDidLayoutSubviews() {
     \\        super.viewDidLayoutSubviews()
+    \\        sendViewportUpdate()
+    \\    }
+    \\
+    \\    private func sendViewportUpdate() {
     \\        guard let nativeApp else { return }
     \\        let scale = Float(view.window?.screen.scale ?? UIScreen.main.scale)
-    \\        zero_native_app_resize(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil)
+    \\        let safe = view.safeAreaInsets
+    \\        zero_native_app_viewport(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil, Float(safe.top), Float(safe.right), Float(safe.bottom), Float(safe.left), 0, 0, Float(keyboardBottomInset), 0)
     \\        zero_native_app_frame(nativeApp)
     \\    }
     \\
@@ -958,6 +969,7 @@ fn androidActivity() []const u8 {
     \\import android.app.Activity
     \\import android.content.res.Configuration
     \\import android.graphics.Color
+    \\import android.graphics.Rect
     \\import android.net.Uri
     \\import android.os.Bundle
     \\import android.view.MotionEvent
@@ -972,6 +984,7 @@ fn androidActivity() []const u8 {
     \\class MainActivity : Activity(), SurfaceHolder.Callback {
     \\    private var nativeApp: Long = 0
     \\    private lateinit var statusLabel: TextView
+    \\    private var currentSurfaceHolder: SurfaceHolder? = null
     \\
     \\    override fun onCreate(savedInstanceState: Bundle?) {
     \\        super.onCreate(savedInstanceState)
@@ -1096,17 +1109,38 @@ fn androidActivity() []const u8 {
     \\
     \\    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
     \\        if (nativeApp == 0L) return
-    \\        nativeResize(nativeApp, width.toFloat(), height.toFloat(), resources.displayMetrics.density, holder.surface)
+    \\        currentSurfaceHolder = holder
+    \\        sendViewport(width, height, holder.surface)
     \\        nativeFrame(nativeApp)
     \\    }
     \\
     \\    override fun surfaceCreated(holder: SurfaceHolder) {}
     \\
-    \\    override fun surfaceDestroyed(holder: SurfaceHolder) {}
+    \\    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    \\        if (currentSurfaceHolder == holder) currentSurfaceHolder = null
+    \\    }
     \\
     \\    override fun onConfigurationChanged(newConfig: Configuration) {
     \\        super.onConfigurationChanged(newConfig)
     \\        if (nativeApp != 0L) nativeFrame(nativeApp)
+    \\    }
+    \\
+    \\    private fun sendViewport(width: Int, height: Int, surface: Any) {
+    \\        if (nativeApp == 0L) return
+    \\        val density = resources.displayMetrics.density
+    \\        val insets = window.decorView.rootWindowInsets
+    \\        val safeTop = ((insets?.systemWindowInsetTop ?: 0).toFloat()) / density
+    \\        val safeRight = ((insets?.systemWindowInsetRight ?: 0).toFloat()) / density
+    \\        val safeBottom = ((insets?.systemWindowInsetBottom ?: 0).toFloat()) / density
+    \\        val safeLeft = ((insets?.systemWindowInsetLeft ?: 0).toFloat()) / density
+    \\        nativeViewport(nativeApp, width.toFloat(), height.toFloat(), density, surface, safeTop, safeRight, safeBottom, safeLeft, 0f, 0f, keyboardBottomInset(density), 0f)
+    \\    }
+    \\
+    \\    private fun keyboardBottomInset(density: Float): Float {
+    \\        val visibleFrame = Rect()
+    \\        window.decorView.getWindowVisibleDisplayFrame(visibleFrame)
+    \\        val hiddenBottom = (window.decorView.rootView.height - visibleFrame.bottom).coerceAtLeast(0)
+    \\        return if (hiddenBottom > (100 * density).toInt()) hiddenBottom.toFloat() / density else 0f
     \\    }
     \\
     \\    override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -1142,6 +1176,7 @@ fn androidActivity() []const u8 {
     \\    external fun nativeSetAssetRoot(app: Long, path: String)
     \\    external fun nativeSetAssetEntry(app: Long, path: String)
     \\    external fun nativeResize(app: Long, width: Float, height: Float, scale: Float, surface: Any)
+    \\    external fun nativeViewport(app: Long, width: Float, height: Float, scale: Float, surface: Any, safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float, keyboardTop: Float, keyboardRight: Float, keyboardBottom: Float, keyboardLeft: Float)
     \\    external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
     \\    external fun nativeCommand(app: Long, command: String): Int
     \\    external fun nativeFrame(app: Long)
@@ -1178,6 +1213,7 @@ fn androidJni() []const u8 {
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetRoot(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_root((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetEntry(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_entry((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeResize(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface) { (void)env; (void)self; zero_native_app_resize((void*)app, w, h, scale, surface); }
+    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeViewport(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface, jfloat safe_top, jfloat safe_right, jfloat safe_bottom, jfloat safe_left, jfloat keyboard_top, jfloat keyboard_right, jfloat keyboard_bottom, jfloat keyboard_left) { (void)env; (void)self; zero_native_app_viewport((void*)app, w, h, scale, surface, safe_top, safe_right, safe_bottom, safe_left, keyboard_top, keyboard_right, keyboard_bottom, keyboard_left); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeTouch(JNIEnv *env, jobject self, jlong app, jlong id, jint phase, jfloat x, jfloat y, jfloat pressure) { (void)env; (void)self; zero_native_app_touch((void*)app, (uint64_t)id, phase, x, y, pressure); }
     \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; zero_native_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)zero_native_app_last_command_count((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeFrame(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_frame((void*)app); }
@@ -2015,6 +2051,8 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "webView.loadFileURL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "appendingPathComponent(\"Resources\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "keyboardWillChangeFrameNotification") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "view.safeAreaInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, iosDefaultShellConfig(), "primaryCommand = \"mobile.back\"") != null);
 
     const android_gradle = androidBuildGradle();
@@ -2028,7 +2066,10 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "webView.loadUrl(url)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "WebView(this)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_activity, "override fun surfaceDestroyed(holder: SurfaceHolder) {}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeViewport(nativeApp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "rootWindowInsets") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "keyboardBottomInset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "if (currentSurfaceHolder == holder) currentSurfaceHolder = null") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "surfaceDestroyed(holder: SurfaceHolder) {\n        if (nativeApp != 0L) nativeStop(nativeApp)\n    }") == null);
     try std.testing.expect(std.mem.indexOf(u8, androidDefaultShellConfig(), "const val secondaryCommand = \"mobile.refresh\"") != null);
 
@@ -2039,6 +2080,7 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "#include <stdint.h>") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_root") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_entry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_viewport") != null);
 }
 
 test "android shell config escapes Kotlin string interpolation" {

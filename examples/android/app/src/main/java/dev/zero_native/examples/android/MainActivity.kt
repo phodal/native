@@ -3,6 +3,7 @@ package dev.zero_native.examples.android
 import android.app.Activity
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -16,6 +17,7 @@ import android.widget.TextView
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private var nativeApp: Long = 0
     private lateinit var statusLabel: TextView
+    private var currentSurfaceHolder: SurfaceHolder? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,19 +129,54 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        nativeResize(nativeApp, width.toFloat(), height.toFloat(), resources.displayMetrics.density, holder.surface)
+        currentSurfaceHolder = holder
+        sendViewport(width, height, holder.surface)
         nativeFrame(nativeApp)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        if (currentSurfaceHolder == holder) currentSurfaceHolder = null
+    }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (nativeApp != 0L) {
             nativeFrame(nativeApp)
         }
+    }
+
+    private fun sendViewport(width: Int, height: Int, surface: Any) {
+        if (nativeApp == 0L) return
+        val density = resources.displayMetrics.density
+        val insets = window.decorView.rootWindowInsets
+        val safeTop = ((insets?.systemWindowInsetTop ?: 0).toFloat()) / density
+        val safeRight = ((insets?.systemWindowInsetRight ?: 0).toFloat()) / density
+        val safeBottom = ((insets?.systemWindowInsetBottom ?: 0).toFloat()) / density
+        val safeLeft = ((insets?.systemWindowInsetLeft ?: 0).toFloat()) / density
+        nativeViewport(
+            nativeApp,
+            width.toFloat(),
+            height.toFloat(),
+            density,
+            surface,
+            safeTop,
+            safeRight,
+            safeBottom,
+            safeLeft,
+            0f,
+            0f,
+            keyboardBottomInset(density),
+            0f,
+        )
+    }
+
+    private fun keyboardBottomInset(density: Float): Float {
+        val visibleFrame = Rect()
+        window.decorView.getWindowVisibleDisplayFrame(visibleFrame)
+        val hiddenBottom = (window.decorView.rootView.height - visibleFrame.bottom).coerceAtLeast(0)
+        return if (hiddenBottom > (100 * density).toInt()) hiddenBottom.toFloat() / density else 0f
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -172,6 +209,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     external fun nativeDeactivate(app: Long)
     external fun nativeStop(app: Long)
     external fun nativeResize(app: Long, width: Float, height: Float, scale: Float, surface: Any)
+    external fun nativeViewport(app: Long, width: Float, height: Float, scale: Float, surface: Any, safeTop: Float, safeRight: Float, safeBottom: Float, safeLeft: Float, keyboardTop: Float, keyboardRight: Float, keyboardBottom: Float, keyboardLeft: Float)
     external fun nativeTouch(app: Long, id: Long, phase: Int, x: Float, y: Float, pressure: Float)
     external fun nativeCommand(app: Long, command: String): Int
     external fun nativeFrame(app: Long)

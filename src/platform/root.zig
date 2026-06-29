@@ -692,6 +692,8 @@ pub const Surface = struct {
     id: u64 = 1,
     size: geometry.SizeF = geometry.SizeF.init(640, 360),
     scale_factor: f32 = 1,
+    safe_area_insets: geometry.InsetsF = .{},
+    keyboard_insets: geometry.InsetsF = .{},
     native_handle: ?*anyopaque = null,
 };
 

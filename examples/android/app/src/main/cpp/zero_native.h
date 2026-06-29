@@ -10,6 +10,7 @@ void zero_native_app_activate(void *app);
 void zero_native_app_deactivate(void *app);
 void zero_native_app_stop(void *app);
 void zero_native_app_resize(void *app, float width, float height, float scale, void *surface);
+void zero_native_app_viewport(void *app, float width, float height, float scale, void *surface, float safe_top, float safe_right, float safe_bottom, float safe_left, float keyboard_top, float keyboard_right, float keyboard_bottom, float keyboard_left);
 void zero_native_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
 void zero_native_app_command(void *app, const char *name, uintptr_t len);
 void zero_native_app_frame(void *app);

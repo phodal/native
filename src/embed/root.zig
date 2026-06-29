@@ -237,11 +237,43 @@ pub fn zero_native_app_stop(app: ?*anyopaque) void {
 
 pub fn zero_native_app_resize(app: ?*anyopaque, width: f32, height: f32, scale: f32, surface: ?*anyopaque) void {
     const self = mobileApp(app) orelse return;
-    self.embedded.resize(.{
+    self.embedded.resize(mobileSurface(width, height, scale, surface, .{}, .{})) catch |err| recordError(self, err);
+}
+
+pub fn zero_native_app_viewport(
+    app: ?*anyopaque,
+    width: f32,
+    height: f32,
+    scale: f32,
+    surface: ?*anyopaque,
+    safe_top: f32,
+    safe_right: f32,
+    safe_bottom: f32,
+    safe_left: f32,
+    keyboard_top: f32,
+    keyboard_right: f32,
+    keyboard_bottom: f32,
+    keyboard_left: f32,
+) void {
+    const self = mobileApp(app) orelse return;
+    self.embedded.resize(mobileSurface(
+        width,
+        height,
+        scale,
+        surface,
+        geometry.InsetsF.init(safe_top, safe_right, safe_bottom, safe_left),
+        geometry.InsetsF.init(keyboard_top, keyboard_right, keyboard_bottom, keyboard_left),
+    )) catch |err| recordError(self, err);
+}
+
+fn mobileSurface(width: f32, height: f32, scale: f32, surface: ?*anyopaque, safe_area_insets: geometry.InsetsF, keyboard_insets: geometry.InsetsF) platform.Surface {
+    return .{
         .size = .{ .width = width, .height = height },
         .scale_factor = scale,
+        .safe_area_insets = safe_area_insets,
+        .keyboard_insets = keyboard_insets,
         .native_handle = surface,
-    }) catch |err| recordError(self, err);
+    };
 }
 
 pub fn zero_native_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: f32, y: f32, pressure: f32) void {
@@ -435,6 +467,14 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, 390), self.mobile_surface_width);
     try std.testing.expectEqual(@as(f32, 844), self.mobile_surface_height);
     try std.testing.expectEqual(@as(f32, 3), self.mobile_surface_scale);
+
+    zero_native_app_viewport(app, 390, 700, 3, &native_surface_token, 47, 0, 34, 0, 0, 0, 144, 0);
+    try std.testing.expectEqual(@as(usize, 2), self.mobile_surface_resize_count);
+    try std.testing.expectEqual(@as(f32, 390), self.embedded.runtime.surface.size.width);
+    try std.testing.expectEqual(@as(f32, 700), self.embedded.runtime.surface.size.height);
+    try std.testing.expectEqual(@as(f32, 47), self.embedded.runtime.surface.safe_area_insets.top);
+    try std.testing.expectEqual(@as(f32, 34), self.embedded.runtime.surface.safe_area_insets.bottom);
+    try std.testing.expectEqual(@as(f32, 144), self.embedded.runtime.surface.keyboard_insets.bottom);
 
     zero_native_app_touch(app, 42, 0, 11, 22, 0.5);
     try std.testing.expectEqual(@as(usize, 1), self.touch_count);

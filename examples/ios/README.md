@@ -36,9 +36,9 @@ Select a simulator or device and run the `ZeroNativeIOSExample` scheme.
 
 - `viewDidLoad` creates and starts the zero-native app.
 - `SceneDelegate` forwards activation and resignation with `zero_native_app_activate` and `zero_native_app_deactivate`.
-- `viewDidLayoutSubviews` forwards the current WebView size and screen scale with `zero_native_app_resize`, then requests a frame.
-- Keyboard frame changes adjust the `WKWebView` bottom constraint so UIKit owns keyboard avoidance before resize/frame work reaches zero-native.
+- `viewDidLayoutSubviews` forwards the current WebView size, screen scale, safe-area insets, and keyboard inset with `zero_native_app_viewport`, then requests a frame.
+- Keyboard frame changes adjust the `WKWebView` bottom constraint while also forwarding the keyboard inset to zero-native.
 - The native Back and Refresh buttons call `zero_native_app_command` with stable mobile command IDs, update status from `zero_native_app_last_command_count`, and request a frame.
 - Controller teardown stops and destroys the app.
 
-The `app.zon` shell view tree describes this header and WebView workspace. Native mobile layout is still implemented in Swift so UIKit owns safe areas, keyboard avoidance, and scene lifecycle.
+The `app.zon` shell view tree describes this header and WebView workspace. Native mobile layout is still implemented in Swift so UIKit owns safe areas, keyboard avoidance, and scene lifecycle while zero-native receives the viewport metrics needed for GPU/widget layout.

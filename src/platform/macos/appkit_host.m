@@ -509,7 +509,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
                             withBytes:bgra
                           bytesPerRow:width * 4];
     self.hasCanvasTexture = YES;
-    self.lastScale = scale > 0 ? scale : self.lastScale;
+    (void)scale;
     [self stopDisplayTimer];
     [self renderFrame];
     return YES;

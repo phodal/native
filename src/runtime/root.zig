@@ -1992,14 +1992,20 @@ pub const Runtime = struct {
             },
             .gpu_surface_resized => |resize_event| {
                 if (self.findViewIndex(resize_event.window_id, resize_event.label)) |index| {
+                    const previous_frame = self.views[index].frame;
+                    const previous_size = self.views[index].gpu_size;
+                    const previous_scale = self.views[index].gpu_scale_factor;
+                    const next_size = resize_event.frame.size();
+                    const frame_changed = !rectsEqual(previous_frame, resize_event.frame);
+                    const surface_changed = !sizesEqual(previous_size, next_size) or previous_scale != resize_event.scale_factor;
                     self.views[index].frame = resize_event.frame;
-                    self.views[index].gpu_size = resize_event.frame.size();
+                    self.views[index].gpu_size = next_size;
                     self.views[index].gpu_scale_factor = resize_event.scale_factor;
-                    self.views[index].presented_canvas_valid = false;
+                    if (surface_changed) self.views[index].presented_canvas_valid = false;
                     if (self.views[index].gpu_status == .unavailable) self.views[index].gpu_status = .ready;
+                    if (frame_changed or surface_changed) self.invalidateFor(.surface_resize, resize_event.frame);
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_resized = resize_event });
-                self.invalidateFor(.surface_resize, resize_event.frame);
                 try self.log("gpu_surface.resize", "gpu surface resized", &.{
                     trace.string("label", resize_event.label),
                     trace.float("width", resize_event.frame.width),
@@ -9943,6 +9949,97 @@ test "runtime next canvas frame presents empty canvas once" {
     try std.testing.expect(!harness.runtime.views[0].canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_change_count);
     try std.testing.expect(harness.runtime.views[0].canvas_frame_dirty_bounds == null);
+}
+
+test "runtime duplicate GPU surface resize keeps retained canvas frame clean" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-duplicate-resize", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+    const initial_frame = harness.runtime.views[0].frame;
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = "canvas",
+        .frame = initial_frame,
+        .scale_factor = 2,
+    } });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 320, 240),
+        .fill = .{ .color = canvas.Color.rgb8(245, 248, 255) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var render_commands: [1]canvas.RenderCommand = undefined;
+    var render_batches: [1]canvas.RenderBatch = undefined;
+    var resources: [1]canvas.RenderResource = undefined;
+    var resource_cache_entries: [1]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [2]canvas.RenderResourceCacheAction = undefined;
+    var glyphs: [1]canvas.GlyphAtlasEntry = undefined;
+    var changes: [2]canvas.DiffChange = undefined;
+    const frame_storage = canvas.CanvasFrameStorage{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    };
+
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 1,
+        .surface_size = geometry.SizeF.init(320, 240),
+        .scale = 2,
+    }, frame_storage);
+    try std.testing.expect(first_frame.full_repaint);
+    try std.testing.expect(harness.runtime.views[0].presented_canvas_valid);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = "canvas",
+        .frame = initial_frame,
+        .scale_factor = 2,
+    } });
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dirty_region_count);
+    try std.testing.expect(harness.runtime.views[0].presented_canvas_valid);
+
+    const clean_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{
+        .frame_index = 2,
+        .surface_size = geometry.SizeF.init(320, 240),
+        .scale = 2,
+    }, frame_storage);
+    try std.testing.expect(!clean_frame.full_repaint);
+    try std.testing.expect(!clean_frame.requiresRender());
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = "canvas",
+        .frame = geometry.RectF.init(0, 0, 360, 240),
+        .scale_factor = 2,
+    } });
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect(!harness.runtime.views[0].presented_canvas_valid);
 }
 
 test "runtime next canvas frame keeps unchanged clipped display lists incremental" {

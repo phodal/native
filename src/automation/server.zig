@@ -1,6 +1,10 @@
 const std = @import("std");
+const geometry = @import("geometry");
 const protocol = @import("protocol.zig");
 const snapshot = @import("snapshot.zig");
+
+const snapshot_initial_capacity: usize = 16 * 1024;
+const windows_initial_capacity: usize = 1024;
 
 pub const Server = struct {
     io: std.Io,
@@ -14,21 +18,21 @@ pub const Server = struct {
     pub fn publish(self: Server, input_value: snapshot.Input) !void {
         var cwd = std.Io.Dir.cwd();
         try cwd.createDirPath(self.io, self.directory);
-        var text_buffer: [4 * 1024]u8 = undefined;
-        var writer = std.Io.Writer.fixed(&text_buffer);
-        try snapshot.writeText(input_value, &writer);
+        var writer = try std.Io.Writer.Allocating.initCapacity(std.heap.page_allocator, snapshot_initial_capacity);
+        defer writer.deinit();
+        try snapshot.writeText(input_value, &writer.writer);
         var path_buffer: [256]u8 = undefined;
-        try writePath(self.io, self.path("snapshot.txt", &path_buffer), writer.buffered());
-        var a11y_buffer: [4 * 1024]u8 = undefined;
-        var a11y_writer = std.Io.Writer.fixed(&a11y_buffer);
-        try snapshot.writeA11yText(input_value, &a11y_writer);
-        try writePath(self.io, self.path("accessibility.txt", &path_buffer), a11y_writer.buffered());
-        var windows_buffer: [512]u8 = undefined;
-        var windows_writer = std.Io.Writer.fixed(&windows_buffer);
+        try writePath(self.io, self.path("snapshot.txt", &path_buffer), writer.written());
+        var a11y_writer = try std.Io.Writer.Allocating.initCapacity(std.heap.page_allocator, snapshot_initial_capacity);
+        defer a11y_writer.deinit();
+        try snapshot.writeA11yText(input_value, &a11y_writer.writer);
+        try writePath(self.io, self.path("accessibility.txt", &path_buffer), a11y_writer.written());
+        var windows_writer = try std.Io.Writer.Allocating.initCapacity(std.heap.page_allocator, windows_initial_capacity);
+        defer windows_writer.deinit();
         for (input_value.windows) |window| {
-            try windows_writer.print("window @w{d} \"{s}\" focused={any}\n", .{ window.id, window.title, window.focused });
+            try windows_writer.writer.print("window @w{d} \"{s}\" focused={any}\n", .{ window.id, window.title, window.focused });
         }
-        try writePath(self.io, self.path("windows.txt", &path_buffer), windows_writer.buffered());
+        try writePath(self.io, self.path("windows.txt", &path_buffer), windows_writer.written());
     }
 
     pub fn publishBridgeResponse(self: Server, response: []const u8) !void {
@@ -84,6 +88,46 @@ test "server writes bridge response artifact" {
     var path_buffer: [256]u8 = undefined;
     const bytes = try readPath(std.testing.io, server.path("bridge-response.txt", &path_buffer), &buffer);
     try std.testing.expectEqualStrings("{\"id\":\"1\",\"ok\":true}", bytes);
+}
+
+test "server publishes large retained widget snapshots" {
+    const directory = ".zig-cache/test-webview-automation-large-snapshot";
+    try resetTestDirectory(std.testing.io, directory);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, directory) catch {};
+
+    const windows = [_]snapshot.Window{.{
+        .title = "Large Widget Snapshot",
+        .bounds = geometry.RectF.init(0, 0, 1200, 760),
+    }};
+    var widgets: [80]snapshot.Widget = undefined;
+    for (&widgets, 0..) |*widget, index| {
+        widget.* = .{
+            .view_label = "components-canvas",
+            .id = 1000 + index,
+            .role = "textbox",
+            .name = "Retained component field with a descriptive accessible name",
+            .text_value = "zero-native retained widget snapshot payload",
+            .bounds = geometry.RectF.init(@floatFromInt(index), @floatFromInt(index), 180, 28),
+            .actions = .{ .focus = true, .set_text = true, .set_selection = true },
+            .text_selection = .{ .start = 1, .end = 12 },
+        };
+    }
+
+    const server = Server.init(std.testing.io, directory, "Large");
+    try server.publish(.{
+        .windows = &windows,
+        .widgets = &widgets,
+    });
+
+    var path_buffer: [256]u8 = undefined;
+    var buffer: [32 * 1024]u8 = undefined;
+    const text = try readPath(std.testing.io, server.path("snapshot.txt", &path_buffer), &buffer);
+    try std.testing.expect(text.len > 4 * 1024);
+    try std.testing.expect(std.mem.indexOf(u8, text, "widget @w1/components-canvas#1079") != null);
+
+    const a11y = try readPath(std.testing.io, server.path("accessibility.txt", &path_buffer), &buffer);
+    try std.testing.expect(a11y.len > 4 * 1024);
+    try std.testing.expect(std.mem.indexOf(u8, a11y, "@w1/components-canvas#1079 role=textbox") != null);
 }
 
 test "server consumes automation command files" {

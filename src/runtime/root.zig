@@ -4384,6 +4384,20 @@ fn canvasWidgetLayoutNodeWithSourceSemantics(
     return copy;
 }
 
+fn applyCanvasWidgetSourceScrollSemantics(
+    nodes: []canvas.WidgetSemanticsNode,
+    source_semantics: []const canvas.WidgetSemanticsNode,
+) void {
+    for (nodes) |*node| {
+        const source = canvasWidgetSemanticsById(source_semantics, node.id) orelse continue;
+        if (!source.scroll.present) continue;
+        node.value = source.value;
+        node.scroll = source.scroll;
+        node.actions = source.actions;
+        node.focusable = source.focusable;
+    }
+}
+
 fn clampCanvasWidgetLayoutScrollOffsets(nodes: []canvas.WidgetLayoutNode, states: ?[]canvas.ScrollState) void {
     for (nodes, 0..) |node, index| {
         if (node.widget.kind != .scroll_view or node.widget.layout.virtualized) continue;
@@ -5132,7 +5146,8 @@ const RuntimeView = struct {
             return;
         }
 
-        const source_semantics = try layout.collectSemantics(&self.widget_semantics_nodes);
+        var source_semantics_entries: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined;
+        const source_semantics = try layout.collectSemantics(&source_semantics_entries);
         var previous_scroll_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetScrollReconcileEntry = undefined;
         const previous_scroll_states = collectCanvasWidgetScrollReconcileEntries(
             self.widgetLayoutTree().nodes,
@@ -5166,6 +5181,7 @@ const RuntimeView = struct {
         );
 
         const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
+        applyCanvasWidgetSourceScrollSemantics(self.widget_semantics_nodes[0..semantics.len], source_semantics);
         self.widget_semantics_node_count = semantics.len;
         if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
             self.canvas_widget_focused_id = 0;
@@ -9967,6 +9983,16 @@ test "runtime leaves virtualized canvas scroll views app driven" {
     try std.testing.expectEqual(@as(f32, 0), retained.nodes[0].widget.value);
     try std.testing.expectEqualDeep(layout.nodes[1].frame, retained.nodes[1].frame);
     try std.testing.expectEqual(@as(u64, 1), harness.runtime.views[0].widget_revision);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 5), snapshot.widgets.len);
+    try std.testing.expect(snapshot.widgets[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 0), snapshot.widgets[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 48), snapshot.widgets[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 80), snapshot.widgets[0].scroll.content_extent);
+    try std.testing.expect(snapshot.widgets[0].actions.focus);
+    try std.testing.expect(snapshot.widgets[0].actions.increment);
+    try std.testing.expect(snapshot.widgets[0].actions.decrement);
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;

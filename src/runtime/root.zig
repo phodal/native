@@ -5916,7 +5916,7 @@ const RuntimeView = struct {
 
         const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len);
         const anchor: ?usize = if (extend) current_selection.anchor else null;
-        const next_selection = canvas.textSelectionForWidgetPoint(widget, point, anchor, .{}) orelse return null;
+        const next_selection = canvas.textSelectionForWidgetPoint(widget, point, anchor, self.widget_tokens) orelse return null;
         if (canvasTextSelectionsEqual(current_selection, next_selection) and widget.text_composition == null) return null;
 
         self.widget_layout_nodes[index].widget.text_selection = next_selection;
@@ -12076,6 +12076,60 @@ test "runtime applies pointer selection to canvas text fields" {
     snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqualStrings("Xry", snapshot.widgets[0].text_value);
     try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 1, .end = 1 }, snapshot.widgets[0].text_selection.?);
+}
+
+test "runtime maps canvas text pointer selection with stored design tokens" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-text-pointer-token-selection", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 160, 36),
+        .text = "Query",
+        .semantics = .{ .label = "Search" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const tokens = canvas.DesignTokens{
+        .typography = .{ .body_size = 20 },
+    };
+    _ = try harness.runtime.setCanvasWidgetDesignTokens(1, "canvas", tokens);
+
+    const point = geometry.PointF.init(46, 24);
+    const expected = canvas.textSelectionForWidgetPoint(text_field, point, null, tokens).?;
+    const default_selection = canvas.textSelectionForWidgetPoint(text_field, point, null, .{}).?;
+    try std.testing.expect(expected.focus != default_selection.focus);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = point.x,
+        .y = point.y,
+    } });
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(expected, retained.nodes[1].widget.text_selection.?);
 }
 
 test "runtime applies text input to focused canvas search fields" {

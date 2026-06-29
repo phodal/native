@@ -4365,7 +4365,9 @@ fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
         const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, next, index, previous_text_states);
         node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(text_copy, source_semantics);
     }
-    return .{ .nodes = node_buffer[0..next.nodes.len] };
+    const reconciled = node_buffer[0..next.nodes.len];
+    clampCanvasWidgetLayoutScrollOffsets(reconciled, null);
+    return .{ .nodes = reconciled };
 }
 
 fn canvasWidgetLayoutNodeWithSourceSemantics(
@@ -4380,6 +4382,56 @@ fn canvasWidgetLayoutNodeWithSourceSemantics(
         }
     }
     return copy;
+}
+
+fn clampCanvasWidgetLayoutScrollOffsets(nodes: []canvas.WidgetLayoutNode, states: ?[]canvas.ScrollState) void {
+    for (nodes, 0..) |node, index| {
+        if (node.widget.kind != .scroll_view or node.widget.layout.virtualized) continue;
+
+        const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+        if (viewport.isEmpty()) continue;
+
+        const content_extent = canvasWidgetLayoutScrollContentExtent(nodes, index, viewport);
+        const max_offset = @max(0, content_extent - viewport.height);
+        const current_offset = node.widget.value;
+        const next_offset = std.math.clamp(@max(0, current_offset), 0, max_offset);
+        if (next_offset == current_offset) continue;
+
+        const offset_delta = next_offset - current_offset;
+        nodes[index].widget.value = next_offset;
+        translateCanvasWidgetLayoutScrollDescendants(nodes, index, -offset_delta);
+        if (states) |scroll_states| {
+            if (index < scroll_states.len) {
+                scroll_states[index].offset = next_offset;
+                scroll_states[index].velocity = 0;
+                scroll_states[index].viewport_extent = viewport.height;
+                scroll_states[index].content_extent = content_extent;
+            }
+        }
+    }
+}
+
+fn canvasWidgetLayoutScrollContentExtent(nodes: []const canvas.WidgetLayoutNode, scroll_index: usize, viewport: geometry.RectF) f32 {
+    if (scroll_index >= nodes.len) return 0;
+    const scroll_node = nodes[scroll_index];
+    const scroll_depth = scroll_node.depth;
+    const offset = @max(0, scroll_node.widget.value);
+    var bottom = viewport.maxY();
+    var index = scroll_index + 1;
+    while (index < nodes.len and nodes[index].depth > scroll_depth) : (index += 1) {
+        bottom = @max(bottom, nodes[index].frame.maxY() + offset);
+    }
+    return @max(0, bottom - viewport.y);
+}
+
+fn translateCanvasWidgetLayoutScrollDescendants(nodes: []canvas.WidgetLayoutNode, scroll_index: usize, dy: f32) void {
+    if (scroll_index >= nodes.len) return;
+    const scroll_depth = nodes[scroll_index].depth;
+    var index = scroll_index + 1;
+    while (index < nodes.len and nodes[index].depth > scroll_depth) : (index += 1) {
+        nodes[index].frame = nodes[index].frame.translate(geometry.OffsetF.init(0, dy));
+        nodes[index].widget.frame = nodes[index].frame;
+    }
 }
 
 fn appendWidgetTextStorageRange(buffer: []u8, len: *usize, value: []const u8) anyerror!WidgetTextStorageRange {
@@ -5107,6 +5159,11 @@ const RuntimeView = struct {
             self.widget_scroll_states[self.widget_layout_node_count] = canvasWidgetScrollStateForLayoutNode(copy, previous_scroll_states);
             self.widget_layout_node_count += 1;
         }
+
+        clampCanvasWidgetLayoutScrollOffsets(
+            self.widget_layout_nodes[0..self.widget_layout_node_count],
+            self.widget_scroll_states[0..self.widget_layout_node_count],
+        );
 
         const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
         self.widget_semantics_node_count = semantics.len;
@@ -9677,6 +9734,75 @@ test "runtime reconciles canvas widget scroll momentum across layout replacement
     try std.testing.expectApproxEqAbs(@as(f32, 47.04), kinetic_layout.findById(1).?.widget.value, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, -35.04), kinetic_layout.findById(2).?.frame.y, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 8.96), kinetic_layout.findById(3).?.frame.y, 0.01);
+}
+
+test "runtime clamps canvas scroll offset after layout replacement shrinks content" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-scroll-clamp-replacement", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 220, 96),
+    });
+
+    const full_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 88, 0, 32), .text = "Three" },
+    };
+    const full_scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .frame = geometry.RectF.init(0, 0, 180, 72),
+        .value = 48,
+        .children = &full_children,
+    };
+    var full_nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const full_layout = try canvas.layoutWidgetTree(full_scroll, geometry.RectF.init(0, 0, 180, 72), &full_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", full_layout);
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 48), retained.findById(1).?.widget.value);
+    try std.testing.expectEqual(@as(f32, -48), retained.findById(2).?.frame.y);
+
+    const short_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+    };
+    const short_scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .frame = geometry.RectF.init(0, 0, 180, 72),
+        .value = 48,
+        .children = &short_children,
+    };
+    var short_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const short_layout = try canvas.layoutWidgetTree(short_scroll, geometry.RectF.init(0, 0, 180, 72), &short_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", short_layout);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(1).?.widget.value);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(2).?.frame.y);
+    try std.testing.expectEqual(@as(f32, 0), harness.runtime.views[0].widget_scroll_states[0].offset);
+    try std.testing.expectEqual(@as(f32, 0), harness.runtime.views[0].widget_scroll_states[0].velocity);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 2), snapshot.widgets.len);
+    try std.testing.expect(snapshot.widgets[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 0), snapshot.widgets[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 72), snapshot.widgets[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 72), snapshot.widgets[0].scroll.content_extent);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 180, 32), snapshot.widgets[1].bounds);
 }
 
 test "runtime chains wheel input from saturated nested canvas scroll views" {

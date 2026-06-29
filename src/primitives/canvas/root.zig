@@ -8156,12 +8156,13 @@ fn nextTextLineEnd(text: []const u8, start: usize, size: f32, options: TextLayou
 
     var index = start;
     var last_break: ?usize = null;
-    while (index < text.len) : (index += 1) {
+    while (index < text.len) {
         if (text[index] == '\n') return index;
-        const next_width = estimateTextWidth(text[start .. index + 1], size);
-        if (isTextBreakByte(text[index])) last_break = index + 1;
+        const next_index = nextTextOffset(text, index);
+        const next_width = estimateTextWidth(text[start..next_index], size);
+        if (isTextBreakByte(text[index])) last_break = next_index;
         if (next_width > max_width) {
-            if (index == start) return index + 1;
+            if (index == start) return next_index;
             if (options.wrap == .word) {
                 if (last_break) |break_index| {
                     if (break_index > start) return trimTrailingTextBreak(text, start, break_index);
@@ -8169,6 +8170,7 @@ fn nextTextLineEnd(text: []const u8, start: usize, size: f32, options: TextLayou
             }
             return index;
         }
+        index = next_index;
     }
     return text.len;
 }
@@ -8235,11 +8237,21 @@ fn textLineWidth(text: DrawText, text_start: usize, text_len: usize, glyph_start
 }
 
 fn estimateTextWidth(text: []const u8, size: f32) f32 {
-    return @as(f32, @floatFromInt(text.len)) * size * 0.5;
+    return @as(f32, @floatFromInt(utf8ScalarCount(text))) * size * 0.5;
 }
 
 fn isTextBreakByte(byte: u8) bool {
     return byte == ' ' or byte == '\t';
+}
+
+fn utf8ScalarCount(text: []const u8) usize {
+    var count: usize = 0;
+    var index: usize = 0;
+    while (index < text.len) {
+        count += 1;
+        index += @min(utf8SequenceLength(text[index]), text.len - index);
+    }
+    return count;
 }
 
 const TextReplaceResult = struct {
@@ -14271,6 +14283,41 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(usize, 17), layout.lines[3].text_start);
     try std.testing.expectEqual(@as(usize, 4), layout.lines[3].text_len);
     try expectRect(geometry.RectF.init(4, 10, 25, 56), layout.bounds);
+}
+
+test "text layout measures utf8 scalars for fallback wrapping" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(2, 18),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "éééé éé",
+    };
+
+    var lines: [3]TextLine = undefined;
+    const layout = try layoutTextRun(text, .{ .max_width = 20, .line_height = 12, .wrap = .word }, &lines);
+    try std.testing.expectEqual(@as(usize, 2), layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
+    try std.testing.expectEqual(@as(usize, 8), layout.lines[0].text_len);
+    try expectRect(geometry.RectF.init(2, 8, 20, 12), layout.lines[0].bounds);
+    try std.testing.expectEqual(@as(usize, 9), layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 4), layout.lines[1].text_len);
+    try expectRect(geometry.RectF.init(2, 20, 10, 12), layout.lines[1].bounds);
+    try expectRect(geometry.RectF.init(2, 8, 20, 24), layout.bounds);
+
+    var character_lines: [3]TextLine = undefined;
+    const character_layout = try layoutTextRun(.{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "ééé",
+    }, .{ .max_width = 10, .line_height = 12, .wrap = .character }, &character_lines);
+    try std.testing.expectEqual(@as(usize, 2), character_layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 0), character_layout.lines[0].text_start);
+    try std.testing.expectEqual(@as(usize, 4), character_layout.lines[0].text_len);
+    try std.testing.expectEqual(@as(usize, 4), character_layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 2), character_layout.lines[1].text_len);
 }
 
 test "text layout cache plans upload retain and evict work" {

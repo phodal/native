@@ -4308,10 +4308,13 @@ fn collectCanvasWidgetTextReconcileEntries(
 
 fn canvasWidgetLayoutNodeWithTextReconcileState(
     node: canvas.WidgetLayoutNode,
+    layout: canvas.WidgetLayoutTree,
+    node_index: usize,
     previous: []const CanvasWidgetTextReconcileEntry,
 ) canvas.WidgetLayoutNode {
     var copy = node;
     if (copy.widget.id == 0 or !canvasWidgetEditableTextKind(copy.widget.kind)) return copy;
+    if (copy.widget.state.disabled or canvasWidgetLayoutNodeHidden(layout, node_index)) return copy;
     if (copy.widget.text_selection != null or copy.widget.text_composition != null) return copy;
 
     for (previous) |entry| {
@@ -5043,8 +5046,8 @@ const RuntimeView = struct {
         self.widget_semantics_node_count = 0;
         self.widget_text_len = 0;
 
-        for (layout.nodes) |node| {
-            const copy = canvasWidgetLayoutNodeWithTextReconcileState(try self.copyWidgetLayoutNode(node, source_semantics), previous_text_states);
+        for (layout.nodes, 0..) |node, layout_index| {
+            const copy = canvasWidgetLayoutNodeWithTextReconcileState(try self.copyWidgetLayoutNode(node, source_semantics), layout, layout_index, previous_text_states);
             self.widget_layout_nodes[self.widget_layout_node_count] = copy;
             self.widget_scroll_states[self.widget_layout_node_count] = canvasWidgetScrollStateForLayoutNode(copy, previous_scroll_states);
             self.widget_layout_node_count += 1;
@@ -10095,6 +10098,74 @@ test "runtime reconciles canvas text edit state across layout replacement" {
     try std.testing.expectEqualStrings("Reset", retained.nodes[1].widget.text);
     try std.testing.expect(retained.nodes[1].widget.text_selection == null);
     try std.testing.expect(retained.nodes[1].widget.text_composition == null);
+}
+
+test "runtime drops canvas text edit state when layout replacement disables text field" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-disabled-text-reconcile", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 260, 140),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 160, 36),
+        .text = "Cafe",
+        .semantics = .{ .label = "Name" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 260, 140), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 2;
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_selection = .{ .anchor = 1, .focus = 4 } });
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = "af\xc3\xa9", .cursor = 4 } });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(1, 5), retained.nodes[1].widget.text_composition.?);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    const disabled_text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(24, 28, 184, 36),
+        .text = "Caf\xc3\xa9",
+        .state = .{ .disabled = true },
+        .semantics = .{ .label = "Name" },
+    };
+    var disabled_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const disabled_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{disabled_text_field} }, geometry.RectF.init(0, 0, 260, 140), &disabled_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", disabled_layout);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
+    try std.testing.expect(retained.nodes[1].widget.text_selection == null);
+    try std.testing.expect(retained.nodes[1].widget.text_composition == null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("Caf\xc3\xa9", snapshot.widgets[0].text_value);
+    try std.testing.expect(!snapshot.widgets[0].enabled);
+    try std.testing.expect(!snapshot.widgets[0].focused);
+    try std.testing.expect(snapshot.widgets[0].text_selection == null);
+    try std.testing.expect(snapshot.widgets[0].text_composition == null);
 }
 
 test "runtime applies pointer selection to canvas text fields" {

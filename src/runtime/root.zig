@@ -4620,7 +4620,7 @@ fn canvasWidgetLayoutNodeClippedBounds(layout: canvas.WidgetLayoutTree, node_ind
 fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
-        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon => false,
+        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon, .image => false,
         .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }

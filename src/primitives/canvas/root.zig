@@ -2878,6 +2878,7 @@ pub const WidgetKind = enum {
     menu_surface,
     text,
     icon,
+    image,
     button,
     icon_button,
     text_field,
@@ -2992,6 +2993,10 @@ pub const Widget = struct {
     frame: geometry.RectF = .{},
     text: []const u8 = "",
     command: []const u8 = "",
+    image_id: ImageId = 0,
+    image_src: ?geometry.RectF = null,
+    image_fit: ImageFit = .stretch,
+    image_opacity: f32 = 1,
     text_selection: ?TextSelection = null,
     text_composition: ?TextRange = null,
     value: f32 = 0,
@@ -5433,6 +5438,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
         .menu_surface => try emitMenuSurfaceWidget(builder, widget, tokens, depth),
         .text => try emitTextWidget(builder, widget, tokens),
         .icon => try emitIconWidget(builder, widget, tokens),
+        .image => try emitImageWidget(builder, widget),
         .button => try emitButtonWidget(builder, widget, tokens),
         .icon_button => try emitIconButtonWidget(builder, widget, tokens),
         .text_field => try emitTextFieldWidget(builder, widget, tokens),
@@ -5501,6 +5507,7 @@ fn emitWidgetLayoutNode(
         .menu_surface => try emitMenuSurfaceWidgetChrome(builder, widget, tokens),
         .text => try emitTextWidget(builder, widget, tokens),
         .icon => try emitIconWidget(builder, widget, tokens),
+        .image => try emitImageWidget(builder, widget),
         .button => try emitButtonWidget(builder, widget, tokens),
         .icon_button => try emitIconButtonWidget(builder, widget, tokens),
         .text_field => try emitTextFieldWidget(builder, widget, tokens),
@@ -5657,6 +5664,18 @@ fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .origin = centeredTextOrigin(widget.frame, widget.text, size),
         .color = if (widget.state.disabled) tokens.colors.text_muted else tokens.colors.text,
         .text = widget.text,
+    });
+}
+
+fn emitImageWidget(builder: *Builder, widget: Widget) Error!void {
+    if (widget.image_id == 0 or widget.frame.normalized().isEmpty()) return;
+    try builder.drawImage(.{
+        .id = widgetPartId(widget.id, 1),
+        .image_id = widget.image_id,
+        .src = widget.image_src,
+        .dst = widget.frame,
+        .opacity = widget.image_opacity,
+        .fit = widget.image_fit,
     });
 }
 
@@ -6380,7 +6399,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
             }
         },
-        .text, .icon, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
+        .text, .icon, .image, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
     }
 
     return index;
@@ -7037,7 +7056,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .menu_surface => .menu,
         .list => .list,
         .text => .text,
-        .icon => .image,
+        .icon, .image => .image,
         .button => .button,
         .icon_button => .button,
         .text_field, .search_field => .textbox,
@@ -7365,7 +7384,7 @@ fn isDragSource(widget: Widget) bool {
 fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
-        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon => false,
+        .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon, .image => false,
         .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => true,
     };
 }
@@ -7483,6 +7502,10 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         !widgetLayoutStylesEqual(previous.widget.layout, next.widget.layout);
     const content_dirty = !std.mem.eql(u8, previous.widget.text, next.widget.text) or
         previous.widget.value != next.widget.value or
+        previous.widget.image_id != next.widget.image_id or
+        !optionalRectsEqual(previous.widget.image_src, next.widget.image_src) or
+        previous.widget.image_fit != next.widget.image_fit or
+        previous.widget.image_opacity != next.widget.image_opacity or
         !optionalTextSelectionsEqual(previous.widget.text_selection, next.widget.text_selection) or
         !optionalTextRangesEqual(previous.widget.text_composition, next.widget.text_composition);
     const behavior_dirty = !std.mem.eql(u8, previous.widget.command, next.widget.command);
@@ -11411,6 +11434,47 @@ test "widget icons expose image and button semantics" {
     }
 }
 
+test "widget image emits draw image and exposes image semantics" {
+    const image = Widget{
+        .id = 8,
+        .kind = .image,
+        .frame = geometry.RectF.init(12, 14, 80, 48),
+        .image_id = 42,
+        .image_src = geometry.RectF.init(0, 0, 320, 192),
+        .image_fit = .cover,
+        .image_opacity = 0.75,
+        .semantics = .{ .label = "Deployment preview" },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(image, image.frame, &nodes);
+    try std.testing.expect(layout.hitTest(geometry.PointF.init(20, 20)) == null);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.image, semantics[0].role);
+    try std.testing.expectEqualStrings("Deployment preview", semantics[0].label);
+    try std.testing.expect(!semantics[0].focusable);
+
+    var commands: [1]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 1), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .draw_image => |draw| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(8, 1)), draw.id);
+            try std.testing.expectEqual(@as(ImageId, 42), draw.image_id);
+            try expectRect(geometry.RectF.init(0, 0, 320, 192), draw.src);
+            try expectRect(geometry.RectF.init(12, 14, 80, 48), draw.dst);
+            try std.testing.expectEqual(ImageFit.cover, draw.fit);
+            try std.testing.expectEqual(@as(f32, 0.75), draw.opacity);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "widget text fields expose textbox semantics and render focused chrome" {
     const text_field = Widget{
         .id = 8,
@@ -12194,6 +12258,21 @@ test "widget layout diff separates paint and semantics dirtiness" {
         .text = "Report",
         .semantics = .{ .actions = .{ .focus = true, .press = true } },
     }};
+    const image_previous_child = [_]Widget{.{
+        .id = 3,
+        .kind = .image,
+        .frame = geometry.RectF.init(8, 12, 80, 48),
+        .image_id = 11,
+    }};
+    const image_next_child = [_]Widget{.{
+        .id = 3,
+        .kind = .image,
+        .frame = geometry.RectF.init(8, 12, 80, 48),
+        .image_id = 12,
+        .image_src = geometry.RectF.init(0, 0, 640, 360),
+        .image_fit = .contain,
+        .image_opacity = 0.5,
+    }};
 
     var previous_nodes: [2]WidgetLayoutNode = undefined;
     var pressed_nodes: [2]WidgetLayoutNode = undefined;
@@ -12201,12 +12280,16 @@ test "widget layout diff separates paint and semantics dirtiness" {
     var command_nodes: [2]WidgetLayoutNode = undefined;
     var action_previous_nodes: [2]WidgetLayoutNode = undefined;
     var action_nodes: [2]WidgetLayoutNode = undefined;
+    var image_previous_nodes: [2]WidgetLayoutNode = undefined;
+    var image_next_nodes: [2]WidgetLayoutNode = undefined;
     const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &previous_child }, geometry.RectF.init(0, 0, 140, 80), &previous_nodes);
     const pressed = try layoutWidgetTree(.{ .kind = .stack, .children = &pressed_child }, geometry.RectF.init(0, 0, 140, 80), &pressed_nodes);
     const semantic = try layoutWidgetTree(.{ .kind = .stack, .children = &semantic_child }, geometry.RectF.init(0, 0, 140, 80), &semantic_nodes);
     const command = try layoutWidgetTree(.{ .kind = .stack, .children = &command_child }, geometry.RectF.init(0, 0, 140, 80), &command_nodes);
     const action_previous = try layoutWidgetTree(.{ .kind = .stack, .children = &action_previous_child }, geometry.RectF.init(0, 0, 140, 80), &action_previous_nodes);
     const action = try layoutWidgetTree(.{ .kind = .stack, .children = &action_child }, geometry.RectF.init(0, 0, 140, 80), &action_nodes);
+    const image_previous = try layoutWidgetTree(.{ .kind = .stack, .children = &image_previous_child }, geometry.RectF.init(0, 0, 140, 80), &image_previous_nodes);
+    const image_next = try layoutWidgetTree(.{ .kind = .stack, .children = &image_next_child }, geometry.RectF.init(0, 0, 140, 80), &image_next_nodes);
 
     var invalidations_buffer: [2]WidgetInvalidation = undefined;
     const pressed_invalidations = try WidgetLayoutTree.diff(previous, pressed, &invalidations_buffer);
@@ -12235,6 +12318,13 @@ test "widget layout diff separates paint and semantics dirtiness" {
     try std.testing.expect(!action_invalidations[0].layout_dirty);
     try std.testing.expect(!action_invalidations[0].paint_dirty);
     try std.testing.expect(action_invalidations[0].semantics_dirty);
+
+    const image_invalidations = try WidgetLayoutTree.diff(image_previous, image_next, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), image_invalidations.len);
+    try std.testing.expect(!image_invalidations[0].layout_dirty);
+    try std.testing.expect(image_invalidations[0].paint_dirty);
+    try std.testing.expect(image_invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(8, 12, 80, 48), image_invalidations[0].dirty_bounds);
 }
 
 test "widget layout diff marks grid column changes as layout dirty" {

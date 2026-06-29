@@ -6526,6 +6526,19 @@ fn isPointVisibleInWidgetAncestors(layout: WidgetLayoutTree, node_index: usize, 
     return true;
 }
 
+fn isWidgetFrameVisibleInWidgetAncestors(layout: WidgetLayoutTree, node_index: usize) bool {
+    if (node_index >= layout.nodes.len) return false;
+    const frame = layout.nodes[node_index].frame.normalized();
+    if (frame.isEmpty()) return false;
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |parent_index| {
+        const parent = layout.nodes[parent_index];
+        if (parent.widget.kind == .scroll_view and geometry.RectF.intersection(frame, parent.frame.normalized()).isEmpty()) return false;
+        current = parent.parent_index;
+    }
+    return true;
+}
+
 fn routeWidgetPointerEvent(layout: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
     const target = capturedWidgetPointerTarget(layout, event) orelse
         hitTestWidgetLayout(layout, event.point) orelse return .{ .entries = output[0..0] };
@@ -6727,6 +6740,7 @@ fn focusSpatial(layout: WidgetLayoutTree, current_index: usize, direction: Widge
 fn focusTargetFromLayoutNode(layout: WidgetLayoutTree, index: usize) ?WidgetFocusTarget {
     if (index >= layout.nodes.len) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     return focusTargetFromNode(layout.nodes[index], index);
 }
 
@@ -9981,6 +9995,33 @@ test "widget scroll view offsets children and clips display list" {
     try std.testing.expect(semantics[0].actions.focus);
     try std.testing.expect(semantics[0].actions.increment);
     try std.testing.expect(semantics[0].actions.decrement);
+}
+
+test "widget focus traversal skips scroll clipped children" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 80, 0, 32), .text = "Three" },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 20,
+        .children = &children,
+    };
+
+    var nodes: [5]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 60), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, -20, 120, 32));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 24, 120, 32));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(0, 60, 120, 32));
+
+    try std.testing.expectEqual(@as(ObjectId, 1), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 2), layout.focusTarget(1, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.focusTarget(2, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 1), layout.focusTarget(3, .forward).?.id);
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.focusTarget(1, .backward).?.id);
+    try std.testing.expect(layout.focusTargetById(4) == null);
 }
 
 test "scroll state applies wheel deltas kinetic decay and bounds" {

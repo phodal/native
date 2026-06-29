@@ -9,6 +9,8 @@ pub const Error = error{
     DuplicateWidgetId,
     GlyphAtlasCacheListFull,
     GlyphAtlasListFull,
+    ImageCacheListFull,
+    ImageListFull,
     LayerCacheListFull,
     LayerListFull,
     PathGeometryCacheListFull,
@@ -680,6 +682,11 @@ pub const RenderPlan = struct {
         return planner.build(self);
     }
 
+    pub fn imagePlan(self: RenderPlan, output: []RenderImage) Error!RenderImagePlan {
+        var planner = RenderImagePlanner.init(output);
+        return planner.build(self);
+    }
+
     pub fn layerPlan(self: RenderPlan, output: []RenderLayer) Error!RenderLayerPlan {
         var planner = RenderLayerPlanner.init(output);
         return planner.build(self);
@@ -867,6 +874,90 @@ pub const RenderPathGeometryCachePlan = struct {
     }
 
     fn actionCountByKind(self: RenderPathGeometryCachePlan, kind: RenderPathGeometryCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
+    }
+};
+
+pub const RenderImage = struct {
+    image_id: ImageId,
+    command_index: usize = 0,
+    id: ?ObjectId = null,
+    draw_count: usize = 0,
+    bounds: geometry.RectF = .{},
+    fingerprint: u64 = 0,
+};
+
+pub const RenderImagePlan = struct {
+    images: []const RenderImage = &.{},
+
+    pub fn imageCount(self: RenderImagePlan) usize {
+        return self.images.len;
+    }
+
+    pub fn drawCount(self: RenderImagePlan) usize {
+        var count: usize = 0;
+        for (self.images) |image| count += image.draw_count;
+        return count;
+    }
+
+    pub fn cachePlan(self: RenderImagePlan, previous: []const RenderImageCacheEntry, frame_index: u64, entries: []RenderImageCacheEntry, actions: []RenderImageCacheAction) Error!RenderImageCachePlan {
+        var planner = RenderImageCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+};
+
+pub const RenderImageKey = struct {
+    image_id: ImageId,
+    fingerprint: u64 = 0,
+};
+
+pub const RenderImageCacheEntry = struct {
+    key: RenderImageKey,
+    last_used_frame: u64 = 0,
+};
+
+pub const RenderImageCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const RenderImageCacheAction = struct {
+    kind: RenderImageCacheActionKind,
+    key: RenderImageKey,
+    image_index: ?usize = null,
+    cache_index: ?usize = null,
+};
+
+pub const RenderImageCachePlan = struct {
+    entries: []const RenderImageCacheEntry = &.{},
+    actions: []const RenderImageCacheAction = &.{},
+
+    pub fn entryCount(self: RenderImageCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: RenderImageCachePlan) usize {
+        return self.actions.len;
+    }
+
+    pub fn uploadCount(self: RenderImageCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: RenderImageCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: RenderImageCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: RenderImageCachePlan, kind: RenderImageCacheActionKind) usize {
         var count: usize = 0;
         for (self.actions) |action| {
             if (action.kind == kind) count += 1;
@@ -1187,6 +1278,7 @@ pub const CanvasFrameOptions = struct {
     budget: CanvasFrameBudget = .{},
     previous_pipeline_cache: []const RenderPipelineCacheEntry = &.{},
     previous_path_geometry_cache: []const RenderPathGeometryCacheEntry = &.{},
+    previous_image_cache: []const RenderImageCacheEntry = &.{},
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
     previous_layer_cache: []const RenderLayerCacheEntry = &.{},
     previous_visual_effect_cache: []const VisualEffectCacheEntry = &.{},
@@ -1205,6 +1297,9 @@ pub const CanvasFrameStorage = struct {
     path_geometries: []RenderPathGeometry = &.{},
     path_geometry_cache_entries: []RenderPathGeometryCacheEntry = &.{},
     path_geometry_cache_actions: []RenderPathGeometryCacheAction = &.{},
+    images: []RenderImage = &.{},
+    image_cache_entries: []RenderImageCacheEntry = &.{},
+    image_cache_actions: []RenderImageCacheAction = &.{},
     layers: []RenderLayer = &.{},
     layer_cache_entries: []RenderLayerCacheEntry = &.{},
     layer_cache_actions: []RenderLayerCacheAction = &.{},
@@ -1232,6 +1327,8 @@ pub const CanvasFrameBudget = struct {
     max_pipeline_uploads: usize = 0,
     max_path_geometries: usize = 0,
     max_path_geometry_uploads: usize = 0,
+    max_images: usize = 0,
+    max_image_uploads: usize = 0,
     max_layers: usize = 0,
     max_layer_uploads: usize = 0,
     max_resources: usize = 0,
@@ -1252,6 +1349,8 @@ pub const CanvasFrameBudget = struct {
             .pipeline_uploads_over = budgetExceeded(self.max_pipeline_uploads, diagnostics.pipeline_upload_count),
             .path_geometries_over = budgetExceeded(self.max_path_geometries, diagnostics.path_geometry_count),
             .path_geometry_uploads_over = budgetExceeded(self.max_path_geometry_uploads, diagnostics.path_geometry_upload_count),
+            .images_over = budgetExceeded(self.max_images, diagnostics.image_count),
+            .image_uploads_over = budgetExceeded(self.max_image_uploads, diagnostics.image_upload_count),
             .layers_over = budgetExceeded(self.max_layers, diagnostics.layer_count),
             .layer_uploads_over = budgetExceeded(self.max_layer_uploads, diagnostics.layer_upload_count),
             .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
@@ -1274,6 +1373,8 @@ pub const CanvasFrameBudgetStatus = struct {
     pipeline_uploads_over: bool = false,
     path_geometries_over: bool = false,
     path_geometry_uploads_over: bool = false,
+    images_over: bool = false,
+    image_uploads_over: bool = false,
     layers_over: bool = false,
     layer_uploads_over: bool = false,
     resources_over: bool = false,
@@ -1298,6 +1399,8 @@ pub const CanvasFrameBudgetStatus = struct {
         if (self.pipeline_uploads_over) count += 1;
         if (self.path_geometries_over) count += 1;
         if (self.path_geometry_uploads_over) count += 1;
+        if (self.images_over) count += 1;
+        if (self.image_uploads_over) count += 1;
         if (self.layers_over) count += 1;
         if (self.layer_uploads_over) count += 1;
         if (self.resources_over) count += 1;
@@ -1330,6 +1433,10 @@ pub const CanvasFrameDiagnostics = struct {
     path_geometry_upload_count: usize = 0,
     path_geometry_retain_count: usize = 0,
     path_geometry_evict_count: usize = 0,
+    image_count: usize = 0,
+    image_upload_count: usize = 0,
+    image_retain_count: usize = 0,
+    image_evict_count: usize = 0,
     layer_count: usize = 0,
     layer_opacity_count: usize = 0,
     layer_clip_count: usize = 0,
@@ -1398,8 +1505,12 @@ pub const CanvasFrameDiagnostics = struct {
             },
         );
         try writer.print(
-            ",\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"visualEffectCount\":{d},\"visualEffectShadowCount\":{d},\"visualEffectBlurCount\":{d},\"visualEffectUploadCount\":{d},\"visualEffectRetainCount\":{d},\"visualEffectEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            ",\"imageCount\":{d},\"imageUploadCount\":{d},\"imageRetainCount\":{d},\"imageEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"visualEffectCount\":{d},\"visualEffectShadowCount\":{d},\"visualEffectBlurCount\":{d},\"visualEffectUploadCount\":{d},\"visualEffectRetainCount\":{d},\"visualEffectEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
+                self.image_count,
+                self.image_upload_count,
+                self.image_retain_count,
+                self.image_evict_count,
                 self.resource_count,
                 self.resource_upload_count,
                 self.resource_retain_count,
@@ -1461,6 +1572,7 @@ pub const RenderEncoderCommand = union(enum) {
     set_scissor: geometry.RectF,
     pipeline_cache: RenderPipelineCacheAction,
     path_geometry_cache: RenderPathGeometryCacheAction,
+    image_cache: RenderImageCacheAction,
     layer_cache: RenderLayerCacheAction,
     resource_cache: RenderResourceCacheAction,
     visual_effect_cache: VisualEffectCacheAction,
@@ -1482,7 +1594,7 @@ pub const RenderEncoderPlan = struct {
         var count: usize = 0;
         for (self.commands) |command| {
             switch (command) {
-                .pipeline_cache, .path_geometry_cache, .layer_cache, .resource_cache, .visual_effect_cache, .glyph_atlas_cache, .text_layout_cache => count += 1,
+                .pipeline_cache, .path_geometry_cache, .image_cache, .layer_cache, .resource_cache, .visual_effect_cache, .glyph_atlas_cache, .text_layout_cache => count += 1,
                 else => {},
             }
         }
@@ -1524,6 +1636,8 @@ pub const CanvasRenderPass = struct {
     pipeline_actions: []const RenderPipelineCacheAction = &.{},
     path_geometries: []const RenderPathGeometry = &.{},
     path_geometry_actions: []const RenderPathGeometryCacheAction = &.{},
+    images: []const RenderImage = &.{},
+    image_actions: []const RenderImageCacheAction = &.{},
     layers: []const RenderLayer = &.{},
     layer_actions: []const RenderLayerCacheAction = &.{},
     resources: []const RenderResource = &.{},
@@ -1580,6 +1694,14 @@ pub const CanvasRenderPass = struct {
         return count;
     }
 
+    pub fn imageCount(self: CanvasRenderPass) usize {
+        return self.images.len;
+    }
+
+    pub fn imageActionCount(self: CanvasRenderPass) usize {
+        return self.image_actions.len;
+    }
+
     pub fn layerCount(self: CanvasRenderPass) usize {
         return self.layers.len;
     }
@@ -1599,6 +1721,7 @@ pub const CanvasRenderPass = struct {
         if (!self.requiresRender()) return 0;
         return self.pipeline_actions.len +
             self.path_geometry_actions.len +
+            self.image_actions.len +
             self.layer_actions.len +
             self.resource_actions.len +
             self.visual_effect_actions.len +
@@ -1683,6 +1806,8 @@ pub const CanvasFrame = struct {
     pipeline_cache_plan: RenderPipelineCachePlan = .{},
     path_geometry_plan: RenderPathGeometryPlan = .{},
     path_geometry_cache_plan: RenderPathGeometryCachePlan = .{},
+    image_plan: RenderImagePlan = .{},
+    image_cache_plan: RenderImageCachePlan = .{},
     layer_plan: RenderLayerPlan = .{},
     layer_cache_plan: RenderLayerCachePlan = .{},
     resource_plan: RenderResourcePlan = .{},
@@ -1731,6 +1856,10 @@ pub const CanvasFrame = struct {
             .path_geometry_upload_count = self.path_geometry_cache_plan.uploadCount(),
             .path_geometry_retain_count = self.path_geometry_cache_plan.retainCount(),
             .path_geometry_evict_count = self.path_geometry_cache_plan.evictCount(),
+            .image_count = self.image_plan.imageCount(),
+            .image_upload_count = self.image_cache_plan.uploadCount(),
+            .image_retain_count = self.image_cache_plan.retainCount(),
+            .image_evict_count = self.image_cache_plan.evictCount(),
             .layer_count = self.layer_plan.layerCount(),
             .layer_opacity_count = self.layer_plan.opacityLayerCount(),
             .layer_clip_count = self.layer_plan.clipLayerCount(),
@@ -1782,6 +1911,8 @@ pub const CanvasFrame = struct {
             .pipeline_actions = self.pipeline_cache_plan.actions,
             .path_geometries = self.path_geometry_plan.geometries,
             .path_geometry_actions = self.path_geometry_cache_plan.actions,
+            .images = self.image_plan.images,
+            .image_actions = self.image_cache_plan.actions,
             .layers = self.layer_plan.layers,
             .layer_actions = self.layer_cache_plan.actions,
             .resources = self.resource_plan.resources,
@@ -3142,6 +3273,19 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
             storage.path_geometry_cache_entries,
             storage.path_geometry_cache_actions,
         );
+    const image_plan = if (storage.images.len == 0)
+        RenderImagePlan{}
+    else
+        try render_plan.imagePlan(storage.images);
+    const image_cache_plan = if (storage.image_cache_entries.len == 0 and storage.image_cache_actions.len == 0)
+        RenderImageCachePlan{}
+    else
+        try image_plan.cachePlan(
+            options.previous_image_cache,
+            options.frame_index,
+            storage.image_cache_entries,
+            storage.image_cache_actions,
+        );
     const layer_plan = if (storage.layers.len == 0)
         RenderLayerPlan{}
     else
@@ -3216,6 +3360,8 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .pipeline_cache_plan = pipeline_cache_plan,
         .path_geometry_plan = path_geometry_plan,
         .path_geometry_cache_plan = path_geometry_cache_plan,
+        .image_plan = image_plan,
+        .image_cache_plan = image_cache_plan,
         .layer_plan = layer_plan,
         .layer_cache_plan = layer_cache_plan,
         .resource_plan = resource_plan,
@@ -3648,6 +3794,7 @@ pub const RenderEncoderPlanner = struct {
 
         for (pass.pipeline_actions) |action| try self.append(.{ .pipeline_cache = action });
         for (pass.path_geometry_actions) |action| try self.append(.{ .path_geometry_cache = action });
+        for (pass.image_actions) |action| try self.append(.{ .image_cache = action });
         for (pass.layer_actions) |action| try self.append(.{ .layer_cache = action });
         for (pass.resource_actions) |action| try self.append(.{ .resource_cache = action });
         for (pass.visual_effect_actions) |action| try self.append(.{ .visual_effect_cache = action });
@@ -3671,6 +3818,118 @@ pub const RenderEncoderPlanner = struct {
         if (self.len >= self.commands.len) return error.RenderEncoderListFull;
         self.commands[self.len] = command;
         self.len += 1;
+    }
+};
+
+pub const RenderImagePlanner = struct {
+    images: []RenderImage,
+    len: usize = 0,
+
+    pub fn init(images: []RenderImage) RenderImagePlanner {
+        return .{ .images = images };
+    }
+
+    pub fn reset(self: *RenderImagePlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *RenderImagePlanner, render_plan: RenderPlan) Error!RenderImagePlan {
+        self.reset();
+        for (render_plan.commands, 0..) |command, index| {
+            try self.consume(command, index);
+        }
+        return .{ .images = self.images[0..self.len] };
+    }
+
+    fn consume(self: *RenderImagePlanner, command: RenderCommand, index: usize) Error!void {
+        switch (command.command) {
+            .draw_image => |value| try self.appendOrExtend(value, command, index),
+            else => {},
+        }
+    }
+
+    fn appendOrExtend(self: *RenderImagePlanner, image: DrawImage, command: RenderCommand, index: usize) Error!void {
+        const fingerprint = renderImageFingerprint(image.image_id);
+        if (findRenderImage(self.images[0..self.len], image.image_id, fingerprint)) |existing_index| {
+            const existing = &self.images[existing_index];
+            existing.draw_count += 1;
+            existing.id = if (existing.id == command.id) existing.id else null;
+            existing.bounds = geometry.RectF.unionWith(existing.bounds.normalized(), command.bounds.normalized());
+            return;
+        }
+
+        if (self.len >= self.images.len) return error.ImageListFull;
+        self.images[self.len] = .{
+            .image_id = image.image_id,
+            .command_index = index,
+            .id = command.id,
+            .draw_count = 1,
+            .bounds = command.bounds,
+            .fingerprint = fingerprint,
+        };
+        self.len += 1;
+    }
+};
+
+pub const RenderImageCachePlanner = struct {
+    entries: []RenderImageCacheEntry,
+    actions: []RenderImageCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []RenderImageCacheEntry, actions: []RenderImageCacheAction) RenderImageCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *RenderImageCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *RenderImageCachePlanner, image_plan: RenderImagePlan, previous: []const RenderImageCacheEntry, frame_index: u64) Error!RenderImageCachePlan {
+        self.reset();
+        for (image_plan.images, 0..) |image, image_index| {
+            const key = renderImageKey(image);
+            if (findRenderImageCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
+
+            const previous_index = findRenderImageCacheEntry(previous, key);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = key,
+                .image_index = image_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .key = key,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findRenderImageCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *RenderImageCachePlanner, entry: RenderImageCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.ImageCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *RenderImageCachePlanner, action: RenderImageCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.ImageCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
     }
 };
 
@@ -4098,6 +4357,32 @@ fn renderPathGeometryKeysEqual(a: RenderPathGeometryKey, b: RenderPathGeometryKe
         a.fingerprint == b.fingerprint;
 }
 
+fn renderImageKey(image: RenderImage) RenderImageKey {
+    return .{
+        .image_id = image.image_id,
+        .fingerprint = image.fingerprint,
+    };
+}
+
+fn findRenderImage(images: []const RenderImage, image_id: ImageId, fingerprint: u64) ?usize {
+    for (images, 0..) |image, index| {
+        if (image.image_id == image_id and image.fingerprint == fingerprint) return index;
+    }
+    return null;
+}
+
+fn findRenderImageCacheEntry(entries: []const RenderImageCacheEntry, key: RenderImageKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (renderImageKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn renderImageKeysEqual(a: RenderImageKey, b: RenderImageKey) bool {
+    return a.image_id == b.image_id and
+        a.fingerprint == b.fingerprint;
+}
+
 fn renderLayerKey(layer: RenderLayer) RenderLayerKey {
     return .{
         .id = layer.id,
@@ -4356,6 +4641,10 @@ fn drawImageFingerprint(image: DrawImage) u64 {
     hash = resourceHashOptionalRect(hash, image.src);
     hash = resourceHashEnum(hash, @intFromEnum(image.fit));
     return hash;
+}
+
+fn renderImageFingerprint(image_id: ImageId) u64 {
+    return resourceHashU64(resourceHashTag("image_texture"), image_id);
 }
 
 fn drawTextFingerprint(text: DrawText) u64 {
@@ -8285,6 +8574,16 @@ fn writeCanvasRenderPassJson(pass: CanvasRenderPass, writer: anytype) !void {
         if (index > 0) try writer.writeByte(',');
         try writeRenderPathGeometryCacheActionJson(action, writer);
     }
+    try writer.writeAll("],\"images\":[");
+    for (pass.images, 0..) |image, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderImageJson(image, writer);
+    }
+    try writer.writeAll("],\"imageActions\":[");
+    for (pass.image_actions, 0..) |action, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeRenderImageCacheActionJson(action, writer);
+    }
     try writer.writeAll("],\"layers\":[");
     for (pass.layers, 0..) |layer, index| {
         if (index > 0) try writer.writeByte(',');
@@ -8418,6 +8717,30 @@ fn writeRenderPathGeometryKeyJson(key: RenderPathGeometryKey, writer: anytype) !
     try writer.writeAll(",\"id\":");
     try writeOptionalObjectIdJson(key.id, writer);
     try writer.print(",\"commandIndex\":{d},\"fingerprint\":{d}}}", .{ key.command_index, key.fingerprint });
+}
+
+fn writeRenderImageJson(image: RenderImage, writer: anytype) !void {
+    try writer.print("{{\"imageId\":{d},\"commandIndex\":{d},\"id\":", .{ image.image_id, image.command_index });
+    try writeOptionalObjectIdJson(image.id, writer);
+    try writer.print(",\"drawCount\":{d},\"bounds\":", .{image.draw_count});
+    try writeRectJson(image.bounds, writer);
+    try writer.print(",\"fingerprint\":{d}}}", .{image.fingerprint});
+}
+
+fn writeRenderImageCacheActionJson(action: RenderImageCacheAction, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(action.kind));
+    try writer.writeAll(",\"key\":");
+    try writeRenderImageKeyJson(action.key, writer);
+    try writer.writeAll(",\"imageIndex\":");
+    try writeOptionalUsizeJson(action.image_index, writer);
+    try writer.writeAll(",\"cacheIndex\":");
+    try writeOptionalUsizeJson(action.cache_index, writer);
+    try writer.writeByte('}');
+}
+
+fn writeRenderImageKeyJson(key: RenderImageKey, writer: anytype) !void {
+    try writer.print("{{\"imageId\":{d},\"fingerprint\":{d}}}", .{ key.image_id, key.fingerprint });
 }
 
 fn writeRenderLayerJson(layer: RenderLayer, writer: anytype) !void {
@@ -11619,6 +11942,102 @@ test "render pipeline cache plan reports output overflow" {
     try std.testing.expectError(error.RenderPipelineCacheListFull, (RenderBatchPlan{ .batches = &batches }).cachePlan(&.{}, 1, &entries, &no_actions));
 }
 
+test "render image plan deduplicates texture cache inputs" {
+    const commands = [_]CanvasCommand{
+        .{ .draw_image = .{
+            .id = 1,
+            .image_id = 42,
+            .dst = geometry.RectF.init(0, 0, 20, 20),
+        } },
+        .{ .draw_image = .{
+            .id = 2,
+            .image_id = 42,
+            .src = geometry.RectF.init(4, 4, 12, 12),
+            .dst = geometry.RectF.init(48, 0, 20, 20),
+            .opacity = 0.5,
+            .fit = .cover,
+        } },
+        .{ .draw_image = .{
+            .id = 3,
+            .image_id = 77,
+            .dst = geometry.RectF.init(80, 0, 16, 16),
+        } },
+    };
+
+    var render_commands: [3]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var images: [2]RenderImage = undefined;
+    const image_plan = try render_plan.imagePlan(&images);
+
+    try std.testing.expectEqual(@as(usize, 2), image_plan.imageCount());
+    try std.testing.expectEqual(@as(usize, 3), image_plan.drawCount());
+    try std.testing.expectEqual(@as(ImageId, 42), image_plan.images[0].image_id);
+    try std.testing.expect(image_plan.images[0].id == null);
+    try std.testing.expectEqual(@as(usize, 2), image_plan.images[0].draw_count);
+    try expectRect(geometry.RectF.init(0, 0, 68, 20), image_plan.images[0].bounds);
+    try std.testing.expectEqual(renderImageFingerprint(42), image_plan.images[0].fingerprint);
+    try std.testing.expectEqual(@as(ImageId, 77), image_plan.images[1].image_id);
+    try std.testing.expectEqual(@as(?ObjectId, 3), image_plan.images[1].id);
+}
+
+test "render image cache plan uploads retains and evicts textures" {
+    const previous_images = [_]RenderImage{
+        .{ .image_id = 8, .command_index = 0, .id = 1, .draw_count = 1, .bounds = geometry.RectF.init(0, 0, 20, 20), .fingerprint = renderImageFingerprint(8) },
+        .{ .image_id = 9, .command_index = 1, .id = 2, .draw_count = 1, .bounds = geometry.RectF.init(24, 0, 20, 20), .fingerprint = renderImageFingerprint(9) },
+    };
+    var previous_entries: [2]RenderImageCacheEntry = undefined;
+    var previous_actions: [2]RenderImageCacheAction = undefined;
+    const previous_cache = try (RenderImagePlan{ .images = &previous_images }).cachePlan(&.{}, 1, &previous_entries, &previous_actions);
+    try std.testing.expectEqual(@as(usize, 2), previous_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), previous_cache.uploadCount());
+    try std.testing.expectEqual(@as(u64, 1), previous_cache.entries[0].last_used_frame);
+
+    const next_images = [_]RenderImage{
+        .{ .image_id = 8, .command_index = 0, .id = 1, .draw_count = 1, .bounds = geometry.RectF.init(0, 0, 20, 20), .fingerprint = renderImageFingerprint(8) },
+        .{ .image_id = 10, .command_index = 1, .id = 3, .draw_count = 1, .bounds = geometry.RectF.init(48, 0, 20, 20), .fingerprint = renderImageFingerprint(10) },
+    };
+    var next_entries: [2]RenderImageCacheEntry = undefined;
+    var next_actions: [3]RenderImageCacheAction = undefined;
+    const next_cache = try (RenderImagePlan{ .images = &next_images }).cachePlan(previous_cache.entries, 2, &next_entries, &next_actions);
+
+    try std.testing.expectEqual(@as(usize, 2), next_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 3), next_cache.actionCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.evictCount());
+    try std.testing.expectEqual(RenderImageCacheActionKind.retain, next_cache.actions[0].kind);
+    try std.testing.expectEqual(@as(ImageId, 8), next_cache.actions[0].key.image_id);
+    try std.testing.expectEqual(@as(?usize, 0), next_cache.actions[0].image_index);
+    try std.testing.expectEqual(@as(?usize, 0), next_cache.actions[0].cache_index);
+    try std.testing.expectEqual(RenderImageCacheActionKind.upload, next_cache.actions[1].kind);
+    try std.testing.expectEqual(@as(ImageId, 10), next_cache.actions[1].key.image_id);
+    try std.testing.expectEqual(RenderImageCacheActionKind.evict, next_cache.actions[2].kind);
+    try std.testing.expectEqual(@as(ImageId, 9), next_cache.actions[2].key.image_id);
+    try std.testing.expectEqual(@as(u64, 2), next_cache.entries[0].last_used_frame);
+}
+
+test "render image plans report output overflow" {
+    const commands = [_]CanvasCommand{.{ .draw_image = .{
+        .id = 1,
+        .image_id = 1,
+        .dst = geometry.RectF.init(0, 0, 10, 10),
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var no_images: [0]RenderImage = .{};
+    try std.testing.expectError(error.ImageListFull, render_plan.imagePlan(&no_images));
+
+    const images = [_]RenderImage{.{ .image_id = 1, .command_index = 0, .id = 1, .draw_count = 1, .bounds = geometry.RectF.init(0, 0, 10, 10), .fingerprint = renderImageFingerprint(1) }};
+    var no_entries: [0]RenderImageCacheEntry = .{};
+    var actions: [1]RenderImageCacheAction = undefined;
+    try std.testing.expectError(error.ImageCacheListFull, (RenderImagePlan{ .images = &images }).cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]RenderImageCacheEntry = undefined;
+    var no_actions: [0]RenderImageCacheAction = .{};
+    try std.testing.expectError(error.ImageCacheListFull, (RenderImagePlan{ .images = &images }).cachePlan(&.{}, 1, &entries, &no_actions));
+}
+
 test "resource plan collects renderer cache inputs" {
     const stops = [_]GradientStop{
         .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
@@ -12215,6 +12634,8 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 0), render_pass.pathGeometryActionCount());
     try std.testing.expectEqual(@as(usize, 0), render_pass.pathGeometryVertexCount());
     try std.testing.expectEqual(@as(usize, 0), render_pass.pathGeometryIndexCount());
+    try std.testing.expectEqual(@as(usize, 0), render_pass.imageCount());
+    try std.testing.expectEqual(@as(usize, 0), render_pass.imageActionCount());
     try std.testing.expectEqual(@as(usize, 0), render_pass.layerCount());
     try std.testing.expectEqual(@as(usize, 0), render_pass.layerActionCount());
     try std.testing.expectEqual(@as(usize, 14), render_pass.encoderCommandCount());
@@ -12266,6 +12687,7 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"batches\":[{\"pipeline\":\"linear_gradient\",\"commandStart\":0,\"commandCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"pipelineActions\":[{\"kind\":\"upload\",\"pipeline\":\"linear_gradient\",\"batchIndex\":0,\"cacheIndex\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"pathGeometries\":[],\"pathGeometryActions\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"images\":[],\"imageActions\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"layers\":[],\"layerActions\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resources\":[{\"kind\":\"linear_gradient\",\"commandIndex\":0,\"id\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, render_pass_json, "\"resourceActions\":[{\"kind\":\"upload\",\"key\":{\"kind\":\"linear_gradient\"") != null);
@@ -12292,6 +12714,10 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path_geometry_upload_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path_geometry_retain_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.path_geometry_evict_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_upload_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_evict_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.layer_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.layer_opacity_count);
     try std.testing.expectEqual(@as(usize, 0), diagnostics.layer_clip_count);
@@ -12324,6 +12750,8 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(diagnostics.budget_status.pipeline_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.path_geometries_over);
     try std.testing.expect(!diagnostics.budget_status.path_geometry_uploads_over);
+    try std.testing.expect(!diagnostics.budget_status.images_over);
+    try std.testing.expect(!diagnostics.budget_status.image_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.layers_over);
     try std.testing.expect(!diagnostics.budget_status.layer_uploads_over);
     try std.testing.expect(!diagnostics.budget_status.resources_over);
@@ -12339,7 +12767,7 @@ test "canvas frame plan builds first frame renderer packet" {
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
@@ -12347,7 +12775,7 @@ test "canvas frame plan builds first frame renderer packet" {
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }
@@ -12451,6 +12879,78 @@ test "canvas frame plan carries path geometry cache actions" {
     try std.testing.expectEqual(@as(usize, 3), diagnostics.path_geometry_vertex_count);
     try std.testing.expectEqual(@as(usize, 3), diagnostics.path_geometry_index_count);
     try std.testing.expectEqual(@as(usize, 1), diagnostics.path_geometry_upload_count);
+}
+
+test "canvas frame plan carries image cache actions" {
+    const commands = [_]CanvasCommand{.{ .draw_image = .{
+        .id = 1,
+        .image_id = 42,
+        .dst = geometry.RectF.init(8, 8, 24, 24),
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var pipeline_cache_entries: [1]RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [1]RenderPipelineCacheAction = undefined;
+    var images: [1]RenderImage = undefined;
+    var image_cache_entries: [1]RenderImageCacheEntry = undefined;
+    var image_cache_actions: [1]RenderImageCacheAction = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [1]DiffChange = undefined;
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .frame_index = 6,
+        .surface_size = geometry.SizeF.init(64, 64),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .pipeline_cache_entries = &pipeline_cache_entries,
+        .pipeline_cache_actions = &pipeline_cache_actions,
+        .images = &images,
+        .image_cache_entries = &image_cache_entries,
+        .image_cache_actions = &image_cache_actions,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), frame.image_plan.imageCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.image_plan.drawCount());
+    try std.testing.expectEqual(@as(ImageId, 42), frame.image_plan.images[0].image_id);
+    try std.testing.expectEqual(@as(usize, 1), frame.image_cache_plan.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.image_cache_plan.uploadCount());
+    try std.testing.expectEqual(RenderImageCacheActionKind.upload, frame.image_cache_plan.actions[0].kind);
+
+    const render_pass = frame.renderPass();
+    try std.testing.expectEqual(@as(usize, 1), render_pass.imageCount());
+    try std.testing.expectEqual(@as(usize, 1), render_pass.imageActionCount());
+    try std.testing.expectEqual(@as(usize, 3), render_pass.encoderCacheActionCount());
+
+    var encoder_commands: [8]RenderEncoderCommand = undefined;
+    const encoder_plan = try render_pass.encoderPlan(&encoder_commands);
+    try std.testing.expectEqual(@as(usize, 8), encoder_plan.commandCount());
+    try std.testing.expectEqual(@as(usize, 3), encoder_plan.cacheActionCount());
+    switch (encoder_plan.commands[2]) {
+        .pipeline_cache => |action| try std.testing.expectEqual(RenderPipelineKind.image, action.pipeline),
+        else => return error.TestExpectedEqual,
+    }
+    switch (encoder_plan.commands[3]) {
+        .image_cache => |action| {
+            try std.testing.expectEqual(RenderImageCacheActionKind.upload, action.kind);
+            try std.testing.expectEqual(@as(ImageId, 42), action.key.image_id);
+        },
+        else => return error.TestExpectedEqual,
+    }
+
+    const diagnostics = frame.diagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.image_count);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.image_upload_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.image_evict_count);
 }
 
 test "canvas frame plan carries resource cache retain upload and evict actions" {

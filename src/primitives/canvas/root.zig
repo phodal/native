@@ -1392,8 +1392,12 @@ pub const CanvasFrameBudget = struct {
     max_visual_effects: usize = 0,
     max_visual_effect_uploads: usize = 0,
     max_glyph_atlas_entries: usize = 0,
+    max_glyph_atlas_uploads: usize = 0,
+    max_glyph_atlas_evicts: usize = 0,
     max_text_layouts: usize = 0,
     max_text_layout_lines: usize = 0,
+    max_text_layout_uploads: usize = 0,
+    max_text_layout_evicts: usize = 0,
     max_changes: usize = 0,
 
     pub fn status(self: CanvasFrameBudget, diagnostics: CanvasFrameDiagnostics) CanvasFrameBudgetStatus {
@@ -1414,8 +1418,12 @@ pub const CanvasFrameBudget = struct {
             .visual_effects_over = budgetExceeded(self.max_visual_effects, diagnostics.visual_effect_count),
             .visual_effect_uploads_over = budgetExceeded(self.max_visual_effect_uploads, diagnostics.visual_effect_upload_count),
             .glyph_atlas_entries_over = budgetExceeded(self.max_glyph_atlas_entries, diagnostics.glyph_atlas_entry_count),
+            .glyph_atlas_uploads_over = budgetExceeded(self.max_glyph_atlas_uploads, diagnostics.glyph_atlas_upload_count),
+            .glyph_atlas_evicts_over = budgetExceeded(self.max_glyph_atlas_evicts, diagnostics.glyph_atlas_evict_count),
             .text_layouts_over = budgetExceeded(self.max_text_layouts, diagnostics.text_layout_count),
             .text_layout_lines_over = budgetExceeded(self.max_text_layout_lines, diagnostics.text_layout_line_count),
+            .text_layout_uploads_over = budgetExceeded(self.max_text_layout_uploads, diagnostics.text_layout_upload_count),
+            .text_layout_evicts_over = budgetExceeded(self.max_text_layout_evicts, diagnostics.text_layout_evict_count),
             .changes_over = budgetExceeded(self.max_changes, diagnostics.change_count),
         };
     }
@@ -1438,8 +1446,12 @@ pub const CanvasFrameBudgetStatus = struct {
     visual_effects_over: bool = false,
     visual_effect_uploads_over: bool = false,
     glyph_atlas_entries_over: bool = false,
+    glyph_atlas_uploads_over: bool = false,
+    glyph_atlas_evicts_over: bool = false,
     text_layouts_over: bool = false,
     text_layout_lines_over: bool = false,
+    text_layout_uploads_over: bool = false,
+    text_layout_evicts_over: bool = false,
     changes_over: bool = false,
 
     pub fn ok(self: CanvasFrameBudgetStatus) bool {
@@ -1464,8 +1476,12 @@ pub const CanvasFrameBudgetStatus = struct {
         if (self.visual_effects_over) count += 1;
         if (self.visual_effect_uploads_over) count += 1;
         if (self.glyph_atlas_entries_over) count += 1;
+        if (self.glyph_atlas_uploads_over) count += 1;
+        if (self.glyph_atlas_evicts_over) count += 1;
         if (self.text_layouts_over) count += 1;
         if (self.text_layout_lines_over) count += 1;
+        if (self.text_layout_uploads_over) count += 1;
+        if (self.text_layout_evicts_over) count += 1;
         if (self.changes_over) count += 1;
         return count;
     }
@@ -15727,6 +15743,36 @@ test "glyph atlas cache plan reports output overflow" {
     var cache_entries: [1]GlyphAtlasCacheEntry = undefined;
     var no_cache_actions: [0]GlyphAtlasCacheAction = .{};
     try std.testing.expectError(error.GlyphAtlasCacheListFull, (GlyphAtlasPlan{ .entries = &atlas_entries }).cachePlan(&.{}, 1, &cache_entries, &no_cache_actions));
+}
+
+test "canvas frame budget tracks glyph and text cache churn" {
+    const status = (CanvasFrameBudget{
+        .max_glyph_atlas_entries = 8,
+        .max_glyph_atlas_uploads = 1,
+        .max_glyph_atlas_evicts = 1,
+        .max_text_layouts = 8,
+        .max_text_layout_lines = 8,
+        .max_text_layout_uploads = 1,
+        .max_text_layout_evicts = 1,
+    }).status(.{
+        .glyph_atlas_entry_count = 4,
+        .glyph_atlas_upload_count = 2,
+        .glyph_atlas_evict_count = 2,
+        .text_layout_count = 3,
+        .text_layout_line_count = 3,
+        .text_layout_upload_count = 2,
+        .text_layout_evict_count = 2,
+    });
+
+    try std.testing.expect(status.ok() == false);
+    try std.testing.expect(!status.glyph_atlas_entries_over);
+    try std.testing.expect(status.glyph_atlas_uploads_over);
+    try std.testing.expect(status.glyph_atlas_evicts_over);
+    try std.testing.expect(!status.text_layouts_over);
+    try std.testing.expect(!status.text_layout_lines_over);
+    try std.testing.expect(status.text_layout_uploads_over);
+    try std.testing.expect(status.text_layout_evicts_over);
+    try std.testing.expectEqual(@as(usize, 4), status.exceededCount());
 }
 
 test "canvas frame plan builds first frame renderer packet" {

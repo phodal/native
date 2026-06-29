@@ -6334,8 +6334,12 @@ fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
         budget.max_visual_effects == 0 and
         budget.max_visual_effect_uploads == 0 and
         budget.max_glyph_atlas_entries == 0 and
+        budget.max_glyph_atlas_uploads == 0 and
+        budget.max_glyph_atlas_evicts == 0 and
         budget.max_text_layouts == 0 and
         budget.max_text_layout_lines == 0 and
+        budget.max_text_layout_uploads == 0 and
+        budget.max_text_layout_evicts == 0 and
         budget.max_changes == 0;
 }
 
@@ -9492,14 +9496,24 @@ test "runtime next canvas frame keeps recent unused text caches warm" {
         .changes = &changes,
     };
 
+    _ = try harness.runtime.setCanvasFrameBudget(1, "canvas", .{
+        .max_glyph_atlas_uploads = 1,
+        .max_text_layout_uploads = 1,
+    });
     const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 1 }, frame_storage);
     try std.testing.expectEqual(@as(usize, 2), first_frame.glyph_atlas_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 2), first_frame.text_layout_cache_plan.uploadCount());
+    const first_budget_status = first_frame.budgetStatus();
+    try std.testing.expect(first_budget_status.glyph_atlas_uploads_over);
+    try std.testing.expect(first_budget_status.text_layout_uploads_over);
+    try std.testing.expectEqual(@as(usize, 2), first_budget_status.exceededCount());
+    try std.testing.expectEqual(@as(usize, 2), harness.runtime.views[0].canvas_frame_budget_status.exceededCount());
 
     const second_commands = [_]canvas.CanvasCommand{first_commands[0]};
     _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &second_commands });
     const second_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
     try std.testing.expect(second_frame.requiresRender());
+    try std.testing.expect(second_frame.budgetStatus().ok());
     try std.testing.expectEqual(@as(usize, 2), second_frame.glyph_atlas_cache_plan.entryCount());
     try std.testing.expectEqual(@as(usize, 0), second_frame.glyph_atlas_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 2), second_frame.glyph_atlas_cache_plan.retainCount());

@@ -2368,43 +2368,13 @@ pub const ReferenceRenderSurface = struct {
         @memcpy(scratch[0..self.pixels.len], self.pixels);
         const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return;
         const kernel_radius: i64 = @intCast(@max(1, referenceCeil(radius)));
-        const width_i: i64 = @intCast(self.width);
-        const height_i: i64 = @intCast(self.height);
         var y = pixel_rect.y;
         while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
             var x = pixel_rect.x;
             while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
                 const x_i: i64 = @intCast(x);
                 const y_i: i64 = @intCast(y);
-                var total = [_]u64{0} ** 4;
-                var count: u64 = 0;
-
-                var dy: i64 = -kernel_radius;
-                while (dy <= kernel_radius) : (dy += 1) {
-                    const sample_y = y_i + dy;
-                    if (sample_y < 0 or sample_y >= height_i) continue;
-
-                    var dx: i64 = -kernel_radius;
-                    while (dx <= kernel_radius) : (dx += 1) {
-                        const sample_x = x_i + dx;
-                        if (sample_x < 0 or sample_x >= width_i) continue;
-
-                        const sample_index = (@as(usize, @intCast(sample_y)) * self.width + @as(usize, @intCast(sample_x))) * 4;
-                        total[0] += scratch[sample_index + 0];
-                        total[1] += scratch[sample_index + 1];
-                        total[2] += scratch[sample_index + 2];
-                        total[3] += scratch[sample_index + 3];
-                        count += 1;
-                    }
-                }
-
-                if (count == 0) continue;
-                const blurred = [4]u8{
-                    @intCast((total[0] + count / 2) / count),
-                    @intCast((total[1] + count / 2) / count),
-                    @intCast((total[2] + count / 2) / count),
-                    @intCast((total[3] + count / 2) / count),
-                };
+                const blurred = referenceBlurSample(scratch, self.width, self.height, x_i, y_i, kernel_radius, radius);
                 const index = (y * self.width + x) * 4;
                 const dst = [4]u8{
                     self.pixels[index + 0],
@@ -2412,7 +2382,7 @@ pub const ReferenceRenderSurface = struct {
                     self.pixels[index + 2],
                     self.pixels[index + 3],
                 };
-                const out = blendRgba8(dst, rgba8ToColor(blurred), command.opacity);
+                const out = referenceMixRgba8(dst, blurred, command.opacity);
                 self.pixels[index + 0] = out[0];
                 self.pixels[index + 1] = out[1];
                 self.pixels[index + 2] = out[2];
@@ -2482,6 +2452,69 @@ pub const ReferenceRenderSurface = struct {
         return null;
     }
 };
+
+fn referenceBlurSample(source: []const u8, width: usize, height: usize, x: i64, y: i64, kernel_radius: i64, radius: f32) [4]u8 {
+    const width_i: i64 = @intCast(width);
+    const height_i: i64 = @intCast(height);
+    var premultiplied = [_]f32{0} ** 3;
+    var alpha_total: f32 = 0;
+    var weight_total: f32 = 0;
+
+    var dy: i64 = -kernel_radius;
+    while (dy <= kernel_radius) : (dy += 1) {
+        const sample_y = y + dy;
+        if (sample_y < 0 or sample_y >= height_i) continue;
+
+        var dx: i64 = -kernel_radius;
+        while (dx <= kernel_radius) : (dx += 1) {
+            const sample_x = x + dx;
+            if (sample_x < 0 or sample_x >= width_i) continue;
+
+            const weight = referenceBlurWeight(dx, dy, radius);
+            const sample_index = (@as(usize, @intCast(sample_y)) * width + @as(usize, @intCast(sample_x))) * 4;
+            const alpha = @as(f32, @floatFromInt(source[sample_index + 3])) / 255.0;
+            premultiplied[0] += (@as(f32, @floatFromInt(source[sample_index + 0])) / 255.0) * alpha * weight;
+            premultiplied[1] += (@as(f32, @floatFromInt(source[sample_index + 1])) / 255.0) * alpha * weight;
+            premultiplied[2] += (@as(f32, @floatFromInt(source[sample_index + 2])) / 255.0) * alpha * weight;
+            alpha_total += alpha * weight;
+            weight_total += weight;
+        }
+    }
+
+    if (weight_total <= 0) return .{ 0, 0, 0, 0 };
+    const alpha = alpha_total / weight_total;
+    if (alpha <= 0) return .{ 0, 0, 0, 0 };
+    const unpremultiply = 1 / (weight_total * alpha);
+    return .{
+        colorChannelToByte(premultiplied[0] * unpremultiply),
+        colorChannelToByte(premultiplied[1] * unpremultiply),
+        colorChannelToByte(premultiplied[2] * unpremultiply),
+        colorChannelToByte(alpha),
+    };
+}
+
+fn referenceMixRgba8(a: [4]u8, b: [4]u8, t: f32) [4]u8 {
+    const value = std.math.clamp(t, 0, 1);
+    return .{
+        referenceMixByte(a[0], b[0], value),
+        referenceMixByte(a[1], b[1], value),
+        referenceMixByte(a[2], b[2], value),
+        referenceMixByte(a[3], b[3], value),
+    };
+}
+
+fn referenceMixByte(a: u8, b: u8, t: f32) u8 {
+    const start = @as(f32, @floatFromInt(a));
+    const end = @as(f32, @floatFromInt(b));
+    return @intFromFloat(@round(start + (end - start) * t));
+}
+
+fn referenceBlurWeight(dx: i64, dy: i64, radius: f32) f32 {
+    const sigma = @max(radius, 0.5);
+    const x = @as(f32, @floatFromInt(dx));
+    const y = @as(f32, @floatFromInt(dy));
+    return @exp(-(x * x + y * y) / (2 * sigma * sigma));
+}
 
 pub const Density = enum {
     compact,
@@ -14043,9 +14076,52 @@ test "reference renderer blurs with caller scratch storage" {
     const surface = try ReferenceRenderSurface.initWithScratch(3, 1, &pixels, &scratch);
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
-    try expectPixelRgba8(.{ 128, 0, 0, 255 }, surface, 0, 0);
-    try expectPixelRgba8(.{ 85, 0, 85, 255 }, surface, 1, 0);
-    try expectPixelRgba8(.{ 0, 0, 128, 255 }, surface, 2, 0);
+    try expectPixelRgba8(.{ 159, 0, 0, 255 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 70, 0, 70, 255 }, surface, 1, 0);
+    try expectPixelRgba8(.{ 0, 0, 159, 255 }, surface, 2, 0);
+}
+
+test "reference renderer blurs transparent colors without dark fringes" {
+    const commands = [_]CanvasCommand{
+        .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 1, 1),
+            .fill = .{ .color = Color.rgba8(255, 0, 0, 128) },
+        } },
+        .{ .blur = .{
+            .id = 2,
+            .rect = geometry.RectF.init(0, 0, 3, 1),
+            .radius = 1,
+        } },
+    };
+
+    var render_commands: [2]RenderCommand = undefined;
+    var render_batches: [2]RenderBatch = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [0]GlyphAtlasEntry = .{};
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(3, 1),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    });
+
+    var pixels: [3 * 1 * 4]u8 = undefined;
+    var scratch: [3 * 1 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.initWithScratch(3, 1, &pixels, &scratch);
+    try surface.renderPass(frame.renderPass(), Color.rgba8(0, 0, 0, 0));
+
+    try expectPixelRgba8(.{ 255, 0, 0, 80 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 255, 0, 0, 35 }, surface, 1, 0);
+    try expectPixelRgba8(.{ 0, 0, 0, 0 }, surface, 2, 0);
 }
 
 test "reference renderer draws proxy text runs" {

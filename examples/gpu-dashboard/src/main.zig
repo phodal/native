@@ -528,6 +528,10 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .timestamp_ns = frame.timestamp_ns,
         .nonblank = frame.nonblank,
         .sample_color = frame.sample_color,
+        .backend = frame.backend,
+        .pixel_format = frame.pixel_format,
+        .present_mode = frame.present_mode,
+        .status = frame.status,
         .canvas_revision = frame.canvas_revision,
         .canvas_command_count = frame.canvas_command_count,
         .canvas_frame_requires_render = frame.canvas_frame_requires_render,
@@ -541,10 +545,33 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_pipeline_upload_count = frame.canvas_frame_pipeline_upload_count,
         .canvas_frame_pipeline_retain_count = frame.canvas_frame_pipeline_retain_count,
         .canvas_frame_pipeline_evict_count = frame.canvas_frame_pipeline_evict_count,
+        .canvas_frame_path_geometry_count = frame.canvas_frame_path_geometry_count,
+        .canvas_frame_path_geometry_vertex_count = frame.canvas_frame_path_geometry_vertex_count,
+        .canvas_frame_path_geometry_index_count = frame.canvas_frame_path_geometry_index_count,
+        .canvas_frame_path_geometry_upload_count = frame.canvas_frame_path_geometry_upload_count,
+        .canvas_frame_path_geometry_retain_count = frame.canvas_frame_path_geometry_retain_count,
+        .canvas_frame_path_geometry_evict_count = frame.canvas_frame_path_geometry_evict_count,
+        .canvas_frame_image_count = frame.canvas_frame_image_count,
+        .canvas_frame_image_upload_count = frame.canvas_frame_image_upload_count,
+        .canvas_frame_image_retain_count = frame.canvas_frame_image_retain_count,
+        .canvas_frame_image_evict_count = frame.canvas_frame_image_evict_count,
+        .canvas_frame_layer_count = frame.canvas_frame_layer_count,
+        .canvas_frame_layer_opacity_count = frame.canvas_frame_layer_opacity_count,
+        .canvas_frame_layer_clip_count = frame.canvas_frame_layer_clip_count,
+        .canvas_frame_layer_transform_count = frame.canvas_frame_layer_transform_count,
+        .canvas_frame_layer_upload_count = frame.canvas_frame_layer_upload_count,
+        .canvas_frame_layer_retain_count = frame.canvas_frame_layer_retain_count,
+        .canvas_frame_layer_evict_count = frame.canvas_frame_layer_evict_count,
         .canvas_frame_resource_count = frame.canvas_frame_resource_count,
         .canvas_frame_resource_upload_count = frame.canvas_frame_resource_upload_count,
         .canvas_frame_resource_retain_count = frame.canvas_frame_resource_retain_count,
         .canvas_frame_resource_evict_count = frame.canvas_frame_resource_evict_count,
+        .canvas_frame_visual_effect_count = frame.canvas_frame_visual_effect_count,
+        .canvas_frame_visual_effect_shadow_count = frame.canvas_frame_visual_effect_shadow_count,
+        .canvas_frame_visual_effect_blur_count = frame.canvas_frame_visual_effect_blur_count,
+        .canvas_frame_visual_effect_upload_count = frame.canvas_frame_visual_effect_upload_count,
+        .canvas_frame_visual_effect_retain_count = frame.canvas_frame_visual_effect_retain_count,
+        .canvas_frame_visual_effect_evict_count = frame.canvas_frame_visual_effect_evict_count,
         .canvas_frame_glyph_atlas_entry_count = frame.canvas_frame_glyph_atlas_entry_count,
         .canvas_frame_glyph_atlas_upload_count = frame.canvas_frame_glyph_atlas_upload_count,
         .canvas_frame_glyph_atlas_retain_count = frame.canvas_frame_glyph_atlas_retain_count,
@@ -796,6 +823,93 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqual(frame.canvas_frame_batch_count, frame.canvas_frame_encoder_draw_batch_count);
     try std.testing.expect(frame.canvas_frame_pipeline_count >= 4);
     try std.testing.expect(frame.canvas_frame_pipeline_retain_count >= 4);
+}
+
+test "gpu dashboard frame event adapter preserves renderer diagnostics" {
+    const frame = zero_native.platform.GpuFrame{
+        .window_id = 7,
+        .label = "dashboard-canvas",
+        .size = geometry.SizeF.init(720, 520),
+        .scale_factor = 2,
+        .frame_index = 42,
+        .timestamp_ns = 1234,
+        .nonblank = true,
+        .sample_color = 0xff112233,
+        .backend = .metal,
+        .pixel_format = .bgra8_unorm,
+        .present_mode = .timer,
+        .status = .ready,
+        .canvas_revision = 3,
+        .canvas_command_count = 48,
+        .canvas_frame_requires_render = true,
+        .canvas_frame_full_repaint = false,
+        .canvas_frame_batch_count = 12,
+        .canvas_frame_encoder_command_count = 18,
+        .canvas_frame_encoder_cache_action_count = 4,
+        .canvas_frame_encoder_bind_pipeline_count = 5,
+        .canvas_frame_encoder_draw_batch_count = 12,
+        .canvas_frame_pipeline_count = 5,
+        .canvas_frame_pipeline_upload_count = 1,
+        .canvas_frame_pipeline_retain_count = 4,
+        .canvas_frame_pipeline_evict_count = 0,
+        .canvas_frame_path_geometry_count = 2,
+        .canvas_frame_path_geometry_vertex_count = 36,
+        .canvas_frame_path_geometry_index_count = 54,
+        .canvas_frame_path_geometry_upload_count = 1,
+        .canvas_frame_path_geometry_retain_count = 1,
+        .canvas_frame_path_geometry_evict_count = 0,
+        .canvas_frame_image_count = 3,
+        .canvas_frame_image_upload_count = 1,
+        .canvas_frame_image_retain_count = 2,
+        .canvas_frame_image_evict_count = 0,
+        .canvas_frame_layer_count = 2,
+        .canvas_frame_layer_opacity_count = 1,
+        .canvas_frame_layer_clip_count = 0,
+        .canvas_frame_layer_transform_count = 1,
+        .canvas_frame_layer_upload_count = 1,
+        .canvas_frame_layer_retain_count = 1,
+        .canvas_frame_layer_evict_count = 0,
+        .canvas_frame_resource_count = 8,
+        .canvas_frame_resource_upload_count = 2,
+        .canvas_frame_resource_retain_count = 6,
+        .canvas_frame_resource_evict_count = 0,
+        .canvas_frame_visual_effect_count = 4,
+        .canvas_frame_visual_effect_shadow_count = 3,
+        .canvas_frame_visual_effect_blur_count = 1,
+        .canvas_frame_visual_effect_upload_count = 1,
+        .canvas_frame_visual_effect_retain_count = 3,
+        .canvas_frame_visual_effect_evict_count = 0,
+        .canvas_frame_glyph_atlas_entry_count = 16,
+        .canvas_frame_glyph_atlas_upload_count = 2,
+        .canvas_frame_glyph_atlas_retain_count = 14,
+        .canvas_frame_glyph_atlas_evict_count = 0,
+        .canvas_frame_text_layout_count = 10,
+        .canvas_frame_text_layout_line_count = 10,
+        .canvas_frame_text_layout_upload_count = 1,
+        .canvas_frame_text_layout_retain_count = 9,
+        .canvas_frame_text_layout_evict_count = 0,
+        .canvas_frame_change_count = 0,
+        .canvas_frame_budget_exceeded_count = 0,
+        .canvas_frame_budget_ok = true,
+        .canvas_frame_dirty_bounds = rect(10, 20, 30, 40),
+        .widget_revision = 2,
+        .widget_node_count = 10,
+        .widget_semantics_count = 9,
+    };
+    const event_value = gpuFrameEvent(frame);
+
+    try std.testing.expectEqual(frame.window_id, event_value.window_id);
+    try std.testing.expectEqualStrings(frame.label, event_value.label);
+    try std.testing.expectEqualDeep(frame.size, event_value.size);
+    try std.testing.expectEqual(frame.present_mode, event_value.present_mode);
+    try std.testing.expectEqual(frame.canvas_frame_path_geometry_count, event_value.canvas_frame_path_geometry_count);
+    try std.testing.expectEqual(frame.canvas_frame_path_geometry_vertex_count, event_value.canvas_frame_path_geometry_vertex_count);
+    try std.testing.expectEqual(frame.canvas_frame_image_count, event_value.canvas_frame_image_count);
+    try std.testing.expectEqual(frame.canvas_frame_layer_transform_count, event_value.canvas_frame_layer_transform_count);
+    try std.testing.expectEqual(frame.canvas_frame_visual_effect_shadow_count, event_value.canvas_frame_visual_effect_shadow_count);
+    try std.testing.expectEqual(frame.canvas_frame_text_layout_retain_count, event_value.canvas_frame_text_layout_retain_count);
+    try std.testing.expectEqualDeep(frame.canvas_frame_dirty_bounds.?, event_value.canvas_frame_dirty_bounds.?);
+    try std.testing.expectEqual(frame.widget_semantics_count, event_value.widget_semantics_count);
 }
 
 fn expectVisiblePixel(pixel: [4]u8) !void {

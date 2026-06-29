@@ -7288,7 +7288,7 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
                 .kind = .removed,
                 .id = id,
                 .previous_index = previous_index,
-                .dirty_bounds = widgetFullPaintBounds(previous_node),
+                .dirty_bounds = widgetClippedDirtyBounds(previous, previous_index, widgetFullPaintBounds(previous_node)),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -7302,6 +7302,8 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
                 widgetVisibleSubtreeFullPaintBounds(previous, previous_index),
                 widgetVisibleSubtreeFullPaintBounds(next, next_ref.index),
             );
+        } else {
+            change.dirty_bounds = widgetChangedClippedDirtyBounds(previous, previous_index, next, next_ref.index, change.dirty_bounds);
         }
         if (change.layout_dirty or change.paint_dirty or change.semantics_dirty) {
             try appendWidgetInvalidation(output, &len, change);
@@ -7316,7 +7318,7 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
                 .kind = .added,
                 .id = id,
                 .next_index = next_index,
-                .dirty_bounds = widgetFullPaintBounds(next_node),
+                .dirty_bounds = widgetClippedDirtyBounds(next, next_index, widgetFullPaintBounds(next_node)),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -7468,9 +7470,40 @@ fn widgetVisibleSubtreeFullPaintBounds(layout: WidgetLayoutTree, root_index: usi
             hidden_depth = node.depth;
             continue;
         }
-        bounds = unionOptionalBounds(bounds, widgetFullPaintBounds(node));
+        bounds = unionOptionalBounds(bounds, widgetClippedDirtyBounds(layout, index, widgetFullPaintBounds(node)));
     }
     return bounds;
+}
+
+fn widgetChangedClippedDirtyBounds(
+    previous: WidgetLayoutTree,
+    previous_index: usize,
+    next: WidgetLayoutTree,
+    next_index: usize,
+    bounds: ?geometry.RectF,
+) ?geometry.RectF {
+    return unionOptionalBounds(
+        widgetClippedDirtyBounds(previous, previous_index, bounds),
+        widgetClippedDirtyBounds(next, next_index, bounds),
+    );
+}
+
+fn widgetClippedDirtyBounds(layout: WidgetLayoutTree, node_index: usize, bounds: ?geometry.RectF) ?geometry.RectF {
+    if (node_index >= layout.nodes.len) return null;
+    if (isWidgetHiddenInAncestors(layout, node_index)) return null;
+
+    var clipped = (bounds orelse return null).normalized();
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |parent_index| {
+        if (parent_index >= layout.nodes.len) return null;
+        const parent = layout.nodes[parent_index];
+        if (parent.widget.kind == .scroll_view) {
+            clipped = geometry.RectF.intersection(clipped, parent.frame.normalized());
+            if (clipped.isEmpty()) return null;
+        }
+        current = parent.parent_index;
+    }
+    return clipped;
 }
 
 fn widgetPaintChangeBounds(previous: Widget, next: Widget) ?geometry.RectF {
@@ -12133,6 +12166,38 @@ test "widget layout diff marks scroll offset changes as child layout dirty" {
     try std.testing.expectEqual(@as(ObjectId, 2), invalidations[1].id);
     try std.testing.expect(invalidations[1].layout_dirty);
     try std.testing.expect(invalidations[1].paint_dirty);
+}
+
+test "widget layout diff clips paint dirtiness to scroll ancestors" {
+    const previous_children = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 50, 0, 32),
+        .text = "Tail",
+    }};
+    const pressed_children = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 50, 0, 32),
+        .text = "Tail",
+        .state = .{ .pressed = true },
+    }};
+    const previous_scroll = Widget{ .id = 1, .kind = .scroll_view, .children = &previous_children };
+    const pressed_scroll = Widget{ .id = 1, .kind = .scroll_view, .children = &pressed_children };
+
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var pressed_nodes: [2]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(previous_scroll, geometry.RectF.init(0, 0, 120, 60), &previous_nodes);
+    const pressed = try layoutWidgetTree(pressed_scroll, geometry.RectF.init(0, 0, 120, 60), &pressed_nodes);
+
+    var invalidations_buffer: [2]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, pressed, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expectEqual(WidgetInvalidationKind.changed, invalidations[0].kind);
+    try std.testing.expectEqual(@as(ObjectId, 2), invalidations[0].id);
+    try std.testing.expect(!invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try expectRect(geometry.RectF.init(0, 50, 120, 10), invalidations[0].dirty_bounds);
 }
 
 test "widget layout diff reports duplicate ids and output overflow" {

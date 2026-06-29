@@ -298,25 +298,26 @@ const GpuDashboardApp = struct {
 
     fn scheduleDashboardAnimations(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, start_ns: u64) anyerror!void {
         _ = self;
+        const motion = dashboardWidgetTokens().motion;
         const animations = [_]canvas.CanvasRenderAnimation{
-            .{
+            motion.animation(.{
                 .id = live_button_fill_command_id,
                 .start_ns = start_ns,
-                .duration_ms = 900,
+                .duration = .slow,
                 .from_opacity = 0.72,
                 .to_opacity = 1,
                 .from_transform = canvas.Affine.translate(0, -7),
                 .to_transform = canvas.Affine.identity(),
-            },
-            .{
+            }),
+            motion.animation(.{
                 .id = live_button_text_command_id,
                 .start_ns = start_ns,
-                .duration_ms = 900,
+                .duration = .slow,
                 .from_opacity = 0.72,
                 .to_opacity = 1,
                 .from_transform = canvas.Affine.translate(0, -7),
                 .to_transform = canvas.Affine.identity(),
-            },
+            }),
         };
         _ = try runtime.setCanvasRenderAnimations(window_id, "dashboard-canvas", &animations);
     }
@@ -420,6 +421,10 @@ fn dashboardWidgetTokens() canvas.DesignTokens {
         .shadow = .{
             .sm = .{ .y = 10, .blur = 26, .spread = -12 },
             .md = .{ .y = 18, .blur = 42, .spread = -18 },
+        },
+        .motion = .{
+            .slow_ms = 900,
+            .easing = .emphasized,
         },
     };
 }
@@ -934,15 +939,18 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     try buildDashboardDisplayListFromWidgets(&builder);
     const display_list = builder.displayList();
 
-    const animations = [_]canvas.CanvasRenderAnimation{.{
+    const motion = dashboardWidgetTokens().motion;
+    const animations = [_]canvas.CanvasRenderAnimation{motion.animation(.{
         .id = live_button_fill_command_id,
         .start_ns = 1_000_000_000,
-        .duration_ms = 800,
+        .duration = .slow,
         .from_opacity = 0.72,
         .to_opacity = 1,
         .from_transform = canvas.Affine.translate(0, -6),
         .to_transform = canvas.Affine.identity(),
-    }};
+    })};
+    try std.testing.expectEqual(@as(u32, 900), animations[0].duration_ms);
+    try std.testing.expectEqual(canvas.Easing.emphasized, animations[0].easing);
     var overrides: [1]canvas.CanvasRenderOverride = undefined;
     const sampled = try canvas.sampleCanvasRenderAnimations(&animations, 1_400_000_000, &overrides);
     try std.testing.expectEqual(@as(usize, 1), sampled.len);

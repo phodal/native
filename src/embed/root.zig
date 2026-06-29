@@ -1,10 +1,12 @@
 const std = @import("std");
+const geometry = @import("geometry");
 const runtime = @import("../runtime/root.zig");
 const platform = @import("../platform/root.zig");
 
 const max_mobile_command_name_bytes: usize = 128;
 const max_mobile_asset_root_bytes: usize = platform.max_webview_url_bytes;
 const max_mobile_asset_entry_bytes: usize = platform.max_window_source_bytes;
+const mobile_gpu_surface_label = "mobile-surface";
 
 pub const EmbeddedApp = struct {
     app: runtime.App,
@@ -31,6 +33,28 @@ pub const EmbeddedApp = struct {
 
     pub fn resize(self: *EmbeddedApp, surface: platform.Surface) anyerror!void {
         try self.runtime.dispatchPlatformEvent(self.app, .{ .surface_resized = surface });
+        if (surface.native_handle != null) {
+            try self.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_resized = .{
+                .window_id = 1,
+                .label = mobile_gpu_surface_label,
+                .frame = geometry.RectF.fromSize(surface.size),
+                .scale_factor = surface.scale_factor,
+            } });
+        }
+    }
+
+    pub fn touch(self: *EmbeddedApp, id: u64, phase: c_int, x: f32, y: f32, pressure: f32) anyerror!void {
+        try self.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = mobile_gpu_surface_label,
+            .kind = try mobileTouchKindFromPhase(phase),
+            .timestamp_ns = nowNanoseconds(),
+            .pointer_id = id,
+            .x = x,
+            .y = y,
+            .button = 0,
+            .pressure = pressure,
+        } });
     }
 
     pub fn frame(self: *EmbeddedApp) anyerror!void {
@@ -58,6 +82,17 @@ const MobileHostApp = struct {
     activation_count: usize = 0,
     deactivation_count: usize = 0,
     command_count: usize = 0,
+    mobile_surface_resize_count: usize = 0,
+    mobile_surface_width: f32 = 0,
+    mobile_surface_height: f32 = 0,
+    mobile_surface_scale: f32 = 1,
+    touch_count: usize = 0,
+    last_touch_id: u64 = 0,
+    last_touch_kind: platform.GpuSurfaceInputKind = .pointer_up,
+    last_touch_timestamp_ns: u64 = 0,
+    last_touch_x: f32 = 0,
+    last_touch_y: f32 = 0,
+    last_touch_pressure: f32 = 0,
     asset_root: [max_mobile_asset_root_bytes]u8 = undefined,
     asset_root_len: usize = 0,
     asset_entry: [max_mobile_asset_entry_bytes]u8 = undefined,
@@ -72,6 +107,17 @@ const MobileHostApp = struct {
         self.activation_count = 0;
         self.deactivation_count = 0;
         self.command_count = 0;
+        self.mobile_surface_resize_count = 0;
+        self.mobile_surface_width = 0;
+        self.mobile_surface_height = 0;
+        self.mobile_surface_scale = 1;
+        self.touch_count = 0;
+        self.last_touch_id = 0;
+        self.last_touch_kind = .pointer_up;
+        self.last_touch_timestamp_ns = 0;
+        self.last_touch_x = 0;
+        self.last_touch_y = 0;
+        self.last_touch_pressure = 0;
         self.asset_root = undefined;
         self.asset_root_len = 0;
         self.asset_entry = undefined;
@@ -112,6 +158,23 @@ const MobileHostApp = struct {
                 const count = @min(command_event.name.len, max_mobile_command_name_bytes);
                 @memcpy(self.last_command_name[0..count], command_event.name[0..count]);
                 self.last_command_name[count] = 0;
+            },
+            .gpu_surface_resized => |resize| {
+                if (!std.mem.eql(u8, resize.label, mobile_gpu_surface_label)) return;
+                self.mobile_surface_resize_count += 1;
+                self.mobile_surface_width = resize.frame.width;
+                self.mobile_surface_height = resize.frame.height;
+                self.mobile_surface_scale = resize.scale_factor;
+            },
+            .gpu_surface_input => |input| {
+                if (!std.mem.eql(u8, input.label, mobile_gpu_surface_label)) return;
+                self.touch_count += 1;
+                self.last_touch_id = input.pointer_id;
+                self.last_touch_kind = input.kind;
+                self.last_touch_timestamp_ns = input.timestamp_ns;
+                self.last_touch_x = input.x;
+                self.last_touch_y = input.y;
+                self.last_touch_pressure = input.pressure;
             },
             else => {},
         }
@@ -182,12 +245,12 @@ pub fn zero_native_app_resize(app: ?*anyopaque, width: f32, height: f32, scale: 
 }
 
 pub fn zero_native_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: f32, y: f32, pressure: f32) void {
-    _ = app;
-    _ = id;
-    _ = phase;
-    _ = x;
-    _ = y;
-    _ = pressure;
+    const self = mobileApp(app) orelse return;
+    self.embedded.touch(id, phase, x, y, pressure) catch |err| {
+        recordError(self, err);
+        return;
+    };
+    self.last_error = null;
 }
 
 pub fn zero_native_app_command(app: ?*anyopaque, name: ?[*]const u8, len: usize) void {
@@ -254,6 +317,29 @@ pub fn zero_native_app_last_error_name(app: ?*anyopaque) [*:0]const u8 {
     const self = mobileApp(app) orelse return "";
     const err = self.last_error orelse return "";
     return @errorName(err);
+}
+
+fn mobileTouchKindFromPhase(phase: c_int) anyerror!platform.GpuSurfaceInputKind {
+    return switch (phase) {
+        0, 5 => .pointer_down,
+        1, 6 => .pointer_up,
+        2 => .pointer_drag,
+        3 => .pointer_cancel,
+        else => error.InvalidTouchPhase,
+    };
+}
+
+fn nowNanoseconds() u64 {
+    switch (@import("builtin").os.tag) {
+        .windows, .wasi => return 0,
+        else => {
+            var ts: std.posix.timespec = undefined;
+            switch (std.posix.errno(std.posix.system.clock_gettime(.REALTIME, &ts))) {
+                .SUCCESS => return @intCast(@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec),
+                else => return 0,
+            }
+        },
+    }
 }
 
 test "embedded app starts and loads source" {
@@ -335,6 +421,45 @@ test "mobile C ABI forwards activation lifecycle through embedded runtime" {
     try std.testing.expectEqual(@as(usize, 1), self.activation_count);
     try std.testing.expectEqual(@as(usize, 1), self.deactivation_count);
     try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+}
+
+test "mobile C ABI forwards surface resize and touch input" {
+    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer zero_native_app_destroy(app);
+
+    var native_surface_token: u8 = 0;
+    zero_native_app_resize(app, 390, 844, 3, &native_surface_token);
+
+    const self = mobileApp(app).?;
+    try std.testing.expectEqual(@as(usize, 1), self.mobile_surface_resize_count);
+    try std.testing.expectEqual(@as(f32, 390), self.mobile_surface_width);
+    try std.testing.expectEqual(@as(f32, 844), self.mobile_surface_height);
+    try std.testing.expectEqual(@as(f32, 3), self.mobile_surface_scale);
+
+    zero_native_app_touch(app, 42, 0, 11, 22, 0.5);
+    try std.testing.expectEqual(@as(usize, 1), self.touch_count);
+    try std.testing.expectEqual(@as(u64, 42), self.last_touch_id);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_down, self.last_touch_kind);
+    try std.testing.expect(self.last_touch_timestamp_ns > 0);
+    try std.testing.expectEqual(@as(f32, 11), self.last_touch_x);
+    try std.testing.expectEqual(@as(f32, 22), self.last_touch_y);
+    try std.testing.expectEqual(@as(f32, 0.5), self.last_touch_pressure);
+    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+
+    zero_native_app_touch(app, 42, 2, 13, 25, 0.75);
+    try std.testing.expectEqual(@as(usize, 2), self.touch_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_drag, self.last_touch_kind);
+    try std.testing.expectEqual(@as(f32, 13), self.last_touch_x);
+    try std.testing.expectEqual(@as(f32, 25), self.last_touch_y);
+    try std.testing.expectEqual(@as(f32, 0.75), self.last_touch_pressure);
+
+    zero_native_app_touch(app, 42, 3, 13, 25, 0);
+    try std.testing.expectEqual(@as(usize, 3), self.touch_count);
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_cancel, self.last_touch_kind);
+
+    zero_native_app_touch(app, 42, 99, 13, 25, 0);
+    try std.testing.expectEqual(@as(usize, 3), self.touch_count);
+    try std.testing.expectEqualStrings("InvalidTouchPhase", std.mem.span(zero_native_app_last_error_name(app)));
 }
 
 test "mobile C ABI dispatches native commands through embedded runtime" {

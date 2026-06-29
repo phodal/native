@@ -6558,6 +6558,7 @@ fn canvasWidgetPointerEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?canv
     const phase: canvas.WidgetPointerPhase = switch (input_event.kind) {
         .pointer_down => .down,
         .pointer_up => .up,
+        .pointer_cancel => .cancel,
         .pointer_move => .hover,
         .pointer_drag => .move,
         .scroll => .wheel,
@@ -6578,6 +6579,7 @@ fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, focu
         .key_up => .key_up,
         .pointer_down,
         .pointer_up,
+        .pointer_cancel,
         .pointer_move,
         .pointer_drag,
         .scroll,

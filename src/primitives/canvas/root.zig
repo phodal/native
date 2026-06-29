@@ -2354,10 +2354,7 @@ pub const ReferenceRenderSurface = struct {
             while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
                 const point = referencePixelCenter(x, y);
                 const distance = referenceDistanceToRoundedRect(point, shadow_rect, shadow_radius);
-                const alpha = if (blur_radius <= 0)
-                    if (distance <= 0) @as(f32, 1) else @as(f32, 0)
-                else
-                    std.math.clamp(1 - distance / blur_radius, 0, 1);
+                const alpha = referenceShadowFalloff(distance, blur_radius);
                 if (alpha > 0) self.blendPixel(@intCast(x), @intCast(y), referenceScaleColorAlpha(value.color, alpha), command.opacity);
             }
         }
@@ -7542,6 +7539,12 @@ fn referenceScaleColorAlpha(color: Color, alpha: f32) Color {
         .b = color.b,
         .a = color.a * std.math.clamp(alpha, 0, 1),
     };
+}
+
+fn referenceShadowFalloff(distance: f32, blur_radius: f32) f32 {
+    if (blur_radius <= 0) return if (distance <= 0) 1 else 0;
+    const t = std.math.clamp(1 - distance / blur_radius, 0, 1);
+    return t * t * (3 - 2 * t);
 }
 
 fn referenceDistanceToSegment(point: geometry.PointF, from: geometry.PointF, to: geometry.PointF) f32 {
@@ -13924,7 +13927,7 @@ test "reference renderer draws soft shadows" {
     const surface = try ReferenceRenderSurface.init(4, 4, &pixels);
     try surface.renderPass(frame.renderPass(), Color.rgba8(0, 0, 0, 0));
 
-    try expectPixelRgba8(.{ 0, 0, 0, 37 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 0, 0, 0, 27 }, surface, 0, 0);
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 0, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 128 }, surface, 1, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 64 }, surface, 3, 2);

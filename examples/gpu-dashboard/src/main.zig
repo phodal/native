@@ -643,6 +643,9 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .backend = frame.backend,
         .pixel_format = frame.pixel_format,
         .present_mode = frame.present_mode,
+        .alpha_mode = frame.alpha_mode,
+        .color_space = frame.color_space,
+        .vsync = frame.vsync,
         .status = frame.status,
         .canvas_revision = frame.canvas_revision,
         .canvas_command_count = frame.canvas_command_count,
@@ -1206,6 +1209,9 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
         .backend = .metal,
         .pixel_format = .bgra8_unorm,
         .present_mode = .timer,
+        .alpha_mode = .@"opaque",
+        .color_space = .srgb,
+        .vsync = true,
         .status = .ready,
         .canvas_revision = 3,
         .canvas_command_count = 62,
@@ -1270,6 +1276,9 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
     try std.testing.expectEqualStrings(frame.label, event_value.label);
     try std.testing.expectEqualDeep(frame.size, event_value.size);
     try std.testing.expectEqual(frame.present_mode, event_value.present_mode);
+    try std.testing.expectEqual(frame.alpha_mode, event_value.alpha_mode);
+    try std.testing.expectEqual(frame.color_space, event_value.color_space);
+    try std.testing.expectEqual(frame.vsync, event_value.vsync);
     try std.testing.expectEqual(frame.canvas_frame_path_geometry_count, event_value.canvas_frame_path_geometry_count);
     try std.testing.expectEqual(frame.canvas_frame_path_geometry_vertex_count, event_value.canvas_frame_path_geometry_vertex_count);
     try std.testing.expectEqual(frame.canvas_frame_image_count, event_value.canvas_frame_image_count);

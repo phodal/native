@@ -109,6 +109,8 @@ pub const CanvasWidgetAccessibilityActionKind = enum {
     commit_composition,
     cancel_composition,
     select,
+    drag,
+    drop_files,
 };
 
 pub const CanvasWidgetAccessibilityAction = struct {
@@ -1077,6 +1079,8 @@ pub const Runtime = struct {
             .commit_composition => try self.editAutomationCanvasWidgetText(index, action.id, .commit_composition),
             .cancel_composition => try self.editAutomationCanvasWidgetText(index, action.id, .cancel_composition),
             .select => try self.selectAutomationCanvasWidget(index, action.id),
+            .drag => try self.dispatchAutomationCanvasWidgetDrag(app, index, action.id, action.text),
+            .drop_files => try self.dispatchAutomationCanvasWidgetFileDrop(app, index, action.id, action.text),
         }
         return self.views[index].info();
     }
@@ -7510,6 +7514,8 @@ fn canvasWidgetAccessibilityActionSupported(actions: canvas.WidgetActions, actio
         .set_selection => actions.set_selection,
         .set_composition, .commit_composition, .cancel_composition => actions.set_text,
         .select => actions.select,
+        .drag => actions.drag,
+        .drop_files => actions.drop_files,
     };
 }
 
@@ -16190,6 +16196,11 @@ test "runtime dispatches automation canvas widget actions" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_drag_source_id);
     try std.testing.expectEqual(@as(f32, 18), app_state.last_drag_dx);
 
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = 2, .action = .drag, .text = "8 1" });
+    try std.testing.expectEqual(@as(u32, 2), app_state.widget_drag_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_drag_source_id);
+    try std.testing.expectEqual(@as(f32, 8), app_state.last_drag_dx);
+
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .toggle });
     try std.testing.expectEqual(@as(?f32, 1), harness.runtime.views[0].widgetSemantics()[2].value);
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .drag }));
@@ -16216,6 +16227,15 @@ test "runtime dispatches automation canvas widget actions" {
     try std.testing.expectEqualStrings("/tmp/report.csv", app_state.last_drop_first_path);
     try std.testing.expectEqualStrings("drop:files", harness.null_platform.lastWindowEventName());
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/report.csv\",\"/tmp/chart.png\"]") != null);
+
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = 11, .action = .drop_files, .text = "/tmp/accessibility.csv" });
+    try std.testing.expectEqual(@as(u32, 2), app_state.widget_file_drop_count);
+    try std.testing.expectEqual(@as(u32, 2), app_state.file_drop_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), app_state.last_drop_target_id);
+    try std.testing.expectEqual(@as(usize, 1), app_state.last_drop_path_count);
+    try std.testing.expectEqualStrings("/tmp/accessibility.csv", app_state.last_drop_first_path);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/accessibility.csv\"]") != null);
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = 11, .action = .drop_files }));
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 11, .action = .drop_files }));
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .drop_files, .value = "/tmp/report.csv" }));
 

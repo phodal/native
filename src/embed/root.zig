@@ -67,6 +67,8 @@ pub const MobileWidgetActionKind = enum(c_int) {
     commit_composition = 8,
     cancel_composition = 9,
     select = 10,
+    drag = 11,
+    drop_files = 12,
 };
 
 pub const MobileWidgetSemantics = extern struct {
@@ -677,6 +679,8 @@ fn mobileWidgetActionKindFromInt(value: c_int) anyerror!runtime.CanvasWidgetAcce
         @intFromEnum(MobileWidgetActionKind.commit_composition) => .commit_composition,
         @intFromEnum(MobileWidgetActionKind.cancel_composition) => .cancel_composition,
         @intFromEnum(MobileWidgetActionKind.select) => .select,
+        @intFromEnum(MobileWidgetActionKind.drag) => .drag,
+        @intFromEnum(MobileWidgetActionKind.drop_files) => .drop_files,
         else => error.InvalidCommand,
     };
 }
@@ -1140,8 +1144,22 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
             .frame = geometry.RectF.init(210, 16, 120, 32),
             .text = "Inbox",
         },
+        .{
+            .id = 7,
+            .kind = .button,
+            .frame = geometry.RectF.init(210, 56, 120, 32),
+            .text = "Drag",
+            .semantics = .{ .actions = .{ .drag = true } },
+        },
+        .{
+            .id = 8,
+            .kind = .button,
+            .frame = geometry.RectF.init(210, 96, 120, 32),
+            .text = "Drop",
+            .semantics = .{ .actions = .{ .drop_files = true } },
+        },
     };
-    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    var nodes: [10]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{
         .id = 1,
         .kind = .panel,
@@ -1221,6 +1239,29 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
     try std.testing.expectEqual(@as(c_int, 1), list_item.has_value);
     try std.testing.expectEqual(@as(f32, 1), list_item.value);
     try std.testing.expect((list_item.flags & @intFromEnum(MobileWidgetFlag.selected)) != 0);
+
+    const drag_delta = "6 2";
+    action = .{
+        .id = 7,
+        .action = @intFromEnum(MobileWidgetActionKind.drag),
+        .text = drag_delta,
+        .text_len = drag_delta.len,
+    };
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_drag, self.last_input_kind);
+    try std.testing.expectApproxEqAbs(@as(f32, 276), self.last_touch_x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 74), self.last_touch_y, 0.001);
+
+    const drop_paths = "/tmp/mobile-report.csv";
+    action = .{
+        .id = 8,
+        .action = @intFromEnum(MobileWidgetActionKind.drop_files),
+        .text = drop_paths,
+        .text_len = drop_paths.len,
+    };
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqualStrings("drop:files", self.null_platform.lastWindowEventName());
+    try std.testing.expect(std.mem.indexOf(u8, self.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/mobile-report.csv\"]") != null);
 
     action = .{ .id = 99, .action = @intFromEnum(MobileWidgetActionKind.press) };
     try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_action(app, &action));

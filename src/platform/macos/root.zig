@@ -68,6 +68,8 @@ const AppKitEvent = extern struct {
     delta_y: f64,
     widget_id: u64,
     widget_action: c_int,
+    has_composition_cursor: c_int,
+    composition_cursor: usize,
 };
 
 const AppKitCallback = *const fn (context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) void;
@@ -505,6 +507,7 @@ fn gpuSurfaceInputEventFromAppKitEvent(event: *const AppKitEvent) platform_mod.G
         .delta_y = @floatCast(event.delta_y),
         .key = event.key_text[0..event.key_text_len],
         .text = event.input_text[0..event.input_text_len],
+        .composition_cursor = if (event.has_composition_cursor != 0) event.composition_cursor else null,
         .modifiers = shortcutModifiersFromFlags(event.shortcut_modifiers),
     };
 }
@@ -1039,6 +1042,10 @@ fn gpuSurfaceInputKindFromInt(value: c_int) platform_mod.GpuSurfaceInputKind {
         4 => .scroll,
         5 => .key_down,
         6 => .key_up,
+        7 => .text_input,
+        8 => .ime_set_composition,
+        9 => .ime_commit_composition,
+        10 => .ime_cancel_composition,
         else => .pointer_move,
     };
 }
@@ -1301,4 +1308,23 @@ test "mac gpu surface input preserves key and text" {
     try std.testing.expectEqualStrings("\n", input.text);
     try std.testing.expect(input.modifiers.primary);
     try std.testing.expect(input.modifiers.shift);
+}
+
+test "mac gpu surface input preserves ime composition cursor" {
+    const label = "canvas";
+    const text = "compose";
+    var event = std.mem.zeroes(AppKitEvent);
+    event.window_id = 9;
+    event.view_label = label.ptr;
+    event.view_label_len = label.len;
+    event.input_kind = 8;
+    event.input_text = text.ptr;
+    event.input_text_len = text.len;
+    event.has_composition_cursor = 1;
+    event.composition_cursor = 4;
+
+    const input = gpuSurfaceInputEventFromAppKitEvent(&event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_set_composition, input.kind);
+    try std.testing.expectEqualStrings("compose", input.text);
+    try std.testing.expectEqual(@as(?usize, 4), input.composition_cursor);
 }

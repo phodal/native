@@ -324,6 +324,12 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityRowCount" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityMaxValue" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-ime-bridge", "Verify AppKit GPU widgets route native text input and IME composition", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSTextInputClient" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "insertText:(id)string replacementRange" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "setMarkedText:(id)string selectedRange" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-builtin-bridge-policy", "Verify bridge policy docs include guarded dialog commands", &.{
         .{ .path = "docs/src/app/security/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },
         .{ .path = "docs/src/app/bridge/builtin-commands/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },

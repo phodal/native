@@ -36,6 +36,10 @@ typedef enum {
     ZERO_NATIVE_APPKIT_GPU_INPUT_SCROLL = 4,
     ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN = 5,
     ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP = 6,
+    ZERO_NATIVE_APPKIT_GPU_INPUT_TEXT_INPUT = 7,
+    ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION = 8,
+    ZERO_NATIVE_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION = 9,
+    ZERO_NATIVE_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION = 10,
 } zero_native_appkit_gpu_input_kind_t;
 
 typedef enum {
@@ -197,6 +201,8 @@ typedef struct {
     double delta_y;
     uint64_t widget_id;
     int widget_action;
+    int has_composition_cursor;
+    size_t composition_cursor;
 } zero_native_appkit_event_t;
 
 typedef void (*zero_native_appkit_event_callback_t)(void *context, const zero_native_appkit_event_t *event);

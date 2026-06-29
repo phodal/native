@@ -41,6 +41,7 @@ static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger ro
 static NSCursor *ZeroNativeCursorForKind(NSInteger kind);
 static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteger length);
 static NSString *ZeroNativeSubstringForRange(NSString *value, NSRange range);
+static NSString *ZeroNativeStringFromTextInput(id value);
 
 static size_t ZeroNativeOverflowSize(size_t buffer_len) {
     return buffer_len == SIZE_MAX ? SIZE_MAX : buffer_len + 1;
@@ -49,6 +50,13 @@ static size_t ZeroNativeOverflowSize(size_t buffer_len) {
 static NSString *ZeroNativeStringFromBytes(const char *bytes, size_t len) {
     if (!bytes || len == 0) return nil;
     return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
+}
+
+static NSString *ZeroNativeStringFromTextInput(id value) {
+    if (!value) return @"";
+    if ([value isKindOfClass:[NSAttributedString class]]) return ((NSAttributedString *)value).string ?: @"";
+    if ([value isKindOfClass:[NSString class]]) return (NSString *)value;
+    return [value description] ?: @"";
 }
 
 static uint64_t ZeroNativeTimestampNanoseconds(void) {
@@ -210,7 +218,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) uint32_t actionFlags;
 @end
 
-@interface ZeroNativeMetalSurfaceView : NSView
+@interface ZeroNativeMetalSurfaceView : NSView <NSTextInputClient>
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property(nonatomic, strong) CAMetalLayer *metalLayer;
@@ -231,6 +239,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
 @property(nonatomic, strong) NSCursor *surfaceCursor;
+@property(nonatomic, copy) NSString *markedText;
+@property(nonatomic, assign) NSRange markedTextRange;
+@property(nonatomic, assign) NSRange selectedTextRange;
 @property(nonatomic, strong) NSArray<NSAccessibilityElement *> *widgetAccessibilityElements;
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
@@ -243,6 +254,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
+- (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
 - (void)setSurfaceCursor:(NSCursor *)cursor;
 @end
@@ -544,6 +556,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     self.accessibilityRole = NSAccessibilityGroupRole;
     self.surfaceCursor = [NSCursor arrowCursor];
+    self.markedText = @"";
+    self.markedTextRange = NSMakeRange(NSNotFound, 0);
+    self.selectedTextRange = NSMakeRange(0, 0);
 
     [self updateDrawableSize];
     _displayTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0) target:self selector:@selector(renderFrame) userInfo:nil repeats:YES];
@@ -905,6 +920,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 - (void)keyDown:(NSEvent *)event {
     [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
+    [self interpretKeyEvents:@[event]];
 }
 
 - (void)keyUp:(NSEvent *)event {
@@ -954,7 +970,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     BOOL keyEvent = kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN || kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP;
     NSString *keyText = keyEvent && event ? ZeroNativeShortcutKeyForEvent(event) : @"";
-    NSString *inputText = kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN && event ? (event.characters ?: @"") : @"";
+    NSString *inputText = @"";
     const char *keyBytes = keyText.UTF8String ?: "";
     const char *inputBytes = inputText.UTF8String ?: "";
     [self.host emitEvent:(zero_native_appkit_event_t){
@@ -976,6 +992,122 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
         .delta_y = deltaY,
     }];
     [self requestRetainedCanvasFrame];
+}
+
+- (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor {
+    if (!self.host || self.surfaceLabel.length == 0) return;
+    NSString *inputText = text ?: @"";
+    const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
+    const char *inputBytes = inputText.UTF8String ?: "";
+    BOOL hasCompositionCursor = compositionCursor >= 0;
+    [self.host emitEvent:(zero_native_appkit_event_t){
+        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
+        .window_id = self.windowId,
+        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .view_label = labelBytes,
+        .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .input_text = inputBytes,
+        .input_text_len = [inputText lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .input_kind = (int)kind,
+        .has_composition_cursor = hasCompositionCursor ? 1 : 0,
+        .composition_cursor = hasCompositionCursor ? (size_t)compositionCursor : 0,
+    }];
+    [self requestRetainedCanvasFrame];
+}
+
+- (BOOL)hasMarkedText {
+    return self.markedText.length > 0;
+}
+
+- (NSRange)markedRange {
+    return self.markedTextRange;
+}
+
+- (NSRange)selectedRange {
+    return self.selectedTextRange;
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
+    (void)replacementRange;
+    NSString *text = ZeroNativeStringFromTextInput(string);
+    BOOL hadMarkedText = [self hasMarkedText];
+    if (text.length == 0) {
+        self.markedText = @"";
+        self.markedTextRange = NSMakeRange(NSNotFound, 0);
+        self.selectedTextRange = NSMakeRange(0, 0);
+        if (hadMarkedText) {
+            [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
+        }
+        return;
+    }
+
+    NSUInteger cursor = text.length;
+    if (selectedRange.location != NSNotFound) {
+        cursor = MIN(text.length, selectedRange.location + selectedRange.length);
+        self.selectedTextRange = NSMakeRange(MIN(selectedRange.location, text.length), MIN(selectedRange.length, text.length - MIN(selectedRange.location, text.length)));
+    } else {
+        self.selectedTextRange = NSMakeRange(text.length, 0);
+    }
+    self.markedText = text;
+    self.markedTextRange = NSMakeRange(0, text.length);
+    [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION text:text compositionCursor:(NSInteger)cursor];
+}
+
+- (void)unmarkText {
+    BOOL hadMarkedText = [self hasMarkedText];
+    self.markedText = @"";
+    self.markedTextRange = NSMakeRange(NSNotFound, 0);
+    self.selectedTextRange = NSMakeRange(0, 0);
+    if (hadMarkedText) {
+        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
+    }
+}
+
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
+    return @[];
+}
+
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (actualRange) *actualRange = NSMakeRange(NSNotFound, 0);
+    (void)range;
+    return nil;
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+    (void)point;
+    return 0;
+}
+
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if (actualRange) *actualRange = range;
+    NSRect localRect = NSMakeRect(0, 0, 1, MAX(1, self.bounds.size.height));
+    NSRect windowRect = [self convertRect:localRect toView:nil];
+    return self.window ? [self.window convertRectToScreen:windowRect] : windowRect;
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+    (void)replacementRange;
+    NSString *text = ZeroNativeStringFromTextInput(string);
+    if (text.length == 0) return;
+
+    BOOL hadMarkedText = [self hasMarkedText];
+    NSString *markedText = self.markedText ?: @"";
+    self.markedText = @"";
+    self.markedTextRange = NSMakeRange(NSNotFound, 0);
+    self.selectedTextRange = NSMakeRange(text.length, 0);
+
+    if (hadMarkedText && [markedText isEqualToString:text]) {
+        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
+        return;
+    }
+    if (hadMarkedText) {
+        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
+    }
+    [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_TEXT_INPUT text:text compositionCursor:-1];
+}
+
+- (void)doCommandBySelector:(SEL)selector {
+    (void)selector;
 }
 
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action {

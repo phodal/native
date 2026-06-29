@@ -1123,6 +1123,7 @@ pub const Runtime = struct {
         try validateViewLabel(input_event.label);
         const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        if (!self.views[index].focused) return null;
         const focused_id = self.views[index].canvas_widget_focused_id;
         if (focused_id == 0) return null;
         const keyboard = canvasWidgetKeyboardEventFromGpuInput(input_event, focused_id) orelse return null;
@@ -1143,6 +1144,7 @@ pub const Runtime = struct {
         try validateViewLabel(input_event.label);
         const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return error.ViewNotFound;
         if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        if (!self.views[index].focused) return null;
         const focused_id = self.views[index].canvas_widget_focused_id;
         if (focused_id == 0) return null;
         const keyboard = canvasWidgetTextInputEventFromGpuInput(input_event, focused_id) orelse return null;
@@ -9376,6 +9378,94 @@ test "runtime hides widget-owned focus rings when canvas view loses focus" {
     snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
     try std.testing.expect(snapshot.widgets[0].focused);
+}
+
+test "runtime ignores stale canvas widget keyboard focus when canvas view loses focus" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-view-focus-keyboard-route", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "other",
+        .kind = .button,
+        .frame = geometry.RectF.init(260, 0, 80, 32),
+        .text = "Other",
+    });
+
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 140, 32),
+        .text = "Query",
+    }};
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 24,
+    } });
+    try std.testing.expect(harness.runtime.views[0].focused);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    var route_buffer: [4]canvas.WidgetEventRouteEntry = undefined;
+    const key_route = try harness.runtime.routeCanvasWidgetKeyboardInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    }, &route_buffer);
+    try std.testing.expect(key_route != null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), key_route.?.target.?.id);
+
+    const text_route = try harness.runtime.routeCanvasWidgetTextInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    }, &route_buffer);
+    try std.testing.expect(text_route != null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), text_route.?.target.?.id);
+
+    try harness.runtime.focusView(1, "other");
+    try std.testing.expect(!harness.runtime.views[0].focused);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expect(try harness.runtime.routeCanvasWidgetKeyboardInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    }, &route_buffer) == null);
+    try std.testing.expect(try harness.runtime.routeCanvasWidgetTextInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+    }, &route_buffer) == null);
 }
 
 test "runtime clears focused canvas widget when layout replacement hides it" {

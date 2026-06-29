@@ -1168,8 +1168,9 @@ pub const Runtime = struct {
         } else 0;
 
         if (self.views[index].canvas_widget_focused_id == next_focus_id) return;
+        const previous_state = self.views[index].canvasWidgetRenderState();
         self.views[index].canvas_widget_focused_id = next_focus_id;
-        self.invalidateFor(.state, self.views[index].frame);
+        self.invalidateForCanvasWidgetRenderStateChange(index, previous_state, self.views[index].canvasWidgetRenderState());
     }
 
     fn updateCanvasWidgetInteractionFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) void {
@@ -1208,10 +1209,25 @@ pub const Runtime = struct {
             self.views[index].canvas_widget_pressed_id != next_pressed_id;
         if (!interaction_changed and self.views[index].canvas_widget_cursor == next_cursor) return;
 
+        const previous_state = self.views[index].canvasWidgetRenderState();
         self.views[index].canvas_widget_hovered_id = next_hovered_id;
         self.views[index].canvas_widget_pressed_id = next_pressed_id;
         self.views[index].canvas_widget_cursor = next_cursor;
-        if (interaction_changed) self.invalidateFor(.state, self.views[index].frame);
+        if (interaction_changed) self.invalidateForCanvasWidgetRenderStateChange(index, previous_state, self.views[index].canvasWidgetRenderState());
+    }
+
+    fn invalidateForCanvasWidgetRenderStateChange(self: *Runtime, view_index: usize, previous: canvas.WidgetRenderState, next: canvas.WidgetRenderState) void {
+        if (view_index >= self.view_count) return;
+        if (self.views[view_index].kind != .gpu_surface) return;
+        const local_dirty = self.views[view_index].widgetLayoutTree().renderStateDirtyBounds(previous, next) orelse {
+            self.invalidateFor(.state, self.views[view_index].frame);
+            return;
+        };
+        if (canvasDirtyRegionForView(self.views[view_index].frame, local_dirty)) |dirty_region| {
+            self.invalidateFor(.state, dirty_region);
+        } else {
+            self.invalidateFor(.state, self.views[view_index].frame);
+        }
     }
 
     fn updateCanvasWidgetScrollFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {
@@ -1350,8 +1366,9 @@ pub const Runtime = struct {
 
     fn setCanvasWidgetFocusFromKeyboard(self: *Runtime, view_index: usize, target_id: canvas.ObjectId) void {
         if (self.views[view_index].canvas_widget_focused_id == target_id) return;
+        const previous_state = self.views[view_index].canvasWidgetRenderState();
         self.views[view_index].canvas_widget_focused_id = target_id;
-        self.invalidateFor(.state, self.views[view_index].frame);
+        self.invalidateForCanvasWidgetRenderStateChange(view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
     }
 
     fn invalidateForCanvasChanges(self: *Runtime, view_frame: geometry.RectF, changes: []const canvas.DiffChange) void {
@@ -2257,8 +2274,9 @@ pub const Runtime = struct {
         const target = self.views[view_index].widgetLayoutTree().focusTargetById(id) orelse return error.InvalidCommand;
         try self.focusView(self.views[view_index].window_id, self.views[view_index].label);
         if (self.views[view_index].canvas_widget_focused_id != target.id) {
+            const previous_state = self.views[view_index].canvasWidgetRenderState();
             self.views[view_index].canvas_widget_focused_id = target.id;
-            self.invalidateFor(.state, self.views[view_index].frame);
+            self.invalidateForCanvasWidgetRenderStateChange(view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
         }
     }
 
@@ -2304,8 +2322,9 @@ pub const Runtime = struct {
         const label = self.views[view_index].label;
         const origin = bounds.center();
         const previous_pressed_id = self.views[view_index].canvas_widget_pressed_id;
+        const previous_state = self.views[view_index].canvasWidgetRenderState();
         self.views[view_index].canvas_widget_pressed_id = id;
-        if (previous_pressed_id != id) self.invalidateFor(.state, self.views[view_index].frame);
+        if (previous_pressed_id != id) self.invalidateForCanvasWidgetRenderStateChange(view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
         errdefer {
             if (view_index < self.view_count and self.views[view_index].canvas_widget_pressed_id == id) {
                 self.views[view_index].canvas_widget_pressed_id = previous_pressed_id;
@@ -2324,8 +2343,9 @@ pub const Runtime = struct {
 
         if (self.findViewIndex(window_id, label)) |current_index| {
             if (self.views[current_index].canvas_widget_pressed_id == id) {
+                const release_previous_state = self.views[current_index].canvasWidgetRenderState();
                 self.views[current_index].canvas_widget_pressed_id = 0;
-                self.invalidateFor(.state, self.views[current_index].frame);
+                self.invalidateForCanvasWidgetRenderStateChange(current_index, release_previous_state, self.views[current_index].canvasWidgetRenderState());
             }
         }
     }
@@ -4815,6 +4835,14 @@ const RuntimeView = struct {
         const index = self.canvasWidgetNodeIndexById(id) orelse return .arrow;
         const node = self.widget_layout_nodes[index];
         return platformCursorFromCanvas(canvas.cursorForWidgetTarget(node.widget.kind, node.widget.state));
+    }
+
+    fn canvasWidgetRenderState(self: *const RuntimeView) canvas.WidgetRenderState {
+        return .{
+            .focused_id = if (self.canvas_widget_focused_id == 0) null else self.canvas_widget_focused_id,
+            .hovered_id = if (self.canvas_widget_hovered_id == 0) null else self.canvas_widget_hovered_id,
+            .pressed_id = if (self.canvas_widget_pressed_id == 0) null else self.canvas_widget_pressed_id,
+        };
     }
 
     fn applyCanvasWidgetScrollRoute(self: *RuntimeView, route: []const canvas.WidgetEventRouteEntry, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
@@ -11846,6 +11874,7 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, resized_frame.status);
 
     harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
@@ -12034,6 +12063,7 @@ test "runtime dispatches routed canvas widget pointer events" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
     harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
@@ -12053,6 +12083,9 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expect(harness.runtime.views[0].focused);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 2), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 12, 96, 32), harness.runtime.pendingDirtyRegions()[0]);
+    try std.testing.expectEqualDeep(geometry.RectF.init(9, 11, 98, 34), harness.runtime.pendingDirtyRegions()[1]);
 
     const snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqual(@as(usize, 3), snapshot.widgets.len);
@@ -12085,6 +12118,7 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expect(app_state.last_keyboard_super);
 
     harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
@@ -12100,6 +12134,8 @@ test "runtime dispatches routed canvas widget pointer events" {
     try std.testing.expectEqual(canvas.WidgetKind.text_field, app_state.last_keyboard_target_kind);
     try std.testing.expectEqualStrings("tab", app_state.last_keyboard_key);
     try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
+    try std.testing.expectEqualDeep(geometry.RectF.init(9, 11, 142, 74), harness.runtime.pendingDirtyRegions()[0]);
 
     const tab_snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expect(!tab_snapshot.widgets[1].focused);

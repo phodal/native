@@ -3231,6 +3231,10 @@ pub const WidgetLayoutTree = struct {
         return emitWidgetLayoutWithState(builder, self, tokens, state);
     }
 
+    pub fn renderStateDirtyBounds(self: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState) ?geometry.RectF {
+        return widgetRenderStateDirtyBounds(self, previous, next);
+    }
+
     pub fn diff(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
         return diffWidgetLayoutTrees(previous, next, output);
     }
@@ -7349,6 +7353,47 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         .paint_dirty = paint_dirty,
         .semantics_dirty = semantics_dirty,
     };
+}
+
+fn widgetRenderStateDirtyBounds(layout: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState) ?geometry.RectF {
+    var ids: [6]?ObjectId = [_]?ObjectId{null} ** 6;
+    var id_len: usize = 0;
+    if (previous.focused_id != next.focused_id) {
+        appendOptionalObjectId(&ids, &id_len, previous.focused_id);
+        appendOptionalObjectId(&ids, &id_len, next.focused_id);
+    }
+    if (previous.hovered_id != next.hovered_id) {
+        appendOptionalObjectId(&ids, &id_len, previous.hovered_id);
+        appendOptionalObjectId(&ids, &id_len, next.hovered_id);
+    }
+    if (previous.pressed_id != next.pressed_id) {
+        appendOptionalObjectId(&ids, &id_len, previous.pressed_id);
+        appendOptionalObjectId(&ids, &id_len, next.pressed_id);
+    }
+
+    var bounds: ?geometry.RectF = null;
+    for (ids[0..id_len]) |maybe_id| {
+        const id = maybe_id orelse continue;
+        const index = widgetIndexById(layout, id) orelse continue;
+        const node = layout.nodes[index];
+        const base = widgetWithFrame(node.widget, node.frame);
+        const previous_widget = widgetWithRenderState(base, previous);
+        const next_widget = widgetWithRenderState(base, next);
+        if (widgetStatesEqual(previous_widget.state, next_widget.state)) continue;
+        bounds = unionOptionalBounds(bounds, widgetPaintChangeBounds(previous_widget, next_widget));
+    }
+    return bounds;
+}
+
+fn appendOptionalObjectId(output: []?ObjectId, len: *usize, maybe_id: ?ObjectId) void {
+    const id = maybe_id orelse return;
+    if (id == 0) return;
+    for (output[0..len.*]) |existing| {
+        if (existing != null and existing.? == id) return;
+    }
+    if (len.* >= output.len) return;
+    output[len.*] = id;
+    len.* += 1;
 }
 
 fn widgetFullPaintBounds(node: WidgetLayoutNode) geometry.RectF {
@@ -11682,6 +11727,41 @@ test "widget layout diff includes paint overdraw in dirty bounds" {
     try std.testing.expectEqual(WidgetInvalidationKind.changed, focus_invalidations[0].kind);
     try std.testing.expectEqual(@as(ObjectId, 3), focus_invalidations[0].id);
     try expectRect(geometry.RectF.init(9, 69, 102, 32), focus_invalidations[0].dirty_bounds);
+}
+
+test "widget render state dirty bounds tracks changed runtime states" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 12, 96, 32),
+            .text = "Run",
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 56, 96, 32),
+            .text = "Stop",
+        },
+        .{
+            .id = 4,
+            .kind = .text,
+            .frame = geometry.RectF.init(10, 100, 96, 20),
+            .text = "Label",
+        },
+    };
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 160, 140), &nodes);
+
+    try expectRect(
+        geometry.RectF.init(9, 11, 98, 78),
+        layout.renderStateDirtyBounds(
+            .{ .focused_id = 2, .hovered_id = 2, .pressed_id = 2 },
+            .{ .focused_id = 3, .hovered_id = 3 },
+        ),
+    );
+    try std.testing.expect(layout.renderStateDirtyBounds(.{ .focused_id = 2 }, .{ .focused_id = 2 }) == null);
+    try std.testing.expect(layout.renderStateDirtyBounds(.{ .focused_id = 99 }, .{ .focused_id = 100 }) == null);
 }
 
 test "widget layout diff separates paint and semantics dirtiness" {

@@ -19,6 +19,56 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statusLabel: TextView
     private var currentSurfaceHolder: SurfaceHolder? = null
 
+    data class WidgetSemantics(
+        val id: Long,
+        val parentId: Long,
+        val role: Int,
+        val flags: Int,
+        val actions: Int,
+        val x: Float,
+        val y: Float,
+        val width: Float,
+        val height: Float,
+        val value: Float?,
+        val label: String,
+        val text: String,
+        val textSelectionStart: Long,
+        val textSelectionEnd: Long,
+        val textCompositionStart: Long,
+        val textCompositionEnd: Long,
+        val gridRowIndex: Long,
+        val gridColumnIndex: Long,
+        val gridRowCount: Long,
+        val gridColumnCount: Long,
+        val listItemIndex: Long,
+        val listItemCount: Long,
+        val scrollOffset: Float,
+        val scrollViewportExtent: Float,
+        val scrollContentExtent: Float,
+        val hasScroll: Boolean,
+    )
+
+    data class WidgetTextGeometry(
+        val id: Long,
+        val hasCaretBounds: Boolean,
+        val caretX: Float,
+        val caretY: Float,
+        val caretWidth: Float,
+        val caretHeight: Float,
+        val hasSelectionBounds: Boolean,
+        val selectionX: Float,
+        val selectionY: Float,
+        val selectionWidth: Float,
+        val selectionHeight: Float,
+        val selectionRectCount: Int,
+        val hasCompositionBounds: Boolean,
+        val compositionX: Float,
+        val compositionY: Float,
+        val compositionWidth: Float,
+        val compositionHeight: Float,
+        val compositionRectCount: Int,
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         System.loadLibrary("zero_native_example")
@@ -103,6 +153,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         nativeApp = nativeCreate()
         nativeStart(nativeApp)
+        refreshWidgetSemanticsStatus()
     }
 
     private fun dispatchNativeCommand(command: String) {
@@ -112,6 +163,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             statusLabel.text = "Command $count: $command"
         }
         nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
     }
 
     override fun onResume() {
@@ -132,6 +184,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         currentSurfaceHolder = holder
         sendViewport(width, height, holder.surface)
         nativeFrame(nativeApp)
+        refreshWidgetSemanticsStatus()
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
@@ -144,7 +197,96 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onConfigurationChanged(newConfig)
         if (nativeApp != 0L) {
             nativeFrame(nativeApp)
+            refreshWidgetSemanticsStatus()
         }
+    }
+
+    private fun widgetSemanticsSnapshot(): List<WidgetSemantics> {
+        if (nativeApp == 0L) return emptyList()
+        val count = nativeWidgetSemanticsCount(nativeApp)
+        val items = mutableListOf<WidgetSemantics>()
+        for (index in 0 until count) {
+            widgetSemanticsAt(index)?.let { items.add(it) }
+        }
+        return items
+    }
+
+    private fun widgetSemanticsAt(index: Int): WidgetSemantics? {
+        val ids = LongArray(12)
+        val ints = IntArray(5)
+        val floats = FloatArray(8)
+        if (!nativeWidgetSemanticsFields(nativeApp, index, ids, ints, floats)) return null
+        return WidgetSemantics(
+            id = ids[0],
+            parentId = ids[1],
+            role = ints[0],
+            flags = ints[1],
+            actions = ints[2],
+            x = floats[0],
+            y = floats[1],
+            width = floats[2],
+            height = floats[3],
+            value = if (ints[3] != 0) floats[4] else null,
+            label = String(nativeWidgetSemanticsLabel(nativeApp, index), Charsets.UTF_8),
+            text = String(nativeWidgetSemanticsText(nativeApp, index), Charsets.UTF_8),
+            textSelectionStart = ids[2],
+            textSelectionEnd = ids[3],
+            textCompositionStart = ids[4],
+            textCompositionEnd = ids[5],
+            gridRowIndex = ids[6],
+            gridColumnIndex = ids[7],
+            gridRowCount = ids[8],
+            gridColumnCount = ids[9],
+            listItemIndex = ids[10],
+            listItemCount = ids[11],
+            scrollOffset = floats[5],
+            scrollViewportExtent = floats[6],
+            scrollContentExtent = floats[7],
+            hasScroll = ints[4] != 0,
+        )
+    }
+
+    private fun widgetTextGeometry(id: Long): WidgetTextGeometry? {
+        val ints = IntArray(5)
+        val floats = FloatArray(12)
+        if (!nativeWidgetTextGeometry(nativeApp, id, ints, floats)) return null
+        return WidgetTextGeometry(
+            id = id,
+            hasCaretBounds = ints[0] != 0,
+            caretX = floats[0],
+            caretY = floats[1],
+            caretWidth = floats[2],
+            caretHeight = floats[3],
+            hasSelectionBounds = ints[1] != 0,
+            selectionX = floats[4],
+            selectionY = floats[5],
+            selectionWidth = floats[6],
+            selectionHeight = floats[7],
+            selectionRectCount = ints[2],
+            hasCompositionBounds = ints[3] != 0,
+            compositionX = floats[8],
+            compositionY = floats[9],
+            compositionWidth = floats[10],
+            compositionHeight = floats[11],
+            compositionRectCount = ints[4],
+        )
+    }
+
+    private fun dispatchWidgetAction(
+        id: Long,
+        action: Int,
+        text: String? = null,
+        selectionAnchor: Long = 0,
+        selectionFocus: Long = 0,
+        hasSelection: Boolean = false,
+    ): Boolean {
+        if (nativeApp == 0L) return false
+        return nativeWidgetAction(nativeApp, id, action, text, selectionAnchor, selectionFocus, hasSelection)
+    }
+
+    private fun refreshWidgetSemanticsStatus() {
+        if (nativeApp == 0L || !::statusLabel.isInitialized) return
+        statusLabel.contentDescription = "Retained widget semantics: ${widgetSemanticsSnapshot().size}"
     }
 
     private fun sendViewport(width: Int, height: Int, surface: Any) {
@@ -216,6 +358,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     external fun nativeIme(app: Long, kind: Int, text: String, cursor: Long)
     external fun nativeCommand(app: Long, command: String): Int
     external fun nativeFrame(app: Long)
+    external fun nativeWidgetSemanticsCount(app: Long): Int
+    external fun nativeWidgetSemanticsFields(app: Long, index: Int, ids: LongArray, ints: IntArray, floats: FloatArray): Boolean
+    external fun nativeWidgetSemanticsLabel(app: Long, index: Int): ByteArray
+    external fun nativeWidgetSemanticsText(app: Long, index: Int): ByteArray
+    external fun nativeWidgetTextGeometry(app: Long, id: Long, ints: IntArray, floats: FloatArray): Boolean
+    external fun nativeWidgetAction(app: Long, id: Long, action: Int, text: String?, selectionAnchor: Long, selectionFocus: Long, hasSelection: Boolean): Boolean
 
     companion object {
         private const val html = """

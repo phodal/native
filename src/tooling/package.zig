@@ -1110,6 +1110,56 @@ fn androidActivity() []const u8 {
     \\    private lateinit var statusLabel: TextView
     \\    private var currentSurfaceHolder: SurfaceHolder? = null
     \\
+    \\    data class WidgetSemantics(
+    \\        val id: Long,
+    \\        val parentId: Long,
+    \\        val role: Int,
+    \\        val flags: Int,
+    \\        val actions: Int,
+    \\        val x: Float,
+    \\        val y: Float,
+    \\        val width: Float,
+    \\        val height: Float,
+    \\        val value: Float?,
+    \\        val label: String,
+    \\        val text: String,
+    \\        val textSelectionStart: Long,
+    \\        val textSelectionEnd: Long,
+    \\        val textCompositionStart: Long,
+    \\        val textCompositionEnd: Long,
+    \\        val gridRowIndex: Long,
+    \\        val gridColumnIndex: Long,
+    \\        val gridRowCount: Long,
+    \\        val gridColumnCount: Long,
+    \\        val listItemIndex: Long,
+    \\        val listItemCount: Long,
+    \\        val scrollOffset: Float,
+    \\        val scrollViewportExtent: Float,
+    \\        val scrollContentExtent: Float,
+    \\        val hasScroll: Boolean,
+    \\    )
+    \\
+    \\    data class WidgetTextGeometry(
+    \\        val id: Long,
+    \\        val hasCaretBounds: Boolean,
+    \\        val caretX: Float,
+    \\        val caretY: Float,
+    \\        val caretWidth: Float,
+    \\        val caretHeight: Float,
+    \\        val hasSelectionBounds: Boolean,
+    \\        val selectionX: Float,
+    \\        val selectionY: Float,
+    \\        val selectionWidth: Float,
+    \\        val selectionHeight: Float,
+    \\        val selectionRectCount: Int,
+    \\        val hasCompositionBounds: Boolean,
+    \\        val compositionX: Float,
+    \\        val compositionY: Float,
+    \\        val compositionWidth: Float,
+    \\        val compositionHeight: Float,
+    \\        val compositionRectCount: Int,
+    \\    )
+    \\
     \\    override fun onCreate(savedInstanceState: Bundle?) {
     \\        super.onCreate(savedInstanceState)
     \\        System.loadLibrary("zero_native_host")
@@ -1183,6 +1233,7 @@ fn androidActivity() []const u8 {
     \\        nativeSetAssetRoot(nativeApp, packagedAssetRoot())
     \\        nativeSetAssetEntry(nativeApp, ZeroNativeShellConfig.assetEntryPath)
     \\        nativeStart(nativeApp)
+    \\        refreshWidgetSemanticsStatus()
     \\    }
     \\
     \\    private fun packagedAssetRoot(): String {
@@ -1219,6 +1270,7 @@ fn androidActivity() []const u8 {
     \\            statusLabel.text = "Command $count: $command"
     \\        }
     \\        nativeFrame(nativeApp)
+    \\        refreshWidgetSemanticsStatus()
     \\    }
     \\
     \\    override fun onResume() {
@@ -1236,6 +1288,7 @@ fn androidActivity() []const u8 {
     \\        currentSurfaceHolder = holder
     \\        sendViewport(width, height, holder.surface)
     \\        nativeFrame(nativeApp)
+    \\        refreshWidgetSemanticsStatus()
     \\    }
     \\
     \\    override fun surfaceCreated(holder: SurfaceHolder) {}
@@ -1246,7 +1299,98 @@ fn androidActivity() []const u8 {
     \\
     \\    override fun onConfigurationChanged(newConfig: Configuration) {
     \\        super.onConfigurationChanged(newConfig)
-    \\        if (nativeApp != 0L) nativeFrame(nativeApp)
+    \\        if (nativeApp != 0L) {
+    \\            nativeFrame(nativeApp)
+    \\            refreshWidgetSemanticsStatus()
+    \\        }
+    \\    }
+    \\
+    \\    private fun widgetSemanticsSnapshot(): List<WidgetSemantics> {
+    \\        if (nativeApp == 0L) return emptyList()
+    \\        val count = nativeWidgetSemanticsCount(nativeApp)
+    \\        val items = mutableListOf<WidgetSemantics>()
+    \\        for (index in 0 until count) {
+    \\            widgetSemanticsAt(index)?.let { items.add(it) }
+    \\        }
+    \\        return items
+    \\    }
+    \\
+    \\    private fun widgetSemanticsAt(index: Int): WidgetSemantics? {
+    \\        val ids = LongArray(12)
+    \\        val ints = IntArray(5)
+    \\        val floats = FloatArray(8)
+    \\        if (!nativeWidgetSemanticsFields(nativeApp, index, ids, ints, floats)) return null
+    \\        return WidgetSemantics(
+    \\            id = ids[0],
+    \\            parentId = ids[1],
+    \\            role = ints[0],
+    \\            flags = ints[1],
+    \\            actions = ints[2],
+    \\            x = floats[0],
+    \\            y = floats[1],
+    \\            width = floats[2],
+    \\            height = floats[3],
+    \\            value = if (ints[3] != 0) floats[4] else null,
+    \\            label = String(nativeWidgetSemanticsLabel(nativeApp, index), Charsets.UTF_8),
+    \\            text = String(nativeWidgetSemanticsText(nativeApp, index), Charsets.UTF_8),
+    \\            textSelectionStart = ids[2],
+    \\            textSelectionEnd = ids[3],
+    \\            textCompositionStart = ids[4],
+    \\            textCompositionEnd = ids[5],
+    \\            gridRowIndex = ids[6],
+    \\            gridColumnIndex = ids[7],
+    \\            gridRowCount = ids[8],
+    \\            gridColumnCount = ids[9],
+    \\            listItemIndex = ids[10],
+    \\            listItemCount = ids[11],
+    \\            scrollOffset = floats[5],
+    \\            scrollViewportExtent = floats[6],
+    \\            scrollContentExtent = floats[7],
+    \\            hasScroll = ints[4] != 0,
+    \\        )
+    \\    }
+    \\
+    \\    private fun widgetTextGeometry(id: Long): WidgetTextGeometry? {
+    \\        val ints = IntArray(5)
+    \\        val floats = FloatArray(12)
+    \\        if (!nativeWidgetTextGeometry(nativeApp, id, ints, floats)) return null
+    \\        return WidgetTextGeometry(
+    \\            id = id,
+    \\            hasCaretBounds = ints[0] != 0,
+    \\            caretX = floats[0],
+    \\            caretY = floats[1],
+    \\            caretWidth = floats[2],
+    \\            caretHeight = floats[3],
+    \\            hasSelectionBounds = ints[1] != 0,
+    \\            selectionX = floats[4],
+    \\            selectionY = floats[5],
+    \\            selectionWidth = floats[6],
+    \\            selectionHeight = floats[7],
+    \\            selectionRectCount = ints[2],
+    \\            hasCompositionBounds = ints[3] != 0,
+    \\            compositionX = floats[8],
+    \\            compositionY = floats[9],
+    \\            compositionWidth = floats[10],
+    \\            compositionHeight = floats[11],
+    \\            compositionRectCount = ints[4],
+    \\        )
+    \\    }
+    \\
+    \\    private fun dispatchWidgetAction(
+    \\        id: Long,
+    \\        action: Int,
+    \\        text: String? = null,
+    \\        selectionAnchor: Long = 0,
+    \\        selectionFocus: Long = 0,
+    \\        hasSelection: Boolean = false,
+    \\    ): Boolean {
+    \\        if (nativeApp == 0L) return false
+    \\        return nativeWidgetAction(nativeApp, id, action, text, selectionAnchor, selectionFocus, hasSelection)
+    \\    }
+    \\
+    \\    private fun refreshWidgetSemanticsStatus() {
+    \\        if (nativeApp == 0L || !::statusLabel.isInitialized) return
+    \\        statusLabel.contentDescription = "Retained widget semantics: ${widgetSemanticsSnapshot().size}"
     \\    }
     \\
     \\    private fun sendViewport(width: Int, height: Int, surface: Any) {
@@ -1307,6 +1451,12 @@ fn androidActivity() []const u8 {
     \\    external fun nativeIme(app: Long, kind: Int, text: String, cursor: Long)
     \\    external fun nativeCommand(app: Long, command: String): Int
     \\    external fun nativeFrame(app: Long)
+    \\    external fun nativeWidgetSemanticsCount(app: Long): Int
+    \\    external fun nativeWidgetSemanticsFields(app: Long, index: Int, ids: LongArray, ints: IntArray, floats: FloatArray): Boolean
+    \\    external fun nativeWidgetSemanticsLabel(app: Long, index: Int): ByteArray
+    \\    external fun nativeWidgetSemanticsText(app: Long, index: Int): ByteArray
+    \\    external fun nativeWidgetTextGeometry(app: Long, id: Long, ints: IntArray, floats: FloatArray): Boolean
+    \\    external fun nativeWidgetAction(app: Long, id: Long, action: Int, text: String?, selectionAnchor: Long, selectionFocus: Long, hasSelection: Boolean): Boolean
     \\
     \\    companion object {
     \\        private const val html = """
@@ -1331,6 +1481,7 @@ fn androidJni() []const u8 {
     \\#include <stdint.h>
     \\#include <string.h>
     \\#include "zero_native.h"
+    \\static jbyteArray zero_native_jni_bytes(JNIEnv *env, const char *ptr, uintptr_t len) { jbyteArray out = (*env)->NewByteArray(env, (jsize)len); if (!out) return NULL; if (ptr && len > 0) (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte*)ptr); return out; }
     \\JNIEXPORT jlong JNICALL Java_dev_zero_1native_MainActivity_nativeCreate(JNIEnv *env, jobject self) { (void)env; (void)self; return (jlong)zero_native_app_create(); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeDestroy(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_destroy((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeStart(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_start((void*)app); }
@@ -1347,6 +1498,12 @@ fn androidJni() []const u8 {
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeIme(JNIEnv *env, jobject self, jlong app, jint kind, jstring text, jlong cursor) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_app_ime((void*)app, kind, chars, chars ? strlen(chars) : 0, (intptr_t)cursor); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); }
     \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; zero_native_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)zero_native_app_last_command_count((void*)app); }
     \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeFrame(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_frame((void*)app); }
+    \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsCount(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; return (jint)zero_native_app_widget_semantics_count((void*)app); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsFields(JNIEnv *env, jobject self, jlong app, jint index, jlongArray ids, jintArray ints, jfloatArray floats) { (void)self; if (!ids || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ids) < 12 || (*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 8) return JNI_FALSE; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return JNI_FALSE; const jlong id_values[12] = { (jlong)node.id, (jlong)node.parent_id, (jlong)node.text_selection_start, (jlong)node.text_selection_end, (jlong)node.text_composition_start, (jlong)node.text_composition_end, (jlong)node.grid_row_index, (jlong)node.grid_column_index, (jlong)node.grid_row_count, (jlong)node.grid_column_count, (jlong)node.list_item_index, (jlong)node.list_item_count }; const jint int_values[5] = { (jint)node.role, (jint)node.flags, (jint)node.actions, (jint)node.has_value, (jint)node.has_scroll }; const jfloat float_values[8] = { (jfloat)node.x, (jfloat)node.y, (jfloat)node.width, (jfloat)node.height, (jfloat)node.value, (jfloat)node.scroll_offset, (jfloat)node.scroll_viewport_extent, (jfloat)node.scroll_content_extent }; (*env)->SetLongArrayRegion(env, ids, 0, 12, id_values); (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 8, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsLabel(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.label, node.label_len); }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsText(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.text, node.text_len); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetTextGeometry(JNIEnv *env, jobject self, jlong app, jlong id, jintArray ints, jfloatArray floats) { (void)self; if (!ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 12) return JNI_FALSE; zero_native_widget_text_geometry_t geometry; memset(&geometry, 0, sizeof(geometry)); if (!zero_native_app_widget_text_geometry((void*)app, (uint64_t)id, &geometry)) return JNI_FALSE; const jint int_values[5] = { (jint)geometry.has_caret_bounds, (jint)geometry.has_selection_bounds, (jint)geometry.selection_rect_count, (jint)geometry.has_composition_bounds, (jint)geometry.composition_rect_count }; const jfloat float_values[12] = { (jfloat)geometry.caret_x, (jfloat)geometry.caret_y, (jfloat)geometry.caret_width, (jfloat)geometry.caret_height, (jfloat)geometry.selection_x, (jfloat)geometry.selection_y, (jfloat)geometry.selection_width, (jfloat)geometry.selection_height, (jfloat)geometry.composition_x, (jfloat)geometry.composition_y, (jfloat)geometry.composition_width, (jfloat)geometry.composition_height }; (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 12, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetAction(JNIEnv *env, jobject self, jlong app, jlong id, jint action, jstring text, jlong selection_anchor, jlong selection_focus, jboolean has_selection) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_widget_action_t request; memset(&request, 0, sizeof(request)); request.id = (uint64_t)id; request.action = (int)action; request.text = chars; request.text_len = chars ? strlen(chars) : 0; request.selection_anchor = (uintptr_t)selection_anchor; request.selection_focus = (uintptr_t)selection_focus; request.has_selection = has_selection ? 1 : 0; const int ok = zero_native_app_widget_action((void*)app, &request); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); return ok ? JNI_TRUE : JNI_FALSE; }
     \\
     ;
 }
@@ -2212,6 +2369,11 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeKey") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeText") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "external fun nativeIme") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "data class WidgetSemantics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "data class WidgetTextGeometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetSemanticsFields") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetTextGeometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeWidgetAction") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "rootWindowInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "keyboardBottomInset") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "if (currentSurfaceHolder == holder) currentSurfaceHolder = null") != null);
@@ -2229,6 +2391,10 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_key") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_text") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_ime") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_semantics_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_semantics_at") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_text_geometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_action") != null);
 }
 
 test "android shell config escapes Kotlin string interpolation" {

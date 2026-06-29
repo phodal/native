@@ -412,6 +412,18 @@ pub const GpuSurfacePresentMode = enum {
     timer,
 };
 
+pub const GpuSurfaceAlphaMode = enum {
+    none,
+    @"opaque",
+    premultiplied,
+};
+
+pub const GpuSurfaceColorSpace = enum {
+    none,
+    srgb,
+    display_p3,
+};
+
 pub const GpuSurfaceStatus = enum {
     unavailable,
     initializing,
@@ -423,11 +435,17 @@ pub const GpuSurfaceOptions = struct {
     backend: GpuSurfaceBackend = .metal,
     pixel_format: GpuSurfacePixelFormat = .bgra8_unorm,
     present_mode: GpuSurfacePresentMode = .timer,
+    alpha_mode: GpuSurfaceAlphaMode = .@"opaque",
+    color_space: GpuSurfaceColorSpace = .srgb,
+    vsync: bool = true,
 
     pub fn isSupported(self: GpuSurfaceOptions) bool {
         return self.backend == .metal and
             self.pixel_format == .bgra8_unorm and
-            self.present_mode == .timer;
+            self.present_mode == .timer and
+            self.alpha_mode == .@"opaque" and
+            self.color_space == .srgb and
+            self.vsync;
     }
 };
 
@@ -512,6 +530,9 @@ pub const ViewInfo = struct {
     gpu_backend: GpuSurfaceBackend = .none,
     gpu_pixel_format: GpuSurfacePixelFormat = .none,
     gpu_present_mode: GpuSurfacePresentMode = .none,
+    gpu_alpha_mode: GpuSurfaceAlphaMode = .none,
+    gpu_color_space: GpuSurfaceColorSpace = .none,
+    gpu_vsync: bool = false,
     gpu_status: GpuSurfaceStatus = .unavailable,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
@@ -593,6 +614,9 @@ pub const ViewInfo = struct {
             .backend = self.gpu_backend,
             .pixel_format = self.gpu_pixel_format,
             .present_mode = self.gpu_present_mode,
+            .alpha_mode = self.gpu_alpha_mode,
+            .color_space = self.gpu_color_space,
+            .vsync = self.gpu_vsync,
             .status = self.gpu_status,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
@@ -828,6 +852,9 @@ pub const GpuFrame = struct {
     backend: GpuSurfaceBackend = .none,
     pixel_format: GpuSurfacePixelFormat = .none,
     present_mode: GpuSurfacePresentMode = .none,
+    alpha_mode: GpuSurfaceAlphaMode = .none,
+    color_space: GpuSurfaceColorSpace = .none,
+    vsync: bool = false,
     status: GpuSurfaceStatus = .unavailable,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
@@ -904,6 +931,9 @@ pub const GpuSurfaceFrameEvent = struct {
     backend: GpuSurfaceBackend = .metal,
     pixel_format: GpuSurfacePixelFormat = .bgra8_unorm,
     present_mode: GpuSurfacePresentMode = .timer,
+    alpha_mode: GpuSurfaceAlphaMode = .@"opaque",
+    color_space: GpuSurfaceColorSpace = .srgb,
+    vsync: bool = true,
     status: GpuSurfaceStatus = .ready,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
@@ -1755,6 +1785,9 @@ pub const NullPlatform = struct {
             .gpu_backend = if (options.kind == .gpu_surface) options.gpu_surface.backend else .none,
             .gpu_pixel_format = if (options.kind == .gpu_surface) options.gpu_surface.pixel_format else .none,
             .gpu_present_mode = if (options.kind == .gpu_surface) options.gpu_surface.present_mode else .none,
+            .gpu_alpha_mode = if (options.kind == .gpu_surface) options.gpu_surface.alpha_mode else .none,
+            .gpu_color_space = if (options.kind == .gpu_surface) options.gpu_surface.color_space else .none,
+            .gpu_vsync = options.kind == .gpu_surface and options.gpu_surface.vsync,
             .gpu_status = if (options.kind == .gpu_surface) .ready else .unavailable,
             .open = true,
         };
@@ -2380,6 +2413,9 @@ const NullView = struct {
     gpu_backend: GpuSurfaceBackend = .none,
     gpu_pixel_format: GpuSurfacePixelFormat = .none,
     gpu_present_mode: GpuSurfacePresentMode = .none,
+    gpu_alpha_mode: GpuSurfaceAlphaMode = .none,
+    gpu_color_space: GpuSurfaceColorSpace = .none,
+    gpu_vsync: bool = false,
     gpu_status: GpuSurfaceStatus = .unavailable,
     open: bool = false,
     label_storage: [max_view_label_bytes]u8 = undefined,

@@ -160,6 +160,13 @@ export type ZeroNativeViewKind =
   | "progress_indicator"
   | "progressIndicator";
 
+export type ZeroNativeGpuSurfaceBackend = "none" | "metal";
+export type ZeroNativeGpuSurfacePixelFormat = "none" | "bgra8_unorm";
+export type ZeroNativeGpuSurfacePresentMode = "none" | "timer";
+export type ZeroNativeGpuSurfaceAlphaMode = "none" | "opaque" | "premultiplied";
+export type ZeroNativeGpuSurfaceColorSpace = "none" | "srgb" | "display_p3";
+export type ZeroNativeGpuSurfaceStatus = "unavailable" | "initializing" | "ready" | "lost";
+
 export interface ZeroNativeViewInfo {
   /** Stable runtime view id for this window/view lifetime. */
   id: number;
@@ -192,6 +199,13 @@ export interface ZeroNativeViewInfo {
   gpuInputLatencyBudgetOk: boolean;
   gpuNonblank: boolean;
   gpuSampleColor: number;
+  gpuBackend: ZeroNativeGpuSurfaceBackend;
+  gpuPixelFormat: ZeroNativeGpuSurfacePixelFormat;
+  gpuPresentMode: ZeroNativeGpuSurfacePresentMode;
+  gpuAlphaMode: ZeroNativeGpuSurfaceAlphaMode;
+  gpuColorSpace: ZeroNativeGpuSurfaceColorSpace;
+  gpuVsync: boolean;
+  gpuStatus: ZeroNativeGpuSurfaceStatus;
   canvasRevision: number;
   canvasCommandCount: number;
   canvasFrameRequiresRender: boolean;
@@ -251,6 +265,18 @@ export interface ZeroNativeCreateNativeViewOptions extends ZeroNativeCreateViewB
   kind: ZeroNativeNativeViewKind;
   frame?: ZeroNativeRect;
   url?: never;
+  /** Only valid for gpu_surface views. Defaults to the first supported backend. */
+  gpuBackend?: ZeroNativeGpuSurfaceBackend;
+  /** Only valid for gpu_surface views. */
+  gpuPixelFormat?: ZeroNativeGpuSurfacePixelFormat;
+  /** Only valid for gpu_surface views. */
+  gpuPresentMode?: ZeroNativeGpuSurfacePresentMode;
+  /** Only valid for gpu_surface views. */
+  gpuAlphaMode?: ZeroNativeGpuSurfaceAlphaMode;
+  /** Only valid for gpu_surface views. */
+  gpuColorSpace?: ZeroNativeGpuSurfaceColorSpace;
+  /** Only valid for gpu_surface views. */
+  gpuVsync?: boolean;
 }
 
 export interface ZeroNativeCreateWebViewViewOptions extends ZeroNativeCreateViewBaseOptions {

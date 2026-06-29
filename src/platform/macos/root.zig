@@ -398,6 +398,9 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
             .backend = .metal,
             .pixel_format = .bgra8_unorm,
             .present_mode = .timer,
+            .alpha_mode = .@"opaque",
+            .color_space = .srgb,
+            .vsync = true,
             .status = .ready,
         } }),
         .gpu_surface_resize => state.emit(.{ .gpu_surface_resized = .{

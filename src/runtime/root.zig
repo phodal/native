@@ -1846,6 +1846,9 @@ pub const Runtime = struct {
                     self.views[index].gpu_backend = frame_event.backend;
                     self.views[index].gpu_pixel_format = frame_event.pixel_format;
                     self.views[index].gpu_present_mode = frame_event.present_mode;
+                    self.views[index].gpu_alpha_mode = frame_event.alpha_mode;
+                    self.views[index].gpu_color_space = frame_event.color_space;
+                    self.views[index].gpu_vsync = frame_event.vsync;
                     self.views[index].gpu_status = frame_event.status;
                     const preview_frame = try self.planCanvasFrameForView(index, .{
                         .frame_index = frame_event.frame_index,
@@ -3866,6 +3869,9 @@ pub const Runtime = struct {
             .gpu_backend = if (options.kind == .gpu_surface) options.gpu_surface.backend else .none,
             .gpu_pixel_format = if (options.kind == .gpu_surface) options.gpu_surface.pixel_format else .none,
             .gpu_present_mode = if (options.kind == .gpu_surface) options.gpu_surface.present_mode else .none,
+            .gpu_alpha_mode = if (options.kind == .gpu_surface) options.gpu_surface.alpha_mode else .none,
+            .gpu_color_space = if (options.kind == .gpu_surface) options.gpu_surface.color_space else .none,
+            .gpu_vsync = options.kind == .gpu_surface and options.gpu_surface.vsync,
             .gpu_status = if (options.kind == .gpu_surface) .ready else .unavailable,
             .focused = false,
             .open = true,
@@ -4984,6 +4990,9 @@ const RuntimeView = struct {
     gpu_backend: platform.GpuSurfaceBackend = .none,
     gpu_pixel_format: platform.GpuSurfacePixelFormat = .none,
     gpu_present_mode: platform.GpuSurfacePresentMode = .none,
+    gpu_alpha_mode: platform.GpuSurfaceAlphaMode = .none,
+    gpu_color_space: platform.GpuSurfaceColorSpace = .none,
+    gpu_vsync: bool = false,
     gpu_status: platform.GpuSurfaceStatus = .unavailable,
     canvas_commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined,
     canvas_command_count: usize = 0,
@@ -5130,6 +5139,9 @@ const RuntimeView = struct {
             .gpu_backend = self.gpu_backend,
             .gpu_pixel_format = self.gpu_pixel_format,
             .gpu_present_mode = self.gpu_present_mode,
+            .gpu_alpha_mode = self.gpu_alpha_mode,
+            .gpu_color_space = self.gpu_color_space,
+            .gpu_vsync = self.gpu_vsync,
             .gpu_status = self.gpu_status,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
@@ -6954,6 +6966,11 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
     try json.writeString(writer, @tagName(view.gpu_pixel_format));
     try writer.writeAll(",\"gpuPresentMode\":");
     try json.writeString(writer, @tagName(view.gpu_present_mode));
+    try writer.writeAll(",\"gpuAlphaMode\":");
+    try json.writeString(writer, @tagName(view.gpu_alpha_mode));
+    try writer.writeAll(",\"gpuColorSpace\":");
+    try json.writeString(writer, @tagName(view.gpu_color_space));
+    try writer.print(",\"gpuVsync\":{}", .{view.gpu_vsync});
     try writer.writeAll(",\"gpuStatus\":");
     try json.writeString(writer, @tagName(view.gpu_status));
     try writer.print(",\"canvasRevision\":{d},\"canvasCommandCount\":{d},\"canvasFrameRequiresRender\":{},\"canvasFrameFullRepaint\":{},\"canvasFrameBatchCount\":{d}", .{
@@ -7753,6 +7770,15 @@ fn gpuSurfaceOptionsFromJson(payload: []const u8, storage: *json.StringStorage) 
     if (jsonStringField(payload, "gpuPresentMode", storage) orelse jsonStringField(payload, "gpu_present_mode", storage)) |value| {
         options.present_mode = gpuSurfacePresentModeFromString(value) orelse return error.UnsupportedViewKind;
     }
+    if (jsonStringField(payload, "gpuAlphaMode", storage) orelse jsonStringField(payload, "gpu_alpha_mode", storage)) |value| {
+        options.alpha_mode = gpuSurfaceAlphaModeFromString(value) orelse return error.UnsupportedViewKind;
+    }
+    if (jsonStringField(payload, "gpuColorSpace", storage) orelse jsonStringField(payload, "gpu_color_space", storage)) |value| {
+        options.color_space = gpuSurfaceColorSpaceFromString(value) orelse return error.UnsupportedViewKind;
+    }
+    if (jsonBoolField(payload, "gpuVsync") orelse jsonBoolField(payload, "gpu_vsync")) |value| {
+        options.vsync = value;
+    }
     return options;
 }
 
@@ -7773,6 +7799,20 @@ fn gpuSurfacePixelFormatFromString(value: []const u8) ?platform.GpuSurfacePixelF
 fn gpuSurfacePresentModeFromString(value: []const u8) ?platform.GpuSurfacePresentMode {
     inline for (@typeInfo(platform.GpuSurfacePresentMode).@"enum".fields) |field| {
         if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfacePresentMode, field.name);
+    }
+    return null;
+}
+
+fn gpuSurfaceAlphaModeFromString(value: []const u8) ?platform.GpuSurfaceAlphaMode {
+    inline for (@typeInfo(platform.GpuSurfaceAlphaMode).@"enum".fields) |field| {
+        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfaceAlphaMode, field.name);
+    }
+    return null;
+}
+
+fn gpuSurfaceColorSpaceFromString(value: []const u8) ?platform.GpuSurfaceColorSpace {
+    inline for (@typeInfo(platform.GpuSurfaceColorSpace).@"enum".fields) |field| {
+        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfaceColorSpace, field.name);
     }
     return null;
 }
@@ -8434,6 +8474,45 @@ test "runtime rejects unsupported GPU surface configuration" {
         .frame = geometry.RectF.init(0, 0, 320, 240),
         .gpu_surface = .{ .backend = .none },
     }));
+    try std.testing.expectError(error.UnsupportedViewKind, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "transparent-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+        .gpu_surface = .{ .alpha_mode = .premultiplied },
+    }));
+    try std.testing.expectError(error.UnsupportedViewKind, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "wide-color-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+        .gpu_surface = .{ .color_space = .display_p3 },
+    }));
+    try std.testing.expectError(error.UnsupportedViewKind, harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "unpaced-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+        .gpu_surface = .{ .vsync = false },
+    }));
+
+    const supported = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "supported-canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+        .gpu_surface = .{
+            .backend = .metal,
+            .pixel_format = .bgra8_unorm,
+            .present_mode = .timer,
+            .alpha_mode = .@"opaque",
+            .color_space = .srgb,
+            .vsync = true,
+        },
+    });
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", supported.gpu_alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, supported.gpu_color_space);
+    try std.testing.expect(supported.gpu_vsync);
 }
 
 test "runtime retains canvas display lists on GPU surface views" {
@@ -14742,6 +14821,9 @@ test "runtime dispatches GPU surface events" {
         last_gpu_backend: platform.GpuSurfaceBackend = .none,
         last_gpu_pixel_format: platform.GpuSurfacePixelFormat = .none,
         last_gpu_present_mode: platform.GpuSurfacePresentMode = .none,
+        last_gpu_alpha_mode: platform.GpuSurfaceAlphaMode = .none,
+        last_gpu_color_space: platform.GpuSurfaceColorSpace = .none,
+        last_gpu_vsync: bool = false,
         last_gpu_status: platform.GpuSurfaceStatus = .unavailable,
         last_canvas_revision: u64 = 0,
         last_canvas_command_count: usize = 0,
@@ -14784,6 +14866,9 @@ test "runtime dispatches GPU surface events" {
                     self.last_gpu_backend = frame_event.backend;
                     self.last_gpu_pixel_format = frame_event.pixel_format;
                     self.last_gpu_present_mode = frame_event.present_mode;
+                    self.last_gpu_alpha_mode = frame_event.alpha_mode;
+                    self.last_gpu_color_space = frame_event.color_space;
+                    self.last_gpu_vsync = frame_event.vsync;
                     self.last_gpu_status = frame_event.status;
                     self.last_canvas_revision = frame_event.canvas_revision;
                     self.last_canvas_command_count = frame_event.canvas_command_count;
@@ -14844,10 +14929,16 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, created.gpu_backend);
     try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, created.gpu_pixel_format);
     try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, created.gpu_present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", created.gpu_alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, created.gpu_color_space);
+    try std.testing.expect(created.gpu_vsync);
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, created.gpu_status);
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, initial_frame.backend);
     try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, initial_frame.pixel_format);
     try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, initial_frame.present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", initial_frame.alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, initial_frame.color_space);
+    try std.testing.expect(initial_frame.vsync);
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, initial_frame.status);
     try std.testing.expectEqual(@as(f32, 640), initial_frame.size.width);
     try std.testing.expectEqual(@as(f32, 360), initial_frame.size.height);
@@ -14906,6 +14997,9 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, app_state.last_gpu_backend);
     try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, app_state.last_gpu_pixel_format);
     try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, app_state.last_gpu_present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", app_state.last_gpu_alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, app_state.last_gpu_color_space);
+    try std.testing.expect(app_state.last_gpu_vsync);
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, app_state.last_gpu_status);
     try std.testing.expectEqual(@as(u64, 1), app_state.last_canvas_revision);
     try std.testing.expectEqual(@as(usize, 2), app_state.last_canvas_command_count);
@@ -14939,6 +15033,9 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, frame.backend);
     try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, frame.pixel_format);
     try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, frame.present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", frame.alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, frame.color_space);
+    try std.testing.expect(frame.vsync);
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, frame.status);
     try std.testing.expectEqual(@as(u64, 7), frame.frame_index);
     try std.testing.expectEqual(@as(u64, 42), frame.timestamp_ns);
@@ -14987,6 +15084,9 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuBackend\":\"metal\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuPixelFormat\":\"bgra8_unorm\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuPresentMode\":\"timer\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuAlphaMode\":\"opaque\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuColorSpace\":\"srgb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuVsync\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"gpuStatus\":\"ready\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameRequiresRender\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameFullRepaint\":true") != null);
@@ -15033,6 +15133,9 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(platform.GpuSurfaceBackend.metal, preview_frame.backend);
     try std.testing.expectEqual(platform.GpuSurfacePixelFormat.bgra8_unorm, preview_frame.pixel_format);
     try std.testing.expectEqual(platform.GpuSurfacePresentMode.timer, preview_frame.present_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceAlphaMode.@"opaque", preview_frame.alpha_mode);
+    try std.testing.expectEqual(platform.GpuSurfaceColorSpace.srgb, preview_frame.color_space);
+    try std.testing.expect(preview_frame.vsync);
     try std.testing.expectEqual(platform.GpuSurfaceStatus.ready, preview_frame.status);
     try std.testing.expect(preview_frame.canvas_frame_requires_render);
     try std.testing.expect(preview_frame.canvas_frame_full_repaint);
@@ -17579,6 +17682,38 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"open\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":false") != null);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.view_count);
+}
+
+test "runtime handles GPU surface options in JavaScript view bridge commands" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-view-bridge", .source = platform.WebViewSource.html("<p>GPU</p>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    harness.runtime.options.js_window_api = true;
+    const view_origins = [_][]const u8{ "zero://inline", "zero://app" };
+    harness.runtime.options.security.navigation.allowed_origins = &view_origins;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"gpu\",\"command\":\"zero-native.view.create\",\"payload\":{\"label\":\"canvas\",\"kind\":\"gpuSurface\",\"frame\":{\"width\":320,\"height\":240},\"gpuBackend\":\"metal\",\"gpuPixelFormat\":\"bgra8_unorm\",\"gpuPresentMode\":\"timer\",\"gpuAlphaMode\":\"opaque\",\"gpuColorSpace\":\"srgb\",\"gpuVsync\":true}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    const response = harness.null_platform.lastBridgeResponse();
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"kind\":\"gpu_surface\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuBackend\":\"metal\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuPixelFormat\":\"bgra8_unorm\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuPresentMode\":\"timer\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuAlphaMode\":\"opaque\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuColorSpace\":\"srgb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"gpuVsync\":true") != null);
 }
 
 test "runtime gates JavaScript view API with view permission" {

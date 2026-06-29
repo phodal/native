@@ -24,6 +24,7 @@ const mode_command = "dashboard.mode";
 const live_button_fill_command_id: canvas.ObjectId = 103 * 16 + 1;
 const live_button_text_command_id: canvas.ObjectId = 103 * 16 + 4;
 const forecast_text_command_id: canvas.ObjectId = 131 * 16 + 4;
+const forecast_composition_command_id: canvas.ObjectId = 131 * 16 + 5;
 const confidence_active_command_id: canvas.ObjectId = 134 * 16 + 2;
 const overview_fill_command_id: canvas.ObjectId = 111 * 16 + 1;
 const customers_fill_command_id: canvas.ObjectId = 112 * 16 + 1;
@@ -1080,6 +1081,50 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardTextCommand(display_list, forecast_text_command_id, "$14.1M");
     const activity_y_before_scroll = try dashboardTextCommandOriginY(display_list, activity_first_text_command_id);
+
+    resetDashboardDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 131 set-composition est");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
+    snapshot = harness.runtime.automationSnapshot("Dashboard");
+    const composing_forecast = dashboardSnapshotWidget(snapshot, 131).?;
+    try std.testing.expectEqualStrings("$14.1Mest", composing_forecast.text_value);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 9, .end = 9 }, composing_forecast.text_selection.?);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 6, .end = 9 }, composing_forecast.text_composition.?);
+    display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
+    try expectDashboardTextCommand(display_list, forecast_text_command_id, "$14.1Mest");
+    try std.testing.expect(display_list.findCommandById(forecast_composition_command_id) != null);
+
+    resetDashboardDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 131 cancel-composition");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
+    snapshot = harness.runtime.automationSnapshot("Dashboard");
+    const canceled_forecast = dashboardSnapshotWidget(snapshot, 131).?;
+    try std.testing.expectEqualStrings("$14.1M", canceled_forecast.text_value);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 6, .end = 6 }, canceled_forecast.text_selection.?);
+    try std.testing.expect(canceled_forecast.text_composition == null);
+    display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
+    try expectDashboardTextCommand(display_list, forecast_text_command_id, "$14.1M");
+    try std.testing.expect(display_list.findCommandById(forecast_composition_command_id) == null);
+
+    resetDashboardDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 131 set-composition !");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
+    snapshot = harness.runtime.automationSnapshot("Dashboard");
+    const final_composing_forecast = dashboardSnapshotWidget(snapshot, 131).?;
+    try std.testing.expectEqualStrings("$14.1M!", final_composing_forecast.text_value);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 6, .end = 7 }, final_composing_forecast.text_composition.?);
+
+    resetDashboardDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 131 commit-composition");
+    try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
+    snapshot = harness.runtime.automationSnapshot("Dashboard");
+    const committed_forecast = dashboardSnapshotWidget(snapshot, 131).?;
+    try std.testing.expectEqualStrings("$14.1M!", committed_forecast.text_value);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 7, .end = 7 }, committed_forecast.text_selection.?);
+    try std.testing.expect(committed_forecast.text_composition == null);
+    display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
+    try expectDashboardTextCommand(display_list, forecast_text_command_id, "$14.1M!");
+    try std.testing.expect(display_list.findCommandById(forecast_composition_command_id) == null);
 
     resetDashboardDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 133 toggle");

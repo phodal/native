@@ -2995,6 +2995,7 @@ pub const Widget = struct {
     text_selection: ?TextSelection = null,
     text_composition: ?TextRange = null,
     value: f32 = 0,
+    layer: ?i32 = null,
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
     semantics: WidgetSemantics = .{},
@@ -3189,7 +3190,11 @@ pub const WidgetLayoutTree = struct {
     }
 
     pub fn hitTest(self: WidgetLayoutTree, point: geometry.PointF) ?WidgetHit {
-        return hitTestWidgetLayout(self, point);
+        return hitTestWidgetLayout(self, point, .{});
+    }
+
+    pub fn hitTestWithTokens(self: WidgetLayoutTree, point: geometry.PointF, tokens: DesignTokens) ?WidgetHit {
+        return hitTestWidgetLayout(self, point, tokens);
     }
 
     pub fn cursorForHit(self: WidgetLayoutTree, hit: ?WidgetHit) WidgetCursor {
@@ -3198,7 +3203,11 @@ pub const WidgetLayoutTree = struct {
     }
 
     pub fn routePointerEvent(self: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
-        return routeWidgetPointerEvent(self, event, output);
+        return routeWidgetPointerEvent(self, event, .{}, output);
+    }
+
+    pub fn routePointerEventWithTokens(self: WidgetLayoutTree, event: WidgetPointerEvent, tokens: DesignTokens, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+        return routeWidgetPointerEvent(self, event, tokens, output);
     }
 
     pub fn routeKeyboardEvent(self: WidgetLayoutTree, event: WidgetKeyboardEvent, output: []WidgetEventRouteEntry) Error!WidgetKeyboardRoute {
@@ -3615,57 +3624,7 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
 }
 
 fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens, state: WidgetRenderState) Error!void {
-    var clip_stack_depths: [max_widget_depth]usize = undefined;
-    var clip_stack_len: usize = 0;
-    var hidden_depth: ?usize = null;
-
-    for (layout.nodes) |node| {
-        while (clip_stack_len > 0 and node.depth <= clip_stack_depths[clip_stack_len - 1]) {
-            try builder.popClip();
-            clip_stack_len -= 1;
-        }
-        if (hidden_depth) |depth| {
-            if (node.depth > depth) continue;
-            hidden_depth = null;
-        }
-        if (node.widget.semantics.hidden) {
-            hidden_depth = node.depth;
-            continue;
-        }
-
-        const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
-        switch (widget.kind) {
-            .stack, .row, .column, .grid, .data_grid, .list, .data_row => {},
-            .scroll_view => {
-                if (clip_stack_len >= clip_stack_depths.len) return error.RenderStackOverflow;
-                try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
-                clip_stack_depths[clip_stack_len] = node.depth;
-                clip_stack_len += 1;
-            },
-            .panel => try emitPanelWidgetChrome(builder, widget, tokens),
-            .popover => try emitPopoverWidgetChrome(builder, widget, tokens),
-            .menu_surface => try emitMenuSurfaceWidgetChrome(builder, widget, tokens),
-            .text => try emitTextWidget(builder, widget, tokens),
-            .icon => try emitIconWidget(builder, widget, tokens),
-            .button => try emitButtonWidget(builder, widget, tokens),
-            .icon_button => try emitIconButtonWidget(builder, widget, tokens),
-            .text_field => try emitTextFieldWidget(builder, widget, tokens),
-            .search_field => try emitSearchFieldWidget(builder, widget, tokens),
-            .tooltip => try emitTooltipWidget(builder, widget, tokens),
-            .menu_item => try emitMenuItemWidget(builder, widget, tokens),
-            .list_item => try emitListItemWidget(builder, widget, tokens),
-            .data_cell => try emitDataCellWidget(builder, widget, tokens),
-            .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
-            .checkbox => try emitCheckboxWidget(builder, widget, tokens),
-            .toggle => try emitToggleWidget(builder, widget, tokens),
-            .slider => try emitSliderWidget(builder, widget, tokens),
-            .progress => try emitProgressWidget(builder, widget, tokens),
-        }
-    }
-    while (clip_stack_len > 0) {
-        try builder.popClip();
-        clip_stack_len -= 1;
-    }
+    try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
 }
 
 pub const RenderPlanner = struct {
@@ -5387,6 +5346,81 @@ pub const TextLayoutCachePlanner = struct {
     }
 };
 
+const WidgetPaintOrder = struct {
+    layer: i32,
+    index: usize,
+};
+
+fn widgetPaintLayer(widget: Widget, tokens: DesignTokens) i32 {
+    if (widget.layer) |layer| return layer;
+    return switch (widget.kind) {
+        .popover, .menu_surface => tokens.layer.overlay,
+        .tooltip => tokens.layer.floating,
+        else => tokens.layer.base,
+    };
+}
+
+fn nextWidgetPaintChild(children: []const Widget, tokens: DesignTokens, previous: ?WidgetPaintOrder) ?usize {
+    var best: ?WidgetPaintOrder = null;
+    for (children, 0..) |child, index| {
+        const order = WidgetPaintOrder{ .layer = widgetPaintLayer(child, tokens), .index = index };
+        if (!widgetPaintOrderAfter(order, previous)) continue;
+        if (best == null or widgetPaintOrderLess(order, best.?)) best = order;
+    }
+    return if (best) |order| order.index else null;
+}
+
+fn widgetLayoutDirectChildCount(layout: WidgetLayoutTree, parent_index: ?usize) usize {
+    var count: usize = 0;
+    for (layout.nodes) |node| {
+        if (optionalUsizeEqual(node.parent_index, parent_index)) count += 1;
+    }
+    return count;
+}
+
+fn nextWidgetLayoutPaintChild(layout: WidgetLayoutTree, parent_index: ?usize, tokens: DesignTokens, previous: ?WidgetPaintOrder) ?usize {
+    var best: ?WidgetPaintOrder = null;
+    for (layout.nodes, 0..) |node, index| {
+        if (!optionalUsizeEqual(node.parent_index, parent_index)) continue;
+        const order = WidgetPaintOrder{ .layer = widgetPaintLayer(node.widget, tokens), .index = index };
+        if (!widgetPaintOrderAfter(order, previous)) continue;
+        if (best == null or widgetPaintOrderLess(order, best.?)) best = order;
+    }
+    return if (best) |order| order.index else null;
+}
+
+fn previousWidgetLayoutPaintChild(layout: WidgetLayoutTree, parent_index: ?usize, tokens: DesignTokens, previous: ?WidgetPaintOrder) ?usize {
+    var best: ?WidgetPaintOrder = null;
+    for (layout.nodes, 0..) |node, index| {
+        if (!optionalUsizeEqual(node.parent_index, parent_index)) continue;
+        const order = WidgetPaintOrder{ .layer = widgetPaintLayer(node.widget, tokens), .index = index };
+        if (!widgetPaintOrderBefore(order, previous)) continue;
+        if (best == null or widgetPaintOrderLess(best.?, order)) best = order;
+    }
+    return if (best) |order| order.index else null;
+}
+
+fn widgetPaintOrderAfter(order: WidgetPaintOrder, previous: ?WidgetPaintOrder) bool {
+    const value = previous orelse return true;
+    return order.layer > value.layer or (order.layer == value.layer and order.index > value.index);
+}
+
+fn widgetPaintOrderBefore(order: WidgetPaintOrder, previous: ?WidgetPaintOrder) bool {
+    const value = previous orelse return true;
+    return order.layer < value.layer or (order.layer == value.layer and order.index < value.index);
+}
+
+fn widgetPaintOrderLess(a: WidgetPaintOrder, b: WidgetPaintOrder) bool {
+    return a.layer < b.layer or (a.layer == b.layer and a.index < b.index);
+}
+
+fn optionalUsizeEqual(a: ?usize, b: ?usize) bool {
+    if (a) |a_value| {
+        return if (b) |b_value| a_value == b_value else false;
+    }
+    return b == null;
+}
+
 fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     if (depth >= max_widget_depth) return error.WidgetDepthExceeded;
     if (widget.semantics.hidden) return;
@@ -5416,9 +5450,73 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
 }
 
 fn emitWidgetChildren(builder: *Builder, children: []const Widget, tokens: DesignTokens, depth: usize) Error!void {
-    for (children) |child| {
+    var emitted: usize = 0;
+    var previous: ?WidgetPaintOrder = null;
+    while (emitted < children.len) : (emitted += 1) {
+        const child_index = nextWidgetPaintChild(children, tokens, previous) orelse return;
+        const child = children[child_index];
         try emitWidgetDepth(builder, child, tokens, depth + 1);
+        previous = .{ .layer = widgetPaintLayer(child, tokens), .index = child_index };
     }
+}
+
+fn emitWidgetLayoutChildren(
+    builder: *Builder,
+    layout: WidgetLayoutTree,
+    parent_index: ?usize,
+    tokens: DesignTokens,
+    state: WidgetRenderState,
+) Error!void {
+    const child_count = widgetLayoutDirectChildCount(layout, parent_index);
+    var emitted: usize = 0;
+    var previous: ?WidgetPaintOrder = null;
+    while (emitted < child_count) : (emitted += 1) {
+        const child_index = nextWidgetLayoutPaintChild(layout, parent_index, tokens, previous) orelse return;
+        try emitWidgetLayoutNode(builder, layout, child_index, tokens, state);
+        previous = .{ .layer = widgetPaintLayer(layout.nodes[child_index].widget, tokens), .index = child_index };
+    }
+}
+
+fn emitWidgetLayoutNode(
+    builder: *Builder,
+    layout: WidgetLayoutTree,
+    node_index: usize,
+    tokens: DesignTokens,
+    state: WidgetRenderState,
+) Error!void {
+    const node = layout.nodes[node_index];
+    if (node.widget.semantics.hidden) return;
+
+    const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
+    switch (widget.kind) {
+        .stack, .row, .column, .grid, .data_grid, .list, .data_row => {},
+        .scroll_view => {
+            try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
+            try emitWidgetLayoutChildren(builder, layout, node_index, tokens, state);
+            try builder.popClip();
+            return;
+        },
+        .panel => try emitPanelWidgetChrome(builder, widget, tokens),
+        .popover => try emitPopoverWidgetChrome(builder, widget, tokens),
+        .menu_surface => try emitMenuSurfaceWidgetChrome(builder, widget, tokens),
+        .text => try emitTextWidget(builder, widget, tokens),
+        .icon => try emitIconWidget(builder, widget, tokens),
+        .button => try emitButtonWidget(builder, widget, tokens),
+        .icon_button => try emitIconButtonWidget(builder, widget, tokens),
+        .text_field => try emitTextFieldWidget(builder, widget, tokens),
+        .search_field => try emitSearchFieldWidget(builder, widget, tokens),
+        .tooltip => try emitTooltipWidget(builder, widget, tokens),
+        .menu_item => try emitMenuItemWidget(builder, widget, tokens),
+        .list_item => try emitListItemWidget(builder, widget, tokens),
+        .data_cell => try emitDataCellWidget(builder, widget, tokens),
+        .segmented_control => try emitSegmentedControlWidget(builder, widget, tokens),
+        .checkbox => try emitCheckboxWidget(builder, widget, tokens),
+        .toggle => try emitToggleWidget(builder, widget, tokens),
+        .slider => try emitSliderWidget(builder, widget, tokens),
+        .progress => try emitProgressWidget(builder, widget, tokens),
+    }
+
+    try emitWidgetLayoutChildren(builder, layout, node_index, tokens, state);
 }
 
 fn emitPanelWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
@@ -6481,18 +6579,33 @@ fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
     };
 }
 
-fn hitTestWidgetLayout(layout: WidgetLayoutTree, point: geometry.PointF) ?WidgetHit {
-    var index = layout.nodes.len;
-    while (index > 0) {
-        index -= 1;
-        const node = layout.nodes[index];
-        if (!isHitTarget(node.widget)) continue;
-        if (isWidgetHiddenInAncestors(layout, index)) continue;
-        if (!node.frame.normalized().containsPoint(point)) continue;
-        if (!isPointVisibleInWidgetAncestors(layout, index, point)) continue;
-        return widgetHitFromNode(node, index);
+fn hitTestWidgetLayout(layout: WidgetLayoutTree, point: geometry.PointF, tokens: DesignTokens) ?WidgetHit {
+    return hitTestWidgetLayoutChildren(layout, null, point, tokens);
+}
+
+fn hitTestWidgetLayoutChildren(layout: WidgetLayoutTree, parent_index: ?usize, point: geometry.PointF, tokens: DesignTokens) ?WidgetHit {
+    const child_count = widgetLayoutDirectChildCount(layout, parent_index);
+    var tested: usize = 0;
+    var previous: ?WidgetPaintOrder = null;
+    while (tested < child_count) : (tested += 1) {
+        const child_index = previousWidgetLayoutPaintChild(layout, parent_index, tokens, previous) orelse return null;
+        if (hitTestWidgetLayoutNode(layout, child_index, point, tokens)) |hit| return hit;
+        previous = .{ .layer = widgetPaintLayer(layout.nodes[child_index].widget, tokens), .index = child_index };
     }
     return null;
+}
+
+fn hitTestWidgetLayoutNode(layout: WidgetLayoutTree, node_index: usize, point: geometry.PointF, tokens: DesignTokens) ?WidgetHit {
+    if (node_index >= layout.nodes.len) return null;
+    const node = layout.nodes[node_index];
+    if (node.widget.semantics.hidden) return null;
+
+    if (node.widget.kind == .scroll_view and !node.frame.normalized().containsPoint(point)) return null;
+    if (hitTestWidgetLayoutChildren(layout, node_index, point, tokens)) |hit| return hit;
+
+    if (!isHitTarget(node.widget)) return null;
+    if (!node.frame.normalized().containsPoint(point)) return null;
+    return widgetHitFromNode(node, node_index);
 }
 
 fn widgetHitFromNode(node: WidgetLayoutNode, index: usize) WidgetHit {
@@ -6552,10 +6665,10 @@ fn isWidgetFrameVisibleInWidgetAncestors(layout: WidgetLayoutTree, node_index: u
     return true;
 }
 
-fn routeWidgetPointerEvent(layout: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
+fn routeWidgetPointerEvent(layout: WidgetLayoutTree, event: WidgetPointerEvent, tokens: DesignTokens, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
     const target = if (eventUsesPointerCapture(event)) blk: {
         break :blk capturedWidgetPointerTarget(layout, event) orelse return .{ .entries = output[0..0] };
-    } else hitTestWidgetLayout(layout, event.point) orelse return .{ .entries = output[0..0] };
+    } else hitTestWidgetLayout(layout, event.point, tokens) orelse return .{ .entries = output[0..0] };
     const entries = try routeWidgetEventPath(layout, target.index, output);
     return .{ .target = target, .entries = entries };
 }
@@ -7375,15 +7488,16 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
     const behavior_dirty = !std.mem.eql(u8, previous.widget.command, next.widget.command);
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const visibility_dirty = previous.widget.semantics.hidden != next.widget.semantics.hidden;
+    const layer_dirty = previous.widget.layer != next.widget.layer;
     const semantics_dirty =
         layout_dirty or
         content_dirty or
         behavior_dirty or
         state_dirty or
         !widgetSemanticsEqual(previous.widget.semantics, next.widget.semantics);
-    const paint_dirty = layout_dirty or content_dirty or state_dirty or visibility_dirty;
+    const paint_dirty = layout_dirty or content_dirty or state_dirty or visibility_dirty or layer_dirty;
 
-    const dirty_bounds = if (layout_dirty or visibility_dirty)
+    const dirty_bounds = if (layout_dirty or visibility_dirty or layer_dirty)
         unionOptionalBounds(widgetFullPaintBounds(previous), widgetFullPaintBounds(next))
     else if (paint_dirty)
         widgetPaintChangeBounds(previous.widget, next.widget)
@@ -12607,6 +12721,78 @@ test "widget layout emission can render runtime focus state" {
     }
     try std.testing.expect(saw_runtime_focus);
     try std.testing.expect(!saw_stale_focus);
+}
+
+test "widget layer tokens order display emission and hit testing" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .popover,
+            .frame = geometry.RectF.init(8, 8, 96, 64),
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 12, 80, 32),
+            .text = "Base",
+        },
+    };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 120, 90), &nodes);
+
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[0].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[3].objectId());
+    try std.testing.expectEqual(@as(ObjectId, 2), layout.hitTest(geometry.PointF.init(20, 20)).?.id);
+
+    const lowered_overlay = DesignTokens{
+        .layer = .{
+            .base = 10,
+            .floating = 20,
+            .overlay = 0,
+            .modal = 30,
+        },
+    };
+    var lowered_commands: [8]CanvasCommand = undefined;
+    var lowered_builder = Builder.init(&lowered_commands);
+    try layout.emitDisplayList(&lowered_builder, lowered_overlay);
+    const lowered_display_list = lowered_builder.displayList();
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), lowered_display_list.commands[0].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), lowered_display_list.commands[3].objectId());
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTestWithTokens(geometry.PointF.init(20, 20), lowered_overlay).?.id);
+}
+
+test "widget explicit layers override token defaults for overlay ordering" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .popover,
+            .frame = geometry.RectF.init(8, 8, 96, 64),
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 12, 80, 32),
+            .text = "Top",
+            .layer = 500,
+        },
+    };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 120, 90), &nodes);
+
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[0].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[3].objectId());
+    try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTest(geometry.PointF.init(20, 20)).?.id);
 }
 
 test "widget emitter renders checkbox toggle and slider controls" {

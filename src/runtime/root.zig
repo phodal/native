@@ -1212,7 +1212,7 @@ pub const Runtime = struct {
             .hover, .down, .wheel => {},
         }
 
-        const route = try self.views[index].widgetLayoutTree().routePointerEvent(pointer, output);
+        const route = try self.views[index].widgetLayoutTree().routePointerEventWithTokens(pointer, self.views[index].widget_tokens, output);
         return .{
             .window_id = input_event.window_id,
             .view_label = self.views[index].label,
@@ -1333,7 +1333,7 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
 
         const target_id: canvas.ObjectId = if (pointer_event.target) |target| target.id else 0;
-        const hit_target = self.views[index].widgetLayoutTree().hitTest(pointer_event.pointer.point);
+        const hit_target = self.views[index].widgetLayoutTree().hitTestWithTokens(pointer_event.pointer.point, self.views[index].widget_tokens);
         const hit_target_id: canvas.ObjectId = if (hit_target) |target| target.id else 0;
         const hit_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(hit_target));
         var next_hovered_id = self.views[index].canvas_widget_hovered_id;
@@ -5668,7 +5668,7 @@ const RuntimeView = struct {
         var next_cursor = self.canvas_widget_cursor;
 
         if (point) |value| {
-            const hit = layout.hitTest(value);
+            const hit = layout.hitTestWithTokens(value, self.widget_tokens);
             next_hovered_id = if (hit) |target| target.id else 0;
             next_cursor = platformCursorFromCanvas(layout.cursorForHit(hit));
         } else if (!canvasWidgetInteractionTargetExists(layout, next_hovered_id)) {
@@ -12382,6 +12382,71 @@ test "runtime refreshes widget owned display list from canvas input" {
         }
     }
     try std.testing.expect(saw_checkbox_check);
+}
+
+test "runtime routes canvas widget pointers using design token layers" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-layered-input", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 100),
+    });
+
+    const widgets = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .popover,
+            .frame = geometry.RectF.init(8, 8, 96, 64),
+        },
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 12, 80, 32),
+            .text = "Base",
+        },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 160, 100), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    var route_entries: [4]canvas.WidgetEventRouteEntry = undefined;
+    const default_route = (try harness.runtime.routeCanvasWidgetPointerInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 20,
+    }, &route_entries)).?;
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), default_route.target.?.id);
+
+    _ = try harness.runtime.setCanvasWidgetDesignTokens(1, "canvas", .{
+        .layer = .{
+            .base = 10,
+            .floating = 20,
+            .overlay = 0,
+            .modal = 30,
+        },
+    });
+    const lowered_overlay_route = (try harness.runtime.routeCanvasWidgetPointerInput(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 20,
+    }, &route_entries)).?;
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), lowered_overlay_route.target.?.id);
 }
 
 test "runtime selects canvas widgets from pointer and keyboard activation" {

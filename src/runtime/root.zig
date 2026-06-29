@@ -9691,12 +9691,20 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
 
     const retained_after_hide = try harness.runtime.canvasDisplayList(1, "canvas");
     var saw_stale_focused_ring = false;
+    var saw_hidden_button_part = false;
     for (retained_after_hide.commands) |command| {
         if (command.objectId()) |id| {
             if (id == testCanvasWidgetPartId(2, 3)) saw_stale_focused_ring = true;
+            if (id == testCanvasWidgetPartId(2, 1) or
+                id == testCanvasWidgetPartId(2, 2) or
+                id == testCanvasWidgetPartId(2, 4))
+            {
+                saw_hidden_button_part = true;
+            }
         }
     }
     try std.testing.expect(!saw_stale_focused_ring);
+    try std.testing.expect(!saw_hidden_button_part);
 }
 
 test "runtime clears canvas widget interaction state when layout replacement disables it" {

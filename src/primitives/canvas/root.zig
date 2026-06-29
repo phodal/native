@@ -3615,13 +3615,23 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
 fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens, state: WidgetRenderState) Error!void {
     var clip_stack_depths: [max_widget_depth]usize = undefined;
     var clip_stack_len: usize = 0;
+    var hidden_depth: ?usize = null;
 
     for (layout.nodes) |node| {
-        const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
         while (clip_stack_len > 0 and node.depth <= clip_stack_depths[clip_stack_len - 1]) {
             try builder.popClip();
             clip_stack_len -= 1;
         }
+        if (hidden_depth) |depth| {
+            if (node.depth > depth) continue;
+            hidden_depth = null;
+        }
+        if (node.widget.semantics.hidden) {
+            hidden_depth = node.depth;
+            continue;
+        }
+
+        const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
         switch (widget.kind) {
             .stack, .row, .column, .grid, .data_grid, .list, .data_row => {},
             .scroll_view => {
@@ -5377,6 +5387,7 @@ pub const TextLayoutCachePlanner = struct {
 
 fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     if (depth >= max_widget_depth) return error.WidgetDepthExceeded;
+    if (widget.semantics.hidden) return;
 
     switch (widget.kind) {
         .stack, .row, .column, .grid, .data_grid, .list, .data_row => try emitWidgetChildren(builder, widget.children, tokens, depth),
@@ -12136,6 +12147,78 @@ test "widget tree emits panel button text and progress commands" {
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "widget display list skips hidden subtrees" {
+    const hidden_button = Widget{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 32),
+        .text = "Hidden",
+        .semantics = .{ .hidden = true },
+    };
+    var hidden_commands: [4]CanvasCommand = undefined;
+    var hidden_builder = Builder.init(&hidden_commands);
+    try emitWidgetTree(&hidden_builder, hidden_button, .{});
+    try std.testing.expectEqual(@as(usize, 0), hidden_builder.displayList().commandCount());
+
+    const hidden_scroll_children = [_]Widget{.{
+        .id = 4,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 0, 0, 32),
+        .text = "Nested",
+    }};
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(16, 16, 120, 36),
+            .text = "Visible",
+        },
+        .{
+            .id = 3,
+            .kind = .scroll_view,
+            .frame = geometry.RectF.init(16, 64, 160, 48),
+            .semantics = .{ .hidden = true },
+            .children = &hidden_scroll_children,
+        },
+        .{
+            .id = 5,
+            .kind = .text,
+            .frame = geometry.RectF.init(16, 124, 120, 20),
+            .text = "Visible text",
+        },
+    };
+    const root = Widget{
+        .id = 1,
+        .kind = .panel,
+        .frame = geometry.RectF.init(0, 0, 220, 160),
+        .children = &children,
+    };
+
+    var nodes: [5]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, root.frame, &nodes);
+
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+
+    const display_list = builder.displayList();
+    var saw_visible_button = false;
+    var saw_visible_text = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == widgetPartId(2, 1)) saw_visible_button = true;
+            if (id == widgetPartId(5, 1)) saw_visible_text = true;
+            if ((id > widgetPartId(3, 0) and id < widgetPartId(4, 0)) or
+                (id > widgetPartId(4, 0) and id < widgetPartId(5, 0)))
+            {
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    try std.testing.expect(saw_visible_button);
+    try std.testing.expect(saw_visible_text);
 }
 
 test "widget display list renders through reference surface" {

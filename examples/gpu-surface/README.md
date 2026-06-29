@@ -3,7 +3,7 @@
 This example shows a real GPU-backed child surface in the native view tree:
 
 - A native toolbar and statusbar.
-- A Metal-backed `gpu_surface` pane.
+- A Metal-backed `gpu_surface` pane with explicit pixel format, presentation, alpha, color-space, and vsync settings.
 - A WebView sibling pane in the same split layout.
 - Native controls that dispatch commands back to Zig.
 

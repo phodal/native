@@ -1,6 +1,6 @@
 # Native Surfaces
 
-Native surfaces are the app-owned regions that zero-native composes inside a platform window. A surface can be a WebView, native chrome, a native utility panel, or a future specialized drawing region. The key model is that WebView content is one surface in the window, not the whole app.
+Native surfaces are the app-owned regions that zero-native composes inside a platform window. A surface can be a WebView, native chrome, a native utility panel, or a specialized drawing region. The key model is that WebView content is one surface in the window, not the whole app.
 
 ## Surface Types
 
@@ -35,7 +35,7 @@ Native surfaces are the app-owned regions that zero-native composes inside a pla
     </tr>
     <tr>
       <td>GPU surface</td>
-      <td>Future custom drawing regions for editors, timelines, games, or canvas-like workflows</td>
+      <td>Custom drawing regions for editors, timelines, dashboards, games, or canvas-like workflows</td>
       <td>Metal-backed on macOS system WebView; other hosts report it unsupported</td>
     </tr>
   </tbody>
@@ -119,13 +119,27 @@ if (runtime.supports(.native_views)) {
     try runtime.createView(.{ .label = "toolbar", .kind = .toolbar });
 }
 if (runtime.supports(.gpu_surfaces)) {
-    try runtime.createView(.{ .label = "canvas", .kind = .gpu_surface, .frame = zero_native.geometry.RectF.init(0, 0, 480, 320) });
+    try runtime.createView(.{
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = zero_native.geometry.RectF.init(0, 0, 480, 320),
+        .gpu_surface = .{
+            .backend = .metal,
+            .pixel_format = .bgra8_unorm,
+            .present_mode = .timer,
+            .alpha_mode = .@"opaque",
+            .color_space = .srgb,
+            .vsync = true,
+        },
+    });
 }
 ```
 
 ```js
 const hasNativeViews = await window.zero.platform.supports("native_views");
 ```
+
+`gpu_surface` views report GPU presentation state through `ViewInfo` and `GpuSurfaceFrameEvent`, including the selected backend, pixel format, present mode, alpha mode, color space, vsync flag, status, frame size, frame index, timestamp, nonblank sample status, input latency budget, retained canvas frame counters, widget revision, widget node count, and current cursor intent.
 
 See [Platform Support](/platform-support) for the current host matrix.
 

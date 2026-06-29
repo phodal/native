@@ -2248,6 +2248,7 @@ pub const Runtime = struct {
             .cancel_composition => try self.editAutomationCanvasWidgetText(view_index, action.id, .cancel_composition),
             .select => try self.selectAutomationCanvasWidget(view_index, action.id),
             .drag => try self.dispatchAutomationCanvasWidgetDrag(app, view_index, action.id, action.value),
+            .drop_files => try self.dispatchAutomationCanvasWidgetFileDrop(app, view_index, action.id, action.value),
         }
     }
 
@@ -2348,6 +2349,22 @@ pub const Runtime = struct {
                 self.invalidateForCanvasWidgetRenderStateChange(current_index, release_previous_state, self.views[current_index].canvasWidgetRenderState());
             }
         }
+    }
+
+    fn dispatchAutomationCanvasWidgetFileDrop(self: *Runtime, app: App, view_index: usize, id: canvas.ObjectId, value: []const u8) anyerror!void {
+        if (view_index >= self.view_count) return error.ViewNotFound;
+        var paths_buffer: [platform.max_drop_paths][]const u8 = undefined;
+        const paths = try parseAutomationDropPaths(value, paths_buffer[0..]);
+        const node = self.views[view_index].widgetLayoutTree().findById(id) orelse return error.InvalidCommand;
+        const bounds = node.frame.normalized();
+        if (bounds.isEmpty()) return error.InvalidCommand;
+
+        try self.dispatchPlatformEvent(app, .{ .files_dropped = .{
+            .window_id = self.views[view_index].window_id,
+            .view_label = self.views[view_index].label,
+            .point = bounds.center(),
+            .paths = paths,
+        } });
     }
 
     fn invalidateForCanvasWidgetDirty(self: *Runtime, view_index: usize, dirty: geometry.RectF) void {
@@ -6346,6 +6363,7 @@ const AutomationWidgetActionKind = enum {
     cancel_composition,
     select,
     drag,
+    drop_files,
 };
 
 const AutomationWidgetAction = struct {
@@ -6399,7 +6417,13 @@ fn parseAutomationWidgetAction(value: []const u8) !AutomationWidgetAction {
     const action = automationWidgetActionKindFromString(action_part.token) orelse return error.InvalidCommand;
     const action_value = std.mem.trim(u8, action_part.rest, " \n\r\t");
     if (action == .set_selection and action_value.len == 0) return error.InvalidCommand;
-    if (action != .set_text and action != .set_selection and action != .set_composition and action != .drag and action_value.len > 0) return error.InvalidCommand;
+    if (action == .drop_files and action_value.len == 0) return error.InvalidCommand;
+    if (action != .set_text and
+        action != .set_selection and
+        action != .set_composition and
+        action != .drag and
+        action != .drop_files and
+        action_value.len > 0) return error.InvalidCommand;
     return .{
         .view_label = view.token,
         .id = id,
@@ -6431,6 +6455,7 @@ fn automationWidgetActionKindFromString(value: []const u8) ?AutomationWidgetActi
     if (std.ascii.eqlIgnoreCase(value, "cancel_composition") or std.ascii.eqlIgnoreCase(value, "cancel-composition")) return .cancel_composition;
     if (std.ascii.eqlIgnoreCase(value, "select")) return .select;
     if (std.ascii.eqlIgnoreCase(value, "drag")) return .drag;
+    if (std.ascii.eqlIgnoreCase(value, "drop_files") or std.ascii.eqlIgnoreCase(value, "drop-files")) return .drop_files;
     return null;
 }
 
@@ -6446,7 +6471,20 @@ fn automationWidgetActionSupported(actions: canvas.WidgetActions, action: Automa
         .set_composition, .commit_composition, .cancel_composition => actions.set_text,
         .select => actions.select,
         .drag => actions.drag,
+        .drop_files => actions.drop_files,
     };
+}
+
+fn parseAutomationDropPaths(value: []const u8, output: [][]const u8) ![]const []const u8 {
+    var parts = std.mem.tokenizeAny(u8, value, " \n\r\t");
+    var len: usize = 0;
+    while (parts.next()) |path| {
+        if (len >= output.len) return error.InvalidCommand;
+        output[len] = path;
+        len += 1;
+    }
+    if (len == 0) return error.InvalidCommand;
+    return output[0..len];
 }
 
 fn parseAutomationTextSelection(value: []const u8) !canvas.TextSelection {
@@ -6587,12 +6625,29 @@ test "runtime parses automation widget actions" {
     try std.testing.expectEqual(AutomationWidgetActionKind.drag, drag_delta.action);
     try std.testing.expectEqualStrings("18 2", drag_delta.value);
 
+    const drop_files = try parseAutomationWidgetAction("canvas 9 drop-files /tmp/report.csv /tmp/chart.png");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 9), drop_files.id);
+    try std.testing.expectEqual(AutomationWidgetActionKind.drop_files, drop_files.action);
+    try std.testing.expectEqualStrings("/tmp/report.csv /tmp/chart.png", drop_files.value);
+
+    const drop_files_underscore = try parseAutomationWidgetAction("canvas 9 drop_files /tmp/report.csv");
+    try std.testing.expectEqual(AutomationWidgetActionKind.drop_files, drop_files_underscore.action);
+    try std.testing.expectEqualStrings("/tmp/report.csv", drop_files_underscore.value);
+
+    var drop_paths_buffer: [2][]const u8 = undefined;
+    const drop_paths = try parseAutomationDropPaths(" /tmp/report.csv /tmp/chart.png ", drop_paths_buffer[0..]);
+    try std.testing.expectEqual(@as(usize, 2), drop_paths.len);
+    try std.testing.expectEqualStrings("/tmp/report.csv", drop_paths[0]);
+    try std.testing.expectEqualStrings("/tmp/chart.png", drop_paths[1]);
+    try std.testing.expectError(error.InvalidCommand, parseAutomationDropPaths("", drop_paths_buffer[0..]));
+
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction(""));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 0 press"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas nope press"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 press extra"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 set-selection"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 commit-composition extra"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 drop-files"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 unknown"));
 }
 
@@ -12304,11 +12359,16 @@ test "runtime dispatches automation canvas widget actions" {
         command_count: u32 = 0,
         widget_keyboard_count: u32 = 0,
         widget_drag_count: u32 = 0,
+        widget_file_drop_count: u32 = 0,
+        file_drop_count: u32 = 0,
         raw_input_count: u32 = 0,
         last_command: []const u8 = "",
         last_keyboard_target_id: canvas.ObjectId = 0,
         last_drag_source_id: canvas.ObjectId = 0,
         last_drag_dx: f32 = 0,
+        last_drop_target_id: canvas.ObjectId = 0,
+        last_drop_path_count: usize = 0,
+        last_drop_first_path: []const u8 = "",
 
         fn app(self: *@This()) App {
             return .{ .context = self, .name = "gpu-widget-automation-actions", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
@@ -12332,6 +12392,13 @@ test "runtime dispatches automation canvas widget actions" {
                     if (drag_event.source) |source| self.last_drag_source_id = source.id;
                     self.last_drag_dx = drag_event.drag.delta.dx;
                 },
+                .canvas_widget_file_drop => |drop_event| {
+                    self.widget_file_drop_count += 1;
+                    if (drop_event.target) |target| self.last_drop_target_id = target.id;
+                    self.last_drop_path_count = drop_event.drop.paths.len;
+                    self.last_drop_first_path = if (drop_event.drop.paths.len > 0) drop_event.drop.paths[0] else "";
+                },
+                .files_dropped => self.file_drop_count += 1,
                 else => {},
             }
         }
@@ -12363,8 +12430,9 @@ test "runtime dispatches automation canvas widget actions" {
         .{ .id = 5, .kind = .text_field, .frame = geometry.RectF.init(10, 122, 150, 32), .text = "Draft" },
         .{ .id = 6, .kind = .list_item, .frame = geometry.RectF.init(170, 10, 120, 32), .text = "Inbox" },
         .{ .id = 7, .kind = .scroll_view, .frame = geometry.RectF.init(170, 52, 120, 48), .children = &scroll_items },
+        .{ .id = 11, .kind = .button, .frame = geometry.RectF.init(170, 110, 120, 32), .text = "Upload", .semantics = .{ .actions = .{ .drop_files = true } } },
     };
-    var nodes: [12]canvas.WidgetLayoutNode = undefined;
+    var nodes: [13]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 320, 180), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
@@ -12396,6 +12464,17 @@ test "runtime dispatches automation canvas widget actions" {
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 7, .action = .decrement });
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqual(@as(f32, 0.0), scrolled_layout.findById(7).?.widget.value);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 11, .action = .drop_files, .value = "/tmp/report.csv /tmp/chart.png" });
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_file_drop_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.file_drop_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), app_state.last_drop_target_id);
+    try std.testing.expectEqual(@as(usize, 2), app_state.last_drop_path_count);
+    try std.testing.expectEqualStrings("/tmp/report.csv", app_state.last_drop_first_path);
+    try std.testing.expectEqualStrings("drop:files", harness.null_platform.lastWindowEventName());
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/report.csv\",\"/tmp/chart.png\"]") != null);
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 11, .action = .drop_files }));
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .drop_files, .value = "/tmp/report.csv" }));
 
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 5, .action = .set_text, .value = "Hello world" });
     try std.testing.expectEqualStrings("Hello world", harness.runtime.views[0].widgetSemantics()[4].label);

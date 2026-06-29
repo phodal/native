@@ -4190,6 +4190,17 @@ fn canvasWidgetBooleanSelected(widget: canvas.Widget) bool {
     return widget.state.selected or widget.value >= 0.5;
 }
 
+fn canvasWidgetSelectableSelected(widget: canvas.Widget) bool {
+    return widget.state.selected or widget.value >= 0.5;
+}
+
+fn canvasWidgetSelectionClearsSiblings(kind: canvas.WidgetKind) bool {
+    return switch (kind) {
+        .list_item, .data_cell, .segmented_control => true,
+        else => false,
+    };
+}
+
 fn isCanvasWidgetActivationKey(key: []const u8) bool {
     return std.ascii.eqlIgnoreCase(key, "space") or std.ascii.eqlIgnoreCase(key, "enter");
 }
@@ -5157,12 +5168,33 @@ const RuntimeView = struct {
             .list_item, .data_cell, .segmented_control => {},
             else => return null,
         }
-        if (widget.state.selected == selected and ((selected and widget.value >= 1) or (!selected and widget.value <= 0))) return null;
+
+        var dirty: ?geometry.RectF = null;
+        var changed = false;
+        if (selected and canvasWidgetSelectionClearsSiblings(widget.kind)) {
+            const parent_index = self.widget_layout_nodes[index].parent_index;
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |*node, sibling_index| {
+                if (sibling_index == index) continue;
+                if (node.parent_index != parent_index or node.widget.kind != widget.kind) continue;
+                if (!canvasWidgetSelectableSelected(node.widget)) continue;
+                node.widget.state.selected = false;
+                node.widget.value = 0;
+                dirty = unionRects(dirty, node.frame);
+                changed = true;
+            }
+        }
+
+        const target_value: f32 = if (selected) 1 else 0;
+        if (self.widget_layout_nodes[index].widget.state.selected != selected or self.widget_layout_nodes[index].widget.value != target_value) {
+            dirty = unionRects(dirty, self.widget_layout_nodes[index].frame);
+            changed = true;
+        }
+        if (!changed) return null;
         self.widget_layout_nodes[index].widget.state.selected = selected;
-        self.widget_layout_nodes[index].widget.value = if (selected) 1 else 0;
+        self.widget_layout_nodes[index].widget.value = target_value;
         try self.refreshCanvasWidgetSemantics();
         self.widget_revision += 1;
-        return widget.frame;
+        return dirty;
     }
 
     fn setCanvasWidgetTextValue(self: *RuntimeView, id: canvas.ObjectId, text: []const u8) anyerror!?geometry.RectF {
@@ -9952,6 +9984,133 @@ test "runtime selects canvas widgets from pointer and keyboard activation" {
     try std.testing.expect(snapshot.widgets[0].selected);
     try std.testing.expect(!snapshot.widgets[1].selected);
     try std.testing.expect(snapshot.widgets[2].selected);
+}
+
+test "runtime clears sibling canvas selections in retained groups" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-select-groups", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(30, 40, 260, 180),
+    });
+
+    const nav_items = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 32),
+            .text = "Overview",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 3,
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 32),
+            .text = "Customers",
+        },
+    };
+    const mode_items = [_]canvas.Widget{
+        .{
+            .id = 4,
+            .kind = .segmented_control,
+            .frame = geometry.RectF.init(0, 0, 64, 32),
+            .text = "List",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 5,
+            .kind = .segmented_control,
+            .frame = geometry.RectF.init(0, 0, 64, 32),
+            .text = "Grid",
+        },
+    };
+    const groups = [_]canvas.Widget{
+        .{
+            .id = 10,
+            .kind = .list,
+            .frame = geometry.RectF.init(10, 10, 120, 68),
+            .layout = .{ .gap = 4 },
+            .children = &nav_items,
+        },
+        .{
+            .id = 0,
+            .kind = .row,
+            .frame = geometry.RectF.init(10, 96, 140, 32),
+            .layout = .{ .gap = 8 },
+            .children = &mode_items,
+        },
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &groups }, geometry.RectF.init(0, 0, 260, 180), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 50,
+    } });
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 20,
+        .y = 50,
+    } });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(2).?.widget.value);
+    try std.testing.expect(retained.findById(3).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(3).?.widget.value);
+    try std.testing.expect(harness.runtime.pendingDirtyRegions().len >= 1);
+    try std.testing.expectEqualDeep(geometry.RectF.init(40, 50, 120, 68), harness.runtime.pendingDirtyRegions()[0]);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    harness.runtime.views[0].canvas_widget_focused_id = 5;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    } });
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(4).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(4).?.widget.value);
+    try std.testing.expect(retained.findById(5).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(5).?.widget.value);
+
+    const semantics = harness.runtime.views[0].widgetSemantics();
+    try std.testing.expectEqual(@as(?f32, 0), semantics[1].value);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[2].value);
+    try std.testing.expectEqual(@as(?f32, 0), semantics[3].value);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[4].value);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(!snapshot.widgets[1].selected);
+    try std.testing.expect(snapshot.widgets[2].selected);
+    try std.testing.expect(!snapshot.widgets[3].selected);
+    try std.testing.expect(snapshot.widgets[4].selected);
 }
 
 test "runtime applies keyboard values to focused canvas controls" {

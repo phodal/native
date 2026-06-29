@@ -6850,7 +6850,7 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
             .scroll = scroll.metrics,
             .bounds = node.frame,
             .state = node.widget.state,
-            .focusable = node.widget.semantics.focusable or node.widget.semantics.actions.focus or actions.focus or defaultFocusable(node.widget),
+            .focusable = semanticFocusable(node.widget, actions),
             .actions = actions,
             .text_selection = widgetTextSelectionRange(node.widget),
             .text_composition = widgetTextCompositionRange(node.widget),
@@ -7148,6 +7148,11 @@ fn semanticActions(widget: Widget) WidgetActions {
     actions.drag = actions.drag or widget.semantics.actions.drag;
     actions.drop_files = actions.drop_files or widget.semantics.actions.drop_files;
     return actions;
+}
+
+fn semanticFocusable(widget: Widget, actions: WidgetActions) bool {
+    if (widget.id == 0 or widget.state.disabled or widget.semantics.hidden) return false;
+    return widget.semantics.focusable or widget.semantics.actions.focus or actions.focus or defaultFocusable(widget);
 }
 
 fn defaultSemanticActions(widget: Widget) WidgetActions {
@@ -10758,6 +10763,59 @@ test "widget layout collects accessibility semantics" {
     try std.testing.expectEqual(@as(?f32, 0.75), semantics[2].value);
     try std.testing.expect(semantics[2].actions.isEmpty());
     try expectRect(geometry.RectF.init(10, 52, 160, 8), semantics[2].bounds);
+}
+
+test "widget disabled semantics suppresses focusability and actions" {
+    const children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(8, 8, 100, 32),
+            .text = "Disabled",
+            .state = .{ .disabled = true },
+            .semantics = .{ .focusable = true, .actions = .{ .focus = true, .press = true } },
+        },
+        .{
+            .id = 3,
+            .kind = .text,
+            .frame = geometry.RectF.init(8, 48, 140, 20),
+            .text = "Disabled copy",
+            .state = .{ .disabled = true },
+            .semantics = .{ .focusable = true },
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(8, 76, 100, 32),
+            .text = "Active",
+        },
+    };
+    const root = Widget{ .kind = .stack, .children = &children };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 160, 120), &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 4), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expect(layout.focusTargetById(2) == null);
+    try std.testing.expect(layout.focusTargetById(3) == null);
+
+    var semantics_buffer: [3]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 3), semantics.len);
+
+    try std.testing.expectEqual(@as(ObjectId, 2), semantics[0].id);
+    try std.testing.expect(semantics[0].state.disabled);
+    try std.testing.expect(!semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.isEmpty());
+
+    try std.testing.expectEqual(@as(ObjectId, 3), semantics[1].id);
+    try std.testing.expect(semantics[1].state.disabled);
+    try std.testing.expect(!semantics[1].focusable);
+    try std.testing.expect(semantics[1].actions.isEmpty());
+
+    try std.testing.expectEqual(@as(ObjectId, 4), semantics[2].id);
+    try std.testing.expect(semantics[2].focusable);
+    try std.testing.expect(semantics[2].actions.focus);
+    try std.testing.expect(semantics[2].actions.press);
 }
 
 test "widget hidden semantics suppresses descendant semantics" {

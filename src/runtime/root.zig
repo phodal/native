@@ -972,6 +972,7 @@ pub const Runtime = struct {
         var source_semantics_buffer: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined;
         const source_semantics = try layout.collectSemantics(&source_semantics_buffer);
         var reconciled_nodes: [max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined;
+        var previous_control_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined;
         var previous_text_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined;
         var previous_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
         const reconciled_layout = try canvasWidgetLayoutTreeWithRuntimeReconcileState(
@@ -979,6 +980,7 @@ pub const Runtime = struct {
             layout,
             source_semantics,
             &reconciled_nodes,
+            &previous_control_entries,
             &previous_text_entries,
             &previous_text_bytes,
         );
@@ -4241,6 +4243,13 @@ const CanvasWidgetScrollReconcileEntry = struct {
     state: canvas.ScrollState = .{},
 };
 
+const CanvasWidgetControlReconcileEntry = struct {
+    id: canvas.ObjectId = 0,
+    kind: canvas.WidgetKind = .checkbox,
+    state: canvas.WidgetState = .{},
+    value: f32 = 0,
+};
+
 const CanvasWidgetTextReconcileEntry = struct {
     id: canvas.ObjectId = 0,
     kind: canvas.WidgetKind = .text_field,
@@ -4284,6 +4293,38 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
 
 fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
     return kind == .text_field or kind == .search_field;
+}
+
+fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
+    return switch (kind) {
+        .checkbox,
+        .toggle,
+        .slider,
+        .list_item,
+        .data_cell,
+        .segmented_control,
+        => true,
+        else => false,
+    };
+}
+
+fn collectCanvasWidgetControlReconcileEntries(
+    nodes: []const canvas.WidgetLayoutNode,
+    output: []CanvasWidgetControlReconcileEntry,
+) []const CanvasWidgetControlReconcileEntry {
+    var len: usize = 0;
+    for (nodes) |node| {
+        if (node.widget.id == 0 or !canvasWidgetRuntimeControlKind(node.widget.kind)) continue;
+        if (len >= output.len) break;
+        output[len] = .{
+            .id = node.widget.id,
+            .kind = node.widget.kind,
+            .state = node.widget.state,
+            .value = node.widget.value,
+        };
+        len += 1;
+    }
+    return output[0..len];
 }
 
 fn collectCanvasWidgetScrollReconcileEntries(
@@ -4340,6 +4381,39 @@ fn collectCanvasWidgetTextReconcileEntries(
     return output[0..len];
 }
 
+fn canvasWidgetLayoutNodeWithControlReconcileState(
+    node: canvas.WidgetLayoutNode,
+    layout: canvas.WidgetLayoutTree,
+    node_index: usize,
+    previous: []const CanvasWidgetControlReconcileEntry,
+) canvas.WidgetLayoutNode {
+    var copy = node;
+    if (copy.widget.id == 0 or !canvasWidgetRuntimeControlKind(copy.widget.kind)) return copy;
+    if (copy.widget.state.disabled or canvasWidgetLayoutNodeHidden(layout, node_index)) return copy;
+
+    for (previous) |entry| {
+        if (entry.id != copy.widget.id or entry.kind != copy.widget.kind) continue;
+        switch (copy.widget.kind) {
+            .checkbox, .toggle => {
+                const selected = entry.state.selected or entry.value >= 0.5;
+                copy.widget.state.selected = selected;
+                copy.widget.value = if (selected) 1 else 0;
+            },
+            .slider => {
+                copy.widget.value = std.math.clamp(entry.value, 0, 1);
+            },
+            .list_item, .data_cell, .segmented_control => {
+                const selected = entry.state.selected or entry.value >= 0.5;
+                copy.widget.state.selected = selected;
+                copy.widget.value = if (selected) 1 else 0;
+            },
+            else => {},
+        }
+        break;
+    }
+    return copy;
+}
+
 fn canvasWidgetLayoutNodeWithTextReconcileState(
     node: canvas.WidgetLayoutNode,
     layout: canvas.WidgetLayoutTree,
@@ -4366,11 +4440,16 @@ fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     next: canvas.WidgetLayoutTree,
     source_semantics: []const canvas.WidgetSemanticsNode,
     node_buffer: []canvas.WidgetLayoutNode,
+    control_entries: []CanvasWidgetControlReconcileEntry,
     text_entries: []CanvasWidgetTextReconcileEntry,
     text_storage: []u8,
 ) anyerror!canvas.WidgetLayoutTree {
     if (next.nodes.len > node_buffer.len) return error.WidgetNodeLimitReached;
 
+    const previous_control_states = collectCanvasWidgetControlReconcileEntries(
+        previous.nodes,
+        control_entries,
+    );
     var text_len: usize = 0;
     const previous_text_states = try collectCanvasWidgetTextReconcileEntries(
         previous.nodes,
@@ -4381,7 +4460,8 @@ fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
 
     for (next.nodes, 0..) |node, index| {
         const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, next, index, previous_text_states);
-        node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(text_copy, source_semantics);
+        const control_copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, next, index, previous_control_states);
+        node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(control_copy, source_semantics);
     }
     const reconciled = node_buffer[0..next.nodes.len];
     clampCanvasWidgetLayoutScrollOffsets(reconciled, null);
@@ -5166,6 +5246,11 @@ const RuntimeView = struct {
 
         var source_semantics_entries: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined;
         const source_semantics = try layout.collectSemantics(&source_semantics_entries);
+        var previous_control_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined;
+        const previous_control_states = collectCanvasWidgetControlReconcileEntries(
+            self.widgetLayoutTree().nodes,
+            &previous_control_entries,
+        );
         var previous_scroll_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetScrollReconcileEntry = undefined;
         const previous_scroll_states = collectCanvasWidgetScrollReconcileEntries(
             self.widgetLayoutTree().nodes,
@@ -5187,7 +5272,8 @@ const RuntimeView = struct {
         self.widget_text_len = 0;
 
         for (layout.nodes, 0..) |node, layout_index| {
-            const copy = canvasWidgetLayoutNodeWithTextReconcileState(try self.copyWidgetLayoutNode(node, source_semantics), layout, layout_index, previous_text_states);
+            const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(try self.copyWidgetLayoutNode(node, source_semantics), layout, layout_index, previous_text_states);
+            const copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, layout, layout_index, previous_control_states);
             self.widget_layout_nodes[self.widget_layout_node_count] = copy;
             self.widget_scroll_states[self.widget_layout_node_count] = canvasWidgetScrollStateForLayoutNode(copy, previous_scroll_states);
             self.widget_layout_node_count += 1;
@@ -10969,6 +11055,170 @@ test "runtime applies pointer values to canvas controls" {
     }
     try std.testing.expect(saw_checkbox_check);
     try std.testing.expect(saw_empty_slider_active);
+}
+
+test "runtime reconciles canvas control state across layout replacement" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-control-reconcile", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 280, 220),
+    });
+
+    const list_items = [_]canvas.Widget{
+        .{
+            .id = 5,
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 30),
+            .text = "Overview",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 6,
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 36, 0, 30),
+            .text = "Customers",
+        },
+    };
+    const mode_items = [_]canvas.Widget{
+        .{
+            .id = 7,
+            .kind = .segmented_control,
+            .frame = geometry.RectF.init(0, 0, 72, 30),
+            .text = "List",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 8,
+            .kind = .segmented_control,
+            .frame = geometry.RectF.init(80, 0, 72, 30),
+            .text = "Grid",
+        },
+    };
+    const data_cells = [_]canvas.Widget{
+        .{
+            .id = 11,
+            .kind = .data_cell,
+            .frame = geometry.RectF.init(0, 0, 72, 30),
+            .text = "Edge",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 12,
+            .kind = .data_cell,
+            .frame = geometry.RectF.init(80, 0, 72, 30),
+            .text = "Billing",
+        },
+    };
+    const controls = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .checkbox,
+            .frame = geometry.RectF.init(10, 10, 120, 28),
+            .text = "Live",
+        },
+        .{
+            .id = 3,
+            .kind = .toggle,
+            .frame = geometry.RectF.init(10, 48, 120, 28),
+            .text = "Alerts",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 4,
+            .kind = .slider,
+            .frame = geometry.RectF.init(10, 88, 120, 32),
+            .value = 0.5,
+        },
+        .{
+            .id = 10,
+            .kind = .list,
+            .frame = geometry.RectF.init(150, 10, 110, 72),
+            .children = &list_items,
+        },
+        .{
+            .kind = .row,
+            .frame = geometry.RectF.init(10, 140, 160, 30),
+            .children = &mode_items,
+        },
+        .{
+            .kind = .row,
+            .frame = geometry.RectF.init(10, 178, 160, 30),
+            .children = &data_cells,
+        },
+    };
+    var nodes: [13]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &controls }, geometry.RectF.init(0, 0, 280, 220), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 2, .action = .toggle });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .toggle });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 4, .action = .increment });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 6, .action = .select });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 8, .action = .select });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 12, .action = .select });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(2).?.widget.value);
+    try std.testing.expect(!retained.findById(3).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(3).?.widget.value);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.55), retained.findById(4).?.widget.value, 0.001);
+    try std.testing.expect(!retained.findById(5).?.widget.state.selected);
+    try std.testing.expect(retained.findById(6).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(7).?.widget.state.selected);
+    try std.testing.expect(retained.findById(8).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(11).?.widget.state.selected);
+    try std.testing.expect(retained.findById(12).?.widget.state.selected);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(2).?.widget.value);
+    try std.testing.expect(!retained.findById(3).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(3).?.widget.value);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.55), retained.findById(4).?.widget.value, 0.001);
+    try std.testing.expect(!retained.findById(5).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(5).?.widget.value);
+    try std.testing.expect(retained.findById(6).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(6).?.widget.value);
+    try std.testing.expect(!retained.findById(7).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(7).?.widget.value);
+    try std.testing.expect(retained.findById(8).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(8).?.widget.value);
+    try std.testing.expect(!retained.findById(11).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(11).?.widget.value);
+    try std.testing.expect(retained.findById(12).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(12).?.widget.value);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+
+    const semantics = harness.runtime.views[0].widgetSemantics();
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 2).?.value);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 3).?.value);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.55), canvasWidgetSemanticsById(semantics, 4).?.value.?, 0.001);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 5).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 6).?.value);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 7).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 8).?.value);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 11).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 12).?.value);
 }
 
 test "runtime refreshes widget owned display list from canvas input" {

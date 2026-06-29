@@ -6540,10 +6540,19 @@ fn isWidgetFrameVisibleInWidgetAncestors(layout: WidgetLayoutTree, node_index: u
 }
 
 fn routeWidgetPointerEvent(layout: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
-    const target = capturedWidgetPointerTarget(layout, event) orelse
-        hitTestWidgetLayout(layout, event.point) orelse return .{ .entries = output[0..0] };
+    const target = if (eventUsesPointerCapture(event)) blk: {
+        break :blk capturedWidgetPointerTarget(layout, event) orelse return .{ .entries = output[0..0] };
+    } else hitTestWidgetLayout(layout, event.point) orelse return .{ .entries = output[0..0] };
     const entries = try routeWidgetEventPath(layout, target.index, output);
     return .{ .target = target, .entries = entries };
+}
+
+fn eventUsesPointerCapture(event: WidgetPointerEvent) bool {
+    if (event.captured_id == null) return false;
+    return switch (event.phase) {
+        .move, .up, .cancel => true,
+        .hover, .down, .wheel => false,
+    };
 }
 
 fn capturedWidgetPointerTarget(layout: WidgetLayoutTree, event: WidgetPointerEvent) ?WidgetHit {
@@ -10287,7 +10296,7 @@ test "widget pointer route skips scroll clipped captured targets" {
     var hidden_entries: [0]WidgetEventRouteEntry = .{};
     const hidden_route = try layout.routePointerEvent(.{
         .phase = .move,
-        .point = geometry.PointF.init(180, 80),
+        .point = geometry.PointF.init(10, 20),
         .captured_id = 2,
     }, &hidden_entries);
     try std.testing.expect(hidden_route.target == null);

@@ -24,6 +24,7 @@ pub const Error = error{
     TextLayoutCacheListFull,
     TextLayoutLineListFull,
     TextLayoutPlanListFull,
+    TextSelectionRectListFull,
     VisualEffectCacheListFull,
     VisualEffectListFull,
     TextEditBufferTooSmall,
@@ -507,6 +508,11 @@ pub const TextRange = struct {
         const range = self.normalized(text_len);
         return range.start == range.end;
     }
+};
+
+pub const TextSelectionRect = struct {
+    range: TextRange = .{},
+    rect: geometry.RectF = .{},
 };
 
 pub const TextSelection = struct {
@@ -2459,10 +2465,11 @@ pub const ReferenceRenderSurface = struct {
         if (line.glyph_len > 0 and line.glyph_start < value.glyphs.len) {
             const glyph_end = @min(value.glyphs.len, line.glyph_start + line.glyph_len);
             const raw_bounds = textLineBounds(value, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
+            const first_x = value.glyphs[line.glyph_start].x;
             const dx = line.bounds.x - raw_bounds.x;
             for (value.glyphs[line.glyph_start..glyph_end]) |glyph| {
                 const width = estimatedGlyphAdvance(glyph, value.size);
-                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x + dx, line.baseline + glyph.y - value.size, width, value.size);
+                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x - first_x + dx, line.baseline + glyph.y - value.size, width, value.size);
                 self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
             }
             return;
@@ -3538,6 +3545,63 @@ pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []T
         .key = textLayoutKey(text, options),
         .layout = .{ .lines = output[0..len], .bounds = bounds },
     };
+}
+
+pub fn layoutTextCaretRect(text: DrawText, options: TextLayoutOptions, offset: usize, lines: []TextLine) Error!?geometry.RectF {
+    const layout = try layoutTextRun(text, options, lines);
+    return textCaretRectForLayout(text, layout, offset);
+}
+
+pub fn textCaretRectForLayout(text: DrawText, layout: TextLayout, offset: usize) ?geometry.RectF {
+    const line = textLineForOffset(layout, text.text.len, snapTextOffset(text.text, offset)) orelse return null;
+    const x = textLineCaretX(text, line, offset);
+    return geometry.RectF.init(x, line.bounds.y, 1, @max(1, line.bounds.height));
+}
+
+pub fn layoutTextSelectionRects(
+    text: DrawText,
+    options: TextLayoutOptions,
+    range: TextRange,
+    lines: []TextLine,
+    output: []TextSelectionRect,
+) Error![]const TextSelectionRect {
+    const layout = try layoutTextRun(text, options, lines);
+    return textSelectionRectsForLayout(text, layout, range, output);
+}
+
+pub fn textSelectionRectsForLayout(text: DrawText, layout: TextLayout, range: TextRange, output: []TextSelectionRect) Error![]const TextSelectionRect {
+    const normalized = snapTextRange(text.text, range);
+    if (normalized.isCollapsed(text.text.len)) return output[0..0];
+
+    var len: usize = 0;
+    for (layout.lines) |line| {
+        const line_range = textLineRange(text, line);
+        const start = @max(normalized.start, line_range.start);
+        const end = @min(normalized.end, line_range.end);
+        if (start >= end) continue;
+        if (len >= output.len) return error.TextSelectionRectListFull;
+
+        const x0 = textLineCaretX(text, line, start);
+        const x1 = textLineCaretX(text, line, end);
+        const left = @min(x0, x1);
+        const right = @max(x0, x1);
+        output[len] = .{
+            .range = TextRange.init(start, end),
+            .rect = geometry.RectF.init(left, line.bounds.y, @max(1, right - left), @max(1, line.bounds.height)),
+        };
+        len += 1;
+    }
+    return output[0..len];
+}
+
+pub fn layoutTextOffsetForPoint(text: DrawText, options: TextLayoutOptions, point: geometry.PointF, lines: []TextLine) Error!?usize {
+    const layout = try layoutTextRun(text, options, lines);
+    return textOffsetForLayoutPoint(text, layout, point);
+}
+
+pub fn textOffsetForLayoutPoint(text: DrawText, layout: TextLayout, point: geometry.PointF) ?usize {
+    const line = textLineForPoint(layout, point) orelse return null;
+    return textLineOffsetForX(text, line, point.x);
 }
 
 pub fn applyTextInputEvent(state: TextEditState, event: TextInputEvent, output: []u8) Error!TextEditState {
@@ -9169,6 +9233,116 @@ fn alignTextLineBounds(bounds: geometry.RectF, options: TextLayoutOptions) geome
         .end => extra,
     };
     return bounds.translate(geometry.OffsetF.init(dx, 0));
+}
+
+fn textLineForOffset(layout: TextLayout, text_len: usize, offset: usize) ?TextLine {
+    if (layout.lines.len == 0) return null;
+    const normalized = @min(offset, text_len);
+    var previous: ?TextLine = null;
+    for (layout.lines) |line| {
+        const range = textLineRangeForLength(text_len, line);
+        if (normalized < range.start) return previous orelse line;
+        if (normalized <= range.end) return line;
+        previous = line;
+    }
+    return previous;
+}
+
+fn textLineForPoint(layout: TextLayout, point: geometry.PointF) ?TextLine {
+    var previous: ?TextLine = null;
+    for (layout.lines) |line| {
+        if (point.y < line.bounds.y + line.bounds.height) return line;
+        previous = line;
+    }
+    return previous;
+}
+
+fn textLineRange(text: DrawText, line: TextLine) TextRange {
+    return textLineRangeForLength(text.text.len, line);
+}
+
+fn textLineRangeForLength(text_len: usize, line: TextLine) TextRange {
+    const start = @min(line.text_start, text_len);
+    const end = @min(text_len, start + line.text_len);
+    return TextRange.init(start, end);
+}
+
+fn textLineCaretX(text: DrawText, line: TextLine, offset: usize) f32 {
+    const range = textLineRange(text, line);
+    const snapped = clampTextOffsetToRange(text.text, range, offset);
+    if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len) {
+        return textLineGlyphCaretX(text, line, range, snapped);
+    }
+    return line.bounds.x + estimateTextWidth(text.text[range.start..snapped], text.size);
+}
+
+fn textLineGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset: usize) f32 {
+    if (range.end <= range.start) return line.bounds.x;
+    if (offset <= range.start) return line.bounds.x;
+    if (offset >= range.end) return line.bounds.x + line.bounds.width;
+
+    const scalar_count = utf8ScalarCount(text.text[range.start..range.end]);
+    if (scalar_count == 0) return line.bounds.x;
+    const scalar_index = utf8ScalarIndexForOffset(text.text[range.start..range.end], offset - range.start);
+    const glyph_offset = @min(line.glyph_len, (scalar_index * line.glyph_len) / scalar_count);
+    if (glyph_offset == 0) return line.bounds.x;
+    if (glyph_offset >= line.glyph_len or line.glyph_start + glyph_offset >= text.glyphs.len) return line.bounds.x + line.bounds.width;
+
+    const raw_bounds = textLineBounds(text, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
+    const first_x = text.glyphs[line.glyph_start].x;
+    const glyph = text.glyphs[line.glyph_start + glyph_offset];
+    return text.origin.x + glyph.x - first_x + (line.bounds.x - raw_bounds.x);
+}
+
+fn textLineOffsetForX(text: DrawText, line: TextLine, x: f32) usize {
+    const range = textLineRange(text, line);
+    if (x <= line.bounds.x) return range.start;
+    if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len) {
+        return textLineGlyphOffsetForX(text, line, range, x);
+    }
+
+    const advance = @max(1, text.size * 0.5);
+    var cursor = range.start;
+    var caret_x = line.bounds.x;
+    while (cursor < range.end) {
+        if (x < caret_x + advance * 0.5) return cursor;
+        caret_x += advance;
+        cursor = nextTextOffset(text.text, cursor);
+    }
+    return range.end;
+}
+
+fn textLineGlyphOffsetForX(text: DrawText, line: TextLine, range: TextRange, x: f32) usize {
+    const glyph_end = @min(text.glyphs.len, line.glyph_start + line.glyph_len);
+    const raw_bounds = textLineBounds(text, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
+    const first_x = text.glyphs[line.glyph_start].x;
+    const dx = line.bounds.x - raw_bounds.x;
+    for (text.glyphs[line.glyph_start..glyph_end], 0..) |glyph, glyph_index| {
+        const glyph_x = text.origin.x + glyph.x - first_x + dx;
+        const advance = @max(1, estimatedGlyphAdvance(glyph, text.size));
+        if (x < glyph_x + advance * 0.5) {
+            const glyph_range = textRangeForGlyphRange(text.text, line.glyph_start + glyph_index, 1, text.glyphs.len);
+            return clampTextOffsetToRange(text.text, range, glyph_range.start);
+        }
+    }
+    return range.end;
+}
+
+fn clampTextOffsetToRange(text: []const u8, range: TextRange, offset: usize) usize {
+    const snapped = snapTextOffset(text, offset);
+    if (snapped < range.start) return range.start;
+    if (snapped > range.end) return range.end;
+    return snapped;
+}
+
+fn utf8ScalarIndexForOffset(text: []const u8, offset: usize) usize {
+    const target = snapTextOffset(text, offset);
+    var cursor: usize = 0;
+    var index: usize = 0;
+    while (cursor < target) : (index += 1) {
+        cursor = nextTextOffset(text, cursor);
+    }
+    return index;
 }
 
 fn lineHeight(text: DrawText, options: TextLayoutOptions) f32 {
@@ -16927,6 +17101,86 @@ test "text layout aligns fallback and shaped line boxes" {
 
     try expectRect(geometry.RectF.init(8, 10, 12, 14), shaped.lines[0].bounds);
     try expectRect(geometry.RectF.init(8, 10, 12, 14), shaped.bounds);
+}
+
+test "text layout maps caret selection and points across wrapped fallback lines" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Hello world",
+    };
+    const options = TextLayoutOptions{ .max_width = 30, .line_height = 14, .wrap = .word };
+
+    var caret_lines: [2]TextLine = undefined;
+    try expectRect(geometry.RectF.init(29, 10, 1, 14), try layoutTextCaretRect(text, options, 5, &caret_lines));
+
+    var selection_lines: [2]TextLine = undefined;
+    var selection_rects: [2]TextSelectionRect = undefined;
+    const rects = try layoutTextSelectionRects(text, options, TextRange.init(3, 8), &selection_lines, &selection_rects);
+    try std.testing.expectEqual(@as(usize, 2), rects.len);
+    try std.testing.expectEqualDeep(TextRange.init(3, 5), rects[0].range);
+    try expectRect(geometry.RectF.init(19, 10, 10, 14), rects[0].rect);
+    try std.testing.expectEqualDeep(TextRange.init(6, 8), rects[1].range);
+    try expectRect(geometry.RectF.init(4, 24, 10, 14), rects[1].rect);
+
+    var point_lines: [2]TextLine = undefined;
+    const offset = (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(16, 25), &point_lines)).?;
+    try std.testing.expectEqual(@as(usize, 8), offset);
+
+    var overflow_lines: [2]TextLine = undefined;
+    var one_rect: [1]TextSelectionRect = undefined;
+    try std.testing.expectError(error.TextSelectionRectListFull, layoutTextSelectionRects(text, options, TextRange.init(3, 8), &overflow_lines, &one_rect));
+}
+
+test "text layout maps caret selection and points across shaped glyph lines" {
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 2, .y = -3, .advance = 5 },
+        .{ .id = 2, .x = 6, .y = 4, .advance = 4 },
+    };
+    const text = DrawText{
+        .font_id = 2,
+        .size = 10,
+        .origin = geometry.PointF.init(10, 20),
+        .color = Color.rgb8(255, 255, 255),
+        .text = "AV",
+        .glyphs = &glyphs,
+    };
+    const options = TextLayoutOptions{ .line_height = 12 };
+
+    var caret_lines: [1]TextLine = undefined;
+    try expectRect(geometry.RectF.init(14, 7, 1, 19.5), try layoutTextCaretRect(text, options, 1, &caret_lines));
+
+    var selection_lines: [1]TextLine = undefined;
+    var selection_rects: [1]TextSelectionRect = undefined;
+    const rects = try layoutTextSelectionRects(text, options, TextRange.init(1, 2), &selection_lines, &selection_rects);
+    try std.testing.expectEqual(@as(usize, 1), rects.len);
+    try expectRect(geometry.RectF.init(14, 7, 4, 19.5), rects[0].rect);
+
+    var point_lines: [1]TextLine = undefined;
+    const offset = (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(13, 12), &point_lines)).?;
+    try std.testing.expectEqual(@as(usize, 1), offset);
+
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .font_id = text.font_id,
+        .size = text.size,
+        .origin = text.origin,
+        .color = text.color,
+        .text = text.text,
+        .glyphs = text.glyphs,
+        .text_layout = options,
+    } }};
+    var render_commands: [1]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var pixels: [24 * 32 * 4]u8 = [_]u8{0} ** (24 * 32 * 4);
+    const surface = try ReferenceRenderSurface.init(24, 32, &pixels);
+    try surface.renderPass(.{
+        .commands = render_plan.commands,
+        .surface_size = geometry.SizeF.init(24, 32),
+        .full_repaint = true,
+    }, Color.rgb8(0, 0, 0));
+    try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 10, 8);
 }
 
 test "text layout measures utf8 scalars for fallback wrapping" {

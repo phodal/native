@@ -14,6 +14,7 @@ const sidebar_width: f32 = 208;
 const statusbar_height: f32 = 32;
 const canvas_width: f32 = window_width - sidebar_width;
 const canvas_height: f32 = window_height - toolbar_height - statusbar_height;
+const reference_present_scale_limit: f32 = 1;
 const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
@@ -195,8 +196,7 @@ const GpuComponentsApp = struct {
     fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!canvas.CanvasFrame {
         const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, canvas_height) else frame_event.size;
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
-        try self.ensurePixelBuffers(surface_size, scale_factor);
-        return try runtime.presentNextCanvasFramePixels(
+        const canvas_frame = try runtime.nextCanvasFrame(
             frame_event.window_id,
             canvas_label,
             .{
@@ -207,10 +207,27 @@ const GpuComponentsApp = struct {
                 .full_repaint = full_repaint,
             },
             self.frameStorage(),
-            self.pixels.?,
-            self.scratch.?,
-            color(247, 249, 252),
         );
+        if (canvas_frame.requiresRender()) {
+            const present_scale = referencePresentScale(scale_factor);
+            try self.ensurePixelBuffers(surface_size, present_scale);
+            var present_frame = canvas_frame;
+            present_frame.scale = present_scale;
+            try runtime.presentCanvasFramePixels(
+                frame_event.window_id,
+                canvas_label,
+                present_frame,
+                self.pixels.?,
+                self.scratch.?,
+                color(247, 249, 252),
+            );
+        }
+        return canvas_frame;
+    }
+
+    fn referencePresentScale(scale_factor: f32) f32 {
+        const normalized = if (scale_factor > 0) scale_factor else 1;
+        return @min(normalized, reference_present_scale_limit);
     }
 
     fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
@@ -802,8 +819,9 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
     try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
-    try std.testing.expectEqual(@as(usize, 1944), harness.null_platform.gpu_surface_present_width);
-    try std.testing.expectEqual(@as(usize, 1352), harness.null_platform.gpu_surface_present_height);
+    try std.testing.expectEqual(@as(usize, 972), harness.null_platform.gpu_surface_present_width);
+    try std.testing.expectEqual(@as(usize, 676), harness.null_platform.gpu_surface_present_height);
+    try std.testing.expectEqual(@as(f32, 1), harness.null_platform.gpu_surface_present_scale_factor);
 
     try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
         .label = canvas_label,

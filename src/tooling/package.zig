@@ -467,6 +467,26 @@ fn embedHeader() []const u8 {
     \\  float scroll_content_extent;
     \\  int has_scroll;
     \\} zero_native_widget_semantics_t;
+    \\typedef struct zero_native_widget_text_geometry {
+    \\  uint64_t id;
+    \\  int has_caret_bounds;
+    \\  float caret_x;
+    \\  float caret_y;
+    \\  float caret_width;
+    \\  float caret_height;
+    \\  int has_selection_bounds;
+    \\  float selection_x;
+    \\  float selection_y;
+    \\  float selection_width;
+    \\  float selection_height;
+    \\  uintptr_t selection_rect_count;
+    \\  int has_composition_bounds;
+    \\  float composition_x;
+    \\  float composition_y;
+    \\  float composition_width;
+    \\  float composition_height;
+    \\  uintptr_t composition_rect_count;
+    \\} zero_native_widget_text_geometry_t;
     \\typedef struct zero_native_widget_action {
     \\  uint64_t id;
     \\  int action;
@@ -497,6 +517,7 @@ fn embedHeader() []const u8 {
     \\const char *zero_native_app_last_error_name(void *app);
     \\uintptr_t zero_native_app_widget_semantics_count(void *app);
     \\int zero_native_app_widget_semantics_at(void *app, uintptr_t index, zero_native_widget_semantics_t *out);
+    \\int zero_native_app_widget_text_geometry(void *app, uint64_t id, zero_native_widget_text_geometry_t *out);
     \\int zero_native_app_widget_action(void *app, const zero_native_widget_action_t *action);
     \\
     ;
@@ -2152,12 +2173,14 @@ test "archive command reports nonzero exit" {
 test "mobile package templates include native command shells" {
     const header = embedHeader();
     try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_semantics_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_text_geometry_t") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_action_t") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ROLE_TEXTBOX") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_SET_SELECTION") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_KIND_SET_TEXT") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_semantics_count") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_semantics_at") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_text_geometry") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_action") != null);
 
     const ios_controller = iosViewController();

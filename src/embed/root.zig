@@ -103,6 +103,27 @@ pub const MobileWidgetSemantics = extern struct {
     has_scroll: c_int = 0,
 };
 
+pub const MobileWidgetTextGeometry = extern struct {
+    id: u64 = 0,
+    has_caret_bounds: c_int = 0,
+    caret_x: f32 = 0,
+    caret_y: f32 = 0,
+    caret_width: f32 = 0,
+    caret_height: f32 = 0,
+    has_selection_bounds: c_int = 0,
+    selection_x: f32 = 0,
+    selection_y: f32 = 0,
+    selection_width: f32 = 0,
+    selection_height: f32 = 0,
+    selection_rect_count: usize = 0,
+    has_composition_bounds: c_int = 0,
+    composition_x: f32 = 0,
+    composition_y: f32 = 0,
+    composition_width: f32 = 0,
+    composition_height: f32 = 0,
+    composition_rect_count: usize = 0,
+};
+
 pub const MobileWidgetActionRequest = extern struct {
     id: u64 = 0,
     action: c_int = @intFromEnum(MobileWidgetActionKind.focus),
@@ -210,6 +231,10 @@ pub const EmbeddedApp = struct {
 
     pub fn widgetSemantics(self: *const EmbeddedApp) anyerror![]const canvas.WidgetSemanticsNode {
         return self.runtime.canvasWidgetSemantics(1, mobile_gpu_surface_label);
+    }
+
+    pub fn widgetTextGeometry(self: *const EmbeddedApp, id: canvas.ObjectId) anyerror!canvas.WidgetTextGeometry {
+        return self.runtime.canvasWidgetTextGeometry(1, mobile_gpu_surface_label, id);
     }
 
     pub fn widgetAction(self: *EmbeddedApp, action: runtime.CanvasWidgetAccessibilityAction) anyerror!void {
@@ -595,6 +620,25 @@ pub fn zero_native_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: 
     return 1;
 }
 
+pub fn zero_native_app_widget_text_geometry(app: ?*anyopaque, id: u64, out: ?*MobileWidgetTextGeometry) c_int {
+    const self = mobileApp(app) orelse return 0;
+    const output = out orelse {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    };
+    if (id == 0) {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    }
+    const geometry_value = self.embedded.widgetTextGeometry(id) catch |err| {
+        recordError(self, err);
+        return 0;
+    };
+    output.* = mobileWidgetTextGeometryFromCanvas(id, geometry_value);
+    self.last_error = null;
+    return 1;
+}
+
 pub fn zero_native_app_widget_action(app: ?*anyopaque, request: ?*const MobileWidgetActionRequest) c_int {
     const self = mobileApp(app) orelse return 0;
     const value = request orelse {
@@ -732,6 +776,36 @@ fn mobileWidgetSemanticsFromNode(nodes: []const canvas.WidgetSemanticsNode, inde
         .scroll_content_extent = node.scroll.content_extent,
         .has_scroll = if (node.scroll.present) 1 else 0,
     };
+}
+
+fn mobileWidgetTextGeometryFromCanvas(id: canvas.ObjectId, geometry_value: canvas.WidgetTextGeometry) MobileWidgetTextGeometry {
+    var value = MobileWidgetTextGeometry{
+        .id = id,
+        .selection_rect_count = geometry_value.selection_rect_count,
+        .composition_rect_count = geometry_value.composition_rect_count,
+    };
+    if (geometry_value.caret_bounds) |bounds| {
+        value.has_caret_bounds = 1;
+        value.caret_x = bounds.x;
+        value.caret_y = bounds.y;
+        value.caret_width = bounds.width;
+        value.caret_height = bounds.height;
+    }
+    if (geometry_value.selection_bounds) |bounds| {
+        value.has_selection_bounds = 1;
+        value.selection_x = bounds.x;
+        value.selection_y = bounds.y;
+        value.selection_width = bounds.width;
+        value.selection_height = bounds.height;
+    }
+    if (geometry_value.composition_bounds) |bounds| {
+        value.has_composition_bounds = 1;
+        value.composition_x = bounds.x;
+        value.composition_y = bounds.y;
+        value.composition_width = bounds.width;
+        value.composition_height = bounds.height;
+    }
+    return value;
 }
 
 fn mobileWidgetSemanticParentId(nodes: []const canvas.WidgetSemanticsNode, parent_index: ?usize) u64 {
@@ -1090,6 +1164,18 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expect((text_node.flags & @intFromEnum(MobileWidgetFlag.focused)) != 0);
     try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_text)) != 0);
     try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_selection)) != 0);
+
+    var text_geometry: MobileWidgetTextGeometry = .{};
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_text_geometry(app, 3, &text_geometry));
+    try std.testing.expectEqual(@as(u64, 3), text_geometry.id);
+    try std.testing.expectEqual(@as(c_int, 0), text_geometry.has_caret_bounds);
+    try std.testing.expectEqual(@as(c_int, 1), text_geometry.has_selection_bounds);
+    try std.testing.expectEqual(@as(usize, 1), text_geometry.selection_rect_count);
+    try std.testing.expect(text_geometry.selection_width > 0);
+    try std.testing.expectEqual(@as(c_int, 0), text_geometry.has_composition_bounds);
+
+    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_text_geometry(app, 2, &text_geometry));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
 
     try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_at(app, 99, &text_node));
     try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));

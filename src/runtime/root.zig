@@ -1120,6 +1120,17 @@ pub const Runtime = struct {
         return self.views[index].widget_tokens;
     }
 
+    pub fn canvasWidgetTextGeometry(self: *const Runtime, window_id: platform.WindowId, label: []const u8, id: canvas.ObjectId) anyerror!canvas.WidgetTextGeometry {
+        try self.validateViewParent(window_id);
+        try validateViewLabel(label);
+        if (id == 0) return error.InvalidCommand;
+        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
+        if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+        const node = self.views[index].widgetLayoutTree().findById(id) orelse return error.InvalidCommand;
+        if (!canvasWidgetEditableTextKind(node.widget.kind)) return error.InvalidCommand;
+        return canvas.textGeometryForWidget(node.widget, self.views[index].widget_tokens);
+    }
+
     pub fn editCanvasWidgetText(self: *Runtime, window_id: platform.WindowId, label: []const u8, id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!platform.ViewInfo {
         try self.validateViewParent(window_id);
         try validateViewLabel(label);
@@ -11337,6 +11348,71 @@ test "runtime leaves virtualized canvas scroll views app driven" {
     try std.testing.expectEqual(@as(u64, 1), kinetic.widget_revision);
     try std.testing.expect(!harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime exposes retained canvas widget text geometry" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-text-geometry", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 160),
+    });
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .text_field,
+            .frame = geometry.RectF.init(12, 16, 160, 36),
+            .text = "Search",
+            .text_selection = canvas.TextSelection.collapsed(3),
+        },
+        .{
+            .id = 3,
+            .kind = .search_field,
+            .frame = geometry.RectF.init(12, 60, 160, 36),
+            .text = "Cafe",
+            .text_selection = .{ .anchor = 1, .focus = 4 },
+            .text_composition = canvas.TextRange.init(2, 4),
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 108, 120, 32),
+            .text = "Run",
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 240, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const caret = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
+    try std.testing.expect(caret.caret_bounds != null);
+    try std.testing.expect(caret.selection_bounds == null);
+    try std.testing.expectEqual(@as(usize, 0), caret.selection_rect_count);
+    try std.testing.expect(caret.composition_bounds == null);
+
+    const range = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 3);
+    try std.testing.expect(range.caret_bounds == null);
+    try std.testing.expect(range.selection_bounds != null);
+    try std.testing.expectEqual(@as(usize, 1), range.selection_rect_count);
+    try std.testing.expect(range.composition_bounds != null);
+    try std.testing.expectEqual(@as(usize, 1), range.composition_rect_count);
+
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.canvasWidgetTextGeometry(1, "canvas", 0));
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.canvasWidgetTextGeometry(1, "canvas", 4));
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.canvasWidgetTextGeometry(1, "canvas", 99));
 }
 
 test "runtime applies text input to focused canvas text fields" {

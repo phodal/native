@@ -2385,7 +2385,9 @@ pub const Runtime = struct {
     }
 
     fn selectAutomationCanvasWidget(self: *Runtime, view_index: usize, id: canvas.ObjectId) anyerror!void {
-        if (self.views[view_index].widgetLayoutTree().focusTargetById(id) != null) {
+        const layout = self.views[view_index].widgetLayoutTree();
+        if (!canvasWidgetSelectableTargetExists(layout, id)) return error.InvalidCommand;
+        if (layout.focusTargetById(id) != null) {
             try self.focusAutomationCanvasWidget(view_index, id);
         }
         const dirty = try self.views[view_index].setCanvasWidgetSelected(id, true) orelse return;
@@ -2408,7 +2410,9 @@ pub const Runtime = struct {
     fn dispatchAutomationCanvasWidgetDrag(self: *Runtime, app: App, view_index: usize, id: canvas.ObjectId, value: []const u8) anyerror!void {
         if (view_index >= self.view_count) return error.ViewNotFound;
         const delta = try parseAutomationDragDelta(value);
-        const node = self.views[view_index].widgetLayoutTree().findById(id) orelse return error.InvalidCommand;
+        const layout = self.views[view_index].widgetLayoutTree();
+        if (!canvasWidgetInteractionTargetExists(layout, id)) return error.InvalidCommand;
+        const node = layout.findById(id) orelse return error.InvalidCommand;
         const bounds = node.frame.normalized();
         if (bounds.isEmpty()) return error.InvalidCommand;
 
@@ -2446,9 +2450,11 @@ pub const Runtime = struct {
 
     fn dispatchAutomationCanvasWidgetFileDrop(self: *Runtime, app: App, view_index: usize, id: canvas.ObjectId, value: []const u8) anyerror!void {
         if (view_index >= self.view_count) return error.ViewNotFound;
+        const layout = self.views[view_index].widgetLayoutTree();
+        if (!canvasWidgetInteractionTargetExists(layout, id)) return error.InvalidCommand;
         var paths_buffer: [platform.max_drop_paths][]const u8 = undefined;
         const paths = try parseAutomationDropPaths(value, paths_buffer[0..]);
-        const node = self.views[view_index].widgetLayoutTree().findById(id) orelse return error.InvalidCommand;
+        const node = layout.findById(id) orelse return error.InvalidCommand;
         const bounds = node.frame.normalized();
         if (bounds.isEmpty()) return error.InvalidCommand;
 
@@ -4266,6 +4272,29 @@ fn canvasWidgetInteractionTargetExists(layout: canvas.WidgetLayoutTree, id: canv
     if (canvasWidgetLayoutNodeHidden(layout, index)) return false;
     if (!canvasWidgetLayoutNodeFrameVisible(layout, index)) return false;
     return canvasWidgetRuntimeHitTarget(layout.nodes[index].widget);
+}
+
+fn canvasWidgetSelectableTargetExists(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) bool {
+    const index = canvasWidgetLayoutNodeIndexById(layout, id) orelse return false;
+    if (canvasWidgetLayoutNodeHidden(layout, index)) return false;
+    const widget = layout.nodes[index].widget;
+    if (widget.id == 0 or widget.state.disabled) return false;
+    if (!canvasWidgetSelectionClearsSiblings(widget.kind)) return false;
+    return canvasWidgetSelectableTargetFrameAllowed(layout, index);
+}
+
+fn canvasWidgetSelectableTargetFrameAllowed(layout: canvas.WidgetLayoutTree, node_index: usize) bool {
+    if (node_index >= layout.nodes.len) return false;
+    const frame = layout.nodes[node_index].frame.normalized();
+    if (!frame.isEmpty()) return canvasWidgetLayoutNodeFrameVisible(layout, node_index);
+
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return true;
+        if (layout.nodes[index].widget.kind == .scroll_view) return false;
+        current = layout.nodes[index].parent_index;
+    }
+    return true;
 }
 
 fn canvasWidgetLayoutNodeIndexById(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) ?usize {
@@ -14852,6 +14881,128 @@ test "runtime dispatches automation canvas widget actions" {
 
     try std.testing.expect(app_state.widget_keyboard_count >= 3);
     try std.testing.expect(app_state.raw_input_count >= 3);
+}
+
+test "runtime rejects automation canvas widget actions for scroll clipped targets" {
+    const TestApp = struct {
+        widget_drag_count: u32 = 0,
+        widget_file_drop_count: u32 = 0,
+        file_drop_count: u32 = 0,
+        raw_input_count: u32 = 0,
+        last_drag_source_id: canvas.ObjectId = 0,
+        last_drop_target_id: canvas.ObjectId = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-clipped-automation-actions", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .gpu_surface_input => self.raw_input_count += 1,
+                .canvas_widget_drag => |drag_event| {
+                    self.widget_drag_count += 1;
+                    if (drag_event.source) |source| self.last_drag_source_id = source.id;
+                },
+                .canvas_widget_file_drop => |drop_event| {
+                    self.widget_file_drop_count += 1;
+                    if (drop_event.target) |target| self.last_drop_target_id = target.id;
+                },
+                .files_dropped => self.file_drop_count += 1,
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 48),
+    });
+
+    const selectable_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Hidden" },
+        .{ .id = 3, .kind = .list_item, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Visible" },
+    };
+    var selectable_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const selectable_layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .value = 40, .children = &selectable_children },
+        geometry.RectF.init(0, 0, 160, 48),
+        &selectable_nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", selectable_layout);
+
+    var snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[1].actions.select);
+    try std.testing.expect(snapshot.widgets[2].actions.select);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -32, 160, 32), snapshot.widgets[1].bounds);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 16, 160, 32), snapshot.widgets[2].bounds);
+
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 2, .action = .select }));
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(2).?.widget.value);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .select });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(3).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(3).?.widget.value);
+
+    const drag_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Hidden drag", .semantics = .{ .actions = .{ .drag = true } } },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Visible drag", .semantics = .{ .actions = .{ .drag = true } } },
+    };
+    var drag_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const drag_layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .value = 40, .children = &drag_children },
+        geometry.RectF.init(0, 0, 160, 48),
+        &drag_nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", drag_layout);
+
+    snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[1].actions.drag);
+    try std.testing.expect(snapshot.widgets[2].actions.drag);
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 2, .action = .drag, .value = "8 0" }));
+    try std.testing.expectEqual(@as(u32, 0), app_state.widget_drag_count);
+    try std.testing.expectEqual(@as(u32, 0), app_state.raw_input_count);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .drag, .value = "8 0" });
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_drag_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), app_state.last_drag_source_id);
+
+    const drop_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "Hidden drop", .semantics = .{ .actions = .{ .drop_files = true } } },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 48, 0, 32), .text = "Visible drop", .semantics = .{ .actions = .{ .drop_files = true } } },
+    };
+    var drop_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const drop_layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .value = 40, .children = &drop_children },
+        geometry.RectF.init(0, 0, 160, 48),
+        &drop_nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", drop_layout);
+
+    snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expect(snapshot.widgets[1].actions.drop_files);
+    try std.testing.expect(snapshot.widgets[2].actions.drop_files);
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 2, .action = .drop_files, .value = "/tmp/hidden.csv" }));
+    try std.testing.expectEqual(@as(u32, 0), app_state.widget_file_drop_count);
+    try std.testing.expectEqual(@as(u32, 0), app_state.file_drop_count);
+
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 3, .action = .drop_files, .value = "/tmp/visible.csv" });
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_file_drop_count);
+    try std.testing.expectEqual(@as(u32, 1), app_state.file_drop_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), app_state.last_drop_target_id);
 }
 
 test "runtime automation protocol refreshes widget-owned canvas display lists" {

@@ -855,10 +855,10 @@ pub const Runtime = struct {
                 storage.text_layout_cache_actions,
             );
 
+        const canvas_changed = self.views[index].canvas_revision != self.views[index].presented_canvas_revision;
         const full_repaint = frame_options.full_repaint or
             !self.views[index].presented_canvas_valid or
-            self.views[index].presented_canvas_has_unkeyed or
-            self.views[index].currentCanvasHasUnkeyed();
+            (canvas_changed and (self.views[index].presented_canvas_has_unkeyed or self.views[index].currentCanvasHasUnkeyed()));
         const changes = if (full_repaint)
             storage.changes[0..0]
         else
@@ -9059,6 +9059,76 @@ test "runtime next canvas frame presents empty canvas once" {
     try std.testing.expect(!harness.runtime.views[0].canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_change_count);
     try std.testing.expect(harness.runtime.views[0].canvas_frame_dirty_bounds == null);
+}
+
+test "runtime next canvas frame keeps unchanged clipped display lists incremental" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-clipped-next-frame", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 120, 80),
+    });
+
+    const commands = [_]canvas.CanvasCommand{
+        .{ .push_clip = .{ .id = 90, .rect = geometry.RectF.init(0, 0, 80, 48) } },
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(8, 8, 96, 32), .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) } } },
+        .pop_clip,
+    };
+    const changed_commands = [_]canvas.CanvasCommand{
+        .{ .push_clip = .{ .id = 90, .rect = geometry.RectF.init(0, 0, 80, 48) } },
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(12, 8, 96, 32), .fill = .{ .color = canvas.Color.rgb8(255, 255, 255) } } },
+        .pop_clip,
+    };
+
+    var render_commands: [2]canvas.RenderCommand = undefined;
+    var render_batches: [1]canvas.RenderBatch = undefined;
+    var resources: [2]canvas.RenderResource = undefined;
+    var resource_cache_entries: [2]canvas.RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [4]canvas.RenderResourceCacheAction = undefined;
+    var layers: [2]canvas.RenderLayer = undefined;
+    var layer_cache_entries: [2]canvas.RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [4]canvas.RenderLayerCacheAction = undefined;
+    var glyphs: [0]canvas.GlyphAtlasEntry = .{};
+    var changes: [4]canvas.DiffChange = undefined;
+    const frame_storage = canvas.CanvasFrameStorage{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .layers = &layers,
+        .layer_cache_entries = &layer_cache_entries,
+        .layer_cache_actions = &layer_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .changes = &changes,
+    };
+
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 1 }, frame_storage);
+    try std.testing.expect(first_frame.full_repaint);
+    try std.testing.expect(first_frame.requiresRender());
+
+    const clean_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, frame_storage);
+    try std.testing.expect(!clean_frame.full_repaint);
+    try std.testing.expect(!clean_frame.requiresRender());
+    try std.testing.expect(clean_frame.dirty_bounds == null);
+
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &changed_commands });
+    const changed_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 3 }, frame_storage);
+    try std.testing.expect(changed_frame.full_repaint);
+    try std.testing.expect(changed_frame.requiresRender());
 }
 
 test "runtime invalidates canvas display list dirty regions" {

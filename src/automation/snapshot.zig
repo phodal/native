@@ -355,9 +355,11 @@ fn writeWidgetScroll(widget: Widget, writer: anytype) !void {
 }
 
 fn writeWidgetState(widget: Widget, writer: anytype) !void {
-    if (!widget.hovered and !widget.pressed and !widget.selected) return;
+    if (!widget.focused and widget.enabled and !widget.hovered and !widget.pressed and !widget.selected) return;
     try writer.writeAll(" state=[");
     var wrote = false;
+    try writeWidgetStateFlag(widget.focused, "focused", &wrote, writer);
+    try writeWidgetStateFlag(!widget.enabled, "disabled", &wrote, writer);
     try writeWidgetStateFlag(widget.hovered, "hovered", &wrote, writer);
     try writeWidgetStateFlag(widget.pressed, "pressed", &wrote, writer);
     try writeWidgetStateFlag(widget.selected, "selected", &wrote, writer);
@@ -581,38 +583,49 @@ test "snapshot emits widget semantics" {
     var writer = std.Io.Writer.fixed(&buffer);
     const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
     const views = [_]platform.ViewInfo{.{ .label = "canvas", .kind = .gpu_surface, .frame = geometry.RectF.init(0, 0, 100, 100), .role = "canvas" }};
-    const widgets = [_]Widget{.{
-        .window_id = 1,
-        .view_label = "canvas",
-        .id = 42,
-        .role = "button",
-        .name = "Run query",
-        .parent_id = 7,
-        .text_value = "deploy",
-        .grid_row_index = 1,
-        .grid_column_index = 2,
-        .grid_row_count = 4,
-        .grid_column_count = 5,
-        .list = .{
-            .present = true,
-            .item_index = 3,
-            .item_count = 9,
+    const widgets = [_]Widget{
+        .{
+            .window_id = 1,
+            .view_label = "canvas",
+            .id = 42,
+            .role = "button",
+            .name = "Run query",
+            .parent_id = 7,
+            .text_value = "deploy",
+            .grid_row_index = 1,
+            .grid_column_index = 2,
+            .grid_row_count = 4,
+            .grid_column_count = 5,
+            .list = .{
+                .present = true,
+                .item_index = 3,
+                .item_count = 9,
+            },
+            .scroll = .{
+                .present = true,
+                .offset = 12.0,
+                .viewport_extent = 80.0,
+                .content_extent = 180.0,
+            },
+            .bounds = geometry.RectF.init(10, 12, 80, 32),
+            .focused = true,
+            .hovered = true,
+            .pressed = true,
+            .selected = true,
+            .actions = .{ .focus = true, .press = true, .set_selection = true, .drag = true, .drop_files = true },
+            .text_selection = .{ .start = 4, .end = 4 },
+            .text_composition = .{ .start = 0, .end = 3 },
         },
-        .scroll = .{
-            .present = true,
-            .offset = 12.0,
-            .viewport_extent = 80.0,
-            .content_extent = 180.0,
+        .{
+            .window_id = 1,
+            .view_label = "canvas",
+            .id = 43,
+            .role = "button",
+            .name = "Disabled",
+            .bounds = geometry.RectF.init(10, 48, 80, 32),
+            .enabled = false,
         },
-        .bounds = geometry.RectF.init(10, 12, 80, 32),
-        .focused = true,
-        .hovered = true,
-        .pressed = true,
-        .selected = true,
-        .actions = .{ .focus = true, .press = true, .set_selection = true, .drag = true, .drop_files = true },
-        .text_selection = .{ .start = 4, .end = 4 },
-        .text_composition = .{ .start = 0, .end = 3 },
-    }};
+    };
     try writeText(.{
         .windows = &windows,
         .views = &views,
@@ -624,7 +637,9 @@ test "snapshot emits widget semantics" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[hovered,pressed,selected]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[focused,hovered,pressed,selected]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "@w1/canvas#43 role=button name=\"Disabled\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "state=[disabled]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "actions=[focus,press,set_selection,drag,drop_files]") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "selection=4..4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "composition=0..3") != null);
@@ -636,14 +651,16 @@ test "snapshot emits widget semantics" {
         .views = &views,
         .widgets = &widgets,
     }, &a11y_writer);
-    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "a11y root=@w1 nodes=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "a11y root=@w1 nodes=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#42 role=button name=\"Run query\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "parent=#7") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "text=\"deploy\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "grid=[row_index=1,column_index=2,row_count=4,column_count=5]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "list=[index=3,count=9]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "scroll=[offset=12,viewport=80,content=180]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[hovered,pressed,selected]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[focused,hovered,pressed,selected]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "@w1/canvas#43 role=button name=\"Disabled\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "state=[disabled]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "actions=[focus,press,set_selection,drag,drop_files]") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "selection=4..4") != null);
     try std.testing.expect(std.mem.indexOf(u8, a11y_writer.buffered(), "composition=0..3") != null);

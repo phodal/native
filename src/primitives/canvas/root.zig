@@ -348,10 +348,17 @@ pub const TextWrap = enum {
     character,
 };
 
+pub const TextAlign = enum {
+    start,
+    center,
+    end,
+};
+
 pub const TextLayoutOptions = struct {
     max_width: f32 = 0,
     line_height: f32 = 0,
     wrap: TextWrap = .word,
+    alignment: TextAlign = .start,
 };
 
 pub const TextLine = struct {
@@ -379,6 +386,7 @@ pub const TextLayoutKey = struct {
     max_width: f32 = 0,
     line_height: f32 = 0,
     wrap: TextWrap = .word,
+    alignment: TextAlign = .start,
     text_len: usize = 0,
     glyph_count: usize = 0,
     fingerprint: u64 = 0,
@@ -3479,13 +3487,13 @@ pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []T
     var start: usize = 0;
     while (start < text.text.len) {
         const end = nextTextLineEnd(text.text, start, text.size, options);
-        try appendTextLine(output, &len, text, start, end - start, start, end - start, lineHeight(text, options), &bounds);
+        try appendTextLine(output, &len, text, start, end - start, start, end - start, lineHeight(text, options), options, &bounds);
         start = end;
         if (start < text.text.len and text.text[start] == '\n') start += 1;
         while (options.wrap == .word and start < text.text.len and isTextBreakByte(text.text[start])) start += 1;
     }
     if (text.text.len == 0) {
-        try appendTextLine(output, &len, text, 0, 0, 0, 0, lineHeight(text, options), &bounds);
+        try appendTextLine(output, &len, text, 0, 0, 0, 0, lineHeight(text, options), options, &bounds);
     }
     return .{
         .key = textLayoutKey(text, options),
@@ -4920,6 +4928,7 @@ fn textLayoutKey(text: DrawText, options: TextLayoutOptions) TextLayoutKey {
         .max_width = nonNegative(options.max_width),
         .line_height = nonNegative(options.line_height),
         .wrap = options.wrap,
+        .alignment = options.alignment,
         .text_len = text.text.len,
         .glyph_count = text.glyphs.len,
         .fingerprint = textLayoutFingerprint(text, options),
@@ -4932,6 +4941,7 @@ fn textLayoutFingerprint(text: DrawText, options: TextLayoutOptions) u64 {
     hash = resourceHashF32(hash, nonNegative(options.max_width));
     hash = resourceHashF32(hash, nonNegative(options.line_height));
     hash = resourceHashEnum(hash, @intFromEnum(options.wrap));
+    hash = resourceHashEnum(hash, @intFromEnum(options.alignment));
     return hash;
 }
 
@@ -4950,6 +4960,7 @@ fn textLayoutKeysEqual(a: TextLayoutKey, b: TextLayoutKey) bool {
         a.max_width == b.max_width and
         a.line_height == b.line_height and
         a.wrap == b.wrap and
+        a.alignment == b.alignment and
         a.text_len == b.text_len and
         a.glyph_count == b.glyph_count and
         a.fingerprint == b.fingerprint;
@@ -8992,10 +9003,10 @@ fn appendGlyphTextLines(output: []TextLine, len: *usize, text: DrawText, options
 
         const glyph_end = nextGlyphLineEnd(text, glyph_start, options);
         const range = textRangeForGlyphRange(text.text, glyph_start, glyph_end - glyph_start, text.glyphs.len);
-        try appendTextLine(output, len, text, range.start, range.byteLen(text.text.len), glyph_start, glyph_end - glyph_start, height, bounds);
+        try appendTextLine(output, len, text, range.start, range.byteLen(text.text.len), glyph_start, glyph_end - glyph_start, height, options, bounds);
         glyph_start = glyph_end;
     }
-    if (len.* == initial_len) try appendTextLine(output, len, text, 0, 0, 0, 0, height, bounds);
+    if (len.* == initial_len) try appendTextLine(output, len, text, 0, 0, 0, 0, height, options, bounds);
 }
 
 fn nextGlyphLineEnd(text: DrawText, start: usize, options: TextLayoutOptions) usize {
@@ -9048,11 +9059,15 @@ fn appendTextLine(
     glyph_start: usize,
     glyph_len: usize,
     line_height: f32,
+    options: TextLayoutOptions,
     bounds: *?geometry.RectF,
 ) Error!void {
     if (len.* >= output.len) return error.TextLayoutLineListFull;
     const baseline = text.origin.y + @as(f32, @floatFromInt(len.*)) * line_height;
-    const line_bounds = textLineBounds(text, text_start, text_len, glyph_start, glyph_len, baseline, line_height);
+    const line_bounds = alignTextLineBounds(
+        textLineBounds(text, text_start, text_len, glyph_start, glyph_len, baseline, line_height),
+        options,
+    );
     output[len.*] = .{
         .text_start = text_start,
         .text_len = text_len,
@@ -9063,6 +9078,18 @@ fn appendTextLine(
     };
     len.* += 1;
     bounds.* = unionOptionalBounds(bounds.*, line_bounds);
+}
+
+fn alignTextLineBounds(bounds: geometry.RectF, options: TextLayoutOptions) geometry.RectF {
+    const max_width = nonNegative(options.max_width);
+    if (max_width <= 0 or bounds.width >= max_width) return bounds;
+    const extra = max_width - bounds.width;
+    const dx = switch (options.alignment) {
+        .start => 0,
+        .center => extra * 0.5,
+        .end => extra,
+    };
+    return bounds.translate(geometry.OffsetF.init(dx, 0));
 }
 
 fn lineHeight(text: DrawText, options: TextLayoutOptions) f32 {
@@ -10055,6 +10082,8 @@ fn writeTextLayoutKeyJson(key: TextLayoutKey, writer: anytype) !void {
         key.line_height,
     });
     try json.writeString(writer, @tagName(key.wrap));
+    try writer.writeAll(",\"align\":");
+    try json.writeString(writer, @tagName(key.alignment));
     try writer.print(",\"textLen\":{d},\"glyphCount\":{d},\"fingerprint\":{d}}}", .{
         key.text_len,
         key.glyph_count,
@@ -16631,6 +16660,7 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(f32, 30), plan.key.max_width);
     try std.testing.expectEqual(@as(f32, 14), plan.key.line_height);
     try std.testing.expectEqual(TextWrap.word, plan.key.wrap);
+    try std.testing.expectEqual(TextAlign.start, plan.key.alignment);
     try std.testing.expectEqual(text.text.len, plan.key.text_len);
     try std.testing.expectEqual(@as(usize, 0), plan.key.glyph_count);
     try std.testing.expect(plan.key.fingerprint != 0);
@@ -16646,6 +16676,43 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(usize, 17), layout.lines[3].text_start);
     try std.testing.expectEqual(@as(usize, 4), layout.lines[3].text_len);
     try expectRect(geometry.RectF.init(4, 10, 25, 56), layout.bounds);
+}
+
+test "text layout aligns fallback and shaped line boxes" {
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "Hi",
+    };
+
+    var center_lines: [1]TextLine = undefined;
+    const centered = try layoutTextRunPlan(text, .{ .max_width = 30, .line_height = 14, .alignment = .center }, &center_lines);
+    try std.testing.expectEqual(TextAlign.center, centered.key.alignment);
+    try expectRect(geometry.RectF.init(14, 10, 10, 14), centered.layout.lines[0].bounds);
+    try expectRect(geometry.RectF.init(14, 10, 10, 14), centered.layout.bounds);
+
+    var end_lines: [1]TextLine = undefined;
+    const end = try layoutTextRun(text, .{ .max_width = 30, .line_height = 14, .alignment = .end }, &end_lines);
+    try expectRect(geometry.RectF.init(24, 10, 10, 14), end.lines[0].bounds);
+
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 8 },
+        .{ .id = 2, .x = 8, .y = 0, .advance = 4 },
+    };
+    var shaped_lines: [1]TextLine = undefined;
+    const shaped = try layoutTextRun(.{
+        .font_id = 2,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "AV",
+        .glyphs = &glyphs,
+    }, .{ .max_width = 20, .line_height = 14, .alignment = .center }, &shaped_lines);
+
+    try expectRect(geometry.RectF.init(8, 10, 12, 14), shaped.lines[0].bounds);
+    try expectRect(geometry.RectF.init(8, 10, 12, 14), shaped.bounds);
 }
 
 test "text layout measures utf8 scalars for fallback wrapping" {
@@ -16718,7 +16785,7 @@ test "text layout cache plans upload retain and evict work" {
     try std.testing.expectEqual(@as(?usize, 0), retained.actions[0].cache_index);
 
     var changed_lines: [4]TextLine = undefined;
-    const changed_plan = try layoutTextRunPlan(text, .{ .max_width = 60, .line_height = 14, .wrap = .word }, &changed_lines);
+    const changed_plan = try layoutTextRunPlan(text, .{ .max_width = 30, .line_height = 14, .wrap = .word, .alignment = .center }, &changed_lines);
     var changed_entries: [1]TextLayoutCacheEntry = undefined;
     var changed_actions: [2]TextLayoutCacheAction = undefined;
     const changed = try changed_plan.cachePlan(retained.entries, 3, &changed_entries, &changed_actions);
@@ -16726,6 +16793,7 @@ test "text layout cache plans upload retain and evict work" {
     try std.testing.expectEqual(@as(usize, 1), changed.uploadCount());
     try std.testing.expectEqual(@as(usize, 0), changed.retainCount());
     try std.testing.expectEqual(@as(usize, 1), changed.evictCount());
+    try std.testing.expectEqual(TextAlign.center, changed.entries[0].key.alignment);
     try std.testing.expectEqual(TextLayoutCacheActionKind.upload, changed.actions[0].kind);
     try std.testing.expectEqual(@as(?usize, 0), changed.actions[0].layout_index);
     try std.testing.expectEqual(TextLayoutCacheActionKind.evict, changed.actions[1].kind);

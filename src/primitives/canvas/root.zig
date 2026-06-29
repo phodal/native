@@ -2396,7 +2396,7 @@ pub const ReferenceRenderSurface = struct {
         if (value.glyphs.len > 0) {
             for (value.glyphs) |glyph| {
                 const width = estimatedGlyphAdvance(glyph, value.size);
-                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x, value.origin.y - value.size, width, value.size);
+                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x, value.origin.y + glyph.y - value.size, width, value.size);
                 self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
             }
             return;
@@ -8183,24 +8183,31 @@ fn textBounds(value: DrawText) ?geometry.RectF {
     if (value.glyphs.len == 0 and value.text.len == 0) return null;
 
     var min_x = value.origin.x;
+    var min_y = value.origin.y - value.size;
     var max_x = value.origin.x;
+    var max_y = value.origin.y + value.size * 0.25;
     if (value.glyphs.len > 0) {
         min_x = value.origin.x + value.glyphs[0].x;
         max_x = min_x + estimatedGlyphAdvance(value.glyphs[0], value.size);
+        min_y = value.origin.y + value.glyphs[0].y - value.size;
+        max_y = value.origin.y + value.glyphs[0].y + value.size * 0.25;
         for (value.glyphs[1..]) |glyph| {
             const glyph_x = value.origin.x + glyph.x;
+            const glyph_y = value.origin.y + glyph.y;
             min_x = @min(min_x, glyph_x);
             max_x = @max(max_x, glyph_x + estimatedGlyphAdvance(glyph, value.size));
+            min_y = @min(min_y, glyph_y - value.size);
+            max_y = @max(max_y, glyph_y + value.size * 0.25);
         }
     } else {
-        max_x = value.origin.x + @as(f32, @floatFromInt(value.text.len)) * value.size * 0.5;
+        max_x = value.origin.x + estimateTextWidth(value.text, value.size);
     }
 
     return geometry.RectF.init(
         min_x,
-        value.origin.y - value.size,
+        min_y,
         @max(value.size * 0.25, max_x - min_x),
-        value.size * 1.25,
+        @max(value.size * 1.25, max_y - min_y),
     );
 }
 
@@ -14271,6 +14278,49 @@ test "reference renderer advances proxy text by utf8 scalars" {
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
 }
 
+test "reference renderer applies shaped glyph y offsets" {
+    const shaped_glyphs = [_]Glyph{.{ .id = 1, .x = 0, .y = 1, .advance = 1 }};
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 2,
+        .size = 2,
+        .origin = geometry.PointF.init(1, 3),
+        .color = Color.rgb8(255, 0, 0),
+        .glyphs = &shaped_glyphs,
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    var render_batches: [1]RenderBatch = undefined;
+    var resources: [1]RenderResource = undefined;
+    var resource_cache_entries: [1]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [1]RenderResourceCacheAction = undefined;
+    var glyphs: [1]GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [1]GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [1]GlyphAtlasCacheAction = undefined;
+    var changes: [0]DiffChange = .{};
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(4, 5),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .glyph_atlas_cache_entries = &glyph_cache_entries,
+        .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .changes = &changes,
+    });
+
+    var pixels: [4 * 5 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(4, 5, &pixels);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 2);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 3);
+}
+
 test "reference renderer draws image resources" {
     const commands = [_]CanvasCommand{.{ .draw_image = .{
         .id = 1,
@@ -14508,6 +14558,28 @@ test "text edit state tracks ime composition ranges" {
     try std.testing.expectEqualStrings("héo", state.text);
     try std.testing.expectEqual(@as(usize, 3), state.selection.focus);
     try std.testing.expect(state.composition == null);
+}
+
+test "text bounds follow utf8 scalar fallback and shaped y offsets" {
+    try expectRect(geometry.RectF.init(2, 8, 15, 12.5), textBounds(.{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(2, 18),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "é B",
+    }));
+
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = -2, .advance = 6 },
+        .{ .id = 2, .x = 8, .y = 3, .advance = 5 },
+    };
+    try expectRect(geometry.RectF.init(4, 8, 13, 17.5), textBounds(.{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .glyphs = &glyphs,
+    }));
 }
 
 test "text layout wraps words into deterministic line boxes" {

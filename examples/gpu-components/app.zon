@@ -1,0 +1,44 @@
+.{
+    .id = "dev.zero_native.gpu_components",
+    .name = "gpu-components",
+    .display_name = "GPU Components",
+    .version = "0.1.0",
+    .icons = .{ "assets/icon.icns" },
+    .platforms = .{ "macos" },
+    .permissions = .{ "view", "command" },
+    .capabilities = .{ "native_views", "gpu_surfaces" },
+    .shell = .{
+        .windows = .{
+            .{
+                .label = "main",
+                .title = "zero-native GPU Components",
+                .width = 1180,
+                .height = 760,
+                .restore_policy = "center_on_primary",
+                .views = .{
+                    .{ .label = "toolbar", .kind = "toolbar", .edge = "top", .height = 52, .role = "Toolbar" },
+                    .{ .label = "toolbar-title", .kind = "label", .parent = "toolbar", .x = 18, .y = 16, .width = 260, .height = 20, .text = "GPU Components" },
+                    .{ .label = "theme-mode", .kind = "segmented_control", .parent = "toolbar", .x = 292, .y = 11, .width = 174, .height = 30, .text = "Light|Dark|High", .command = "components.theme" },
+                    .{ .label = "refresh", .kind = "button", .parent = "toolbar", .x = 482, .y = 11, .width = 86, .height = 30, .text = "Refresh", .command = "components.refresh" },
+                    .{ .label = "body", .kind = "split", .fill = true, .axis = "row" },
+                    .{ .label = "sidebar", .kind = "sidebar", .parent = "body", .width = 208, .min_width = 188, .max_width = 244, .role = "Navigation" },
+                    .{ .label = "sidebar-title", .kind = "label", .parent = "sidebar", .x = 18, .y = 22, .width = 164, .height = 20, .text = "Native-first kit" },
+                    .{ .label = "nav-controls", .kind = "list_item", .parent = "sidebar", .x = 14, .y = 64, .width = 178, .height = 32, .text = "Controls" },
+                    .{ .label = "nav-inputs", .kind = "list_item", .parent = "sidebar", .x = 14, .y = 102, .width = 178, .height = 32, .text = "Inputs" },
+                    .{ .label = "nav-data", .kind = "list_item", .parent = "sidebar", .x = 14, .y = 140, .width = 178, .height = 32, .text = "Data" },
+                    .{ .label = "components-canvas", .kind = "gpu_surface", .parent = "body", .fill = true, .min_width = 640, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
+                    .{ .label = "statusbar", .kind = "statusbar", .edge = "bottom", .height = 32, .role = "Status" },
+                    .{ .label = "status-label", .kind = "label", .parent = "statusbar", .x = 14, .y = 7, .width = 820, .height = 18, .text = "Component lab waiting for the first GPU frame." },
+                },
+            },
+        },
+    },
+    .security = .{
+        .navigation = .{
+            .allowed_origins = .{ "zero://app", "zero://inline" },
+            .external_links = .{ .action = "deny" },
+        },
+    },
+    .web_engine = "system",
+    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+}

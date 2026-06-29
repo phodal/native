@@ -1,0 +1,808 @@
+const std = @import("std");
+const runner = @import("runner");
+const zero_native = @import("zero-native");
+
+pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+
+const canvas = zero_native.canvas;
+const geometry = zero_native.geometry;
+
+const window_width: f32 = 1180;
+const window_height: f32 = 760;
+const toolbar_height: f32 = 52;
+const sidebar_width: f32 = 208;
+const statusbar_height: f32 = 32;
+const canvas_width: f32 = window_width - sidebar_width;
+const canvas_height: f32 = window_height - toolbar_height - statusbar_height;
+const max_component_pipelines: usize = 8;
+const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
+const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
+const max_component_widgets: usize = 48;
+const component_chrome_prefix_commands: usize = 3;
+const component_chrome_suffix_commands: usize = 0;
+const refresh_command = "components.refresh";
+const theme_command = "components.theme";
+const canvas_label = "components-canvas";
+const primary_button_fill_id: canvas.ObjectId = 104 * 16 + 1;
+const search_text_id: canvas.ObjectId = 112 * 16 + 4;
+const scroll_track_id: canvas.ObjectId = 130 * 16 + 2;
+const scroll_thumb_id: canvas.ObjectId = 130 * 16 + 3;
+const menu_item_text_id: canvas.ObjectId = 142 * 16 + 3;
+const data_cell_text_id: canvas.ObjectId = 156 * 16 + 4;
+const popover_blur_id: canvas.ObjectId = 140 * 16 + 12;
+
+const bg_stops = [_]canvas.GradientStop{
+    .{ .offset = 0, .color = color(247, 249, 252) },
+    .{ .offset = 0.56, .color = color(238, 245, 250) },
+    .{ .offset = 1, .color = color(242, 246, 240) },
+};
+
+const accent_stops = [_]canvas.GradientStop{
+    .{ .offset = 0, .color = color(38, 99, 235) },
+    .{ .offset = 1, .color = color(16, 185, 129) },
+};
+
+const html =
+    \\<!doctype html>
+    \\<html>
+    \\<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+    \\<body></body>
+    \\</html>
+;
+
+const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
+const shell_views = [_]zero_native.ShellView{
+    .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = toolbar_height, .layer = 30, .role = "Toolbar" },
+    .{ .label = "toolbar-title", .kind = .label, .parent = "toolbar", .x = 18, .y = 16, .width = 260, .height = 20, .layer = 31, .text = "GPU Components" },
+    .{ .label = "theme-mode", .kind = .segmented_control, .parent = "toolbar", .x = 292, .y = 11, .width = 174, .height = 30, .layer = 31, .text = "Light|Dark|High", .command = theme_command },
+    .{ .label = "refresh", .kind = .button, .parent = "toolbar", .x = 482, .y = 11, .width = 86, .height = 30, .layer = 31, .text = "Refresh", .command = refresh_command },
+    .{ .label = "body", .kind = .split, .fill = true, .axis = .row },
+    .{ .label = "sidebar", .kind = .sidebar, .parent = "body", .width = sidebar_width, .min_width = 188, .max_width = 244, .layer = 10, .role = "Navigation" },
+    .{ .label = "sidebar-title", .kind = .label, .parent = "sidebar", .x = 18, .y = 22, .width = 164, .height = 20, .layer = 11, .text = "Native-first kit" },
+    .{ .label = "nav-controls", .kind = .list_item, .parent = "sidebar", .x = 14, .y = 64, .width = 178, .height = 32, .layer = 11, .text = "Controls" },
+    .{ .label = "nav-inputs", .kind = .list_item, .parent = "sidebar", .x = 14, .y = 102, .width = 178, .height = 32, .layer = 11, .text = "Inputs" },
+    .{ .label = "nav-data", .kind = .list_item, .parent = "sidebar", .x = 14, .y = 140, .width = 178, .height = 32, .layer = 11, .text = "Data" },
+    .{ .label = canvas_label, .kind = .gpu_surface, .parent = "body", .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
+    .{ .label = "statusbar", .kind = .statusbar, .edge = .bottom, .height = statusbar_height, .layer = 30, .role = "Status" },
+    .{ .label = "status-label", .kind = .label, .parent = "statusbar", .x = 14, .y = 7, .width = 820, .height = 18, .layer = 31, .text = "Component lab waiting for the first GPU frame." },
+};
+const shell_windows = [_]zero_native.ShellWindow{.{
+    .label = "main",
+    .title = "zero-native GPU Components",
+    .width = window_width,
+    .height = window_height,
+    .views = &shell_views,
+}};
+const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+
+const GpuComponentsApp = struct {
+    refresh_count: u32 = 0,
+    theme_count: u32 = 0,
+    canvas_installed: bool = false,
+    reported_planned_frame: bool = false,
+    pixels: ?[]u8 = null,
+    scratch: ?[]u8 = null,
+    render_commands: [max_component_commands]canvas.RenderCommand = undefined,
+    render_batches: [max_component_commands]canvas.RenderBatch = undefined,
+    pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined,
+    pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined,
+    layers: [max_component_commands]canvas.RenderLayer = undefined,
+    layer_cache_entries: [max_component_commands]canvas.RenderLayerCacheEntry = undefined,
+    layer_cache_actions: [max_component_commands * 2]canvas.RenderLayerCacheAction = undefined,
+    resources: [max_component_commands]canvas.RenderResource = undefined,
+    cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined,
+    cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined,
+    visual_effects: [max_component_commands]canvas.VisualEffect = undefined,
+    visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined,
+    visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined,
+    glyphs: [max_component_glyphs]canvas.GlyphAtlasEntry = undefined,
+    glyph_cache_entries: [max_component_glyphs]canvas.GlyphAtlasCacheEntry = undefined,
+    glyph_cache_actions: [max_component_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined,
+    text_layout_plans: [max_component_commands]canvas.TextLayoutPlan = undefined,
+    text_layout_lines: [max_component_glyphs]canvas.TextLine = undefined,
+    text_layout_cache_entries: [max_component_commands]canvas.TextLayoutCacheEntry = undefined,
+    text_layout_cache_actions: [max_component_commands * 2]canvas.TextLayoutCacheAction = undefined,
+    changes: [max_component_commands * 2 + 1]canvas.DiffChange = undefined,
+
+    fn app(self: *@This()) zero_native.App {
+        return .{
+            .context = self,
+            .name = "gpu-components",
+            .source = zero_native.WebViewSource.html(html),
+            .scene_fn = scene,
+            .event_fn = event,
+            .stop_fn = stop,
+        };
+    }
+
+    fn deinit(self: *@This()) void {
+        if (self.pixels) |pixels| std.heap.page_allocator.free(pixels);
+        if (self.scratch) |scratch| std.heap.page_allocator.free(scratch);
+        self.pixels = null;
+        self.scratch = null;
+    }
+
+    fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
+        _ = context;
+        return shell_scene;
+    }
+
+    fn event(context: *anyopaque, runtime: *zero_native.Runtime, event_value: zero_native.Event) anyerror!void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        switch (event_value) {
+            .command => |command| {
+                if (std.mem.eql(u8, command.name, refresh_command)) {
+                    try self.refresh(runtime, command);
+                } else if (std.mem.eql(u8, command.name, theme_command)) {
+                    try self.changeTheme(runtime, command);
+                }
+            },
+            .gpu_surface_frame => |frame_event| try self.handleGpuFrame(runtime, frame_event),
+            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
+        }
+    }
+
+    fn stop(context: *anyopaque, runtime: *zero_native.Runtime) anyerror!void {
+        _ = runtime;
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.deinit();
+    }
+
+    fn handleGpuFrame(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
+        if (!std.mem.eql(u8, frame_event.label, canvas_label)) return;
+        if (!self.canvas_installed) {
+            try installComponentsCanvasModel(runtime, frame_event.window_id);
+            _ = try self.presentComponentsCanvas(runtime, frame_event, true);
+            try self.updateStatus(runtime, frame_event.window_id, "Component lab display list presented on the GPU surface.");
+            self.canvas_installed = true;
+            return;
+        }
+
+        _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
+        if (!self.reported_planned_frame and frame_event.canvas_command_count > 0) {
+            self.reported_planned_frame = true;
+            var status_buffer: [160]u8 = undefined;
+            const status = try componentFrameStatus(&status_buffer, frame_event);
+            try self.updateStatus(runtime, frame_event.window_id, status);
+        }
+    }
+
+    fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+        self.refresh_count += 1;
+        self.reported_planned_frame = false;
+        try installComponentsCanvasModel(runtime, command.window_id);
+        const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, canvas_label);
+        _ = try self.presentComponentsCanvas(runtime, gpuFrameEvent(gpu_frame), true);
+
+        var status_buffer: [160]u8 = undefined;
+        const status = try std.fmt.bufPrint(&status_buffer, "Component lab refreshed from {s}. Count {d}.", .{ @tagName(command.source), self.refresh_count });
+        try self.updateStatus(runtime, command.window_id, status);
+    }
+
+    fn changeTheme(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+        self.theme_count += 1;
+        var status_buffer: [160]u8 = undefined;
+        const status = try std.fmt.bufPrint(&status_buffer, "Native theme selector changed from {s}. Count {d}.", .{ @tagName(command.source), self.theme_count });
+        try self.updateStatus(runtime, command.window_id, status);
+    }
+
+    fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!canvas.CanvasFrame {
+        const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, canvas_height) else frame_event.size;
+        const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
+        try self.ensurePixelBuffers(surface_size, scale_factor);
+        return try runtime.presentNextCanvasFramePixels(
+            frame_event.window_id,
+            canvas_label,
+            .{
+                .frame_index = frame_event.frame_index,
+                .timestamp_ns = frame_event.timestamp_ns,
+                .surface_size = surface_size,
+                .scale = scale_factor,
+                .full_repaint = full_repaint,
+            },
+            self.frameStorage(),
+            self.pixels.?,
+            self.scratch.?,
+            color(247, 249, 252),
+        );
+    }
+
+    fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
+        _ = self;
+        _ = try runtime.updateView(window_id, "status-label", .{ .text = text });
+    }
+
+    fn frameStorage(self: *@This()) canvas.CanvasFrameStorage {
+        return .{
+            .render_commands = &self.render_commands,
+            .render_batches = &self.render_batches,
+            .pipeline_cache_entries = &self.pipeline_cache_entries,
+            .pipeline_cache_actions = &self.pipeline_cache_actions,
+            .layers = &self.layers,
+            .layer_cache_entries = &self.layer_cache_entries,
+            .layer_cache_actions = &self.layer_cache_actions,
+            .resources = &self.resources,
+            .resource_cache_entries = &self.cache_entries,
+            .resource_cache_actions = &self.cache_actions,
+            .visual_effects = &self.visual_effects,
+            .visual_effect_cache_entries = &self.visual_effect_cache_entries,
+            .visual_effect_cache_actions = &self.visual_effect_cache_actions,
+            .glyph_atlas_entries = &self.glyphs,
+            .glyph_atlas_cache_entries = &self.glyph_cache_entries,
+            .glyph_atlas_cache_actions = &self.glyph_cache_actions,
+            .text_layout_plans = &self.text_layout_plans,
+            .text_layout_lines = &self.text_layout_lines,
+            .text_layout_cache_entries = &self.text_layout_cache_entries,
+            .text_layout_cache_actions = &self.text_layout_cache_actions,
+            .changes = &self.changes,
+        };
+    }
+
+    fn ensurePixelBuffers(self: *@This(), surface_size: geometry.SizeF, scale_factor: f32) anyerror!void {
+        const pixel_size = try zero_native.runtime.canvasSurfacePixelSize(surface_size, scale_factor);
+        if (self.pixels == null or self.pixels.?.len < pixel_size.byte_len) {
+            if (self.pixels) |pixels| std.heap.page_allocator.free(pixels);
+            self.pixels = try std.heap.page_allocator.alloc(u8, pixel_size.byte_len);
+        }
+        if (self.scratch == null or self.scratch.?.len < pixel_size.byte_len) {
+            if (self.scratch) |scratch| std.heap.page_allocator.free(scratch);
+            self.scratch = try std.heap.page_allocator.alloc(u8, pixel_size.byte_len);
+        }
+    }
+};
+
+fn installComponentsCanvasModel(runtime: *zero_native.Runtime, window_id: zero_native.WindowId) anyerror!void {
+    var commands: [max_component_commands]canvas.CanvasCommand = undefined;
+    var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    var builder = canvas.Builder.init(&commands);
+    const layout = try buildComponentsWidgetLayout(&nodes);
+    try buildComponentsDisplayList(&builder, layout);
+    _ = try runtime.setCanvasDisplayList(window_id, canvas_label, builder.displayList());
+    _ = try runtime.setCanvasWidgetLayout(window_id, canvas_label, layout);
+    _ = try runtime.emitCanvasWidgetDisplayListWithChrome(window_id, canvas_label, componentTokens(), .{
+        .prefix_command_count = component_chrome_prefix_commands,
+        .suffix_command_count = component_chrome_suffix_commands,
+    });
+}
+
+fn buildComponentsDisplayListFromWidgets(builder: *canvas.Builder) canvas.Error!void {
+    var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    const layout = try buildComponentsWidgetLayout(&nodes);
+    try buildComponentsDisplayList(builder, layout);
+}
+
+fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
+    try builder.fillRect(.{ .id = 1, .rect = rect(0, 0, canvas_width, canvas_height), .fill = .{ .linear_gradient = .{ .start = pt(0, 0), .end = pt(canvas_width, canvas_height), .stops = &bg_stops } } });
+    try builder.shadow(.{ .id = 2, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .offset = .{ .dx = 0, .dy = 22 }, .blur = 46, .spread = -16, .color = rgba(20, 28, 43, 34) });
+    try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = color(255, 255, 255) } });
+    try layout.emitDisplayList(builder, componentTokens());
+}
+
+fn componentTokens() canvas.DesignTokens {
+    return .{
+        .colors = .{
+            .surface = rgba(255, 255, 255, 238),
+            .surface_subtle = color(248, 250, 252),
+            .surface_pressed = rgba(38, 99, 235, 24),
+            .text = color(17, 24, 39),
+            .text_muted = color(97, 111, 126),
+            .border = color(224, 231, 239),
+            .accent = color(38, 99, 235),
+            .accent_text = color(255, 255, 255),
+            .focus_ring = color(20, 184, 166),
+            .shadow = rgba(15, 23, 42, 28),
+            .disabled = color(226, 232, 240),
+        },
+        .typography = .{
+            .font_id = 1,
+            .body_size = 12,
+            .label_size = 11,
+            .title_size = 20,
+            .button_size = 12,
+        },
+        .radius = .{
+            .sm = 4,
+            .md = 8,
+            .lg = 14,
+            .xl = 18,
+        },
+        .shadow = .{
+            .sm = .{ .y = 8, .blur = 22, .spread = -12 },
+            .md = .{ .y = 16, .blur = 34, .spread = -16 },
+        },
+        .motion = .{ .normal_ms = 180, .slow_ms = 520, .easing = .emphasized },
+        .scroll = .{ .wheel_multiplier = 1.1, .wheel_velocity_scale = 72, .deceleration_per_second = 0.88, .stop_velocity = 4 },
+    };
+}
+
+fn buildComponentsWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!canvas.WidgetLayoutTree {
+    const nav_items = [_]canvas.Widget{
+        .{ .id = 121, .kind = .list_item, .text = "Controls", .state = .{ .selected = true } },
+    };
+    const scroll_items = [_]canvas.Widget{
+        .{ .id = 131, .kind = .list_item, .frame = rect(0, 92, 0, 30), .text = "Scroll physics" },
+    };
+    const form_controls = [_]canvas.Widget{
+        .{ .id = 111, .kind = .text_field, .frame = rect(16, 48, 132, 30), .text = "zero-native", .semantics = .{ .label = "Project name" } },
+        .{ .id = 112, .kind = .search_field, .frame = rect(158, 48, 148, 30), .text = "components", .semantics = .{ .label = "Component search" } },
+        .{ .id = 113, .kind = .checkbox, .frame = rect(16, 92, 116, 28), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
+        .{ .id = 114, .kind = .toggle, .frame = rect(150, 92, 100, 28), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live toggle" } },
+        .{ .id = 115, .kind = .slider, .frame = rect(16, 138, 156, 26), .value = 0.62, .semantics = .{ .label = "Density slider" } },
+        .{ .id = 116, .kind = .progress, .frame = rect(188, 147, 116, 10), .value = 0.74, .semantics = .{ .label = "Build progress" } },
+        .{ .id = 117, .kind = .segmented_control, .frame = rect(16, 180, 132, 30), .text = "Small|Large", .value = 0.5, .state = .{ .selected = true }, .semantics = .{ .label = "Density segment" } },
+    };
+    const menu_items = [_]canvas.Widget{
+        .{ .id = 142, .kind = .menu_item, .text = "Copy token" },
+    };
+    const popover_children = [_]canvas.Widget{.{
+        .id = 141,
+        .kind = .menu_surface,
+        .frame = rect(12, 12, 150, 64),
+        .layout = .{ .gap = 2 },
+        .semantics = .{ .label = "Component actions" },
+        .children = &menu_items,
+    }};
+    const data_cells = [_]canvas.Widget{
+        .{ .id = 156, .kind = .data_cell, .text = "Wheel/Home/End", .command = "components.open", .layout = .{ .grow = 1 } },
+    };
+    const data_rows = [_]canvas.Widget{
+        .{ .id = 151, .kind = .data_row, .frame = rect(0, 0, 0, 28), .children = &data_cells },
+    };
+    const data_panel_children = [_]canvas.Widget{
+        .{ .id = 150, .kind = .data_grid, .frame = rect(16, 48, 304, 60), .text = "Finished component behavior", .layout = .{ .gap = 2 }, .children = &data_rows },
+        .{ .id = 160, .kind = .tooltip, .frame = rect(22, 124, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
+    };
+    const top_widgets = [_]canvas.Widget{
+        .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
+        .{ .id = 102, .kind = .text, .frame = rect(64, 88, 360, 18), .text = "Retained widgets, semantics, and GPU display-list output." },
+        .{ .id = 103, .kind = .icon, .frame = rect(528, 58, 28, 28), .text = "*", .semantics = .{ .label = "Accent icon" } },
+        .{ .id = 104, .kind = .button, .frame = rect(574, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
+        .{ .id = 105, .kind = .icon_button, .frame = rect(706, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
+        .{ .id = 106, .kind = .column, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
+        .{ .id = 120, .kind = .list, .frame = rect(424, 142, 152, 120), .layout = .{ .gap = 8 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
+        .{ .id = 130, .kind = .scroll_view, .frame = rect(604, 142, 164, 104), .value = 20, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
+        .{ .id = 140, .kind = .popover, .frame = rect(424, 286, 174, 88), .backdrop_blur = 12, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
+        .{ .id = 149, .kind = .column, .frame = rect(64, 408, 344, 174), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
+    };
+    return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, canvas_width, canvas_height), nodes);
+}
+
+fn componentFrame(display_list: canvas.DisplayList, previous: ?canvas.DisplayList, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage) canvas.Error!canvas.CanvasFrame {
+    return display_list.framePlan(previous, options, storage);
+}
+
+fn componentFrameStorage(
+    render_commands: []canvas.RenderCommand,
+    render_batches: []canvas.RenderBatch,
+    pipeline_cache_entries: []canvas.RenderPipelineCacheEntry,
+    pipeline_cache_actions: []canvas.RenderPipelineCacheAction,
+    layers: []canvas.RenderLayer,
+    layer_cache_entries: []canvas.RenderLayerCacheEntry,
+    layer_cache_actions: []canvas.RenderLayerCacheAction,
+    resources: []canvas.RenderResource,
+    cache_entries: []canvas.RenderResourceCacheEntry,
+    cache_actions: []canvas.RenderResourceCacheAction,
+    visual_effects: []canvas.VisualEffect,
+    visual_effect_cache_entries: []canvas.VisualEffectCacheEntry,
+    visual_effect_cache_actions: []canvas.VisualEffectCacheAction,
+    glyphs: []canvas.GlyphAtlasEntry,
+    glyph_cache_entries: []canvas.GlyphAtlasCacheEntry,
+    glyph_cache_actions: []canvas.GlyphAtlasCacheAction,
+    text_layout_plans: []canvas.TextLayoutPlan,
+    text_layout_lines: []canvas.TextLine,
+    text_layout_cache_entries: []canvas.TextLayoutCacheEntry,
+    text_layout_cache_actions: []canvas.TextLayoutCacheAction,
+    changes: []canvas.DiffChange,
+) canvas.CanvasFrameStorage {
+    return .{
+        .render_commands = render_commands,
+        .render_batches = render_batches,
+        .pipeline_cache_entries = pipeline_cache_entries,
+        .pipeline_cache_actions = pipeline_cache_actions,
+        .layers = layers,
+        .layer_cache_entries = layer_cache_entries,
+        .layer_cache_actions = layer_cache_actions,
+        .resources = resources,
+        .resource_cache_entries = cache_entries,
+        .resource_cache_actions = cache_actions,
+        .visual_effects = visual_effects,
+        .visual_effect_cache_entries = visual_effect_cache_entries,
+        .visual_effect_cache_actions = visual_effect_cache_actions,
+        .glyph_atlas_entries = glyphs,
+        .glyph_atlas_cache_entries = glyph_cache_entries,
+        .glyph_atlas_cache_actions = glyph_cache_actions,
+        .text_layout_plans = text_layout_plans,
+        .text_layout_lines = text_layout_lines,
+        .text_layout_cache_entries = text_layout_cache_entries,
+        .text_layout_cache_actions = text_layout_cache_actions,
+        .changes = changes,
+    };
+}
+
+fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFrameEvent {
+    return .{
+        .window_id = frame.window_id,
+        .label = frame.label,
+        .size = frame.size,
+        .scale_factor = frame.scale_factor,
+        .frame_index = frame.frame_index,
+        .timestamp_ns = frame.timestamp_ns,
+        .input_timestamp_ns = frame.input_timestamp_ns,
+        .input_latency_ns = frame.input_latency_ns,
+        .input_latency_budget_ns = frame.input_latency_budget_ns,
+        .input_latency_budget_exceeded_count = frame.input_latency_budget_exceeded_count,
+        .input_latency_budget_ok = frame.input_latency_budget_ok,
+        .nonblank = frame.nonblank,
+        .sample_color = frame.sample_color,
+        .backend = frame.backend,
+        .pixel_format = frame.pixel_format,
+        .present_mode = frame.present_mode,
+        .alpha_mode = frame.alpha_mode,
+        .color_space = frame.color_space,
+        .vsync = frame.vsync,
+        .status = frame.status,
+        .canvas_revision = frame.canvas_revision,
+        .canvas_command_count = frame.canvas_command_count,
+        .canvas_frame_requires_render = frame.canvas_frame_requires_render,
+        .canvas_frame_full_repaint = frame.canvas_frame_full_repaint,
+        .canvas_frame_batch_count = frame.canvas_frame_batch_count,
+        .canvas_frame_encoder_command_count = frame.canvas_frame_encoder_command_count,
+        .canvas_frame_encoder_cache_action_count = frame.canvas_frame_encoder_cache_action_count,
+        .canvas_frame_encoder_bind_pipeline_count = frame.canvas_frame_encoder_bind_pipeline_count,
+        .canvas_frame_encoder_draw_batch_count = frame.canvas_frame_encoder_draw_batch_count,
+        .canvas_frame_pipeline_count = frame.canvas_frame_pipeline_count,
+        .canvas_frame_pipeline_upload_count = frame.canvas_frame_pipeline_upload_count,
+        .canvas_frame_pipeline_retain_count = frame.canvas_frame_pipeline_retain_count,
+        .canvas_frame_pipeline_evict_count = frame.canvas_frame_pipeline_evict_count,
+        .canvas_frame_path_geometry_count = frame.canvas_frame_path_geometry_count,
+        .canvas_frame_path_geometry_vertex_count = frame.canvas_frame_path_geometry_vertex_count,
+        .canvas_frame_path_geometry_index_count = frame.canvas_frame_path_geometry_index_count,
+        .canvas_frame_path_geometry_upload_count = frame.canvas_frame_path_geometry_upload_count,
+        .canvas_frame_path_geometry_retain_count = frame.canvas_frame_path_geometry_retain_count,
+        .canvas_frame_path_geometry_evict_count = frame.canvas_frame_path_geometry_evict_count,
+        .canvas_frame_image_count = frame.canvas_frame_image_count,
+        .canvas_frame_image_upload_count = frame.canvas_frame_image_upload_count,
+        .canvas_frame_image_retain_count = frame.canvas_frame_image_retain_count,
+        .canvas_frame_image_evict_count = frame.canvas_frame_image_evict_count,
+        .canvas_frame_layer_count = frame.canvas_frame_layer_count,
+        .canvas_frame_layer_opacity_count = frame.canvas_frame_layer_opacity_count,
+        .canvas_frame_layer_clip_count = frame.canvas_frame_layer_clip_count,
+        .canvas_frame_layer_transform_count = frame.canvas_frame_layer_transform_count,
+        .canvas_frame_layer_upload_count = frame.canvas_frame_layer_upload_count,
+        .canvas_frame_layer_retain_count = frame.canvas_frame_layer_retain_count,
+        .canvas_frame_layer_evict_count = frame.canvas_frame_layer_evict_count,
+        .canvas_frame_resource_count = frame.canvas_frame_resource_count,
+        .canvas_frame_resource_upload_count = frame.canvas_frame_resource_upload_count,
+        .canvas_frame_resource_retain_count = frame.canvas_frame_resource_retain_count,
+        .canvas_frame_resource_evict_count = frame.canvas_frame_resource_evict_count,
+        .canvas_frame_visual_effect_count = frame.canvas_frame_visual_effect_count,
+        .canvas_frame_visual_effect_shadow_count = frame.canvas_frame_visual_effect_shadow_count,
+        .canvas_frame_visual_effect_blur_count = frame.canvas_frame_visual_effect_blur_count,
+        .canvas_frame_visual_effect_upload_count = frame.canvas_frame_visual_effect_upload_count,
+        .canvas_frame_visual_effect_retain_count = frame.canvas_frame_visual_effect_retain_count,
+        .canvas_frame_visual_effect_evict_count = frame.canvas_frame_visual_effect_evict_count,
+        .canvas_frame_glyph_atlas_entry_count = frame.canvas_frame_glyph_atlas_entry_count,
+        .canvas_frame_glyph_atlas_upload_count = frame.canvas_frame_glyph_atlas_upload_count,
+        .canvas_frame_glyph_atlas_retain_count = frame.canvas_frame_glyph_atlas_retain_count,
+        .canvas_frame_glyph_atlas_evict_count = frame.canvas_frame_glyph_atlas_evict_count,
+        .canvas_frame_text_layout_count = frame.canvas_frame_text_layout_count,
+        .canvas_frame_text_layout_line_count = frame.canvas_frame_text_layout_line_count,
+        .canvas_frame_text_layout_upload_count = frame.canvas_frame_text_layout_upload_count,
+        .canvas_frame_text_layout_retain_count = frame.canvas_frame_text_layout_retain_count,
+        .canvas_frame_text_layout_evict_count = frame.canvas_frame_text_layout_evict_count,
+        .canvas_frame_change_count = frame.canvas_frame_change_count,
+        .canvas_frame_budget_exceeded_count = frame.canvas_frame_budget_exceeded_count,
+        .canvas_frame_budget_ok = frame.canvas_frame_budget_ok,
+        .canvas_frame_dirty_bounds = frame.canvas_frame_dirty_bounds,
+        .canvas_frame_profile_work_units = frame.canvas_frame_profile_work_units,
+        .canvas_frame_profile_risk = frame.canvas_frame_profile_risk,
+        .canvas_frame_profile_surface_area = frame.canvas_frame_profile_surface_area,
+        .canvas_frame_profile_dirty_area = frame.canvas_frame_profile_dirty_area,
+        .canvas_frame_profile_dirty_ratio = frame.canvas_frame_profile_dirty_ratio,
+        .widget_revision = frame.widget_revision,
+        .widget_node_count = frame.widget_node_count,
+        .widget_semantics_count = frame.widget_semantics_count,
+    };
+}
+
+fn componentFrameStatus(buffer: []u8, frame_event: zero_native.GpuSurfaceFrameEvent) std.fmt.BufPrintError![]u8 {
+    return std.fmt.bufPrint(
+        buffer,
+        "Component frame: {s} risk, {d} commands, {d} batches, {d} semantics nodes.",
+        .{
+            @tagName(frame_event.canvas_frame_profile_risk),
+            frame_event.canvas_command_count,
+            frame_event.canvas_frame_batch_count,
+            frame_event.widget_semantics_count,
+        },
+    );
+}
+
+fn componentSnapshotWidget(snapshot: zero_native.automation.snapshot.Input, id: u64) ?zero_native.automation.snapshot.Widget {
+    for (snapshot.widgets) |widget| {
+        if (widget.id == id and std.mem.eql(u8, widget.view_label, canvas_label)) return widget;
+    }
+    return null;
+}
+
+fn componentViewByLabel(runtime: *const zero_native.Runtime, label: []const u8) ?zero_native.ViewInfo {
+    var views_buffer: [zero_native.platform.max_views + zero_native.platform.max_webviews + 1]zero_native.ViewInfo = undefined;
+    const views = runtime.listViews(1, &views_buffer);
+    for (views) |view| {
+        if (std.mem.eql(u8, view.label, label)) return view;
+    }
+    return null;
+}
+
+fn resetComponentDirty(runtime: *zero_native.Runtime) void {
+    runtime.invalidated = false;
+    runtime.dirty_region_count = 0;
+}
+
+fn color(r: u8, g: u8, b: u8) canvas.Color {
+    return canvas.Color.rgb8(r, g, b);
+}
+
+fn rgba(r: u8, g: u8, b: u8, a: u8) canvas.Color {
+    return canvas.Color.rgba8(r, g, b, a);
+}
+
+fn rect(x: f32, y: f32, width: f32, height: f32) geometry.RectF {
+    return geometry.RectF.init(x, y, width, height);
+}
+
+fn pt(x: f32, y: f32) geometry.PointF {
+    return geometry.PointF.init(x, y);
+}
+
+pub fn main(init: std.process.Init) !void {
+    var app = GpuComponentsApp{};
+    try runner.runWithOptions(app.app(), .{
+        .app_name = "gpu-components",
+        .window_title = "zero-native GPU Components",
+        .bundle_id = "dev.zero_native.gpu_components",
+        .icon_path = "assets/icon.icns",
+        .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
+        .js_window_api = false,
+        .security = .{
+            .permissions = &app_permissions,
+            .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app" } },
+        },
+    }, init);
+}
+
+test "gpu components scene declares native shell and gpu canvas" {
+    try std.testing.expect(shell_views[0].kind == .toolbar);
+    try std.testing.expect(shell_views[5].kind == .sidebar);
+    try std.testing.expect(shell_views[10].kind == .gpu_surface);
+    try std.testing.expect(shell_views[11].kind == .statusbar);
+    try std.testing.expectEqualStrings("body", shell_views[10].parent.?);
+    try std.testing.expect(shell_views[10].gpu_backend.? == .metal);
+    try std.testing.expect(shell_views[10].gpu_pixel_format.? == .bgra8_unorm);
+    try std.testing.expect(shell_views[10].gpu_present_mode.? == .timer);
+    try std.testing.expect(shell_views[10].gpu_alpha_mode.? == .@"opaque");
+    try std.testing.expect(shell_views[10].gpu_color_space.? == .srgb);
+    try std.testing.expect(shell_views[10].gpu_vsync.?);
+}
+
+test "gpu components display list covers finished live controls" {
+    var commands: [max_component_commands]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try buildComponentsDisplayListFromWidgets(&builder);
+    const display_list = builder.displayList();
+
+    try std.testing.expect(display_list.commandCount() >= 54);
+    try std.testing.expect(display_list.commandCount() <= max_component_commands);
+    try std.testing.expect(display_list.findCommandById(1) != null);
+    try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
+    try std.testing.expect(display_list.findCommandById(search_text_id) != null);
+    try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
+    try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
+    try std.testing.expect(display_list.findCommandById(popover_blur_id) != null);
+    try std.testing.expect(display_list.findCommandById(menu_item_text_id) != null);
+    try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
+    const bounds = display_list.bounds().?;
+    try std.testing.expect(bounds.x <= 0);
+    try std.testing.expect(bounds.y <= 0);
+    try std.testing.expect(bounds.width >= canvas_width);
+    try std.testing.expect(bounds.height >= canvas_height);
+}
+
+test "gpu components frame plan stays within runtime budgets" {
+    var commands: [max_component_commands]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try buildComponentsDisplayListFromWidgets(&builder);
+    const display_list = builder.displayList();
+
+    var render_commands: [max_component_commands]canvas.RenderCommand = undefined;
+    var render_batches: [max_component_commands]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
+    var layers: [max_component_commands]canvas.RenderLayer = undefined;
+    var layer_cache_entries: [max_component_commands]canvas.RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [max_component_commands * 2]canvas.RenderLayerCacheAction = undefined;
+    var resources: [max_component_commands]canvas.RenderResource = undefined;
+    var cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined;
+    var cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var visual_effects: [max_component_commands]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined;
+    var glyphs: [max_component_glyphs]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [max_component_glyphs]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [max_component_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [max_component_commands]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [max_component_glyphs]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [max_component_commands]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [max_component_commands * 2]canvas.TextLayoutCacheAction = undefined;
+    var changes: [max_component_commands * 2 + 1]canvas.DiffChange = undefined;
+    const frame = try componentFrame(display_list, null, .{
+        .surface_size = geometry.SizeF.init(canvas_width, canvas_height),
+        .full_repaint = true,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expect(frame.batch_plan.batchCount() >= 8);
+    try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
+    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 3);
+    try std.testing.expect(frame.text_layout_plan.planCount() >= 12);
+    try std.testing.expect(frame.profile().work_units > 0);
+    try std.testing.expect(frame.profile().surface_area > 0);
+}
+
+test "gpu components semantics cover retained widget families" {
+    var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    const layout = try buildComponentsWidgetLayout(&nodes);
+    var semantics_buffer: [max_component_widgets]canvas.WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+
+    try expectSemanticRole(semantics, 103, .image);
+    try expectSemanticRole(semantics, 104, .button);
+    try expectSemanticRole(semantics, 105, .button);
+    try expectSemanticRole(semantics, 106, .group);
+    try expectSemanticRole(semantics, 111, .textbox);
+    try expectSemanticRole(semantics, 112, .textbox);
+    try expectSemanticRole(semantics, 113, .checkbox);
+    try expectSemanticRole(semantics, 114, .switch_control);
+    try expectSemanticRole(semantics, 115, .slider);
+    try expectSemanticRole(semantics, 116, .progressbar);
+    try expectSemanticRole(semantics, 117, .tab);
+    try expectSemanticRole(semantics, 120, .list);
+    try expectSemanticRole(semantics, 121, .listitem);
+    try expectSemanticRole(semantics, 130, .group);
+    try expectSemanticRole(semantics, 140, .dialog);
+    try expectSemanticRole(semantics, 141, .menu);
+    try expectSemanticRole(semantics, 142, .menuitem);
+    try expectSemanticRole(semantics, 149, .group);
+    try expectSemanticRole(semantics, 150, .grid);
+    try expectSemanticRole(semantics, 151, .row);
+    try expectSemanticRole(semantics, 156, .gridcell);
+    try expectSemanticRole(semantics, 160, .tooltip);
+
+    const slider = expectSemantic(semantics, 115);
+    try std.testing.expectEqual(@as(?f32, 0.62), slider.value);
+    try std.testing.expect(slider.actions.increment);
+    try std.testing.expect(slider.actions.decrement);
+    const scroll = expectSemantic(semantics, 130);
+    try std.testing.expect(scroll.scroll.present);
+    try std.testing.expect(scroll.actions.increment);
+    try std.testing.expect(scroll.actions.decrement);
+    const selected_nav = expectSemantic(semantics, 121);
+    try std.testing.expect(selected_nav.state.selected);
+    try std.testing.expect(selected_nav.list.present);
+}
+
+test "gpu components image widget exposes image semantics and display command" {
+    const image = canvas.Widget{
+        .id = 190,
+        .kind = .image,
+        .frame = rect(12, 14, 86, 54),
+        .image_id = 42,
+        .image_src = rect(0, 0, 320, 192),
+        .image_fit = .cover,
+        .image_sampling = .nearest,
+        .image_opacity = 0.82,
+        .semantics = .{ .label = "Preview image" },
+    };
+    var nodes: [1]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(image, image.frame, &nodes);
+    var semantics_buffer: [1]canvas.WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(canvas.WidgetRole.image, semantics[0].role);
+    try std.testing.expectEqualStrings("Preview image", semantics[0].label);
+
+    var commands: [1]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try layout.emitDisplayList(&builder, componentTokens());
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 1), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .draw_image => |draw| {
+            try std.testing.expectEqual(@as(canvas.ObjectId, 190 * 16 + 1), draw.id);
+            try std.testing.expectEqual(@as(canvas.ImageId, 42), draw.image_id);
+            try std.testing.expectEqual(canvas.ImageFit.cover, draw.fit);
+            try std.testing.expectEqual(canvas.ImageSampling.nearest, draw.sampling);
+            try std.testing.expectEqual(@as(f32, 0.82), draw.opacity);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "gpu components app registers component lab on first gpu frame" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    try harness.start(app.app());
+
+    try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app.canvas_installed);
+
+    var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try std.testing.expect(display_list.commandCount() <= max_component_commands);
+    try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
+    try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(usize, 1944), harness.null_platform.gpu_surface_present_width);
+    try std.testing.expectEqual(@as(usize, 1352), harness.null_platform.gpu_surface_present_height);
+
+    const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(widget_layout.nodeCount() >= 26);
+    try std.testing.expectEqualStrings("Input controls", widget_layout.findById(106).?.widget.semantics.label);
+
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(componentSnapshotWidget(snapshot, 104).?.actions.press);
+    try std.testing.expectEqualStrings("textbox", componentSnapshotWidget(snapshot, 111).?.role);
+    try std.testing.expectEqualStrings("textbox", componentSnapshotWidget(snapshot, 112).?.role);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 113).?.actions.toggle);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 114).?.selected);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 115).?.actions.increment);
+    try std.testing.expectEqualStrings("progressbar", componentSnapshotWidget(snapshot, 116).?.role);
+    try std.testing.expectEqualStrings("tab", componentSnapshotWidget(snapshot, 117).?.role);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.present);
+    try std.testing.expectEqualStrings("menuitem", componentSnapshotWidget(snapshot, 142).?.role);
+    try std.testing.expectEqualStrings("gridcell", componentSnapshotWidget(snapshot, 156).?.role);
+    try std.testing.expectEqualStrings("tooltip", componentSnapshotWidget(snapshot, 160).?.role);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 104 press");
+    try std.testing.expectEqual(@as(u32, 1), app.refresh_count);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(componentSnapshotWidget(snapshot, 104).?.focused);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 113 toggle");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(!componentSnapshotWidget(snapshot, 113).?.selected);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 115 increment");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.67), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
+
+    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Component") != null);
+}
+
+fn expectSemanticRole(semantics: []const canvas.WidgetSemanticsNode, id: canvas.ObjectId, role: canvas.WidgetRole) !void {
+    const semantic = expectSemantic(semantics, id);
+    try std.testing.expectEqual(role, semantic.role);
+}
+
+fn expectSemantic(semantics: []const canvas.WidgetSemanticsNode, id: canvas.ObjectId) canvas.WidgetSemanticsNode {
+    for (semantics) |semantic| {
+        if (semantic.id == id) return semantic;
+    }
+    @panic("missing semantic node");
+}

@@ -36,9 +36,9 @@ const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
 const max_canvas_text_layouts_per_view: usize = 16;
 const max_canvas_surface_extent_pixels: f32 = 16_384;
-pub const max_canvas_widget_nodes_per_view: usize = 16;
-pub const max_canvas_widget_semantics_per_view: usize = 16;
-pub const max_canvas_widget_text_bytes_per_view: usize = 512;
+pub const max_canvas_widget_nodes_per_view: usize = 64;
+pub const max_canvas_widget_semantics_per_view: usize = 64;
+pub const max_canvas_widget_text_bytes_per_view: usize = 2048;
 const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_nodes_per_view * 2 + 1;
 
 pub const LifecycleEvent = enum {
@@ -10674,6 +10674,63 @@ test "runtime invalidates canvas widget layout and semantics changes" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", renamed);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime accepts larger retained widget shells for automation" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-large-shell", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 480),
+    });
+
+    var items: [24]canvas.Widget = undefined;
+    for (&items, 0..) |*item, index| {
+        item.* = .{
+            .id = @intCast(index + 2),
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 18),
+            .text = "Item",
+        };
+    }
+    const list = canvas.Widget{
+        .id = 1,
+        .kind = .list,
+        .text = "Workspace list",
+        .layout = .{ .gap = 1 },
+        .children = &items,
+    };
+
+    var nodes: [25]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(list, geometry.RectF.init(0, 0, 320, 480), &nodes);
+    try std.testing.expectEqual(@as(usize, 25), layout.nodeCount());
+
+    const info = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try std.testing.expectEqual(@as(u64, 1), info.widget_revision);
+    try std.testing.expectEqual(@as(usize, 25), info.widget_node_count);
+    try std.testing.expectEqual(@as(usize, 25), info.widget_semantics_count);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 25), snapshot.widgets.len);
+    try std.testing.expectEqualStrings("list", snapshot.widgets[0].role);
+    try std.testing.expectEqualStrings("Workspace list", snapshot.widgets[0].name);
+    try std.testing.expectEqualStrings("listitem", snapshot.widgets[24].role);
+    try std.testing.expectEqual(@as(u64, 25), snapshot.widgets[24].id);
+    try std.testing.expect(snapshot.widgets[24].list.present);
+    try std.testing.expectEqual(@as(u32, 23), snapshot.widgets[24].list.item_index);
+    try std.testing.expectEqual(@as(u32, 24), snapshot.widgets[24].list.item_count);
 }
 
 test "runtime validates canvas widget layout targets and limits" {

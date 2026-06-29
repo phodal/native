@@ -11,6 +11,8 @@ pub const Error = error{
     GlyphAtlasListFull,
     LayerCacheListFull,
     LayerListFull,
+    PathGeometryCacheListFull,
+    PathGeometryListFull,
     RenderBatchListFull,
     RenderListFull,
     RenderOverrideListFull,
@@ -673,6 +675,11 @@ pub const RenderPlan = struct {
         return planner.build(self);
     }
 
+    pub fn pathGeometryPlan(self: RenderPlan, output: []RenderPathGeometry) Error!RenderPathGeometryPlan {
+        var planner = RenderPathGeometryPlanner.init(output);
+        return planner.build(self);
+    }
+
     pub fn layerPlan(self: RenderPlan, output: []RenderLayer) Error!RenderLayerPlan {
         var planner = RenderLayerPlanner.init(output);
         return planner.build(self);
@@ -755,6 +762,111 @@ pub const RenderPipelineCachePlan = struct {
     }
 
     fn actionCountByKind(self: RenderPipelineCachePlan, kind: RenderPipelineCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
+    }
+};
+
+pub const RenderPathGeometryKind = enum {
+    fill,
+    stroke,
+};
+
+pub const RenderPathGeometry = struct {
+    kind: RenderPathGeometryKind,
+    command_index: usize = 0,
+    id: ?ObjectId = null,
+    bounds: geometry.RectF = .{},
+    element_count: usize = 0,
+    contour_count: usize = 0,
+    line_segment_count: usize = 0,
+    quadratic_segment_count: usize = 0,
+    cubic_segment_count: usize = 0,
+    flattened_segment_count: usize = 0,
+    vertex_count: usize = 0,
+    index_count: usize = 0,
+    stroke_width: f32 = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const RenderPathGeometryPlan = struct {
+    geometries: []const RenderPathGeometry = &.{},
+
+    pub fn geometryCount(self: RenderPathGeometryPlan) usize {
+        return self.geometries.len;
+    }
+
+    pub fn vertexCount(self: RenderPathGeometryPlan) usize {
+        var count: usize = 0;
+        for (self.geometries) |geometry_plan| count += geometry_plan.vertex_count;
+        return count;
+    }
+
+    pub fn indexCount(self: RenderPathGeometryPlan) usize {
+        var count: usize = 0;
+        for (self.geometries) |geometry_plan| count += geometry_plan.index_count;
+        return count;
+    }
+
+    pub fn cachePlan(self: RenderPathGeometryPlan, previous: []const RenderPathGeometryCacheEntry, frame_index: u64, entries: []RenderPathGeometryCacheEntry, actions: []RenderPathGeometryCacheAction) Error!RenderPathGeometryCachePlan {
+        var planner = RenderPathGeometryCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+};
+
+pub const RenderPathGeometryKey = struct {
+    kind: RenderPathGeometryKind,
+    id: ?ObjectId = null,
+    command_index: usize = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const RenderPathGeometryCacheEntry = struct {
+    key: RenderPathGeometryKey,
+    last_used_frame: u64 = 0,
+};
+
+pub const RenderPathGeometryCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const RenderPathGeometryCacheAction = struct {
+    kind: RenderPathGeometryCacheActionKind,
+    key: RenderPathGeometryKey,
+    geometry_index: ?usize = null,
+    cache_index: ?usize = null,
+};
+
+pub const RenderPathGeometryCachePlan = struct {
+    entries: []const RenderPathGeometryCacheEntry = &.{},
+    actions: []const RenderPathGeometryCacheAction = &.{},
+
+    pub fn entryCount(self: RenderPathGeometryCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: RenderPathGeometryCachePlan) usize {
+        return self.actions.len;
+    }
+
+    pub fn uploadCount(self: RenderPathGeometryCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: RenderPathGeometryCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: RenderPathGeometryCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: RenderPathGeometryCachePlan, kind: RenderPathGeometryCacheActionKind) usize {
         var count: usize = 0;
         for (self.actions) |action| {
             if (action.kind == kind) count += 1;
@@ -3308,6 +3420,124 @@ fn findRenderPipelineCacheEntry(entries: []const RenderPipelineCacheEntry, pipel
     return null;
 }
 
+pub const RenderPathGeometryPlanner = struct {
+    geometries: []RenderPathGeometry,
+    len: usize = 0,
+
+    pub fn init(geometries: []RenderPathGeometry) RenderPathGeometryPlanner {
+        return .{ .geometries = geometries };
+    }
+
+    pub fn reset(self: *RenderPathGeometryPlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *RenderPathGeometryPlanner, render_plan: RenderPlan) Error!RenderPathGeometryPlan {
+        self.reset();
+        for (render_plan.commands, 0..) |command, index| {
+            try self.consume(command, index);
+        }
+        return .{ .geometries = self.geometries[0..self.len] };
+    }
+
+    fn consume(self: *RenderPathGeometryPlanner, command: RenderCommand, index: usize) Error!void {
+        switch (command.command) {
+            .fill_path => |value| try self.consumePath(.fill, command, index, value.elements, 0),
+            .stroke_path => |value| {
+                const stroke_width = nonNegative(value.stroke.width) * referenceTransformScale(command.transform);
+                if (stroke_width <= 0) return;
+                try self.consumePath(.stroke, command, index, value.elements, stroke_width);
+            },
+            else => {},
+        }
+    }
+
+    fn consumePath(self: *RenderPathGeometryPlanner, kind: RenderPathGeometryKind, command: RenderCommand, index: usize, elements: []const PathElement, stroke_width: f32) Error!void {
+        const counts = analyzePathGeometry(elements, kind);
+        if (counts.vertex_count == 0 or counts.index_count == 0) return;
+        if (self.len >= self.geometries.len) return error.PathGeometryListFull;
+        self.geometries[self.len] = .{
+            .kind = kind,
+            .command_index = index,
+            .id = command.id,
+            .bounds = command.bounds,
+            .element_count = elements.len,
+            .contour_count = counts.contour_count,
+            .line_segment_count = counts.line_segment_count,
+            .quadratic_segment_count = counts.quadratic_segment_count,
+            .cubic_segment_count = counts.cubic_segment_count,
+            .flattened_segment_count = counts.flattened_segment_count,
+            .vertex_count = counts.vertex_count,
+            .index_count = counts.index_count,
+            .stroke_width = stroke_width,
+            .fingerprint = renderPathGeometryFingerprint(command, kind, elements, stroke_width),
+        };
+        self.len += 1;
+    }
+};
+
+pub const RenderPathGeometryCachePlanner = struct {
+    entries: []RenderPathGeometryCacheEntry,
+    actions: []RenderPathGeometryCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []RenderPathGeometryCacheEntry, actions: []RenderPathGeometryCacheAction) RenderPathGeometryCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *RenderPathGeometryCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *RenderPathGeometryCachePlanner, geometry_plan: RenderPathGeometryPlan, previous: []const RenderPathGeometryCacheEntry, frame_index: u64) Error!RenderPathGeometryCachePlan {
+        self.reset();
+        for (geometry_plan.geometries, 0..) |geometry_plan_item, geometry_index| {
+            const key = renderPathGeometryKey(geometry_plan_item);
+            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
+
+            const previous_index = findRenderPathGeometryCacheEntry(previous, key);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = key,
+                .geometry_index = geometry_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .key = key,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *RenderPathGeometryCachePlanner, entry: RenderPathGeometryCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.PathGeometryCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *RenderPathGeometryCachePlanner, action: RenderPathGeometryCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.PathGeometryCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
+    }
+};
+
 fn renderCommandNeedsLayer(command: RenderCommand) bool {
     return command.opacity != 1 or command.clip != null or !affinesEqual(command.transform, Affine.identity());
 }
@@ -3771,6 +4001,29 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.fingerprint == b.fingerprint;
 }
 
+fn renderPathGeometryKey(geometry_plan: RenderPathGeometry) RenderPathGeometryKey {
+    return .{
+        .kind = geometry_plan.kind,
+        .id = geometry_plan.id,
+        .command_index = if (geometry_plan.id == null) geometry_plan.command_index else 0,
+        .fingerprint = geometry_plan.fingerprint,
+    };
+}
+
+fn findRenderPathGeometryCacheEntry(entries: []const RenderPathGeometryCacheEntry, key: RenderPathGeometryKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (renderPathGeometryKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn renderPathGeometryKeysEqual(a: RenderPathGeometryKey, b: RenderPathGeometryKey) bool {
+    return a.kind == b.kind and
+        a.id == b.id and
+        a.command_index == b.command_index and
+        a.fingerprint == b.fingerprint;
+}
+
 fn renderLayerKey(layer: RenderLayer) RenderLayerKey {
     return .{
         .id = layer.id,
@@ -3810,6 +4063,16 @@ fn renderCommandFingerprint(command: RenderCommand) u64 {
     hash = resourceHashRect(hash, command.local_bounds);
     hash = resourceHashRect(hash, command.bounds);
     return resourceHashCanvasCommand(hash, command.command);
+}
+
+fn renderPathGeometryFingerprint(command: RenderCommand, kind: RenderPathGeometryKind, elements: []const PathElement, stroke_width: f32) u64 {
+    var hash = resourceHashTag("path_geometry");
+    hash = resourceHashBytes(hash, @tagName(kind));
+    hash = resourceHashOptionalObjectId(hash, command.id);
+    hash = resourceHashAffine(hash, command.transform);
+    hash = resourceHashPath(hash, elements);
+    hash = resourceHashF32(hash, stroke_width);
+    return hash;
 }
 
 fn visualEffectKey(effect: VisualEffect) VisualEffectKey {
@@ -7148,6 +7411,70 @@ fn shadowBounds(value: Shadow) geometry.RectF {
         .normalized()
         .translate(value.offset)
         .inflate(geometry.InsetsF.all(spread + blur_radius));
+}
+
+const PathGeometryCounts = struct {
+    contour_count: usize = 0,
+    line_segment_count: usize = 0,
+    quadratic_segment_count: usize = 0,
+    cubic_segment_count: usize = 0,
+    flattened_segment_count: usize = 0,
+    vertex_count: usize = 0,
+    index_count: usize = 0,
+};
+
+fn analyzePathGeometry(elements: []const PathElement, kind: RenderPathGeometryKind) PathGeometryCounts {
+    var counts = PathGeometryCounts{};
+    var has_current = false;
+
+    for (elements) |element| {
+        switch (element.verb) {
+            .move_to => {
+                counts.contour_count += 1;
+                counts.vertex_count += 1;
+                has_current = true;
+            },
+            .line_to => {
+                if (!has_current) {
+                    counts.contour_count += 1;
+                    counts.vertex_count += 1;
+                    has_current = true;
+                    continue;
+                }
+                counts.line_segment_count += 1;
+                counts.flattened_segment_count += 1;
+                counts.vertex_count += 1;
+            },
+            .quad_to => {
+                if (!has_current) continue;
+                counts.quadratic_segment_count += 1;
+                counts.flattened_segment_count += reference_curve_segments;
+                counts.vertex_count += reference_curve_segments;
+            },
+            .cubic_to => {
+                if (!has_current) continue;
+                counts.cubic_segment_count += 1;
+                counts.flattened_segment_count += reference_curve_segments;
+                counts.vertex_count += reference_curve_segments;
+            },
+            .close => {
+                if (!has_current) continue;
+                counts.line_segment_count += 1;
+                counts.flattened_segment_count += 1;
+            },
+        }
+    }
+
+    switch (kind) {
+        .fill => {
+            counts.index_count = if (counts.vertex_count >= 3) (counts.vertex_count - 2) * 3 else 0;
+        },
+        .stroke => {
+            counts.vertex_count = counts.flattened_segment_count * 4;
+            counts.index_count = counts.flattened_segment_count * 6;
+        },
+    }
+    return counts;
 }
 
 fn pathBounds(elements: []const PathElement) ?geometry.RectF {
@@ -10853,6 +11180,167 @@ test "render batch plan respects clip opacity and output limits" {
 
     var empty_batches: [0]RenderBatch = .{};
     try std.testing.expectError(error.RenderBatchListFull, render_plan.batchPlan(&empty_batches));
+}
+
+test "render path geometry plan estimates fill and stroke tessellation" {
+    const path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(20, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .quad_to, .points = .{ geometry.PointF.init(24, 16), geometry.PointF.init(12, 22), geometry.PointF.zero() } },
+        .{ .verb = .cubic_to, .points = .{ geometry.PointF.init(8, 26), geometry.PointF.init(-4, 18), geometry.PointF.init(0, 0) } },
+        .{ .verb = .close },
+    };
+    const commands = [_]CanvasCommand{
+        .{ .fill_path = .{
+            .id = 1,
+            .elements = &path,
+            .fill = .{ .color = Color.rgb8(255, 255, 255) },
+        } },
+        .{ .transform = Affine.scale(2, 2) },
+        .{ .stroke_path = .{
+            .id = 2,
+            .elements = &path,
+            .stroke = .{ .fill = .{ .color = Color.rgb8(24, 24, 27) }, .width = 2 },
+        } },
+    };
+
+    var render_commands: [2]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var geometries: [2]RenderPathGeometry = undefined;
+    const geometry_plan = try render_plan.pathGeometryPlan(&geometries);
+
+    try std.testing.expectEqual(@as(usize, 2), geometry_plan.geometryCount());
+    try std.testing.expectEqual(@as(usize, 130), geometry_plan.vertexCount());
+    try std.testing.expectEqual(@as(usize, 228), geometry_plan.indexCount());
+
+    try std.testing.expectEqual(RenderPathGeometryKind.fill, geometry_plan.geometries[0].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 1), geometry_plan.geometries[0].id);
+    try std.testing.expectEqual(@as(usize, 0), geometry_plan.geometries[0].command_index);
+    try std.testing.expectEqual(@as(usize, 5), geometry_plan.geometries[0].element_count);
+    try std.testing.expectEqual(@as(usize, 1), geometry_plan.geometries[0].contour_count);
+    try std.testing.expectEqual(@as(usize, 2), geometry_plan.geometries[0].line_segment_count);
+    try std.testing.expectEqual(@as(usize, 1), geometry_plan.geometries[0].quadratic_segment_count);
+    try std.testing.expectEqual(@as(usize, 1), geometry_plan.geometries[0].cubic_segment_count);
+    try std.testing.expectEqual(@as(usize, 26), geometry_plan.geometries[0].flattened_segment_count);
+    try std.testing.expectEqual(@as(usize, 26), geometry_plan.geometries[0].vertex_count);
+    try std.testing.expectEqual(@as(usize, 72), geometry_plan.geometries[0].index_count);
+    try std.testing.expectEqual(@as(f32, 0), geometry_plan.geometries[0].stroke_width);
+
+    try std.testing.expectEqual(RenderPathGeometryKind.stroke, geometry_plan.geometries[1].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 2), geometry_plan.geometries[1].id);
+    try std.testing.expectEqual(@as(usize, 1), geometry_plan.geometries[1].command_index);
+    try std.testing.expectEqual(@as(usize, 26), geometry_plan.geometries[1].flattened_segment_count);
+    try std.testing.expectEqual(@as(usize, 104), geometry_plan.geometries[1].vertex_count);
+    try std.testing.expectEqual(@as(usize, 156), geometry_plan.geometries[1].index_count);
+    try std.testing.expectEqual(@as(f32, 4), geometry_plan.geometries[1].stroke_width);
+    try expectRect(geometry.RectF.init(-4, 0, 28, 26), geometry_plan.geometries[0].bounds);
+    try expectRect(geometry.RectF.init(-10, -2, 60, 56), geometry_plan.geometries[1].bounds);
+}
+
+test "render path geometry fingerprint tracks geometry not paint" {
+    const path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(20, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(0, 20), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const changed_path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(24, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(0, 20), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const commands = [_]CanvasCommand{.{ .fill_path = .{
+        .id = 9,
+        .elements = &path,
+        .fill = .{ .color = Color.rgb8(255, 255, 255) },
+    } }};
+    const recolored_commands = [_]CanvasCommand{.{ .fill_path = .{
+        .id = 9,
+        .elements = &path,
+        .fill = .{ .color = Color.rgb8(255, 0, 0) },
+    } }};
+    const reshaped_commands = [_]CanvasCommand{.{ .fill_path = .{
+        .id = 9,
+        .elements = &changed_path,
+        .fill = .{ .color = Color.rgb8(255, 255, 255) },
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var geometries: [1]RenderPathGeometry = undefined;
+    const geometry_plan = try render_plan.pathGeometryPlan(&geometries);
+
+    var recolored_render_commands: [1]RenderCommand = undefined;
+    const recolored_render_plan = try (DisplayList{ .commands = &recolored_commands }).renderPlan(&recolored_render_commands);
+    var recolored_geometries: [1]RenderPathGeometry = undefined;
+    const recolored_geometry_plan = try recolored_render_plan.pathGeometryPlan(&recolored_geometries);
+
+    var reshaped_render_commands: [1]RenderCommand = undefined;
+    const reshaped_render_plan = try (DisplayList{ .commands = &reshaped_commands }).renderPlan(&reshaped_render_commands);
+    var reshaped_geometries: [1]RenderPathGeometry = undefined;
+    const reshaped_geometry_plan = try reshaped_render_plan.pathGeometryPlan(&reshaped_geometries);
+
+    try std.testing.expectEqual(geometry_plan.geometries[0].fingerprint, recolored_geometry_plan.geometries[0].fingerprint);
+    try std.testing.expect(geometry_plan.geometries[0].fingerprint != reshaped_geometry_plan.geometries[0].fingerprint);
+}
+
+test "render path geometry cache plan uploads retains and evicts geometries" {
+    const previous_geometries = [_]RenderPathGeometry{
+        .{ .kind = .fill, .command_index = 0, .id = 1, .bounds = geometry.RectF.init(0, 0, 20, 20), .vertex_count = 3, .index_count = 3, .fingerprint = 11 },
+        .{ .kind = .stroke, .command_index = 1, .id = 2, .bounds = geometry.RectF.init(24, 0, 20, 20), .vertex_count = 4, .index_count = 6, .stroke_width = 2, .fingerprint = 22 },
+    };
+    var previous_entries: [2]RenderPathGeometryCacheEntry = undefined;
+    var previous_actions: [2]RenderPathGeometryCacheAction = undefined;
+    const previous_cache = try (RenderPathGeometryPlan{ .geometries = &previous_geometries }).cachePlan(&.{}, 1, &previous_entries, &previous_actions);
+    try std.testing.expectEqual(@as(usize, 2), previous_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), previous_cache.uploadCount());
+
+    const next_geometries = [_]RenderPathGeometry{
+        .{ .kind = .fill, .command_index = 0, .id = 1, .bounds = geometry.RectF.init(0, 0, 20, 20), .vertex_count = 3, .index_count = 3, .fingerprint = 11 },
+        .{ .kind = .stroke, .command_index = 1, .id = 3, .bounds = geometry.RectF.init(48, 0, 20, 20), .vertex_count = 8, .index_count = 12, .stroke_width = 4, .fingerprint = 33 },
+    };
+    var next_entries: [2]RenderPathGeometryCacheEntry = undefined;
+    var next_actions: [3]RenderPathGeometryCacheAction = undefined;
+    const next_cache = try (RenderPathGeometryPlan{ .geometries = &next_geometries }).cachePlan(previous_cache.entries, 2, &next_entries, &next_actions);
+    try std.testing.expectEqual(@as(usize, 2), next_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), next_cache.evictCount());
+    try std.testing.expectEqual(RenderPathGeometryCacheActionKind.retain, next_cache.actions[0].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 1), next_cache.actions[0].key.id);
+    try std.testing.expectEqual(RenderPathGeometryCacheActionKind.upload, next_cache.actions[1].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 3), next_cache.actions[1].key.id);
+    try std.testing.expectEqual(RenderPathGeometryCacheActionKind.evict, next_cache.actions[2].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 2), next_cache.actions[2].key.id);
+}
+
+test "render path geometry plans report output overflow" {
+    const path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(20, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(0, 20), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const commands = [_]CanvasCommand{.{ .fill_path = .{
+        .id = 1,
+        .elements = &path,
+        .fill = .{ .color = Color.rgb8(255, 255, 255) },
+    } }};
+
+    var render_commands: [1]RenderCommand = undefined;
+    const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+    var no_geometries: [0]RenderPathGeometry = .{};
+    try std.testing.expectError(error.PathGeometryListFull, render_plan.pathGeometryPlan(&no_geometries));
+
+    const geometries = [_]RenderPathGeometry{.{ .kind = .fill, .command_index = 0, .id = 1, .bounds = geometry.RectF.init(0, 0, 20, 20), .vertex_count = 3, .index_count = 3, .fingerprint = 11 }};
+    var no_entries: [0]RenderPathGeometryCacheEntry = .{};
+    var actions: [1]RenderPathGeometryCacheAction = undefined;
+    try std.testing.expectError(error.PathGeometryCacheListFull, (RenderPathGeometryPlan{ .geometries = &geometries }).cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]RenderPathGeometryCacheEntry = undefined;
+    var no_actions: [0]RenderPathGeometryCacheAction = .{};
+    try std.testing.expectError(error.PathGeometryCacheListFull, (RenderPathGeometryPlan{ .geometries = &geometries }).cachePlan(&.{}, 1, &entries, &no_actions));
 }
 
 test "render layer plan groups composited commands by state" {

@@ -18,6 +18,8 @@ pub const Error = error{
     TextLayoutCacheListFull,
     TextLayoutLineListFull,
     TextLayoutPlanListFull,
+    VisualEffectCacheListFull,
+    VisualEffectListFull,
     TextEditBufferTooSmall,
     ReferenceRenderSurfaceTooSmall,
     ReferenceRenderUnsupportedCommand,
@@ -848,6 +850,110 @@ pub const RenderResourceCachePlan = struct {
     }
 };
 
+pub const VisualEffectKind = enum {
+    shadow,
+    blur,
+};
+
+pub const VisualEffect = struct {
+    kind: VisualEffectKind,
+    command_index: usize,
+    id: ?ObjectId = null,
+    bounds: ?geometry.RectF = null,
+    radius: Radius = .{},
+    offset: geometry.OffsetF = .{},
+    blur: f32 = 0,
+    spread: f32 = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const VisualEffectPlan = struct {
+    effects: []const VisualEffect = &.{},
+
+    pub fn effectCount(self: VisualEffectPlan) usize {
+        return self.effects.len;
+    }
+
+    pub fn shadowCount(self: VisualEffectPlan) usize {
+        return self.effectCountByKind(.shadow);
+    }
+
+    pub fn blurCount(self: VisualEffectPlan) usize {
+        return self.effectCountByKind(.blur);
+    }
+
+    pub fn cachePlan(self: VisualEffectPlan, previous: []const VisualEffectCacheEntry, frame_index: u64, entries: []VisualEffectCacheEntry, actions: []VisualEffectCacheAction) Error!VisualEffectCachePlan {
+        var planner = VisualEffectCachePlanner.init(entries, actions);
+        return planner.build(self, previous, frame_index);
+    }
+
+    fn effectCountByKind(self: VisualEffectPlan, kind: VisualEffectKind) usize {
+        var count: usize = 0;
+        for (self.effects) |effect| {
+            if (effect.kind == kind) count += 1;
+        }
+        return count;
+    }
+};
+
+pub const VisualEffectKey = struct {
+    kind: VisualEffectKind,
+    id: ?ObjectId = null,
+    command_index: usize = 0,
+    fingerprint: u64 = 0,
+};
+
+pub const VisualEffectCacheEntry = struct {
+    key: VisualEffectKey,
+    last_used_frame: u64 = 0,
+};
+
+pub const VisualEffectCacheActionKind = enum {
+    upload,
+    retain,
+    evict,
+};
+
+pub const VisualEffectCacheAction = struct {
+    kind: VisualEffectCacheActionKind,
+    key: VisualEffectKey,
+    effect_index: ?usize = null,
+    cache_index: ?usize = null,
+};
+
+pub const VisualEffectCachePlan = struct {
+    entries: []const VisualEffectCacheEntry = &.{},
+    actions: []const VisualEffectCacheAction = &.{},
+
+    pub fn entryCount(self: VisualEffectCachePlan) usize {
+        return self.entries.len;
+    }
+
+    pub fn actionCount(self: VisualEffectCachePlan) usize {
+        return self.actions.len;
+    }
+
+    pub fn uploadCount(self: VisualEffectCachePlan) usize {
+        return self.actionCountByKind(.upload);
+    }
+
+    pub fn retainCount(self: VisualEffectCachePlan) usize {
+        return self.actionCountByKind(.retain);
+    }
+
+    pub fn evictCount(self: VisualEffectCachePlan) usize {
+        return self.actionCountByKind(.evict);
+    }
+
+    fn actionCountByKind(self: VisualEffectCachePlan, kind: VisualEffectCacheActionKind) usize {
+        var count: usize = 0;
+        for (self.actions) |action| {
+            if (action.kind == kind) count += 1;
+        }
+        return count;
+    }
+};
+
 pub const CanvasFrameOptions = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
@@ -857,6 +963,7 @@ pub const CanvasFrameOptions = struct {
     budget: CanvasFrameBudget = .{},
     previous_pipeline_cache: []const RenderPipelineCacheEntry = &.{},
     previous_resource_cache: []const RenderResourceCacheEntry = &.{},
+    previous_visual_effect_cache: []const VisualEffectCacheEntry = &.{},
     previous_glyph_atlas_cache: []const GlyphAtlasCacheEntry = &.{},
     previous_text_layout_cache: []const TextLayoutCacheEntry = &.{},
     text_layout_options: TextLayoutOptions = .{},
@@ -872,6 +979,9 @@ pub const CanvasFrameStorage = struct {
     resources: []RenderResource,
     resource_cache_entries: []RenderResourceCacheEntry,
     resource_cache_actions: []RenderResourceCacheAction,
+    visual_effects: []VisualEffect = &.{},
+    visual_effect_cache_entries: []VisualEffectCacheEntry = &.{},
+    visual_effect_cache_actions: []VisualEffectCacheAction = &.{},
     glyph_atlas_entries: []GlyphAtlasEntry,
     glyph_atlas_cache_entries: []GlyphAtlasCacheEntry = &.{},
     glyph_atlas_cache_actions: []GlyphAtlasCacheAction = &.{},
@@ -890,6 +1000,8 @@ pub const CanvasFrameBudget = struct {
     max_pipeline_uploads: usize = 0,
     max_resources: usize = 0,
     max_resource_uploads: usize = 0,
+    max_visual_effects: usize = 0,
+    max_visual_effect_uploads: usize = 0,
     max_glyph_atlas_entries: usize = 0,
     max_text_layouts: usize = 0,
     max_text_layout_lines: usize = 0,
@@ -904,6 +1016,8 @@ pub const CanvasFrameBudget = struct {
             .pipeline_uploads_over = budgetExceeded(self.max_pipeline_uploads, diagnostics.pipeline_upload_count),
             .resources_over = budgetExceeded(self.max_resources, diagnostics.resource_count),
             .resource_uploads_over = budgetExceeded(self.max_resource_uploads, diagnostics.resource_upload_count),
+            .visual_effects_over = budgetExceeded(self.max_visual_effects, diagnostics.visual_effect_count),
+            .visual_effect_uploads_over = budgetExceeded(self.max_visual_effect_uploads, diagnostics.visual_effect_upload_count),
             .glyph_atlas_entries_over = budgetExceeded(self.max_glyph_atlas_entries, diagnostics.glyph_atlas_entry_count),
             .text_layouts_over = budgetExceeded(self.max_text_layouts, diagnostics.text_layout_count),
             .text_layout_lines_over = budgetExceeded(self.max_text_layout_lines, diagnostics.text_layout_line_count),
@@ -920,6 +1034,8 @@ pub const CanvasFrameBudgetStatus = struct {
     pipeline_uploads_over: bool = false,
     resources_over: bool = false,
     resource_uploads_over: bool = false,
+    visual_effects_over: bool = false,
+    visual_effect_uploads_over: bool = false,
     glyph_atlas_entries_over: bool = false,
     text_layouts_over: bool = false,
     text_layout_lines_over: bool = false,
@@ -938,6 +1054,8 @@ pub const CanvasFrameBudgetStatus = struct {
         if (self.pipeline_uploads_over) count += 1;
         if (self.resources_over) count += 1;
         if (self.resource_uploads_over) count += 1;
+        if (self.visual_effects_over) count += 1;
+        if (self.visual_effect_uploads_over) count += 1;
         if (self.glyph_atlas_entries_over) count += 1;
         if (self.text_layouts_over) count += 1;
         if (self.text_layout_lines_over) count += 1;
@@ -962,6 +1080,12 @@ pub const CanvasFrameDiagnostics = struct {
     resource_upload_count: usize = 0,
     resource_retain_count: usize = 0,
     resource_evict_count: usize = 0,
+    visual_effect_count: usize = 0,
+    visual_effect_shadow_count: usize = 0,
+    visual_effect_blur_count: usize = 0,
+    visual_effect_upload_count: usize = 0,
+    visual_effect_retain_count: usize = 0,
+    visual_effect_evict_count: usize = 0,
     glyph_atlas_entry_count: usize = 0,
     glyph_atlas_upload_count: usize = 0,
     glyph_atlas_retain_count: usize = 0,
@@ -984,7 +1108,7 @@ pub const CanvasFrameDiagnostics = struct {
 
     pub fn writeJson(self: CanvasFrameDiagnostics, writer: anytype) !void {
         try writer.print(
-            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"encoderCommandCount\":{d},\"encoderCacheActionCount\":{d},\"encoderBindPipelineCount\":{d},\"encoderDrawBatchCount\":{d},\"pipelineCount\":{d},\"pipelineUploadCount\":{d},\"pipelineRetainCount\":{d},\"pipelineEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            "{{\"frameIndex\":{d},\"commandCount\":{d},\"batchCount\":{d},\"encoderCommandCount\":{d},\"encoderCacheActionCount\":{d},\"encoderBindPipelineCount\":{d},\"encoderDrawBatchCount\":{d},\"pipelineCount\":{d},\"pipelineUploadCount\":{d},\"pipelineRetainCount\":{d},\"pipelineEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"visualEffectCount\":{d},\"visualEffectShadowCount\":{d},\"visualEffectBlurCount\":{d},\"visualEffectUploadCount\":{d},\"visualEffectRetainCount\":{d},\"visualEffectEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
             .{
                 self.frame_index,
                 self.command_count,
@@ -1001,6 +1125,12 @@ pub const CanvasFrameDiagnostics = struct {
                 self.resource_upload_count,
                 self.resource_retain_count,
                 self.resource_evict_count,
+                self.visual_effect_count,
+                self.visual_effect_shadow_count,
+                self.visual_effect_blur_count,
+                self.visual_effect_upload_count,
+                self.visual_effect_retain_count,
+                self.visual_effect_evict_count,
                 self.glyph_atlas_entry_count,
                 self.glyph_atlas_upload_count,
                 self.glyph_atlas_retain_count,
@@ -1052,6 +1182,7 @@ pub const RenderEncoderCommand = union(enum) {
     set_scissor: geometry.RectF,
     pipeline_cache: RenderPipelineCacheAction,
     resource_cache: RenderResourceCacheAction,
+    visual_effect_cache: VisualEffectCacheAction,
     glyph_atlas_cache: GlyphAtlasCacheAction,
     text_layout_cache: TextLayoutCacheAction,
     bind_pipeline: RenderPipelineKind,
@@ -1070,7 +1201,7 @@ pub const RenderEncoderPlan = struct {
         var count: usize = 0;
         for (self.commands) |command| {
             switch (command) {
-                .pipeline_cache, .resource_cache, .glyph_atlas_cache, .text_layout_cache => count += 1,
+                .pipeline_cache, .resource_cache, .visual_effect_cache, .glyph_atlas_cache, .text_layout_cache => count += 1,
                 else => {},
             }
         }
@@ -1112,6 +1243,8 @@ pub const CanvasRenderPass = struct {
     pipeline_actions: []const RenderPipelineCacheAction = &.{},
     resources: []const RenderResource = &.{},
     resource_actions: []const RenderResourceCacheAction = &.{},
+    visual_effects: []const VisualEffect = &.{},
+    visual_effect_actions: []const VisualEffectCacheAction = &.{},
     glyph_atlas_entries: []const GlyphAtlasEntry = &.{},
     glyph_atlas_actions: []const GlyphAtlasCacheAction = &.{},
     text_layouts: []const TextLayoutPlan = &.{},
@@ -1153,6 +1286,7 @@ pub const CanvasRenderPass = struct {
         if (!self.requiresRender()) return 0;
         return self.pipeline_actions.len +
             self.resource_actions.len +
+            self.visual_effect_actions.len +
             self.glyph_atlas_actions.len +
             self.text_layout_actions.len;
     }
@@ -1180,6 +1314,14 @@ pub const CanvasRenderPass = struct {
 
     pub fn resourceActionCount(self: CanvasRenderPass) usize {
         return self.resource_actions.len;
+    }
+
+    pub fn visualEffectCount(self: CanvasRenderPass) usize {
+        return self.visual_effects.len;
+    }
+
+    pub fn visualEffectActionCount(self: CanvasRenderPass) usize {
+        return self.visual_effect_actions.len;
     }
 
     pub fn glyphAtlasEntryCount(self: CanvasRenderPass) usize {
@@ -1226,6 +1368,8 @@ pub const CanvasFrame = struct {
     pipeline_cache_plan: RenderPipelineCachePlan = .{},
     resource_plan: RenderResourcePlan = .{},
     resource_cache_plan: RenderResourceCachePlan = .{},
+    visual_effect_plan: VisualEffectPlan = .{},
+    visual_effect_cache_plan: VisualEffectCachePlan = .{},
     glyph_atlas_plan: GlyphAtlasPlan = .{},
     glyph_atlas_cache_plan: GlyphAtlasCachePlan = .{},
     text_layout_plan: TextLayoutPlanSet = .{},
@@ -1266,6 +1410,12 @@ pub const CanvasFrame = struct {
             .resource_upload_count = self.resource_cache_plan.uploadCount(),
             .resource_retain_count = self.resource_cache_plan.retainCount(),
             .resource_evict_count = self.resource_cache_plan.evictCount(),
+            .visual_effect_count = self.visual_effect_plan.effectCount(),
+            .visual_effect_shadow_count = self.visual_effect_plan.shadowCount(),
+            .visual_effect_blur_count = self.visual_effect_plan.blurCount(),
+            .visual_effect_upload_count = self.visual_effect_cache_plan.uploadCount(),
+            .visual_effect_retain_count = self.visual_effect_cache_plan.retainCount(),
+            .visual_effect_evict_count = self.visual_effect_cache_plan.evictCount(),
             .glyph_atlas_entry_count = self.glyph_atlas_plan.entryCount(),
             .glyph_atlas_upload_count = self.glyph_atlas_cache_plan.uploadCount(),
             .glyph_atlas_retain_count = self.glyph_atlas_cache_plan.retainCount(),
@@ -1300,6 +1450,8 @@ pub const CanvasFrame = struct {
             .pipeline_actions = self.pipeline_cache_plan.actions,
             .resources = self.resource_plan.resources,
             .resource_actions = self.resource_cache_plan.actions,
+            .visual_effects = self.visual_effect_plan.effects,
+            .visual_effect_actions = self.visual_effect_cache_plan.actions,
             .glyph_atlas_entries = self.glyph_atlas_plan.entries,
             .glyph_atlas_actions = self.glyph_atlas_cache_plan.actions,
             .text_layouts = self.text_layout_plan.plans,
@@ -2441,6 +2593,11 @@ pub const DisplayList = struct {
         return planner.build(self);
     }
 
+    pub fn visualEffectPlan(self: DisplayList, output: []VisualEffect) Error!VisualEffectPlan {
+        var planner = VisualEffectPlanner.init(output);
+        return planner.build(self);
+    }
+
     pub fn glyphAtlasPlan(self: DisplayList, output: []GlyphAtlasEntry) Error!GlyphAtlasPlan {
         var planner = GlyphAtlasPlanner.init(output);
         return planner.build(self);
@@ -2643,6 +2800,19 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         storage.resource_cache_entries,
         storage.resource_cache_actions,
     );
+    const visual_effect_plan = if (storage.visual_effects.len == 0)
+        VisualEffectPlan{}
+    else
+        try next.visualEffectPlan(storage.visual_effects);
+    const visual_effect_cache_plan = if (storage.visual_effect_cache_entries.len == 0 and storage.visual_effect_cache_actions.len == 0)
+        VisualEffectCachePlan{}
+    else
+        try visual_effect_plan.cachePlan(
+            options.previous_visual_effect_cache,
+            options.frame_index,
+            storage.visual_effect_cache_entries,
+            storage.visual_effect_cache_actions,
+        );
     const glyph_atlas_plan = try next.glyphAtlasPlan(storage.glyph_atlas_entries);
     const glyph_atlas_cache_plan = try glyph_atlas_plan.cachePlan(
         options.previous_glyph_atlas_cache,
@@ -2684,6 +2854,8 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .pipeline_cache_plan = pipeline_cache_plan,
         .resource_plan = resource_plan,
         .resource_cache_plan = resource_cache_plan,
+        .visual_effect_plan = visual_effect_plan,
+        .visual_effect_cache_plan = visual_effect_cache_plan,
         .glyph_atlas_plan = glyph_atlas_plan,
         .glyph_atlas_cache_plan = glyph_atlas_cache_plan,
         .text_layout_plan = text_layout_plan,
@@ -2981,6 +3153,7 @@ pub const RenderEncoderPlanner = struct {
 
         for (pass.pipeline_actions) |action| try self.append(.{ .pipeline_cache = action });
         for (pass.resource_actions) |action| try self.append(.{ .resource_cache = action });
+        for (pass.visual_effect_actions) |action| try self.append(.{ .visual_effect_cache = action });
         for (pass.glyph_atlas_actions) |action| try self.append(.{ .glyph_atlas_cache = action });
         for (pass.text_layout_actions) |action| try self.append(.{ .text_layout_cache = action });
 
@@ -3155,6 +3328,120 @@ pub const RenderResourceCachePlanner = struct {
     }
 };
 
+pub const VisualEffectPlanner = struct {
+    effects: []VisualEffect,
+    len: usize = 0,
+
+    pub fn init(effects: []VisualEffect) VisualEffectPlanner {
+        return .{ .effects = effects };
+    }
+
+    pub fn reset(self: *VisualEffectPlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *VisualEffectPlanner, display_list: DisplayList) Error!VisualEffectPlan {
+        self.reset();
+        for (display_list.commands, 0..) |command, index| {
+            try self.consume(command, index);
+        }
+        return .{ .effects = self.effects[0..self.len] };
+    }
+
+    fn consume(self: *VisualEffectPlanner, command: CanvasCommand, index: usize) Error!void {
+        switch (command) {
+            .shadow => |value| try self.append(.{
+                .kind = .shadow,
+                .command_index = index,
+                .id = nonZeroObjectId(value.id),
+                .bounds = shadowBounds(value),
+                .radius = value.radius,
+                .offset = value.offset,
+                .blur = nonNegative(value.blur),
+                .spread = value.spread,
+                .fingerprint = shadowFingerprint(value),
+            }),
+            .blur => |value| try self.append(.{
+                .kind = .blur,
+                .command_index = index,
+                .id = nonZeroObjectId(value.id),
+                .bounds = value.rect.normalized().inflate(geometry.InsetsF.all(nonNegative(value.radius))),
+                .blur = nonNegative(value.radius),
+                .fingerprint = blurFingerprint(value),
+            }),
+            else => {},
+        }
+    }
+
+    fn append(self: *VisualEffectPlanner, effect: VisualEffect) Error!void {
+        if (self.len >= self.effects.len) return error.VisualEffectListFull;
+        self.effects[self.len] = effect;
+        self.len += 1;
+    }
+};
+
+pub const VisualEffectCachePlanner = struct {
+    entries: []VisualEffectCacheEntry,
+    actions: []VisualEffectCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []VisualEffectCacheEntry, actions: []VisualEffectCacheAction) VisualEffectCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *VisualEffectCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *VisualEffectCachePlanner, effect_plan: VisualEffectPlan, previous: []const VisualEffectCacheEntry, frame_index: u64) Error!VisualEffectCachePlan {
+        self.reset();
+        for (effect_plan.effects, 0..) |effect, effect_index| {
+            const key = visualEffectKey(effect);
+            if (findVisualEffectCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
+
+            const previous_index = findVisualEffectCacheEntry(previous, key);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = key,
+                .effect_index = effect_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .key = key,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findVisualEffectCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *VisualEffectCachePlanner, entry: VisualEffectCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.VisualEffectCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *VisualEffectCachePlanner, action: VisualEffectCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.VisualEffectCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
+    }
+};
+
 fn renderResourceKey(resource: RenderResource) RenderResourceKey {
     return .{
         .kind = resource.kind,
@@ -3179,6 +3466,29 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.command_index == b.command_index and
         a.image_id == b.image_id and
         a.font_id == b.font_id and
+        a.fingerprint == b.fingerprint;
+}
+
+fn visualEffectKey(effect: VisualEffect) VisualEffectKey {
+    return .{
+        .kind = effect.kind,
+        .id = effect.id,
+        .command_index = if (effect.id == null) effect.command_index else 0,
+        .fingerprint = effect.fingerprint,
+    };
+}
+
+fn findVisualEffectCacheEntry(entries: []const VisualEffectCacheEntry, key: VisualEffectKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (visualEffectKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn visualEffectKeysEqual(a: VisualEffectKey, b: VisualEffectKey) bool {
+    return a.kind == b.kind and
+        a.id == b.id and
+        a.command_index == b.command_index and
         a.fingerprint == b.fingerprint;
 }
 
@@ -7127,6 +7437,16 @@ fn writeCanvasRenderPassJson(pass: CanvasRenderPass, writer: anytype) !void {
         if (index > 0) try writer.writeByte(',');
         try writeRenderResourceCacheActionJson(action, writer);
     }
+    try writer.writeAll("],\"visualEffects\":[");
+    for (pass.visual_effects, 0..) |effect, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeVisualEffectJson(effect, writer);
+    }
+    try writer.writeAll("],\"visualEffectActions\":[");
+    for (pass.visual_effect_actions, 0..) |action, index| {
+        if (index > 0) try writer.writeByte(',');
+        try writeVisualEffectCacheActionJson(action, writer);
+    }
     try writer.writeAll("],\"glyphAtlasEntries\":[");
     for (pass.glyph_atlas_entries, 0..) |entry, index| {
         if (index > 0) try writer.writeByte(',');
@@ -7223,6 +7543,44 @@ fn writeRenderResourceKeyJson(key: RenderResourceKey, writer: anytype) !void {
     try writer.writeAll(",\"id\":");
     try writeOptionalObjectIdJson(key.id, writer);
     try writer.print(",\"commandIndex\":{d},\"imageId\":{d},\"fontId\":{d},\"fingerprint\":{d}}}", .{ key.command_index, key.image_id, key.font_id, key.fingerprint });
+}
+
+fn writeVisualEffectJson(effect: VisualEffect, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(effect.kind));
+    try writer.print(",\"commandIndex\":{d},\"id\":", .{effect.command_index});
+    try writeOptionalObjectIdJson(effect.id, writer);
+    try writer.writeAll(",\"bounds\":");
+    try writeOptionalRectJson(effect.bounds, writer);
+    try writer.writeAll(",\"radius\":");
+    try writeRadiusJson(effect.radius, writer);
+    try writer.print(",\"offset\":[{d},{d}],\"blur\":{d},\"spread\":{d},\"fingerprint\":{d}}}", .{
+        effect.offset.dx,
+        effect.offset.dy,
+        effect.blur,
+        effect.spread,
+        effect.fingerprint,
+    });
+}
+
+fn writeVisualEffectCacheActionJson(action: VisualEffectCacheAction, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(action.kind));
+    try writer.writeAll(",\"key\":");
+    try writeVisualEffectKeyJson(action.key, writer);
+    try writer.writeAll(",\"effectIndex\":");
+    try writeOptionalUsizeJson(action.effect_index, writer);
+    try writer.writeAll(",\"cacheIndex\":");
+    try writeOptionalUsizeJson(action.cache_index, writer);
+    try writer.writeByte('}');
+}
+
+fn writeVisualEffectKeyJson(key: VisualEffectKey, writer: anytype) !void {
+    try writer.writeAll("{\"kind\":");
+    try json.writeString(writer, @tagName(key.kind));
+    try writer.writeAll(",\"id\":");
+    try writeOptionalObjectIdJson(key.id, writer);
+    try writer.print(",\"commandIndex\":{d},\"fingerprint\":{d}}}", .{ key.command_index, key.fingerprint });
 }
 
 fn writeGlyphAtlasEntryJson(entry: GlyphAtlasEntry, writer: anytype) !void {
@@ -10284,6 +10642,122 @@ test "resource plan reports output overflow" {
     try std.testing.expectError(error.RenderResourceListFull, (DisplayList{ .commands = &commands }).resourcePlan(&resources));
 }
 
+test "visual effect plan collects shadow and blur cache inputs" {
+    const commands = [_]CanvasCommand{
+        .{ .shadow = .{
+            .id = 7,
+            .rect = geometry.RectF.init(10, 20, 30, 40),
+            .radius = Radius.all(5),
+            .offset = .{ .dx = 3, .dy = 4 },
+            .blur = 12,
+            .spread = -2,
+            .color = Color.rgba8(0, 0, 0, 96),
+        } },
+        .{ .blur = .{
+            .id = 0,
+            .rect = geometry.RectF.init(80, 90, 20, 10),
+            .radius = 6,
+        } },
+    };
+
+    var effects: [2]VisualEffect = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).visualEffectPlan(&effects);
+    try std.testing.expectEqual(@as(usize, 2), plan.effectCount());
+    try std.testing.expectEqual(@as(usize, 1), plan.shadowCount());
+    try std.testing.expectEqual(@as(usize, 1), plan.blurCount());
+    try std.testing.expectEqual(VisualEffectKind.shadow, plan.effects[0].kind);
+    try std.testing.expectEqual(@as(?ObjectId, 7), plan.effects[0].id);
+    try expectRect(geometry.RectF.init(-1, 10, 58, 68), plan.effects[0].bounds);
+    try std.testing.expect(radiiEqual(Radius.all(5), plan.effects[0].radius));
+    try std.testing.expectEqual(@as(f32, 12), plan.effects[0].blur);
+    try std.testing.expectEqual(@as(f32, -2), plan.effects[0].spread);
+    try std.testing.expectEqual(VisualEffectKind.blur, plan.effects[1].kind);
+    try std.testing.expect(plan.effects[1].id == null);
+    try expectRect(geometry.RectF.init(74, 84, 32, 22), plan.effects[1].bounds);
+    try std.testing.expectEqual(@as(f32, 6), plan.effects[1].blur);
+
+    const key = visualEffectKey(plan.effects[1]);
+    try std.testing.expectEqual(VisualEffectKind.blur, key.kind);
+    try std.testing.expect(key.id == null);
+    try std.testing.expectEqual(@as(usize, 1), key.command_index);
+}
+
+test "visual effect cache plan uploads retains and evicts effects" {
+    const first_commands = [_]CanvasCommand{
+        .{ .shadow = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 20, 20),
+            .blur = 8,
+            .color = Color.rgba8(0, 0, 0, 64),
+        } },
+        .{ .blur = .{
+            .id = 2,
+            .rect = geometry.RectF.init(30, 0, 20, 20),
+            .radius = 4,
+        } },
+    };
+    const second_commands = [_]CanvasCommand{
+        .{ .shadow = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 20, 20),
+            .blur = 8,
+            .color = Color.rgba8(0, 0, 0, 64),
+        } },
+        .{ .blur = .{
+            .id = 2,
+            .rect = geometry.RectF.init(30, 0, 20, 20),
+            .radius = 10,
+        } },
+    };
+
+    var first_effects: [2]VisualEffect = undefined;
+    const first_plan = try (DisplayList{ .commands = &first_commands }).visualEffectPlan(&first_effects);
+    var first_entries: [2]VisualEffectCacheEntry = undefined;
+    var first_actions: [2]VisualEffectCacheAction = undefined;
+    const first_cache = try first_plan.cachePlan(&.{}, 1, &first_entries, &first_actions);
+    try std.testing.expectEqual(@as(usize, 2), first_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 2), first_cache.uploadCount());
+    try std.testing.expectEqual(@as(u64, 1), first_cache.entries[0].last_used_frame);
+
+    var second_effects: [2]VisualEffect = undefined;
+    const second_plan = try (DisplayList{ .commands = &second_commands }).visualEffectPlan(&second_effects);
+    var second_entries: [2]VisualEffectCacheEntry = undefined;
+    var second_actions: [3]VisualEffectCacheAction = undefined;
+    const second_cache = try second_plan.cachePlan(first_cache.entries, 2, &second_entries, &second_actions);
+    try std.testing.expectEqual(@as(usize, 2), second_cache.entryCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.retainCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), second_cache.evictCount());
+    try std.testing.expectEqual(VisualEffectCacheActionKind.retain, second_cache.actions[0].kind);
+    try std.testing.expectEqual(VisualEffectKind.shadow, second_cache.actions[0].key.kind);
+    try std.testing.expectEqual(VisualEffectCacheActionKind.upload, second_cache.actions[1].kind);
+    try std.testing.expectEqual(VisualEffectKind.blur, second_cache.actions[1].key.kind);
+    try std.testing.expectEqual(VisualEffectCacheActionKind.evict, second_cache.actions[2].kind);
+    try std.testing.expectEqual(VisualEffectKind.blur, second_cache.actions[2].key.kind);
+    try std.testing.expectEqual(@as(u64, 2), second_cache.entries[0].last_used_frame);
+}
+
+test "visual effect plans report output overflow" {
+    const commands = [_]CanvasCommand{.{ .shadow = .{
+        .id = 1,
+        .rect = geometry.RectF.init(0, 0, 10, 10),
+        .blur = 4,
+        .color = Color.rgba8(0, 0, 0, 64),
+    } }};
+    var no_effects: [0]VisualEffect = .{};
+    try std.testing.expectError(error.VisualEffectListFull, (DisplayList{ .commands = &commands }).visualEffectPlan(&no_effects));
+
+    var effects: [1]VisualEffect = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).visualEffectPlan(&effects);
+    var no_entries: [0]VisualEffectCacheEntry = .{};
+    var actions: [1]VisualEffectCacheAction = undefined;
+    try std.testing.expectError(error.VisualEffectCacheListFull, plan.cachePlan(&.{}, 1, &no_entries, &actions));
+
+    var entries: [1]VisualEffectCacheEntry = undefined;
+    var no_actions: [0]VisualEffectCacheAction = .{};
+    try std.testing.expectError(error.VisualEffectCacheListFull, plan.cachePlan(&.{}, 1, &entries, &no_actions));
+}
+
 test "glyph atlas plan deduplicates shaped glyph keys" {
     const first_glyphs = [_]Glyph{
         .{ .id = 10, .x = 0.10, .y = 0, .advance = 8 },
@@ -10636,19 +11110,19 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expectEqual(@as(usize, 4), diagnostics.budget_status.exceededCount());
     try std.testing.expectEqual(@as(usize, 4), frame.budgetStatus().exceededCount());
 
-    var diagnostics_json_buffer: [1280]u8 = undefined;
+    var diagnostics_json_buffer: [1536]u8 = undefined;
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
-    var clean_json_buffer: [1280]u8 = undefined;
+    var clean_json_buffer: [1536]u8 = undefined;
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }

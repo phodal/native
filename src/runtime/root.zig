@@ -714,6 +714,19 @@ pub const Runtime = struct {
             storage.resource_cache_entries,
             storage.resource_cache_actions,
         );
+        const visual_effect_plan = if (storage.visual_effects.len == 0)
+            canvas.VisualEffectPlan{}
+        else
+            try display_list.visualEffectPlan(storage.visual_effects);
+        const visual_effect_cache_plan = if (storage.visual_effect_cache_entries.len == 0 and storage.visual_effect_cache_actions.len == 0)
+            canvas.VisualEffectCachePlan{}
+        else
+            try visual_effect_plan.cachePlan(
+                frame_options.previous_visual_effect_cache,
+                frame_options.frame_index,
+                storage.visual_effect_cache_entries,
+                storage.visual_effect_cache_actions,
+            );
         const glyph_atlas_plan = try display_list.glyphAtlasPlan(storage.glyph_atlas_entries);
         const glyph_atlas_cache_plan = try glyph_atlas_plan.cachePlan(
             frame_options.previous_glyph_atlas_cache,
@@ -757,6 +770,8 @@ pub const Runtime = struct {
             .pipeline_cache_plan = pipeline_cache_plan,
             .resource_plan = resource_plan,
             .resource_cache_plan = resource_cache_plan,
+            .visual_effect_plan = visual_effect_plan,
+            .visual_effect_cache_plan = visual_effect_cache_plan,
             .glyph_atlas_plan = glyph_atlas_plan,
             .glyph_atlas_cache_plan = glyph_atlas_cache_plan,
             .text_layout_plan = text_layout_plan,
@@ -4903,6 +4918,8 @@ fn canvasFrameBudgetIsUnset(budget: canvas.CanvasFrameBudget) bool {
         budget.max_pipeline_uploads == 0 and
         budget.max_resources == 0 and
         budget.max_resource_uploads == 0 and
+        budget.max_visual_effects == 0 and
+        budget.max_visual_effect_uploads == 0 and
         budget.max_glyph_atlas_entries == 0 and
         budget.max_text_layouts == 0 and
         budget.max_text_layout_lines == 0 and

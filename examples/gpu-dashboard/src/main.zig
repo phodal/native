@@ -159,6 +159,9 @@ const GpuDashboardApp = struct {
     resources: [max_dashboard_commands]canvas.RenderResource = undefined,
     cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined,
     cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined,
+    visual_effects: [max_dashboard_commands]canvas.VisualEffect = undefined,
+    visual_effect_cache_entries: [max_dashboard_commands]canvas.VisualEffectCacheEntry = undefined,
+    visual_effect_cache_actions: [max_dashboard_commands * 2]canvas.VisualEffectCacheAction = undefined,
     glyphs: [max_dashboard_glyphs]canvas.GlyphAtlasEntry = undefined,
     glyph_cache_entries: [max_dashboard_glyphs]canvas.GlyphAtlasCacheEntry = undefined,
     glyph_cache_actions: [max_dashboard_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined,
@@ -348,6 +351,9 @@ const GpuDashboardApp = struct {
             .resources = &self.resources,
             .resource_cache_entries = &self.cache_entries,
             .resource_cache_actions = &self.cache_actions,
+            .visual_effects = &self.visual_effects,
+            .visual_effect_cache_entries = &self.visual_effect_cache_entries,
+            .visual_effect_cache_actions = &self.visual_effect_cache_actions,
             .glyph_atlas_entries = &self.glyphs,
             .glyph_atlas_cache_entries = &self.glyph_cache_entries,
             .glyph_atlas_cache_actions = &self.glyph_cache_actions,
@@ -489,6 +495,9 @@ fn dashboardFrameStorage(
     resources: []canvas.RenderResource,
     cache_entries: []canvas.RenderResourceCacheEntry,
     cache_actions: []canvas.RenderResourceCacheAction,
+    visual_effects: []canvas.VisualEffect,
+    visual_effect_cache_entries: []canvas.VisualEffectCacheEntry,
+    visual_effect_cache_actions: []canvas.VisualEffectCacheAction,
     glyphs: []canvas.GlyphAtlasEntry,
     glyph_cache_entries: []canvas.GlyphAtlasCacheEntry,
     glyph_cache_actions: []canvas.GlyphAtlasCacheAction,
@@ -506,6 +515,9 @@ fn dashboardFrameStorage(
         .resources = resources,
         .resource_cache_entries = cache_entries,
         .resource_cache_actions = cache_actions,
+        .visual_effects = visual_effects,
+        .visual_effect_cache_entries = visual_effect_cache_entries,
+        .visual_effect_cache_actions = visual_effect_cache_actions,
         .glyph_atlas_entries = glyphs,
         .glyph_atlas_cache_entries = glyph_cache_entries,
         .glyph_atlas_cache_actions = glyph_cache_actions,
@@ -632,6 +644,9 @@ test "gpu dashboard display list renders through the reference surface" {
     var resources: [max_dashboard_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var visual_effects: [max_dashboard_commands]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [max_dashboard_commands]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [max_dashboard_commands * 2]canvas.VisualEffectCacheAction = undefined;
     var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
@@ -643,13 +658,16 @@ test "gpu dashboard display list renders through the reference surface" {
     const frame = try dashboardFrame(display_list, null, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .full_repaint = true,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
     try std.testing.expect(frame.pipeline_cache_plan.uploadCount() >= 4);
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
+    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
+    try std.testing.expect(frame.visual_effect_plan.shadowCount() >= 4);
+    try std.testing.expect(frame.visual_effect_cache_plan.uploadCount() >= 4);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 10);
     var encoder_commands: [max_dashboard_glyphs + max_dashboard_commands * 3]canvas.RenderEncoderCommand = undefined;
     const encoder_plan = try frame.renderPass().encoderPlan(&encoder_commands);
@@ -695,6 +713,9 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     var resources: [max_dashboard_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_dashboard_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_dashboard_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var visual_effects: [max_dashboard_commands]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [max_dashboard_commands]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [max_dashboard_commands * 2]canvas.VisualEffectCacheAction = undefined;
     var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
     var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
     var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
@@ -707,10 +728,11 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     const frame = try dashboardFrame(display_list, display_list, .{
         .surface_size = geometry.SizeF.init(720, 520),
         .render_overrides = sampled,
-    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+    }, dashboardFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
+    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expect(frame.dirty_bounds != null);
 }

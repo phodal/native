@@ -252,6 +252,7 @@ pub const DrawImage = struct {
 
 pub const Glyph = struct {
     id: u32,
+    font_id: FontId = 0,
     x: f32,
     y: f32,
     advance: f32 = 0,
@@ -5035,6 +5036,7 @@ fn drawTextFingerprint(text: DrawText) u64 {
     hash = resourceHashUsize(hash, text.glyphs.len);
     for (text.glyphs) |glyph| {
         hash = resourceHashU32(hash, glyph.id);
+        hash = resourceHashU64(hash, glyphFontId(text.font_id, glyph));
         hash = resourceHashF32(hash, glyph.x);
         hash = resourceHashF32(hash, glyph.y);
         hash = resourceHashF32(hash, glyph.advance);
@@ -5331,7 +5333,7 @@ pub const GlyphAtlasPlanner = struct {
         if (text.glyphs.len > 0) {
             for (text.glyphs, 0..) |glyph, glyph_index| {
                 const key = GlyphAtlasKey{
-                    .font_id = text.font_id,
+                    .font_id = glyphFontId(text.font_id, glyph),
                     .glyph_id = glyph.id,
                     .size = text.size,
                     .subpixel_x = subpixelBucket(text.origin.x + glyph.x),
@@ -8392,6 +8394,10 @@ fn glyphAtlasKeysEqual(a: GlyphAtlasKey, b: GlyphAtlasKey) bool {
         a.subpixel_y == b.subpixel_y;
 }
 
+fn glyphFontId(run_font_id: FontId, glyph: Glyph) FontId {
+    return if (glyph.font_id == 0) run_font_id else glyph.font_id;
+}
+
 fn findGlyphAtlasCacheEntry(entries: []const GlyphAtlasCacheEntry, key: GlyphAtlasKey) ?usize {
     for (entries, 0..) |entry, index| {
         if (glyphAtlasKeysEqual(entry.key, key)) return index;
@@ -10017,7 +10023,7 @@ fn pathElementsEqual(a: []const PathElement, b: []const PathElement) bool {
 fn glyphsEqual(a: []const Glyph, b: []const Glyph) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
-        if (left.id != right.id or left.x != right.x or left.y != right.y or left.advance != right.advance) return false;
+        if (left.id != right.id or left.font_id != right.font_id or left.x != right.x or left.y != right.y or left.advance != right.advance) return false;
     }
     return true;
 }
@@ -10699,7 +10705,9 @@ fn writeGlyphsJson(glyphs: []const Glyph, writer: anytype) !void {
     try writer.writeByte('[');
     for (glyphs, 0..) |glyph, index| {
         if (index > 0) try writer.writeByte(',');
-        try writer.print("{{\"id\":{d},\"x\":{d},\"y\":{d},\"advance\":{d}}}", .{ glyph.id, glyph.x, glyph.y, glyph.advance });
+        try writer.print("{{\"id\":{d}", .{glyph.id});
+        if (glyph.font_id != 0) try writer.print(",\"font\":{d}", .{glyph.font_id});
+        try writer.print(",\"x\":{d},\"y\":{d},\"advance\":{d}}}", .{ glyph.x, glyph.y, glyph.advance });
     }
     try writer.writeByte(']');
 }
@@ -15477,6 +15485,56 @@ test "glyph atlas plan deduplicates shaped glyph keys" {
     try std.testing.expectEqual(@as(u8, 1), plan.entries[1].key.subpixel_x);
     try std.testing.expectEqual(@as(u32, 10), plan.entries[2].key.glyph_id);
     try std.testing.expectEqual(@as(u8, 2), plan.entries[2].key.subpixel_x);
+}
+
+test "glyph atlas plan honors shaped fallback font overrides" {
+    const glyphs = [_]Glyph{
+        .{ .id = 41, .x = 0, .y = 0, .advance = 8 },
+        .{ .id = 9001, .font_id = 11, .x = 8, .y = 0, .advance = 14 },
+        .{ .id = 42, .x = 22, .y = 0, .advance = 8 },
+    };
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 7,
+        .size = 16,
+        .origin = geometry.PointF.init(12, 24),
+        .color = Color.rgb8(15, 23, 42),
+        .text = "A🙂B",
+        .glyphs = &glyphs,
+    } }};
+
+    var entries: [3]GlyphAtlasEntry = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).glyphAtlasPlan(&entries);
+    try std.testing.expectEqual(@as(usize, 3), plan.entryCount());
+    try std.testing.expectEqual(@as(FontId, 7), plan.entries[0].key.font_id);
+    try std.testing.expectEqual(@as(FontId, 11), plan.entries[1].key.font_id);
+    try std.testing.expectEqual(@as(u32, 9001), plan.entries[1].key.glyph_id);
+    try std.testing.expectEqual(@as(FontId, 7), plan.entries[2].key.font_id);
+
+    const primary_only = [_]Glyph{
+        .{ .id = 41, .x = 0, .y = 0, .advance = 8 },
+        .{ .id = 9001, .x = 8, .y = 0, .advance = 14 },
+        .{ .id = 42, .x = 22, .y = 0, .advance = 8 },
+    };
+    const primary_commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 7,
+        .size = 16,
+        .origin = geometry.PointF.init(12, 24),
+        .color = Color.rgb8(15, 23, 42),
+        .text = "A🙂B",
+        .glyphs = &primary_only,
+    } }};
+
+    var changes: [1]DiffChange = undefined;
+    const diff = try DisplayList.diff(.{ .commands = &primary_commands }, .{ .commands = &commands }, &changes);
+    try std.testing.expectEqual(@as(usize, 1), diff.len);
+    try std.testing.expectEqual(DiffKind.changed, diff[0].kind);
+
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try (DisplayList{ .commands = &commands }).writeJson(&writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "\"font\":11") != null);
 }
 
 test "glyph atlas plan falls back to utf8 scalar glyph keys" {

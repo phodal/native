@@ -877,6 +877,54 @@ test "gpu components frame plan stays within runtime budgets" {
     try std.testing.expect(frame.profile().surface_area > 0);
 }
 
+test "gpu components display list renders stable reference snapshot" {
+    var commands: [max_component_commands]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try buildComponentsDisplayListFromWidgets(&builder);
+    const display_list = builder.displayList();
+
+    var render_commands: [max_component_commands]canvas.RenderCommand = undefined;
+    var render_batches: [max_component_commands]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
+    var layers: [max_component_commands]canvas.RenderLayer = undefined;
+    var layer_cache_entries: [max_component_commands]canvas.RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [max_component_commands * 2]canvas.RenderLayerCacheAction = undefined;
+    var resources: [max_component_commands]canvas.RenderResource = undefined;
+    var cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined;
+    var cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var visual_effects: [max_component_commands]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined;
+    var glyphs: [max_component_glyphs]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [max_component_glyphs]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [max_component_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [max_component_commands]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [max_component_glyphs]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [max_component_commands]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [max_component_commands * 2]canvas.TextLayoutCacheAction = undefined;
+    var changes: [max_component_commands * 2 + 1]canvas.DiffChange = undefined;
+    const frame = try componentFrame(display_list, null, .{
+        .surface_size = geometry.SizeF.init(canvas_width, canvas_height),
+        .full_repaint = true,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+
+    const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
+    const pixels = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(scratch);
+    @memset(pixels, 0);
+    const surface = try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch);
+    try surface.renderPass(frame.renderPass(), color(247, 249, 252));
+
+    try std.testing.expectEqual(@as(u64, 5328701958156580146), referenceSurfaceSignature(pixels));
+    try expectVisiblePixel(surface.pixelRgba8(36, 36));
+    try expectVisiblePixel(surface.pixelRgba8(92, 88));
+    try expectVisiblePixel(surface.pixelRgba8(330, 160));
+    try std.testing.expectEqual(@as(u8, 255), surface.pixelRgba8(288, 190)[3]);
+}
+
 test "gpu components frame event adapter preserves packet status" {
     const frame = zero_native.platform.GpuFrame{
         .window_id = 1,
@@ -1327,4 +1375,17 @@ fn expectSemantic(semantics: []const canvas.WidgetSemanticsNode, id: canvas.Obje
         if (semantic.id == id) return semantic;
     }
     @panic("missing semantic node");
+}
+
+fn expectVisiblePixel(pixel: [4]u8) !void {
+    try std.testing.expect(pixel[3] > 0);
+    try std.testing.expect(pixel[0] != 0 or pixel[1] != 0 or pixel[2] != 0);
+}
+
+fn referenceSurfaceSignature(pixels: []const u8) u64 {
+    var hash: u64 = 14695981039346656037;
+    for (pixels) |byte| {
+        hash = (hash ^ byte) *% 1099511628211;
+    }
+    return hash;
 }

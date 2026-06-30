@@ -7402,6 +7402,32 @@ fn booleanControlSelected(widget: Widget) bool {
     return widget.state.selected or widget.value >= 0.5;
 }
 
+pub fn toggleWidgetKnobCommandId(id: ObjectId) ObjectId {
+    return widgetPartId(id, 3);
+}
+
+pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
+    if (widget.kind != .toggle) return 0;
+    const knob_inset = densityValue(tokens, 2);
+    const track_width = @min(widget.frame.width, @max(densityValue(tokens, 36), widget.frame.height * 1.75));
+    const track_height = @min(widget.frame.height, densityValue(tokens, 24));
+    const track = pixelSnapGeometryRect(tokens, geometry.RectF.init(
+        widget.frame.x,
+        widget.frame.y + (widget.frame.height - track_height) * 0.5,
+        track_width,
+        track_height,
+    ));
+    const knob_size = @max(0, track.height - knob_inset * 2);
+    const off_knob = pixelSnapGeometryRect(tokens, geometry.RectF.init(track.x + knob_inset, track.y + knob_inset, knob_size, knob_size));
+    const on_knob = pixelSnapGeometryRect(tokens, geometry.RectF.init(
+        track.x + track.width - knob_size - knob_inset,
+        track.y + knob_inset,
+        knob_size,
+        knob_size,
+    ));
+    return on_knob.x - off_knob.x;
+}
+
 fn widgetPartId(id: ObjectId, slot: ObjectId) ObjectId {
     if (id == 0) return 0;
     const base = id *% 16;

@@ -1508,6 +1508,32 @@ pub const Runtime = struct {
         );
     }
 
+    fn scheduleCanvasWidgetToggleAnimation(self: *Runtime, view_index: usize, animation: CanvasWidgetToggleAnimation) anyerror!void {
+        if (view_index >= self.view_count) return;
+        if (self.views[view_index].kind != .gpu_surface) return;
+        if (animation.id == 0 or animation.travel <= 0) return;
+
+        const motion = self.views[view_index].widget_tokens.motion;
+        const duration_ms = motion.durationMs(.fast);
+        if (duration_ms == 0) {
+            self.views[view_index].removeCanvasRenderAnimation(canvas.toggleWidgetKnobCommandId(animation.id));
+            return;
+        }
+
+        const from_tx = if (animation.selected) animation.travel else -animation.travel;
+        const render_animation = motion.animation(.{
+            .id = canvas.toggleWidgetKnobCommandId(animation.id),
+            .start_ns = canvasWidgetAnimationStartNs(&self.views[view_index]),
+            .duration = .fast,
+            .from_transform = canvas.Affine.translate(from_tx, 0),
+            .to_transform = canvas.Affine.identity(),
+        });
+        self.views[view_index].replaceCanvasRenderAnimation(render_animation) catch |err| switch (err) {
+            error.RenderAnimationListFull => return,
+            else => return err,
+        };
+    }
+
     fn publishCanvasWidgetAccessibility(self: *Runtime, view_index: usize) anyerror!void {
         if (view_index >= self.view_count) return;
         const view = &self.views[view_index];
@@ -1862,11 +1888,17 @@ pub const Runtime = struct {
         const index = self.findViewIndex(pointer_event.window_id, pointer_event.view_label) orelse return;
         if (self.views[index].kind != .gpu_surface) return;
 
+        const toggle_animation = self.views[index].canvasWidgetToggleAnimationForPointer(
+            pointer_event.pointer,
+            pointer_event.target,
+            self.views[index].canvas_widget_pressed_id,
+        );
         const dirty = try self.views[index].applyCanvasWidgetControlPointer(
             pointer_event.pointer,
             pointer_event.target,
             self.views[index].canvas_widget_pressed_id,
         ) orelse return;
+        if (toggle_animation) |animation| try self.scheduleCanvasWidgetToggleAnimation(index, animation);
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
             self.invalidateFor(.state, dirty_region);
         } else {
@@ -1880,7 +1912,9 @@ pub const Runtime = struct {
         if (self.views[index].kind != .gpu_surface) return;
         const target = keyboard_event.target orelse return;
 
+        const toggle_animation = self.views[index].canvasWidgetToggleAnimationForKeyboard(target.id, keyboard_event.keyboard);
         const dirty = try self.views[index].applyCanvasWidgetControlKeyboard(target.id, keyboard_event.keyboard) orelse return;
+        if (toggle_animation) |animation| try self.scheduleCanvasWidgetToggleAnimation(index, animation);
         const previous_cursor = self.views[index].canvas_widget_cursor;
         if (target.kind == .scroll_view) self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
         if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
@@ -4931,6 +4965,12 @@ const CanvasWidgetScrollSource = enum {
     wheel,
 };
 
+const CanvasWidgetToggleAnimation = struct {
+    id: canvas.ObjectId,
+    selected: bool,
+    travel: f32,
+};
+
 const CanvasResourceCounts = struct {
     command_count: usize = 0,
     gradient_stop_count: usize = 0,
@@ -5576,6 +5616,11 @@ fn canvasWidgetKineticScrollFrameMs(frame_interval_ns: u64) f32 {
     return @as(f32, @floatFromInt(normalized)) / 1_000_000.0;
 }
 
+fn canvasWidgetAnimationStartNs(view: *const RuntimeView) u64 {
+    if (view.gpu_input_timestamp_ns != 0) return view.gpu_input_timestamp_ns;
+    return view.gpu_timestamp_ns;
+}
+
 const CanvasWidgetScrollKeyboardTarget = enum {
     start,
     end,
@@ -6122,6 +6167,30 @@ const RuntimeView = struct {
         if (animations.len > self.canvas_render_animations.len) return error.RenderAnimationListFull;
         @memcpy(self.canvas_render_animations[0..animations.len], animations);
         self.canvas_render_animation_count = animations.len;
+    }
+
+    fn replaceCanvasRenderAnimation(self: *RuntimeView, animation: canvas.CanvasRenderAnimation) anyerror!void {
+        if (animation.id == 0) return error.InvalidViewOptions;
+        var index: usize = 0;
+        while (index < self.canvas_render_animation_count) : (index += 1) {
+            if (self.canvas_render_animations[index].id == animation.id) {
+                self.canvas_render_animations[index] = animation;
+                return;
+            }
+        }
+        if (self.canvas_render_animation_count >= self.canvas_render_animations.len) return error.RenderAnimationListFull;
+        self.canvas_render_animations[self.canvas_render_animation_count] = animation;
+        self.canvas_render_animation_count += 1;
+    }
+
+    fn removeCanvasRenderAnimation(self: *RuntimeView, id: canvas.ObjectId) void {
+        var len: usize = 0;
+        for (self.canvasRenderAnimations()) |animation| {
+            if (animation.id == id) continue;
+            self.canvas_render_animations[len] = animation;
+            len += 1;
+        }
+        self.canvas_render_animation_count = len;
     }
 
     fn copyCanvasFrameRenderOverrides(self: *RuntimeView, overrides: []const canvas.CanvasRenderOverride) anyerror!void {
@@ -6815,6 +6884,38 @@ const RuntimeView = struct {
         }
         self.widget_layout_nodes[edited_index].widget.text_selection = next_state.selection;
         self.widget_layout_nodes[edited_index].widget.text_composition = next_state.composition;
+    }
+
+    fn canvasWidgetToggleAnimation(self: *const RuntimeView, id: canvas.ObjectId) ?CanvasWidgetToggleAnimation {
+        const index = self.canvasWidgetNodeIndexById(id) orelse return null;
+        const widget = self.widget_layout_nodes[index].widget;
+        if (widget.kind != .toggle or widget.state.disabled) return null;
+        const travel = canvas.toggleWidgetKnobTravel(widget, self.widget_tokens);
+        if (travel <= 0) return null;
+        return .{
+            .id = id,
+            .selected = canvasWidgetBooleanSelected(widget),
+            .travel = travel,
+        };
+    }
+
+    fn canvasWidgetToggleAnimationForPointer(
+        self: *const RuntimeView,
+        pointer: canvas.WidgetPointerEvent,
+        target: ?canvas.WidgetHit,
+        pressed_id: canvas.ObjectId,
+    ) ?CanvasWidgetToggleAnimation {
+        if (pointer.phase != .up or pressed_id == 0) return null;
+        const hit = target orelse return null;
+        if (hit.kind != .toggle or hit.id != pressed_id) return null;
+        if (!hit.bounds.normalized().containsPoint(pointer.point)) return null;
+        return self.canvasWidgetToggleAnimation(pressed_id);
+    }
+
+    fn canvasWidgetToggleAnimationForKeyboard(self: *const RuntimeView, id: canvas.ObjectId, keyboard: canvas.WidgetKeyboardEvent) ?CanvasWidgetToggleAnimation {
+        if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return null;
+        if (!isCanvasWidgetActivationKey(keyboard.key)) return null;
+        return self.canvasWidgetToggleAnimation(id);
     }
 
     fn applyCanvasWidgetControlPointer(self: *RuntimeView, pointer: canvas.WidgetPointerEvent, target: ?canvas.WidgetHit, pressed_id: canvas.ObjectId) anyerror!?geometry.RectF {
@@ -15072,6 +15173,43 @@ test "runtime batches pointer widget display list refreshes" {
     const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expect(retained.nodes[1].widget.state.selected);
     try std.testing.expectEqual(@as(f32, 1), retained.nodes[1].widget.value);
+
+    const travel = canvas.toggleWidgetKnobTravel(retained.nodes[1].widget, harness.runtime.views[0].widget_tokens);
+    const animations = try harness.runtime.canvasRenderAnimations(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), animations.len);
+    try std.testing.expectEqual(canvas.toggleWidgetKnobCommandId(4), animations[0].id);
+    try std.testing.expectEqual(@as(u64, 110), animations[0].start_ns);
+    try std.testing.expectEqual(harness.runtime.views[0].widget_tokens.motion.durationMs(.fast), animations[0].duration_ms);
+    try std.testing.expectApproxEqAbs(-travel, animations[0].from_transform.?.tx, 0.001);
+    try std.testing.expectEqual(canvas.Affine.identity(), animations[0].to_transform.?);
+
+    var overrides: [1]canvas.CanvasRenderOverride = undefined;
+    const sampled = try canvas.sampleCanvasRenderAnimations(animations, 110 + 60_000_000, &overrides);
+    try std.testing.expectEqual(@as(usize, 1), sampled.len);
+    try std.testing.expect(sampled[0].transform.?.tx > -travel);
+    try std.testing.expect(sampled[0].transform.?.tx < 0);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .timestamp_ns = 200,
+        .x = 66,
+        .y = 36,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .timestamp_ns = 210,
+        .x = 66,
+        .y = 36,
+    } });
+    const reverse_animations = try harness.runtime.canvasRenderAnimations(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), reverse_animations.len);
+    try std.testing.expectEqual(canvas.toggleWidgetKnobCommandId(4), reverse_animations[0].id);
+    try std.testing.expectEqual(@as(u64, 210), reverse_animations[0].start_ns);
+    try std.testing.expectApproxEqAbs(travel, reverse_animations[0].from_transform.?.tx, 0.001);
 }
 
 test "runtime batches keyboard widget display list refreshes" {

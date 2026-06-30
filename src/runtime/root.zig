@@ -769,7 +769,7 @@ pub const Runtime = struct {
         const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
         const packet = try canvas_frame.gpuPacket(output);
         var writer = std.Io.Writer.fixed(packet_json_buffer);
-        try packet.writeJson(&writer);
+        packet.writeJson(&writer) catch return error.UnsupportedService;
         try self.options.platform.services.presentGpuSurfacePacket(.{
             .window_id = window_id,
             .label = label,
@@ -9962,6 +9962,44 @@ test "runtime presents next canvas GPU packet" {
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
     try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
     try std.testing.expect(presented_frame.canvas_frame_dirty_bounds == null);
+}
+
+test "runtime direct canvas GPU packet reports unsupported when JSON buffer is too small" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-packet-direct-buffer", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 41,
+        .rect = geometry.RectF.init(8, 6, 32, 20),
+        .fill = .{ .color = canvas.Color.rgb8(37, 99, 235) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_json_buffer: [32]u8 = undefined;
+    try std.testing.expectError(error.UnsupportedService, harness.runtime.presentNextCanvasGpuPacket(1, "canvas", .{
+        .frame_index = 13,
+        .timestamp_ns = 45_000,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .scale = 2,
+    }, harness.runtime.canvasFrameScratchStorage(), canvas.Color.rgb8(247, 249, 252), &gpu_commands, &packet_json_buffer));
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_count);
 }
 
 test "runtime presents next canvas frame through packet presenter when available" {

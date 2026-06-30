@@ -3453,6 +3453,7 @@ pub const ControlTokens = struct {
     button_destructive: ControlVisualTokens = .{},
     text_field: ControlVisualTokens = .{},
     search_field: ControlVisualTokens = .{},
+    textarea: ControlVisualTokens = .{},
     list_item: ControlVisualTokens = .{},
     segmented_control: ControlVisualTokens = .{},
     checkbox: ControlVisualTokens = .{},
@@ -3664,6 +3665,7 @@ pub const ControlTokenOverrides = struct {
     button_destructive: ControlVisualTokenOverrides = .{},
     text_field: ControlVisualTokenOverrides = .{},
     search_field: ControlVisualTokenOverrides = .{},
+    textarea: ControlVisualTokenOverrides = .{},
     list_item: ControlVisualTokenOverrides = .{},
     segmented_control: ControlVisualTokenOverrides = .{},
     checkbox: ControlVisualTokenOverrides = .{},
@@ -3691,6 +3693,7 @@ pub const ControlTokenOverrides = struct {
         next.button_destructive = self.button_destructive.apply(next.button_destructive);
         next.text_field = self.text_field.apply(next.text_field);
         next.search_field = self.search_field.apply(next.search_field);
+        next.textarea = self.textarea.apply(next.textarea);
         next.list_item = self.list_item.apply(next.list_item);
         next.segmented_control = self.segmented_control.apply(next.segmented_control);
         next.checkbox = self.checkbox.apply(next.checkbox);
@@ -3807,6 +3810,7 @@ pub const WidgetKind = enum {
     icon_button,
     text_field,
     search_field,
+    textarea,
     tooltip,
     menu_item,
     list_item,
@@ -4040,7 +4044,7 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .switch_control => builtinComponent(.switch_control, "Switch", .toggle, .switch_control, false),
         .table => builtinComponent(.table, "Table", .data_grid, .grid, true),
         .tabs => builtinComponent(.tabs, "Tabs", .row, .group, true),
-        .textarea => builtinComponent(.textarea, "Textarea", .text_field, .textbox, false),
+        .textarea => builtinComponent(.textarea, "Textarea", .textarea, .textbox, false),
         .toggle => builtinComponent(.toggle, "Toggle", .button, .button, false),
         .toggle_group => builtinComponent(.toggle_group, "Toggle Group", .row, .group, true),
         .tooltip => builtinComponent(.tooltip, "Tooltip", .tooltip, .tooltip, false),
@@ -7190,7 +7194,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .badge => try emitBadgeWidget(builder, paint_widget, tokens),
         .button => try emitButtonWidget(builder, paint_widget, tokens),
         .icon_button => try emitIconButtonWidget(builder, paint_widget, tokens),
-        .text_field => try emitTextFieldWidget(builder, paint_widget, tokens),
+        .text_field, .textarea => try emitTextFieldWidget(builder, paint_widget, tokens),
         .search_field => try emitSearchFieldWidget(builder, paint_widget, tokens),
         .tooltip => try emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
@@ -7289,7 +7293,7 @@ fn emitWidgetLayoutNodeContent(
         .badge => try emitBadgeWidget(builder, paint_widget, tokens),
         .button => try emitButtonWidget(builder, paint_widget, tokens),
         .icon_button => try emitIconButtonWidget(builder, paint_widget, tokens),
-        .text_field => try emitTextFieldWidget(builder, paint_widget, tokens),
+        .text_field, .textarea => try emitTextFieldWidget(builder, paint_widget, tokens),
         .search_field => try emitSearchFieldWidget(builder, paint_widget, tokens),
         .tooltip => try emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
@@ -8481,15 +8485,22 @@ fn widgetIconGlyphScale(widget: Widget) f32 {
 }
 
 fn widgetTextSelectionRange(widget: Widget) ?TextRange {
-    if (widget.kind != .text_field and widget.kind != .search_field) return null;
+    if (!widgetTextInputKind(widget.kind)) return null;
     if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
     return null;
 }
 
 fn widgetTextCompositionRange(widget: Widget) ?TextRange {
-    if (widget.kind != .text_field and widget.kind != .search_field) return null;
+    if (!widgetTextInputKind(widget.kind)) return null;
     if (widget.text_composition) |range| return snapTextRange(widget.text, range);
     return null;
+}
+
+fn widgetTextInputKind(kind: WidgetKind) bool {
+    return switch (kind) {
+        .text_field, .search_field, .textarea => true,
+        else => false,
+    };
 }
 
 pub fn textSelectionForWidgetPoint(widget: Widget, point: geometry.PointF, anchor: ?usize, tokens: DesignTokens) ?TextSelection {
@@ -8502,7 +8513,7 @@ pub fn textSelectionForWidgetPoint(widget: Widget, point: geometry.PointF, ancho
 }
 
 pub fn textOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, tokens: DesignTokens) ?usize {
-    if (widget.kind != .text_field and widget.kind != .search_field) return null;
+    if (!widgetTextInputKind(widget.kind)) return null;
     if (widget.state.disabled) return null;
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
@@ -8551,6 +8562,7 @@ fn widgetTextInputLineHeight(text_size: f32) f32 {
 }
 
 fn widgetTextInputWrap(widget: Widget, line_height: f32) TextWrap {
+    if (widget.kind == .textarea) return .word;
     if (widget.kind == .text_field and widget.frame.height >= line_height * 2.25) return .word;
     return .none;
 }
@@ -8854,6 +8866,7 @@ fn buttonStateBackground(visual: ControlVisualTokens, active: bool, hovered: boo
 fn textInputControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
         .search_field => tokens.controls.search_field,
+        .textarea => tokens.controls.textarea,
         else => tokens.controls.text_field,
     };
 }
@@ -9019,7 +9032,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
-        .text, .icon, .image, .avatar, .badge, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        .text, .icon, .image, .avatar, .badge, .button, .icon_button, .text_field, .search_field, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
     }
 
     return index;
@@ -9260,6 +9273,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .icon_button => intrinsicSquareControlSize(widget, tokens),
         .text_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetControlHeight(widget, tokens)),
         .search_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
+        .textarea => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetSizedDensityValue(widget, tokens, 80)),
         .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
         .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
         .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
@@ -9466,7 +9480,7 @@ pub fn cursorForWidgetHit(hit: ?WidgetHit) WidgetCursor {
 pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor {
     if (state.disabled) return .arrow;
     return switch (kind) {
-        .text_field, .search_field => .text,
+        .text_field, .search_field, .textarea => .text,
         .button,
         .icon_button,
         .menu_item,
@@ -10043,7 +10057,7 @@ pub const WidgetTextGeometry = struct {
 
 pub fn textGeometryForWidget(widget: Widget, tokens: DesignTokens) WidgetTextGeometry {
     var value: WidgetTextGeometry = .{};
-    if (widget.kind != .text_field and widget.kind != .search_field) return value;
+    if (!widgetTextInputKind(widget.kind)) return value;
     if (widget.state.disabled) return value;
 
     const text_size = widgetTextInputSize(widget, tokens);
@@ -10126,7 +10140,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .badge => .text,
         .button => .button,
         .icon_button => .button,
-        .text_field, .search_field => .textbox,
+        .text_field, .search_field, .textarea => .textbox,
         .tooltip => .tooltip,
         .menu_item => .menuitem,
         .list_item => .listitem,
@@ -10160,7 +10174,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn semanticTextValue(widget: Widget) []const u8 {
     return switch (widget.kind) {
-        .text_field, .search_field => widget.text,
+        .text_field, .search_field, .textarea => widget.text,
         else => "",
     };
 }
@@ -10446,7 +10460,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
             actions.select = true;
             if (widget.command.len > 0) actions.press = true;
         },
-        .text_field, .search_field => {
+        .text_field, .search_field, .textarea => {
             actions.set_text = true;
             actions.set_selection = true;
         },
@@ -10465,7 +10479,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .scroll_view, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider => !widget.state.disabled,
+        .scroll_view, .button, .icon_button, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -10493,7 +10507,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
     };
 }
 
@@ -10826,7 +10840,7 @@ fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
         .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
-        .text_field, .search_field => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
+        .text_field, .search_field, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .segmented_control => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .data_cell => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, listItemControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .checkbox, .radio, .toggle, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
@@ -10842,6 +10856,7 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
         .icon_button,
         .text_field,
         .search_field,
+        .textarea,
         .menu_item,
         .list_item,
         .data_cell,
@@ -15166,7 +15181,7 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.spinner, builtinComponentDescriptor(.spinner).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.toggle, builtinComponentDescriptor(.switch_control).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.data_grid, builtinComponentDescriptor(.table).root_widget_kind);
-    try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.textarea).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.textarea, builtinComponentDescriptor(.textarea).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.tooltip, builtinComponentDescriptor(.tooltip).root_widget_kind);
 
     try std.testing.expectEqual(WidgetRole.dialog, builtinComponentDescriptor(.sheet).role);
@@ -15446,6 +15461,11 @@ test "design token overrides compose with built-in themes" {
                 .background = Color.rgb8(18, 24, 30),
                 .foreground = Color.rgb8(210, 220, 230),
             },
+            .textarea = .{
+                .background = Color.rgb8(19, 25, 31),
+                .foreground = Color.rgb8(211, 221, 231),
+                .border = Color.rgb8(67, 77, 87),
+            },
             .list_item = .{
                 .hover_background = Color.rgb8(28, 34, 40),
                 .active_background = Color.rgb8(38, 46, 54),
@@ -15563,6 +15583,9 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqual(@as(f32, 1.5), tokens.controls.text_field.stroke_width.?);
     try std.testing.expectEqualDeep(Color.rgb8(18, 24, 30), tokens.controls.search_field.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(210, 220, 230), tokens.controls.search_field.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(19, 25, 31), tokens.controls.textarea.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(211, 221, 231), tokens.controls.textarea.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(67, 77, 87), tokens.controls.textarea.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(28, 34, 40), tokens.controls.list_item.hover_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(38, 46, 54), tokens.controls.list_item.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(235, 240, 245), tokens.controls.list_item.foreground.?);
@@ -16249,6 +16272,59 @@ test "widget search fields expose textbox semantics and render search chrome" {
     }
     switch (display_list.commands[7]) {
         .draw_text => |text| try std.testing.expectEqualStrings("customers", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget textareas expose multiline textbox semantics and render wrapped text" {
+    const textarea = Widget{
+        .id = 12,
+        .kind = .textarea,
+        .frame = geometry.RectF.init(10, 12, 150, 84),
+        .text = "First line Second line",
+        .text_selection = TextSelection.collapsed(10),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Message" },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(textarea, textarea.frame, &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 12), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(WidgetKind.textarea, layout.hitTest(geometry.PointF.init(20, 24)).?.kind);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
+    try std.testing.expectEqualStrings("Message", semantics[0].label);
+    try std.testing.expectEqualStrings("First line Second line", semantics[0].text_value);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.set_text);
+    try std.testing.expect(semantics[0].actions.set_selection);
+
+    const text_geometry = layout.textGeometry(12, .{}).?;
+    try std.testing.expect(text_geometry.caret_bounds != null);
+    try std.testing.expectEqual(@as(usize, 0), text_geometry.selection_rect_count);
+
+    const offset = textOffsetForWidgetPoint(textarea, geometry.PointF.init(28, 36), .{}) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(offset <= textarea.text.len);
+
+    var commands: [4]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, textarea, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    switch (display_list.commands[2]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("First line Second line", text.text);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectEqual(TextWrap.word, text.text_layout.?.wrap);
+            try std.testing.expect(text.origin.y < textarea.frame.y + textarea.frame.height * 0.5);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .draw_line => |line| try expectFillColor(ColorTokens.light().focus_ring, line.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -18041,6 +18117,11 @@ test "widget emitter applies input and list control tokens" {
                 .foreground = Color.rgb8(210, 220, 230),
                 .border = Color.rgb8(90, 100, 110),
             },
+            .textarea = .{
+                .background = Color.rgb8(28, 32, 36),
+                .foreground = Color.rgb8(236, 240, 244),
+                .border = Color.rgb8(96, 106, 116),
+            },
             .list_item = .{
                 .hover_background = Color.rgb8(40, 48, 56),
                 .active_background = Color.rgb8(52, 62, 72),
@@ -18049,14 +18130,15 @@ test "widget emitter applies input and list control tokens" {
         },
     };
 
-    var commands: [13]CanvasCommand = undefined;
+    var commands: [16]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, .{ .id = 50, .kind = .text_field, .frame = geometry.RectF.init(0, 0, 160, 34), .text = "Input" }, tokens);
     try emitWidgetTree(&builder, .{ .id = 51, .kind = .search_field, .frame = geometry.RectF.init(0, 44, 180, 34), .semantics = .{ .label = "Search" } }, tokens);
-    try emitWidgetTree(&builder, .{ .id = 52, .kind = .list_item, .frame = geometry.RectF.init(0, 88, 180, 30), .text = "Inbox", .state = .{ .selected = true } }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 52, .kind = .textarea, .frame = geometry.RectF.init(0, 88, 180, 72), .text = "Message" }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 53, .kind = .list_item, .frame = geometry.RectF.init(0, 168, 180, 30), .text = "Inbox", .state = .{ .selected = true } }, tokens);
 
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 13), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 16), display_list.commandCount());
     switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(20, 24, 28), fill.fill),
         else => return error.TestUnexpectedResult,
@@ -18089,10 +18171,22 @@ test "widget emitter applies input and list control tokens" {
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[11]) {
-        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(52, 62, 72), fill.fill),
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(28, 32, 36), fill.fill),
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[12]) {
+        .stroke_rect => |stroke| try expectFillColor(Color.rgb8(96, 106, 116), stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[13]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(236, 240, 244), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[14]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(52, 62, 72), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[15]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(244, 248, 252), text.color),
         else => return error.TestUnexpectedResult,
     }

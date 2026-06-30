@@ -265,7 +265,7 @@ const GpuComponentsApp = struct {
                 "{s} {s} #{d}: offset {d}.",
                 .{ action, @tagName(widget.kind), id, widget.value },
             ),
-            .text_field, .search_field => try std.fmt.bufPrint(
+            .text_field, .search_field, .textarea => try std.fmt.bufPrint(
                 &status_buffer,
                 "{s} {s} #{d}: {d} bytes.",
                 .{ action, @tagName(widget.kind), id, widget.text.len },
@@ -743,6 +743,7 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 167, .kind = .row, .frame = rect(0, 148, 160, 28), .layout = .{ .gap = 10, .cross_alignment = .center }, .semantics = .{ .label = "Layout radio group" }, .children = &radio_controls },
         .{ .id = 168, .kind = .row, .frame = rect(0, 200, 148, 34), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density segments" }, .children = &segment_controls },
         .{ .id = 118, .kind = .image, .frame = rect(190, 160, 124, 54), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
+        .{ .id = 171, .kind = .textarea, .frame = rect(0, 246, 336, 72), .text = "Compose a native-rendered message", .semantics = .{ .label = "Message textarea" } },
     };
     const menu_items = [_]canvas.Widget{
         .{ .id = 142, .kind = .menu_item, .text = "Copy token" },
@@ -790,11 +791,11 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components", .size = .lg },
         .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .variant = .primary, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
         .{ .id = 105, .kind = .icon_button, .frame = rect(856, 54, 34, 34), .text = "+", .size = .icon, .semantics = .{ .label = "Add component" } },
-        .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 236), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
+        .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 326), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
         .{ .id = 120, .kind = .list, .frame = rect(456, 124, 170, 56), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
         .{ .id = 130, .kind = .scroll_view, .frame = rect(652, 124, 186, 56), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
         .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur_token = .sm, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
-        .{ .id = 149, .kind = .stack, .frame = rect(64, 410, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
+        .{ .id = 149, .kind = .stack, .frame = rect(64, 500, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
     const size = componentSurfaceSize(surface_size);
     return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, size.width, size.height), nodes);
@@ -1145,6 +1146,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 167, rect(64, 272, 160, 28));
     try expectComponentWidgetFrame(layout, 168, rect(64, 324, 148, 34));
     try expectComponentWidgetFrame(layout, 118, rect(254, 284, 124, 54));
+    try expectComponentWidgetFrame(layout, 171, rect(64, 370, 336, 72));
     try expectComponentWidgetFrame(layout, 120, rect(456, 124, 170, 56));
     try expectComponentWidgetFrame(layout, 130, rect(652, 124, 186, 56));
     try expectComponentWidgetFrame(layout, 140, rect(456, 248, 174, 88));
@@ -1153,16 +1155,18 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetsDoNotOverlap(layout, 115, 116);
     try expectComponentWidgetsDoNotOverlap(layout, 167, 118);
     try expectComponentWidgetsDoNotOverlap(layout, 168, 118);
+    try expectComponentWidgetsDoNotOverlap(layout, 171, 168);
+    try expectComponentWidgetsDoNotOverlap(layout, 171, 118);
     try expectComponentWidgetsDoNotOverlap(layout, 106, 120);
     try expectComponentWidgetsDoNotOverlap(layout, 120, 130);
     try expectComponentWidgetsDoNotOverlap(layout, 130, 140);
 
     try std.testing.expect(layout.findById(151) == null);
-    try expectComponentWidgetFrame(layout, 150, rect(64, 410, 360, 28));
-    try expectComponentWidgetFrame(layout, 152, rect(64, 410, 360, 28));
-    try expectComponentWidgetFrame(layout, 156, rect(64, 410, 180, 28));
-    try expectComponentWidgetFrame(layout, 157, rect(244, 410, 180, 28));
-    try expectComponentWidgetFrame(layout, 160, rect(456, 410, 176, 32));
+    try expectComponentWidgetFrame(layout, 150, rect(64, 500, 360, 28));
+    try expectComponentWidgetFrame(layout, 152, rect(64, 500, 360, 28));
+    try expectComponentWidgetFrame(layout, 156, rect(64, 500, 180, 28));
+    try expectComponentWidgetFrame(layout, 157, rect(244, 500, 180, 28));
+    try expectComponentWidgetFrame(layout, 160, rect(456, 500, 176, 32));
     try expectComponentWidgetsDoNotOverlap(layout, 150, 160);
     try expectComponentWidgetsDoNotOverlap(layout, 140, 149);
 
@@ -1179,9 +1183,9 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(scrolled_layout, 133, rect(652, 124, 186, 28));
     try expectComponentWidgetFrame(scrolled_layout, 134, rect(652, 152, 186, 28));
     try std.testing.expect(scrolled_layout.findById(152) == null);
-    try expectComponentWidgetFrame(scrolled_layout, 153, rect(64, 410, 360, 28));
-    try expectComponentWidgetFrame(scrolled_layout, 158, rect(64, 410, 180, 28));
-    try expectComponentWidgetFrame(scrolled_layout, 159, rect(244, 410, 180, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 153, rect(64, 500, 360, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 158, rect(64, 500, 180, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 159, rect(244, 500, 180, 28));
 
     var smooth_scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const smooth_scrolled_layout = try buildComponentsWidgetLayoutWithScroll(&smooth_scrolled_nodes, .{
@@ -1304,7 +1308,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 12778769604304034319), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 7367252919304923671), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1800,7 +1804,7 @@ test "gpu components native theme command updates retained design tokens" {
 
     const themed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try expectComponentWidgetFrame(themed_layout, 111, rect(64, 124, 148, 34));
-    try expectComponentWidgetFrame(themed_layout, 160, rect(456, 410, 176, 32));
+    try expectComponentWidgetFrame(themed_layout, 160, rect(456, 500, 176, 32));
 }
 
 test "gpu components follow system appearance until toolbar theme override" {

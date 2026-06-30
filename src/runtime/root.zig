@@ -5332,12 +5332,12 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
+        .scroll_view, .panel, .popover, .menu_surface, .text, .button, .icon_button, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
     };
 }
 
 fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
-    return kind == .text_field or kind == .search_field;
+    return kind == .text_field or kind == .search_field or kind == .textarea;
 }
 
 fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
@@ -6850,7 +6850,7 @@ const RuntimeView = struct {
     fn applyCanvasWidgetTextEdit(self: *RuntimeView, target_id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!?geometry.RectF {
         const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if ((widget.kind != .text_field and widget.kind != .search_field) or widget.state.disabled) return null;
+        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
 
         var edit_buffer: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
         const current_state = canvas.TextEditState{
@@ -6871,7 +6871,7 @@ const RuntimeView = struct {
     fn canvasWidgetKeyboardTextEdit(self: *const RuntimeView, target: canvas.WidgetFocusTarget, keyboard: canvas.WidgetKeyboardEvent) ?canvas.TextInputEvent {
         const index = self.canvasWidgetNodeIndexById(target.id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if ((widget.kind != .text_field and widget.kind != .search_field) or widget.state.disabled) return null;
+        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
 
         if (keyboard.phase == .key_down and !keyboard.modifiers.shift and !keyboard.modifiers.hasNavigationModifier() and canvasWidgetEscapeKey(keyboard.key)) {
             if (widget.text_composition != null) return .cancel_composition;
@@ -6888,13 +6888,13 @@ const RuntimeView = struct {
         if (canvasWidgetLayoutNodeHidden(layout, index)) return false;
         if (!canvasWidgetLayoutNodeFrameVisible(layout, index)) return false;
         const widget = self.widget_layout_nodes[index].widget;
-        return (widget.kind == .text_field or widget.kind == .search_field) and !widget.state.disabled;
+        return canvasWidgetEditableTextKind(widget.kind) and !widget.state.disabled;
     }
 
     fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
         const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if ((widget.kind != .text_field and widget.kind != .search_field) or widget.state.disabled) return null;
+        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
 
         const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len);
         const anchor: ?usize = if (extend) current_selection.anchor else null;
@@ -7102,7 +7102,7 @@ const RuntimeView = struct {
     fn setCanvasWidgetTextValue(self: *RuntimeView, id: canvas.ObjectId, text: []const u8) anyerror!?geometry.RectF {
         const index = self.canvasWidgetNodeIndexById(id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if ((widget.kind != .text_field and widget.kind != .search_field) or widget.state.disabled) return null;
+        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
         if (std.mem.eql(u8, widget.text, text) and widget.text_composition == null and textSelectionCollapsedAt(widget.text_selection, text.len)) return null;
 
         try self.rewriteCanvasWidgetTextStorage(index, .{
@@ -14276,6 +14276,91 @@ test "runtime applies text input to focused canvas text fields" {
     try std.testing.expectEqualDeep(canvas.TextRange.init(1, 1), harness.runtime.views[0].widgetSemantics()[0].text_selection.?);
     try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 1, .end = 1 }, snapshot.widgets[0].text_selection.?);
     try std.testing.expect(snapshot.widgets[0].text_composition == null);
+}
+
+test "runtime applies text input to canvas textareas" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-textarea-edit", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 160),
+    });
+
+    const textarea = canvas.Widget{
+        .id = 2,
+        .kind = .textarea,
+        .frame = geometry.RectF.init(12, 16, 180, 84),
+        .text = "First",
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{textarea} }, geometry.RectF.init(0, 0, 260, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 188,
+        .y = 28,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "!",
+        .text = "!",
+    } });
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("First!", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(6), retained.nodes[1].widget.text_selection.?);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "\nSecond" });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("First!\nSecond", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(13), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(13, 13), harness.runtime.views[0].widgetSemantics()[0].text_selection.?);
+
+    const text_geometry = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
+    try std.testing.expect(text_geometry.caret_bounds != null);
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqualStrings("Message", snapshot.widgets[0].name);
+    try std.testing.expectEqualStrings("First!\nSecond", snapshot.widgets[0].text_value);
+    try std.testing.expect(snapshot.widgets[0].actions.set_text);
+    try std.testing.expect(snapshot.widgets[0].actions.set_selection);
+
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    const display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_textarea_text = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                if (text.id == testCanvasWidgetPartId(2, 4)) {
+                    try std.testing.expectEqualStrings("First!\nSecond", text.text);
+                    try std.testing.expect(text.text_layout != null);
+                    try std.testing.expectEqual(canvas.TextWrap.word, text.text_layout.?.wrap);
+                    saw_textarea_text = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_textarea_text);
 }
 
 test "runtime applies ime composition edits to canvas text fields" {

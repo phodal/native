@@ -242,6 +242,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, copy) NSString *markedText;
 @property(nonatomic, assign) NSRange markedTextRange;
 @property(nonatomic, assign) NSRange selectedTextRange;
+@property(nonatomic, assign) BOOL interpretedKeyEventEmittedInput;
 @property(nonatomic, strong) NSArray<NSAccessibilityElement *> *widgetAccessibilityElements;
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
@@ -254,6 +255,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
+- (void)emitSyntheticKeyDownWithKey:(NSString *)key modifiers:(uint32_t)modifiers;
 - (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor;
 - (NSAccessibilityElement *)focusedTextAccessibilityElement;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
@@ -920,6 +922,15 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (void)keyDown:(NSEvent *)event {
+    if ([self focusedTextAccessibilityElement]) {
+        self.interpretedKeyEventEmittedInput = NO;
+        [self interpretKeyEvents:@[event]];
+        if (!self.interpretedKeyEventEmittedInput) {
+            [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
+        }
+        self.interpretedKeyEventEmittedInput = NO;
+        return;
+    }
     [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
     [self interpretKeyEvents:@[event]];
 }
@@ -995,8 +1006,28 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     [self requestRetainedCanvasFrame];
 }
 
+- (void)emitSyntheticKeyDownWithKey:(NSString *)key modifiers:(uint32_t)modifiers {
+    if (!self.host || self.surfaceLabel.length == 0 || key.length == 0) return;
+    self.interpretedKeyEventEmittedInput = YES;
+    const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
+    const char *keyBytes = key.UTF8String ?: "";
+    [self.host emitEvent:(zero_native_appkit_event_t){
+        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
+        .window_id = self.windowId,
+        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .view_label = labelBytes,
+        .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .key_text = keyBytes,
+        .key_text_len = [key lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .shortcut_modifiers = modifiers,
+        .input_kind = ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN,
+    }];
+    [self requestRetainedCanvasFrame];
+}
+
 - (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor {
     if (!self.host || self.surfaceLabel.length == 0) return;
+    self.interpretedKeyEventEmittedInput = YES;
     NSString *inputText = text ?: @"";
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     const char *inputBytes = inputText.UTF8String ?: "";
@@ -1149,7 +1180,44 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (void)doCommandBySelector:(SEL)selector {
-    (void)selector;
+    if (![self focusedTextAccessibilityElement]) return;
+    if (selector == @selector(deleteBackward:)) {
+        [self emitSyntheticKeyDownWithKey:@"backspace" modifiers:0];
+    } else if (selector == @selector(deleteForward:)) {
+        [self emitSyntheticKeyDownWithKey:@"delete" modifiers:0];
+    } else if (selector == @selector(moveLeft:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowleft" modifiers:0];
+    } else if (selector == @selector(moveRight:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowright" modifiers:0];
+    } else if (selector == @selector(moveUp:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowup" modifiers:0];
+    } else if (selector == @selector(moveDown:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowdown" modifiers:0];
+    } else if (selector == @selector(moveLeftAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowleft" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(moveRightAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowright" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(moveUpAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowup" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(moveDownAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"arrowdown" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(moveToBeginningOfLine:)) {
+        [self emitSyntheticKeyDownWithKey:@"home" modifiers:0];
+    } else if (selector == @selector(moveToEndOfLine:)) {
+        [self emitSyntheticKeyDownWithKey:@"end" modifiers:0];
+    } else if (selector == @selector(moveToBeginningOfLineAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"home" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(moveToEndOfLineAndModifySelection:)) {
+        [self emitSyntheticKeyDownWithKey:@"end" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(insertNewline:)) {
+        [self emitSyntheticKeyDownWithKey:@"enter" modifiers:0];
+    } else if (selector == @selector(insertTab:)) {
+        [self emitSyntheticKeyDownWithKey:@"tab" modifiers:0];
+    } else if (selector == @selector(insertBacktab:)) {
+        [self emitSyntheticKeyDownWithKey:@"tab" modifiers:ZeroNativeShortcutModifierShift];
+    } else if (selector == @selector(cancelOperation:)) {
+        [self emitSyntheticKeyDownWithKey:@"escape" modifiers:0];
+    }
 }
 
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action {

@@ -3453,6 +3453,9 @@ pub const ControlTokens = struct {
     button_destructive: ControlVisualTokens = .{},
     alert: ControlVisualTokens = .{},
     card: ControlVisualTokens = .{},
+    dialog: ControlVisualTokens = .{},
+    drawer: ControlVisualTokens = .{},
+    sheet: ControlVisualTokens = .{},
     select: ControlVisualTokens = .{},
     text_field: ControlVisualTokens = .{},
     search_field: ControlVisualTokens = .{},
@@ -3668,6 +3671,9 @@ pub const ControlTokenOverrides = struct {
     button_destructive: ControlVisualTokenOverrides = .{},
     alert: ControlVisualTokenOverrides = .{},
     card: ControlVisualTokenOverrides = .{},
+    dialog: ControlVisualTokenOverrides = .{},
+    drawer: ControlVisualTokenOverrides = .{},
+    sheet: ControlVisualTokenOverrides = .{},
     select: ControlVisualTokenOverrides = .{},
     text_field: ControlVisualTokenOverrides = .{},
     search_field: ControlVisualTokenOverrides = .{},
@@ -3699,6 +3705,9 @@ pub const ControlTokenOverrides = struct {
         next.button_destructive = self.button_destructive.apply(next.button_destructive);
         next.alert = self.alert.apply(next.alert);
         next.card = self.card.apply(next.card);
+        next.dialog = self.dialog.apply(next.dialog);
+        next.drawer = self.drawer.apply(next.drawer);
+        next.sheet = self.sheet.apply(next.sheet);
         next.select = self.select.apply(next.select);
         next.text_field = self.text_field.apply(next.text_field);
         next.search_field = self.search_field.apply(next.search_field);
@@ -3809,6 +3818,9 @@ pub const WidgetKind = enum {
     list,
     alert,
     card,
+    dialog,
+    drawer,
+    sheet,
     panel,
     popover,
     menu_surface,
@@ -4078,8 +4090,8 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .card => builtinComponent(.card, .card, .group, true),
         .checkbox => builtinComponent(.checkbox, .checkbox, .checkbox, false),
         .combobox => builtinComponent(.combobox, .search_field, .textbox, true),
-        .dialog => builtinComponent(.dialog, .popover, .dialog, true),
-        .drawer => builtinComponent(.drawer, .popover, .dialog, true),
+        .dialog => builtinComponent(.dialog, .dialog, .dialog, true),
+        .drawer => builtinComponent(.drawer, .drawer, .dialog, true),
         .dropdown_menu => builtinComponent(.dropdown_menu, .menu_surface, .menu, true),
         .input => builtinComponent(.input, .text_field, .textbox, false),
         .pagination => builtinComponent(.pagination, .row, .group, true),
@@ -4088,7 +4100,7 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .resizable => builtinComponent(.resizable, .panel, .group, true),
         .select => builtinComponent(.select, .select, .button, true),
         .separator => builtinComponent(.separator, .separator, .none, false),
-        .sheet => builtinComponent(.sheet, .popover, .dialog, true),
+        .sheet => builtinComponent(.sheet, .sheet, .dialog, true),
         .skeleton => builtinComponent(.skeleton, .skeleton, .none, false),
         .slider => builtinComponent(.slider, .slider, .slider, false),
         .spinner => builtinComponent(.spinner, .spinner, .progressbar, false),
@@ -7236,6 +7248,9 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .scroll_view => try emitScrollViewWidget(builder, paint_widget, tokens, depth),
         .alert => try emitAlertWidget(builder, paint_widget, tokens, depth),
         .card => try emitCardWidget(builder, paint_widget, tokens, depth),
+        .dialog => try emitDialogSurfaceWidget(builder, paint_widget, tokens, depth),
+        .drawer => try emitDrawerSurfaceWidget(builder, paint_widget, tokens, depth),
+        .sheet => try emitSheetSurfaceWidget(builder, paint_widget, tokens, depth),
         .panel => try emitPanelWidget(builder, paint_widget, tokens, depth),
         .popover => try emitPopoverWidget(builder, paint_widget, tokens, depth),
         .menu_surface => try emitMenuSurfaceWidget(builder, paint_widget, tokens, depth),
@@ -7338,6 +7353,9 @@ fn emitWidgetLayoutNodeContent(
         },
         .alert => try emitAlertWidgetChrome(builder, paint_widget, tokens),
         .card => try emitCardWidgetChrome(builder, paint_widget, tokens),
+        .dialog => try emitDialogSurfaceWidgetChrome(builder, paint_widget, tokens),
+        .drawer => try emitDrawerSurfaceWidgetChrome(builder, paint_widget, tokens),
+        .sheet => try emitSheetSurfaceWidgetChrome(builder, paint_widget, tokens),
         .panel => try emitPanelWidgetChrome(builder, paint_widget, tokens),
         .popover => try emitPopoverWidgetChrome(builder, paint_widget, tokens),
         .menu_surface => try emitMenuSurfaceWidgetChrome(builder, paint_widget, tokens),
@@ -7449,7 +7467,8 @@ fn widgetContentClipRadius(widget: Widget, tokens: DesignTokens) Radius {
     if (!widget.layout.clip_content) return .{};
     return switch (widget.kind) {
         .alert, .card, .panel, .menu_surface => Radius.all(tokens.radius.lg),
-        .popover => Radius.all(tokens.radius.xl),
+        .dialog, .popover => Radius.all(tokens.radius.xl),
+        .drawer, .sheet => Radius.all(tokens.radius.lg),
         .tooltip => Radius.all(tokens.radius.md),
         else => .{},
     };
@@ -7564,6 +7583,83 @@ fn emitCardWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens)
     const inset = widgetControlInset(widget, tokens, tokens.spacing.lg);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 3),
+        .font_id = tokens.typography.font_id,
+        .size = title_size,
+        .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(widget.frame.x + inset, widget.frame.y + inset + title_size)),
+        .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
+        .text = widget.text,
+        .text_layout = .{
+            .max_width = @max(1, widget.frame.width - inset * 2),
+            .line_height = widgetLineHeight(title_size),
+            .wrap = .word,
+            .alignment = widget.text_alignment,
+        },
+    });
+}
+
+fn emitDialogSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitDialogSurfaceWidgetChrome(builder, widget, tokens);
+    try emitWidgetClippedChildren(builder, widget, tokens, depth);
+}
+
+fn emitDrawerSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitDrawerSurfaceWidgetChrome(builder, widget, tokens);
+    try emitWidgetClippedChildren(builder, widget, tokens, depth);
+}
+
+fn emitSheetSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitSheetSurfaceWidgetChrome(builder, widget, tokens);
+    try emitWidgetClippedChildren(builder, widget, tokens, depth);
+}
+
+fn emitDialogSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    try emitModalSurfaceWidgetChrome(builder, widget, tokens, dialogControlVisualTokens(tokens), tokens.radius.xl);
+}
+
+fn emitDrawerSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    try emitModalSurfaceWidgetChrome(builder, widget, tokens, drawerControlVisualTokens(tokens), tokens.radius.xl);
+}
+
+fn emitSheetSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    try emitModalSurfaceWidgetChrome(builder, widget, tokens, sheetControlVisualTokens(tokens), tokens.radius.lg);
+}
+
+fn emitModalSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens, fallback_radius: f32) Error!void {
+    const radius = controlRadius(widget, visual, fallback_radius);
+    const shadow_token = tokens.shadow.md;
+    if (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0) {
+        try builder.shadow(.{
+            .id = widgetPartId(widget.id, 1),
+            .rect = widget.frame,
+            .radius = radius,
+            .offset = .{ .dx = 0, .dy = shadow_token.y },
+            .blur = shadow_token.blur,
+            .spread = shadow_token.spread,
+            .color = tokens.colors.shadow,
+        });
+    }
+
+    try builder.fillRoundedRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface)),
+    });
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 3),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
+            .width = controlStrokeWidth(widget, visual, tokens.stroke.hairline),
+        },
+    });
+    if (widget.text.len == 0) return;
+
+    const title_size = widgetTypographySize(widget, tokens.typography.title_size);
+    const inset = widgetControlInset(widget, tokens, tokens.spacing.xl);
+    try builder.drawText(.{
+        .id = widgetPartId(widget.id, 4),
         .font_id = tokens.typography.font_id,
         .size = title_size,
         .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(widget.frame.x + inset, widget.frame.y + inset + title_size)),
@@ -9147,6 +9243,18 @@ fn cardControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
     return controlVisualTokensWithFallback(tokens.controls.card, tokens.controls.panel);
 }
 
+fn dialogControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.dialog, tokens.controls.popover);
+}
+
+fn drawerControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.drawer, tokens.controls.popover);
+}
+
+fn sheetControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.sheet, tokens.controls.popover);
+}
+
 fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
         .list_item, .menu_item, .data_cell => tokens.controls.list_item,
@@ -9170,6 +9278,9 @@ fn surfaceControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisua
     return switch (widget.kind) {
         .alert => alertControlVisualTokens(tokens),
         .card => cardControlVisualTokens(tokens),
+        .dialog => dialogControlVisualTokens(tokens),
+        .drawer => drawerControlVisualTokens(tokens),
+        .sheet => sheetControlVisualTokens(tokens),
         .panel => tokens.controls.panel,
         .popover => tokens.controls.popover,
         .menu_surface => tokens.controls.menu_surface,
@@ -9296,7 +9407,7 @@ fn layoutWidgetDepth(
         else
             try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .stack, .alert, .card, .panel, .popover => {
+        .stack, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover => {
             for (widget.children) |child| {
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
@@ -9558,6 +9669,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .spinner => intrinsicSquareControlSize(widget, tokens),
         .alert => intrinsicAlertWidgetSize(widget, tokens),
         .card => intrinsicCardWidgetSize(widget, tokens),
+        .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens),
         .stack, .row, .column, .grid, .data_grid, .scroll_view, .list, .panel, .popover, .menu_surface, .image => geometry.SizeF.zero(),
     };
 }
@@ -9593,6 +9705,21 @@ fn intrinsicCardWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
     return geometry.SizeF.init(
         @max(widgetSizedDensityValue(widget, tokens, 240), text.width + inset * 2),
         @max(widgetSizedDensityValue(widget, tokens, 120), if (widget.text.len > 0) widgetLineHeight(title_size) + inset * 2 else 0),
+    );
+}
+
+fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const title_size = widgetTypographySize(widget, tokens.typography.title_size);
+    const inset = widgetControlInset(widget, tokens, tokens.spacing.xl);
+    const text = intrinsicTextWidgetSize(widget, tokens, title_size);
+    const default_size = switch (widget.kind) {
+        .drawer => geometry.SizeF.init(360, 280),
+        .sheet => geometry.SizeF.init(320, 420),
+        else => geometry.SizeF.init(420, 220),
+    };
+    return geometry.SizeF.init(
+        @max(widgetSizedDensityValue(widget, tokens, default_size.width), text.width + inset * 2),
+        @max(widgetSizedDensityValue(widget, tokens, default_size.height), if (widget.text.len > 0) widgetLineHeight(title_size) + inset * 2 else 0),
     );
 }
 
@@ -10427,7 +10554,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .stack, .row, .column, .grid, .scroll_view, .alert, .card, .panel => .group,
         .data_grid => .grid,
         .data_row => .row,
-        .popover => .dialog,
+        .dialog, .drawer, .sheet, .popover => .dialog,
         .menu_surface => .menu,
         .list => .list,
         .text => .text,
@@ -10802,7 +10929,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .alert, .card, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
+        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
     };
 }
 
@@ -11133,7 +11260,7 @@ fn widgetFocusPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF 
 
 fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
-        .alert, .card, .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
+        .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         .select => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectControlVisualTokens(tokens), tokens.stroke.regular),
         .text_field, .search_field, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
@@ -11170,7 +11297,7 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
 fn widgetShadowPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
     const token = switch (widget.kind) {
         .panel, .tooltip => tokens.shadow.sm,
-        .popover, .menu_surface => tokens.shadow.md,
+        .dialog, .drawer, .sheet, .popover, .menu_surface => tokens.shadow.md,
         else => return null,
     };
     if (token.y == 0 and token.blur == 0 and token.spread == 0) return null;
@@ -11192,7 +11319,8 @@ fn widgetBackdropBlurPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry
 
 fn widgetShadowRadius(widget: Widget, tokens: DesignTokens) Radius {
     return switch (widget.kind) {
-        .popover => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.xl),
+        .dialog, .drawer, .popover => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.xl),
+        .sheet => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.lg),
         .alert, .card, .panel, .menu_surface => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.lg),
         .tooltip => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.md),
         else => Radius.all(0),
@@ -15476,8 +15604,8 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.row, builtinComponentDescriptor(.button_group).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.card, builtinComponentDescriptor(.card).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.search_field, builtinComponentDescriptor(.combobox).root_widget_kind);
-    try std.testing.expectEqual(WidgetKind.popover, builtinComponentDescriptor(.dialog).root_widget_kind);
-    try std.testing.expectEqual(WidgetKind.popover, builtinComponentDescriptor(.drawer).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.dialog, builtinComponentDescriptor(.dialog).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.drawer, builtinComponentDescriptor(.drawer).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.menu_surface, builtinComponentDescriptor(.dropdown_menu).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.input).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.separator, builtinComponentDescriptor(.separator).root_widget_kind);
@@ -15486,6 +15614,7 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.toggle, builtinComponentDescriptor(.switch_control).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.data_grid, builtinComponentDescriptor(.table).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.select, builtinComponentDescriptor(.select).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.sheet, builtinComponentDescriptor(.sheet).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.textarea, builtinComponentDescriptor(.textarea).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.tooltip, builtinComponentDescriptor(.tooltip).root_widget_kind);
 
@@ -15671,6 +15800,103 @@ test "built-in card renders shadcn surface chrome and title" {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("Revenue pulse", text.text);
             try std.testing.expectEqualDeep(Color.rgb8(238, 242, 246), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "built-in modal surfaces render shadcn chrome and semantics" {
+    const dialog = builtinComponentWidget(.dialog, .{
+        .id = 50,
+        .frame = geometry.RectF.init(0, 0, 320, 160),
+        .text = "Edit profile",
+    });
+    const drawer = builtinComponentWidget(.drawer, .{
+        .id = 51,
+        .frame = geometry.RectF.init(340, 0, 280, 180),
+        .text = "Command drawer",
+    });
+    const sheet = builtinComponentWidget(.sheet, .{
+        .id = 52,
+        .frame = geometry.RectF.init(640, 0, 260, 220),
+        .text = "Inspector",
+    });
+
+    try std.testing.expectEqual(WidgetKind.dialog, dialog.kind);
+    try std.testing.expectEqual(WidgetKind.drawer, drawer.kind);
+    try std.testing.expectEqual(WidgetKind.sheet, sheet.kind);
+    try std.testing.expectEqual(@as(f32, 20), dialog.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 16), sheet.layout.gap);
+    try std.testing.expect(dialog.layout.clip_content);
+    try std.testing.expect(drawer.layout.clip_content);
+    try std.testing.expect(sheet.layout.clip_content);
+
+    const root = Widget{ .kind = .stack, .children = &.{ dialog, drawer, sheet } };
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 920, 240), &nodes);
+    try std.testing.expectEqual(WidgetKind.dialog, layout.hitTest(geometry.PointF.init(12, 12)).?.kind);
+    try std.testing.expectEqual(WidgetKind.drawer, layout.hitTest(geometry.PointF.init(352, 12)).?.kind);
+    try std.testing.expectEqual(WidgetKind.sheet, layout.hitTest(geometry.PointF.init(652, 12)).?.kind);
+
+    var semantics_buffer: [4]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 3), semantics.len);
+    try std.testing.expectEqual(WidgetRole.dialog, semantics[0].role);
+    try std.testing.expectEqualStrings("Edit profile", semantics[0].label);
+    try std.testing.expectEqual(WidgetRole.dialog, semantics[1].role);
+    try std.testing.expectEqualStrings("Command drawer", semantics[1].label);
+    try std.testing.expectEqual(WidgetRole.dialog, semantics[2].role);
+    try std.testing.expectEqualStrings("Inspector", semantics[2].label);
+
+    const tokens = DesignTokens{
+        .shadow = .{ .md = .{ .y = 0, .blur = 0, .spread = 0 } },
+        .controls = .{
+            .dialog = .{
+                .background = Color.rgb8(11, 17, 23),
+                .foreground = Color.rgb8(240, 244, 248),
+                .border = Color.rgb8(55, 65, 75),
+                .radius = 14,
+                .stroke_width = 1.25,
+            },
+            .drawer = .{
+                .background = Color.rgb8(12, 18, 24),
+                .foreground = Color.rgb8(241, 245, 249),
+                .border = Color.rgb8(56, 66, 76),
+                .radius = 16,
+                .stroke_width = 1.5,
+            },
+            .sheet = .{
+                .background = Color.rgb8(13, 19, 25),
+                .foreground = Color.rgb8(242, 246, 250),
+                .border = Color.rgb8(57, 67, 77),
+                .radius = 12,
+                .stroke_width = 1.75,
+            },
+        },
+    };
+    var commands: [18]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 15), display_list.commandCount());
+    switch (display_list.findCommandById(widgetPartId(50, 2)).?.command) {
+        .fill_rounded_rect => |fill| {
+            try std.testing.expectEqualDeep(Radius.all(14), fill.radius);
+            try expectFillColor(Color.rgb8(11, 17, 23), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(51, 3)).?.command) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 1.5), stroke.stroke.width);
+            try expectFillColor(Color.rgb8(56, 66, 76), stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(52, 4)).?.command) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("Inspector", text.text);
+            try std.testing.expectEqualDeep(Color.rgb8(242, 246, 250), text.color);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -15943,6 +16169,21 @@ test "design token overrides compose with built-in themes" {
                 .foreground = Color.rgb8(237, 243, 249),
                 .border = Color.rgb8(61, 71, 81),
             },
+            .dialog = .{
+                .background = Color.rgb8(17, 23, 31),
+                .foreground = Color.rgb8(238, 244, 250),
+                .border = Color.rgb8(63, 73, 85),
+            },
+            .drawer = .{
+                .background = Color.rgb8(18, 24, 32),
+                .foreground = Color.rgb8(239, 245, 251),
+                .border = Color.rgb8(64, 74, 86),
+            },
+            .sheet = .{
+                .background = Color.rgb8(19, 25, 33),
+                .foreground = Color.rgb8(240, 246, 252),
+                .border = Color.rgb8(65, 75, 87),
+            },
             .panel = .{
                 .background = Color.rgb8(16, 22, 28),
                 .border = Color.rgb8(58, 68, 78),
@@ -16058,6 +16299,15 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(15, 21, 27), tokens.controls.card.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(237, 243, 249), tokens.controls.card.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(61, 71, 81), tokens.controls.card.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(17, 23, 31), tokens.controls.dialog.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(238, 244, 250), tokens.controls.dialog.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(63, 73, 85), tokens.controls.dialog.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(18, 24, 32), tokens.controls.drawer.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(239, 245, 251), tokens.controls.drawer.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(64, 74, 86), tokens.controls.drawer.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(19, 25, 33), tokens.controls.sheet.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(240, 246, 252), tokens.controls.sheet.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(65, 75, 87), tokens.controls.sheet.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(16, 22, 28), tokens.controls.panel.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(58, 68, 78), tokens.controls.panel.border.?);
     try std.testing.expectEqual(@as(f32, 16), tokens.controls.panel.radius.?);

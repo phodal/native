@@ -816,6 +816,9 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 180, .kind = .list, .frame = rect(652, 238, 186, 112), .value = virtual_scroll.catalog, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Shadcn-style built-in component catalog" }, .children = &component_catalog_items },
         .{ .id = 173, .kind = .alert, .frame = rect(652, 374, 238, 70), .text = "Web-inspired. Native-rendered.", .semantics = .{ .label = "Built-in alert" } },
         .{ .id = 174, .kind = .card, .frame = rect(456, 374, 170, 70), .text = "Card primitive", .semantics = .{ .label = "Built-in card" } },
+        .{ .id = 175, .kind = .dialog, .frame = rect(456, 462, 170, 58), .text = "Dialog", .semantics = .{ .label = "Built-in dialog" } },
+        .{ .id = 176, .kind = .drawer, .frame = rect(644, 462, 118, 58), .text = "Drawer", .semantics = .{ .label = "Built-in drawer" } },
+        .{ .id = 177, .kind = .sheet, .frame = rect(778, 462, 112, 58), .text = "Sheet", .semantics = .{ .label = "Built-in sheet" } },
         .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur_token = .sm, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
         .{ .id = 149, .kind = .stack, .frame = rect(64, 540, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
@@ -1178,6 +1181,9 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 184, rect(652, 322, 186, 28));
     try expectComponentWidgetFrame(layout, 173, rect(652, 374, 238, 70));
     try expectComponentWidgetFrame(layout, 174, rect(456, 374, 170, 70));
+    try expectComponentWidgetFrame(layout, 175, rect(456, 462, 170, 58));
+    try expectComponentWidgetFrame(layout, 176, rect(644, 462, 118, 58));
+    try expectComponentWidgetFrame(layout, 177, rect(778, 462, 112, 58));
     try expectComponentWidgetFrame(layout, 140, rect(456, 248, 174, 88));
     try expectComponentWidgetsDoNotOverlap(layout, 111, 112);
     try expectComponentWidgetsDoNotOverlap(layout, 113, 114);
@@ -1196,6 +1202,11 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetsDoNotOverlap(layout, 173, 140);
     try expectComponentWidgetsDoNotOverlap(layout, 174, 173);
     try expectComponentWidgetsDoNotOverlap(layout, 174, 140);
+    try expectComponentWidgetsDoNotOverlap(layout, 175, 174);
+    try expectComponentWidgetsDoNotOverlap(layout, 175, 176);
+    try expectComponentWidgetsDoNotOverlap(layout, 176, 177);
+    try expectComponentWidgetsDoNotOverlap(layout, 177, 173);
+    try expectComponentWidgetsDoNotOverlap(layout, 175, 149);
 
     try std.testing.expect(layout.findById(151) == null);
     try expectComponentWidgetFrame(layout, 150, rect(64, 540, 360, 28));
@@ -1350,7 +1361,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 11237215035017349299), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 2297421397985403337), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1425,6 +1436,9 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 172, .button);
     try expectSemanticRole(semantics, 173, .group);
     try expectSemanticRole(semantics, 174, .group);
+    try expectSemanticRole(semantics, 175, .dialog);
+    try expectSemanticRole(semantics, 176, .dialog);
+    try expectSemanticRole(semantics, 177, .dialog);
     try expectSemanticRole(semantics, 180, .list);
     try expectSemanticRole(semantics, 181, .listitem);
 

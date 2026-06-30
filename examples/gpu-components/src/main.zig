@@ -223,7 +223,8 @@ const GpuComponentsApp = struct {
         if (!std.mem.eql(u8, keyboard_event.view_label, canvas_label)) return;
         if (keyboard_event.keyboard.phase != .key_down) return;
         const target = keyboard_event.target orelse return;
-        try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", target.id);
+        const scrolled_id = try self.scrollVirtualWidgetFromKeyboard(runtime, keyboard_event) orelse target.id;
+        try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", scrolled_id);
     }
 
     fn reportWidgetInteraction(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
@@ -278,6 +279,34 @@ const GpuComponentsApp = struct {
 
         try self.setComponentVirtualScrollValue(id, next);
         try self.updateComponentsCanvasModel(runtime, pointer_event.window_id);
+        return id;
+    }
+
+    fn scrollVirtualWidgetFromKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!?canvas.ObjectId {
+        if (keyboard_event.keyboard.modifiers.hasNavigationModifier()) return null;
+        const target = keyboard_event.target orelse return null;
+        const id = componentVirtualScrollTarget(keyboard_event.route) orelse return null;
+        const layout = try runtime.canvasWidgetLayout(keyboard_event.window_id, canvas_label);
+        const node = layout.findById(id) orelse return null;
+        if (!node.widget.layout.virtualized) return null;
+
+        const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+        if (viewport.isEmpty()) return null;
+
+        const direct_target = target.id == id;
+        const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
+        const current = self.componentVirtualScrollValue(id) orelse return null;
+        const next = if (componentVirtualKeyboardScrollTarget(keyboard_event.keyboard, direct_target)) |scroll_target| switch (scroll_target) {
+            .start => 0,
+            .end => max_offset,
+        } else if (componentVirtualKeyboardScrollDelta(viewport.height, keyboard_event.keyboard, direct_target)) |delta|
+            std.math.clamp(current + delta, 0, max_offset)
+        else
+            return null;
+        if (next == current) return id;
+
+        try self.setComponentVirtualScrollValue(id, next);
+        try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
         return id;
     }
 
@@ -475,6 +504,32 @@ fn componentVirtualScrollTarget(route: []const canvas.WidgetEventRouteEntry) ?ca
             else => {},
         }
     }
+    return null;
+}
+
+const ComponentVirtualKeyboardScrollTarget = enum {
+    start,
+    end,
+};
+
+fn componentVirtualKeyboardScrollTarget(keyboard: canvas.WidgetKeyboardEvent, direct_target: bool) ?ComponentVirtualKeyboardScrollTarget {
+    if (!direct_target) return null;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "home")) return .start;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "end")) return .end;
+    return null;
+}
+
+fn componentVirtualKeyboardScrollDelta(viewport_extent: f32, keyboard: canvas.WidgetKeyboardEvent, direct_target: bool) ?f32 {
+    const line_step = @max(24, viewport_extent * 0.35);
+    const page_step = @max(line_step, viewport_extent * 0.85);
+    if (direct_target and (std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft") or std.ascii.eqlIgnoreCase(keyboard.key, "arrowup"))) {
+        return -line_step;
+    }
+    if (direct_target and (std.ascii.eqlIgnoreCase(keyboard.key, "arrowright") or std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown"))) {
+        return line_step;
+    }
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "pageup")) return -page_step;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "pagedown")) return page_step;
     return null;
 }
 
@@ -1372,6 +1427,18 @@ test "gpu components app registers component lab on first gpu frame" {
 
     const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Keyed slider #115") != null);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 130 increment");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    const keyed_scroll = componentSnapshotWidget(snapshot, 130).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 60), keyed_scroll.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), app.virtual_scroll.behavior, 0.001);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
+
+    const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 60") != null);
 }
 
 test "gpu components pointer clicks update retained controls" {

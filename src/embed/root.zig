@@ -624,6 +624,30 @@ pub fn zero_native_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: 
     return 1;
 }
 
+pub fn zero_native_app_widget_semantics_by_id(app: ?*anyopaque, id: u64, out: ?*MobileWidgetSemantics) c_int {
+    const self = mobileApp(app) orelse return 0;
+    const output = out orelse {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    };
+    if (id == 0) {
+        recordError(self, error.InvalidCommand);
+        return 0;
+    }
+    const semantics = self.embedded.widgetSemantics() catch |err| {
+        recordError(self, err);
+        return 0;
+    };
+    for (semantics, 0..) |node, index| {
+        if (node.id != id) continue;
+        output.* = mobileWidgetSemanticsFromNode(semantics, index);
+        self.last_error = null;
+        return 1;
+    }
+    recordError(self, error.InvalidCommand);
+    return 0;
+}
+
 pub fn zero_native_app_widget_text_geometry(app: ?*anyopaque, id: u64, out: ?*MobileWidgetTextGeometry) c_int {
     const self = mobileApp(app) orelse return 0;
     const output = out orelse {
@@ -902,14 +926,15 @@ fn mobileTextRangeEnd(range: ?canvas.TextRange) isize {
 }
 
 fn mobileWidgetSemanticsByIdForTest(app: ?*anyopaque, id: u64) !MobileWidgetSemantics {
-    const count = zero_native_app_widget_semantics_count(app);
-    var index: usize = 0;
-    while (index < count) : (index += 1) {
-        var node: MobileWidgetSemantics = .{};
-        try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, index, &node));
-        if (node.id == id) return node;
-    }
-    return error.TestUnexpectedResult;
+    var node: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_by_id(app, id, &node));
+    try std.testing.expectEqual(id, node.id);
+    return node;
+}
+
+fn expectNoMobileWidgetSemanticsByIdForTest(app: ?*anyopaque, id: u64) !void {
+    var node: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_by_id(app, id, &node));
 }
 
 fn nowNanoseconds() u64 {
@@ -1284,6 +1309,13 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
 
     try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_at(app, 99, &text_node));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+
+    try expectNoMobileWidgetSemanticsByIdForTest(app, 99);
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try expectNoMobileWidgetSemanticsByIdForTest(app, 0);
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_by_id(app, 2, null));
     try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
 }
 

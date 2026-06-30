@@ -1743,9 +1743,7 @@ pub const Runtime = struct {
         const index = self.findViewIndex(keyboard_event.window_id, keyboard_event.view_label) orelse return;
         if (self.views[index].kind != .gpu_surface) return;
         const target = keyboard_event.target orelse return;
-        const edit = canvasWidgetSearchFieldKeyboardTextEditEvent(target.kind, keyboard_event.keyboard) orelse
-            keyboard_event.keyboard.textEditEvent() orelse
-            return;
+        const edit = self.views[index].canvasWidgetKeyboardTextEdit(target, keyboard_event.keyboard) orelse return;
 
         const dirty = try self.views[index].applyCanvasWidgetTextEdit(target.id, edit) orelse return;
         if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
@@ -6563,6 +6561,20 @@ const RuntimeView = struct {
         return self.canvasWidgetDirtyBounds(index, self.widget_layout_nodes[index].frame);
     }
 
+    fn canvasWidgetKeyboardTextEdit(self: *const RuntimeView, target: canvas.WidgetFocusTarget, keyboard: canvas.WidgetKeyboardEvent) ?canvas.TextInputEvent {
+        const index = self.canvasWidgetNodeIndexById(target.id) orelse return null;
+        const widget = self.widget_layout_nodes[index].widget;
+        if ((widget.kind != .text_field and widget.kind != .search_field) or widget.state.disabled) return null;
+
+        if (keyboard.phase == .key_down and !keyboard.modifiers.shift and !keyboard.modifiers.hasNavigationModifier() and canvasWidgetEscapeKey(keyboard.key)) {
+            if (widget.text_composition != null) return .cancel_composition;
+            if (widget.kind == .search_field) return .clear;
+            return null;
+        }
+
+        return keyboard.textEditEvent();
+    }
+
     fn canEditCanvasWidgetText(self: *const RuntimeView, id: canvas.ObjectId) bool {
         const index = self.canvasWidgetNodeIndexById(id) orelse return false;
         const layout = self.widgetLayoutTree();
@@ -7545,11 +7557,8 @@ fn canvasWidgetTextEditEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?can
     };
 }
 
-fn canvasWidgetSearchFieldKeyboardTextEditEvent(kind: canvas.WidgetKind, keyboard: canvas.WidgetKeyboardEvent) ?canvas.TextInputEvent {
-    if (kind != .search_field or keyboard.phase != .key_down) return null;
-    if (keyboard.modifiers.shift or keyboard.modifiers.hasNavigationModifier()) return null;
-    if (std.ascii.eqlIgnoreCase(keyboard.key, "escape") or std.ascii.eqlIgnoreCase(keyboard.key, "esc")) return .clear;
-    return null;
+fn canvasWidgetEscapeKey(key: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(key, "escape") or std.ascii.eqlIgnoreCase(key, "esc");
 }
 
 fn gpuInputHasTextCommandModifier(input_event: GpuSurfaceInputEvent) bool {
@@ -13715,7 +13724,8 @@ test "runtime applies ime composition edits to canvas text fields" {
     harness.init(.{});
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
-    try harness.start(app_state.app());
+    const app = app_state.app();
+    try harness.start(app);
 
     _ = try harness.runtime.createView(.{
         .window_id = 1,
@@ -13809,7 +13819,14 @@ test "runtime applies ime composition edits to canvas text fields" {
     try std.testing.expectEqualDeep(canvas.TextRange.init(5, 10), retained.nodes[1].widget.text_composition.?);
     try std.testing.expectEqual(@as(u64, 5), harness.runtime.views[0].widget_revision);
 
-    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .cancel_composition);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 2;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "escape",
+    } });
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqualStrings("Caf\xc3\xa9", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
@@ -14359,13 +14376,37 @@ test "runtime applies text input to focused canvas search fields" {
     try std.testing.expect(saw_search_icon);
     try std.testing.expect(saw_inserted_text);
 
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_composition = .{ .text = "ing", .cursor = 3 } });
+    try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
+
+    const composing = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Queryxing", composing.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(9), composing.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(6, 9), composing.nodes[1].widget.text_composition.?);
+
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
         .key = "escape",
     } });
-    try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);
+    try std.testing.expectEqual(@as(u64, 4), harness.runtime.views[0].widget_revision);
+
+    const restored = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Queryx", restored.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(6), restored.nodes[1].widget.text_selection.?);
+    try std.testing.expect(restored.nodes[1].widget.text_composition == null);
+    const restored_snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqualStrings("Queryx", restored_snapshot.widgets[0].text_value);
+    try std.testing.expect(restored_snapshot.widgets[0].text_composition == null);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "escape",
+    } });
+    try std.testing.expectEqual(@as(u64, 5), harness.runtime.views[0].widget_revision);
 
     const cleared = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqualStrings("", cleared.nodes[1].widget.text);

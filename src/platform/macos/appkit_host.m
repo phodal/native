@@ -1491,11 +1491,12 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     NSUInteger byteLengthRequired = pixelWidth * pixelHeight * 4;
     NSMutableData *pixels = nil;
+    BOOL directRetainedDirtyUpdate = retainedLoadAction && hasScissor;
     if (clearLoadAction) {
         pixels = [NSMutableData dataWithLength:byteLengthRequired];
     } else {
         if (!self.canvasPacketPixels || self.canvasPacketPixelWidth != pixelWidth || self.canvasPacketPixelHeight != pixelHeight || self.canvasPacketPixels.length != byteLengthRequired) return 0;
-        pixels = [self.canvasPacketPixels mutableCopy];
+        pixels = directRetainedDirtyUpdate ? self.canvasPacketPixels : [self.canvasPacketPixels mutableCopy];
     }
     if (!pixels || pixels.length != byteLengthRequired) return -1;
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
@@ -1832,7 +1833,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 }
 
 - (void)scrollWheel:(NSEvent *)event {
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_SCROLL event:event button:0 deltaX:event.scrollingDeltaX deltaY:event.scrollingDeltaY];
+    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_SCROLL event:event button:0 deltaX:-event.scrollingDeltaX deltaY:-event.scrollingDeltaY];
 }
 
 - (void)keyDown:(NSEvent *)event {

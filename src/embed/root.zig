@@ -1109,6 +1109,51 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
         .frame = geometry.RectF.init(0, 0, 320, 180),
     });
 
+    const scroll_children = [_]canvas.Widget{
+        .{
+            .id = 5,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 0, 0, 28),
+            .text = "Top",
+        },
+        .{
+            .id = 6,
+            .kind = .button,
+            .frame = geometry.RectF.init(0, 88, 0, 28),
+            .text = "Bottom",
+        },
+    };
+    const list_children = [_]canvas.Widget{
+        .{
+            .id = 8,
+            .kind = .list_item,
+            .text = "Inbox",
+        },
+        .{
+            .id = 9,
+            .kind = .list_item,
+            .text = "Archive",
+        },
+    };
+    const grid_cells = [_]canvas.Widget{
+        .{
+            .id = 12,
+            .kind = .data_cell,
+            .text = "Project",
+            .layout = .{ .grow = 1 },
+        },
+        .{
+            .id = 13,
+            .kind = .data_cell,
+            .text = "Status",
+            .layout = .{ .grow = 1 },
+        },
+    };
+    const grid_rows = [_]canvas.Widget{.{
+        .id = 11,
+        .kind = .data_row,
+        .children = &grid_cells,
+    }};
     const children = [_]canvas.Widget{
         .{
             .id = 2,
@@ -1126,8 +1171,32 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
             .state = .{ .focused = true },
             .semantics = .{ .label = "Report title" },
         },
+        .{
+            .id = 4,
+            .kind = .scroll_view,
+            .frame = geometry.RectF.init(12, 96, 120, 48),
+            .value = 20,
+            .semantics = .{ .label = "Mobile scroll" },
+            .children = &scroll_children,
+        },
+        .{
+            .id = 7,
+            .kind = .list,
+            .frame = geometry.RectF.init(160, 16, 120, 68),
+            .text = "Mailboxes",
+            .layout = .{ .gap = 4 },
+            .children = &list_children,
+        },
+        .{
+            .id = 10,
+            .kind = .data_grid,
+            .frame = geometry.RectF.init(160, 96, 140, 40),
+            .text = "Deployments",
+            .layout = .{ .gap = 2 },
+            .children = &grid_rows,
+        },
     };
-    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{
         .id = 1,
         .kind = .stack,
@@ -1136,7 +1205,7 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     }, geometry.RectF.init(0, 0, 320, 180), &nodes);
     _ = try self.embedded.runtime.setCanvasWidgetLayout(1, mobile_gpu_surface_label, layout);
 
-    try std.testing.expectEqual(@as(usize, 3), zero_native_app_widget_semantics_count(app));
+    try std.testing.expectEqual(@as(usize, 13), zero_native_app_widget_semantics_count(app));
 
     var root_node: MobileWidgetSemantics = .{};
     try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 0, &root_node));
@@ -1169,6 +1238,38 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expect((text_node.flags & @intFromEnum(MobileWidgetFlag.focused)) != 0);
     try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_text)) != 0);
     try std.testing.expect((text_node.actions & @intFromEnum(MobileWidgetAction.set_selection)) != 0);
+
+    const scroll_node = try mobileWidgetSemanticsByIdForTest(app, 4);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.group), scroll_node.role);
+    try std.testing.expectEqual(@as(c_int, 1), scroll_node.has_scroll);
+    try std.testing.expectEqual(@as(f32, 20), scroll_node.scroll_offset);
+    try std.testing.expectEqual(@as(f32, 48), scroll_node.scroll_viewport_extent);
+    try std.testing.expectEqual(@as(f32, 116), scroll_node.scroll_content_extent);
+    try std.testing.expect((scroll_node.actions & @intFromEnum(MobileWidgetAction.increment)) != 0);
+    try std.testing.expect((scroll_node.actions & @intFromEnum(MobileWidgetAction.decrement)) != 0);
+
+    const list_node = try mobileWidgetSemanticsByIdForTest(app, 7);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.list), list_node.role);
+    try std.testing.expectEqualStrings("Mailboxes", list_node.label.?[0..list_node.label_len]);
+    const archive_node = try mobileWidgetSemanticsByIdForTest(app, 9);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.listitem), archive_node.role);
+    try std.testing.expectEqual(@as(u64, 7), archive_node.parent_id);
+    try std.testing.expectEqual(@as(isize, 1), archive_node.list_item_index);
+    try std.testing.expectEqual(@as(isize, 2), archive_node.list_item_count);
+    try std.testing.expect((archive_node.actions & @intFromEnum(MobileWidgetAction.select)) != 0);
+
+    const grid_node = try mobileWidgetSemanticsByIdForTest(app, 10);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.grid), grid_node.role);
+    try std.testing.expectEqual(@as(isize, 1), grid_node.grid_row_count);
+    try std.testing.expectEqual(@as(isize, 2), grid_node.grid_column_count);
+    const status_cell = try mobileWidgetSemanticsByIdForTest(app, 13);
+    try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.gridcell), status_cell.role);
+    try std.testing.expectEqual(@as(u64, 11), status_cell.parent_id);
+    try std.testing.expectEqual(@as(isize, 0), status_cell.grid_row_index);
+    try std.testing.expectEqual(@as(isize, 1), status_cell.grid_column_index);
+    try std.testing.expectEqual(@as(isize, 1), status_cell.grid_row_count);
+    try std.testing.expectEqual(@as(isize, 2), status_cell.grid_column_count);
+    try std.testing.expect((status_cell.actions & @intFromEnum(MobileWidgetAction.select)) != 0);
 
     var text_geometry: MobileWidgetTextGeometry = .{};
     try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_text_geometry(app, 3, &text_geometry));

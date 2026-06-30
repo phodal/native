@@ -3009,6 +3009,8 @@ pub const ColorTokens = struct {
     border: Color = Color.rgb8(228, 228, 231),
     accent: Color = Color.rgb8(47, 70, 220),
     accent_text: Color = Color.rgb8(250, 250, 250),
+    destructive: Color = Color.rgb8(220, 38, 38),
+    destructive_text: Color = Color.rgb8(250, 250, 250),
     focus_ring: Color = Color.rgb8(47, 70, 220),
     shadow: Color = Color.rgba8(0, 0, 0, 26),
     disabled: Color = Color.rgb8(244, 244, 245),
@@ -3041,6 +3043,8 @@ pub const ColorTokens = struct {
             .border = Color.rgb8(39, 39, 42),
             .accent = Color.rgb8(47, 70, 220),
             .accent_text = Color.rgb8(250, 250, 250),
+            .destructive = Color.rgb8(239, 68, 68),
+            .destructive_text = Color.rgb8(250, 250, 250),
             .focus_ring = Color.rgb8(96, 120, 255),
             .shadow = Color.rgba8(0, 0, 0, 150),
             .disabled = Color.rgb8(39, 39, 42),
@@ -3058,6 +3062,8 @@ pub const ColorTokens = struct {
             .border = Color.rgba8(0, 0, 0, 180),
             .accent = Color.rgb8(0, 0, 0),
             .accent_text = Color.rgb8(255, 255, 255),
+            .destructive = Color.rgb8(127, 29, 29),
+            .destructive_text = Color.rgb8(255, 255, 255),
             .focus_ring = Color.rgb8(0, 84, 197),
             .shadow = Color.rgba8(0, 0, 0, 96),
             .disabled = Color.rgb8(156, 163, 175),
@@ -3075,6 +3081,8 @@ pub const ColorTokens = struct {
             .border = Color.rgba8(255, 255, 255, 190),
             .accent = Color.rgb8(255, 255, 255),
             .accent_text = Color.rgb8(0, 0, 0),
+            .destructive = Color.rgb8(248, 113, 113),
+            .destructive_text = Color.rgb8(0, 0, 0),
             .focus_ring = Color.rgb8(147, 197, 253),
             .shadow = Color.rgba8(0, 0, 0, 180),
             .disabled = Color.rgb8(82, 82, 82),
@@ -3511,6 +3519,15 @@ pub const WidgetStyle = struct {
     stroke_width: ?f32 = null,
 };
 
+pub const WidgetVariant = enum {
+    default,
+    primary,
+    secondary,
+    outline,
+    ghost,
+    destructive,
+};
+
 pub const WidgetRole = enum {
     none,
     group,
@@ -3593,6 +3610,7 @@ pub const Widget = struct {
     layer: ?i32 = null,
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
+    variant: WidgetVariant = .default,
     style: WidgetStyle = .{},
     semantics: WidgetSemantics = .{},
     children: []const Widget = &.{},
@@ -6926,8 +6944,8 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .rect = widget.frame,
         .radius = radius,
         .stroke = .{
-            .fill = widgetBorderFill(widget, tokens.colors.border),
-            .width = widgetStrokeWidth(widget, tokens.stroke.regular),
+            .fill = buttonBorderFill(widget, tokens),
+            .width = buttonStrokeWidth(widget, tokens),
         },
     });
     if (widget.state.focused) {
@@ -6965,8 +6983,8 @@ fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .rect = widget.frame,
         .radius = radius,
         .stroke = .{
-            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, tokens.colors.border),
-            .width = if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
+            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else buttonBorderFill(widget, tokens),
+            .width = if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         },
     });
     if (widget.text.len > 0) {
@@ -7731,20 +7749,61 @@ fn emitWidgetTextCaret(
 
 fn buttonFill(widget: Widget, tokens: DesignTokens) Fill {
     if (widget.state.disabled) return colorFill(tokens.colors.disabled);
-    if (widget.state.pressed or widget.state.selected) return widgetAccentFill(widget, tokens.colors.accent);
-    if (widget.state.hovered) return widgetBackgroundFill(widget, tokens.colors.surface_subtle);
-    return widgetBackgroundFill(widget, tokens.colors.surface);
+    const active = widget.state.pressed or widget.state.selected;
+    return switch (widget.variant) {
+        .default => if (active)
+            widgetAccentFill(widget, tokens.colors.accent)
+        else if (widget.state.hovered)
+            widgetBackgroundFill(widget, tokens.colors.surface_subtle)
+        else
+            widgetBackgroundFill(widget, tokens.colors.surface),
+        .primary => widgetAccentFill(widget, tokens.colors.accent),
+        .secondary => widgetBackgroundFill(widget, if (active or widget.state.hovered) tokens.colors.surface_pressed else tokens.colors.surface_subtle),
+        .outline => widgetBackgroundFill(widget, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()),
+        .ghost => widgetBackgroundFill(widget, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()),
+        .destructive => widgetAccentFill(widget, tokens.colors.destructive),
+    };
 }
 
 fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
     if (widget.state.disabled) return tokens.colors.text_muted;
-    if (widget.state.pressed or widget.state.selected) return widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text);
-    return widgetForegroundColor(widget, tokens, tokens.colors.text);
+    const active = widget.state.pressed or widget.state.selected;
+    return switch (widget.variant) {
+        .default => if (active)
+            widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text)
+        else
+            widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .primary => widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text),
+        .secondary, .outline, .ghost => widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .destructive => widgetAccentForegroundColor(widget, tokens, tokens.colors.destructive_text),
+    };
+}
+
+fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
+    if (widget.style.border) |border| return colorFill(border);
+    return switch (widget.variant) {
+        .primary => widgetAccentFill(widget, tokens.colors.accent),
+        .destructive => widgetAccentFill(widget, tokens.colors.destructive),
+        .ghost => colorFill(transparentColor()),
+        else => colorFill(tokens.colors.border),
+    };
+}
+
+fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
+    if (widget.style.stroke_width) |width| return nonNegative(width);
+    return switch (widget.variant) {
+        .ghost => 0,
+        else => tokens.stroke.regular,
+    };
 }
 
 fn listItemFillColor(tokens: DesignTokens, state: WidgetState) Color {
     if (state.selected or state.pressed) return tokens.colors.surface_pressed;
     if (state.hovered) return tokens.colors.surface_subtle;
+    return transparentColor();
+}
+
+fn transparentColor() Color {
     return Color.rgba(0, 0, 0, 0);
 }
 
@@ -9087,6 +9146,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         previous.widget.backdrop_blur != next.widget.backdrop_blur or
         previous.widget.backdrop_blur_token != next.widget.backdrop_blur_token or
         previous.widget.text_alignment != next.widget.text_alignment or
+        previous.widget.variant != next.widget.variant or
         !widgetStylesEqual(previous.widget.style, next.widget.style);
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const visibility_dirty = previous.widget.semantics.hidden != next.widget.semantics.hidden;
@@ -9282,7 +9342,8 @@ fn widgetFocusPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF 
 fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
         .panel, .popover, .menu_surface => widgetStrokeWidth(widget, tokens.stroke.hairline),
-        .button, .icon_button, .text_field, .search_field, .segmented_control => if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
+        .button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
+        .text_field, .search_field, .segmented_control => if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         .data_cell => if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.hairline),
         .slider => if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         .list_item, .menu_item, .checkbox, .toggle => if (widget.state.focused) tokens.stroke.focus else 0,
@@ -14979,6 +15040,35 @@ test "widget layout diff marks style changes as paint dirty" {
     try expectRect(geometry.RectF.init(9, 9, 102, 32), invalidations[0].dirty_bounds);
 }
 
+test "widget layout diff marks variant changes as paint dirty" {
+    const previous_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+    }};
+    const variant_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+        .variant = .primary,
+    }};
+
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var variant_nodes: [2]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &previous_child }, geometry.RectF.init(0, 0, 140, 80), &previous_nodes);
+    const variant = try layoutWidgetTree(.{ .kind = .stack, .children = &variant_child }, geometry.RectF.init(0, 0, 140, 80), &variant_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, variant, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expect(!invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expect(!invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(10, 10, 100, 30), invalidations[0].dirty_bounds);
+}
+
 test "widget layout diff marks grid column changes as layout dirty" {
     const children = [_]Widget{
         .{ .id = 2, .kind = .text, .text = "One" },
@@ -15679,6 +15769,64 @@ test "widget emitter applies button state tokens" {
     }
     switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget emitter applies button variants" {
+    const tokens = DesignTokens{
+        .colors = .{
+            .surface = Color.rgb8(250, 250, 250),
+            .surface_subtle = Color.rgb8(242, 244, 246),
+            .border = Color.rgb8(200, 205, 210),
+            .text = Color.rgb8(20, 24, 28),
+            .accent = Color.rgb8(30, 80, 210),
+            .accent_text = Color.rgb8(255, 255, 255),
+            .destructive = Color.rgb8(210, 40, 40),
+            .destructive_text = Color.rgb8(255, 255, 255),
+        },
+    };
+
+    var commands: [15]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, .{ .id = 20, .kind = .button, .frame = geometry.RectF.init(0, 0, 120, 32), .text = "Primary", .variant = .primary }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 21, .kind = .button, .frame = geometry.RectF.init(0, 40, 120, 32), .text = "Secondary", .variant = .secondary }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 22, .kind = .button, .frame = geometry.RectF.init(0, 80, 120, 32), .text = "Outline", .variant = .outline }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 23, .kind = .button, .frame = geometry.RectF.init(0, 120, 120, 32), .text = "Ghost", .variant = .ghost }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 24, .kind = .button, .frame = geometry.RectF.init(0, 160, 120, 32), .text = "Delete", .variant = .destructive }, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 15), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.accent, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.surface_subtle, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[6]) {
+        .fill_rounded_rect => |fill| try expectFillColor(transparentColor(), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[9]) {
+        .fill_rounded_rect => |fill| try expectFillColor(transparentColor(), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[10]) {
+        .stroke_rect => |stroke| try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[12]) {
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.destructive, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[14]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.destructive_text, text.color),
         else => return error.TestUnexpectedResult,
     }
 }

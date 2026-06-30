@@ -783,7 +783,7 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
     };
     const top_widgets = [_]canvas.Widget{
         .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
-        .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
+        .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .variant = .primary, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
         .{ .id = 105, .kind = .icon_button, .frame = rect(856, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
         .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 236), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
         .{ .id = 120, .kind = .list, .frame = rect(456, 124, 170, 56), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
@@ -1297,7 +1297,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 11634933972302081259), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 15752322175100837827), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

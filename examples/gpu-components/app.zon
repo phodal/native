@@ -14,6 +14,7 @@
                 .title = "zero-native GPU Components",
                 .width = 1180,
                 .height = 760,
+                .restore_state = false,
                 .restore_policy = "center_on_primary",
                 .views = .{
                     .{ .label = "toolbar", .kind = "toolbar", .edge = "top", .height = 52, .role = "Toolbar" },

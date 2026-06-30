@@ -78,6 +78,7 @@ const shell_windows = [_]zero_native.ShellWindow{.{
     .title = "zero-native GPU Components",
     .width = window_width,
     .height = window_height,
+    .restore_state = false,
     .views = &shell_views,
 }};
 const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
@@ -145,7 +146,9 @@ const GpuComponentsApp = struct {
                 }
             },
             .gpu_surface_frame => |frame_event| try self.handleGpuFrame(runtime, frame_event),
-            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
+            .canvas_widget_pointer => |pointer_event| try self.handleWidgetPointer(runtime, pointer_event),
+            .canvas_widget_keyboard => |keyboard_event| try self.handleWidgetKeyboard(runtime, keyboard_event),
+            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
         }
     }
 
@@ -171,7 +174,61 @@ const GpuComponentsApp = struct {
         }
 
         _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
-        try self.reportFrameStatus(runtime, frame_event);
+        const current_frame = try runtime.gpuSurfaceFrame(frame_event.window_id, canvas_label);
+        try self.reportFrameStatus(runtime, gpuFrameEvent(current_frame));
+    }
+
+    fn handleWidgetPointer(self: *@This(), runtime: *zero_native.Runtime, pointer_event: zero_native.runtime.CanvasWidgetPointerEvent) anyerror!void {
+        if (!std.mem.eql(u8, pointer_event.view_label, canvas_label)) return;
+        const target = pointer_event.target orelse return;
+        const action = switch (pointer_event.pointer.phase) {
+            .up => "Clicked",
+            .wheel => "Scrolled",
+            else => return,
+        };
+        try self.reportWidgetInteraction(runtime, pointer_event.window_id, action, target.id);
+    }
+
+    fn handleWidgetKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
+        if (!std.mem.eql(u8, keyboard_event.view_label, canvas_label)) return;
+        if (keyboard_event.keyboard.phase != .key_down) return;
+        const target = keyboard_event.target orelse return;
+        try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", target.id);
+    }
+
+    fn reportWidgetInteraction(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
+        const layout = try runtime.canvasWidgetLayout(window_id, canvas_label);
+        const node = layout.findById(id) orelse return;
+        const widget = node.widget;
+        var status_buffer: [192]u8 = undefined;
+        const status = switch (widget.kind) {
+            .checkbox, .toggle => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: {s}.",
+                .{ action, @tagName(widget.kind), id, if (widget.state.selected or widget.value >= 0.5) "on" else "off" },
+            ),
+            .slider, .progress => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: value {d}.",
+                .{ action, @tagName(widget.kind), id, widget.value },
+            ),
+            .scroll_view, .list, .data_grid => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: offset {d}.",
+                .{ action, @tagName(widget.kind), id, widget.value },
+            ),
+            .text_field, .search_field => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: {d} bytes.",
+                .{ action, @tagName(widget.kind), id, widget.text.len },
+            ),
+            else => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}{s}.",
+                .{ action, @tagName(widget.kind), id, if (widget.state.selected) ": selected" else "" },
+            ),
+        };
+        try self.updateStatus(runtime, window_id, status);
     }
 
     fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
@@ -304,7 +361,7 @@ fn buildComponentsDisplayListFromWidgets(builder: *canvas.Builder) canvas.Error!
 
 fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
     try builder.fillRect(.{ .id = 1, .rect = rect(0, 0, canvas_width, canvas_height), .fill = .{ .linear_gradient = .{ .start = pt(0, 0), .end = pt(canvas_width, canvas_height), .stops = &bg_stops } } });
-    try builder.shadow(.{ .id = 2, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .offset = .{ .dx = 0, .dy = 22 }, .blur = 46, .spread = -16, .color = rgba(20, 28, 43, 34) });
+    try builder.shadow(.{ .id = 2, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .offset = .{ .dx = 0, .dy = 16 }, .blur = 20, .spread = -12, .color = rgba(20, 28, 43, 30) });
     try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = color(255, 255, 255) } });
     try layout.emitDisplayList(builder, componentTokens());
 }
@@ -338,8 +395,8 @@ fn componentTokens() canvas.DesignTokens {
             .xl = 18,
         },
         .shadow = .{
-            .sm = .{ .y = 8, .blur = 22, .spread = -12 },
-            .md = .{ .y = 16, .blur = 34, .spread = -16 },
+            .sm = .{ .y = 5, .blur = 12, .spread = -8 },
+            .md = .{ .y = 9, .blur = 18, .spread = -12 },
         },
         .motion = .{ .normal_ms = 180, .slow_ms = 520, .easing = .emphasized },
         .scroll = .{ .wheel_multiplier = 1.1, .wheel_velocity_scale = 72, .deceleration_per_second = 0.88, .stop_velocity = 4 },
@@ -422,7 +479,7 @@ fn buildComponentsWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!ca
         .{ .id = 106, .kind = .column, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
         .{ .id = 120, .kind = .list, .frame = rect(424, 142, 152, 28), .layout = .{ .gap = 8, .virtualized = true, .virtual_item_extent = 28 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
         .{ .id = 130, .kind = .scroll_view, .frame = rect(604, 142, 164, 28), .value = 36, .layout = .{ .gap = 8, .virtualized = true, .virtual_item_extent = 28 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
-        .{ .id = 140, .kind = .popover, .frame = rect(424, 286, 174, 88), .backdrop_blur = 12, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
+        .{ .id = 140, .kind = .popover, .frame = rect(424, 286, 174, 88), .backdrop_blur = 5, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
         .{ .id = 149, .kind = .column, .frame = rect(64, 408, 344, 174), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
     return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, canvas_width, canvas_height), nodes);
@@ -650,6 +707,7 @@ pub fn main(init: std.process.Init) !void {
         .bundle_id = "dev.zero_native.gpu_components",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
+        .restore_state = false,
         .js_window_api = false,
         .security = .{
             .permissions = &app_permissions,
@@ -848,6 +906,11 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 972), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 676), harness.null_platform.gpu_surface_present_height);
     try std.testing.expectEqual(@as(f32, 1), harness.null_platform.gpu_surface_present_scale_factor);
+    const presented_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!presented_frame.canvas_frame_requires_render);
+    try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(zero_native.platform.CanvasFrameProfileRisk.idle, presented_frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(@as(usize, 0), presented_frame.canvas_frame_profile_work_units);
 
     try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
         .label = canvas_label,
@@ -1009,7 +1072,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
 
     const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Component") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Keyed slider #115") != null);
 }
 
 test "gpu components pointer clicks update retained controls" {
@@ -1043,12 +1106,29 @@ test "gpu components pointer clicks update retained controls" {
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(!componentSnapshotWidget(snapshot, 113).?.selected);
     try std.testing.expect(harness.runtime.invalidated);
+    var status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked checkbox #113: off.") != null);
+
+    const present_count = harness.null_platform.gpu_surface_present_count;
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 2,
+        .timestamp_ns = 1_016_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(present_count + 1, harness.null_platform.gpu_surface_present_count);
+    const clean_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!clean_frame.canvas_frame_requires_render);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 114);
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(!componentSnapshotWidget(snapshot, 114).?.selected);
     try std.testing.expectEqual(@as(?f32, 0), componentSnapshotWidget(snapshot, 114).?.value);
+    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked toggle #114: off.") != null);
 
     const slider = (try harness.runtime.canvasWidgetLayout(1, canvas_label)).findById(115).?;
     const slider_point = geometry.PointF.init(slider.frame.x + slider.frame.width * 0.25, slider.frame.center().y);
@@ -1071,6 +1151,8 @@ test "gpu components pointer clicks update retained controls" {
     } });
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
+    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 156);

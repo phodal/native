@@ -749,6 +749,9 @@ pub const Runtime = struct {
             .scale_factor = canvas_frame.scale,
             .rgba8 = surface.pixels,
         });
+        if (self.findViewIndex(window_id, label)) |index| {
+            self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
+        }
     }
 
     pub fn presentNextCanvasFramePixels(
@@ -5652,6 +5655,19 @@ const RuntimeView = struct {
         self.canvas_frame_profile_dirty_ratio = profile.dirty_ratio;
     }
 
+    fn recordCanvasFramePresentationComplete(self: *RuntimeView, frame: canvas.CanvasFrame) void {
+        if (!self.presented_canvas_valid or self.presented_canvas_revision != self.canvas_revision) return;
+        self.recordCanvasFrame(.{
+            .frame_index = frame.frame_index,
+            .timestamp_ns = frame.timestamp_ns,
+            .surface_size = frame.surface_size,
+            .scale = frame.scale,
+            .display_list = self.canvasDisplayList(),
+            .changes = &.{},
+            .budget = frame.budget,
+        });
+    }
+
     fn refreshCanvasFrameBudgetStatus(self: *RuntimeView) void {
         self.canvas_frame_budget_status = self.canvas_frame_budget.status(.{
             .command_count = self.canvas_command_count,
@@ -10024,6 +10040,12 @@ test "runtime presents next canvas frame pixels" {
     try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_height);
     try std.testing.expectEqual(@as(usize, 8 * 8 * 4), harness.null_platform.gpu_surface_present_byte_len);
+    const presented_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expect(!presented_frame.canvas_frame_requires_render);
+    try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
+    try std.testing.expect(presented_frame.canvas_frame_dirty_bounds == null);
+    try std.testing.expectEqual(@as(usize, 0), presented_frame.canvas_frame_profile_work_units);
+    try std.testing.expectEqual(platform.CanvasFrameProfileRisk.idle, presented_frame.canvas_frame_profile_risk);
 }
 
 test "runtime next canvas frame presents empty canvas once" {

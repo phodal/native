@@ -151,6 +151,7 @@ const shell_windows = [_]zero_native.ShellWindow{.{
     .title = "zero-native GPU Dashboard",
     .width = window_width,
     .height = window_height,
+    .restore_state = false,
     .views = &shell_views,
 }};
 const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
@@ -218,7 +219,9 @@ const GpuDashboardApp = struct {
                 }
             },
             .gpu_surface_frame => |frame_event| try self.handleGpuFrame(runtime, frame_event),
-            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_pointer, .canvas_widget_keyboard, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
+            .canvas_widget_pointer => |pointer_event| try self.handleWidgetPointer(runtime, pointer_event),
+            .canvas_widget_keyboard => |keyboard_event| try self.handleWidgetKeyboard(runtime, keyboard_event),
+            .gpu_surface_resized, .gpu_surface_input, .shortcut, .files_dropped, .canvas_widget_file_drop, .canvas_widget_drag, .lifecycle => {},
         }
     }
 
@@ -242,7 +245,61 @@ const GpuDashboardApp = struct {
         }
 
         _ = try self.presentDashboardCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
-        try self.reportFrameStatus(runtime, frame_event);
+        const current_frame = try runtime.gpuSurfaceFrame(frame_event.window_id, "dashboard-canvas");
+        try self.reportFrameStatus(runtime, gpuFrameEvent(current_frame));
+    }
+
+    fn handleWidgetPointer(self: *@This(), runtime: *zero_native.Runtime, pointer_event: zero_native.runtime.CanvasWidgetPointerEvent) anyerror!void {
+        if (!std.mem.eql(u8, pointer_event.view_label, "dashboard-canvas")) return;
+        const target = pointer_event.target orelse return;
+        const action = switch (pointer_event.pointer.phase) {
+            .up => "Clicked",
+            .wheel => "Scrolled",
+            else => return,
+        };
+        try self.reportWidgetInteraction(runtime, pointer_event.window_id, action, target.id);
+    }
+
+    fn handleWidgetKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
+        if (!std.mem.eql(u8, keyboard_event.view_label, "dashboard-canvas")) return;
+        if (keyboard_event.keyboard.phase != .key_down) return;
+        const target = keyboard_event.target orelse return;
+        try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", target.id);
+    }
+
+    fn reportWidgetInteraction(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
+        const layout = try runtime.canvasWidgetLayout(window_id, "dashboard-canvas");
+        const node = layout.findById(id) orelse return;
+        const widget = node.widget;
+        var status_buffer: [192]u8 = undefined;
+        const status = switch (widget.kind) {
+            .checkbox, .toggle => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: {s}.",
+                .{ action, @tagName(widget.kind), id, if (widget.state.selected or widget.value >= 0.5) "on" else "off" },
+            ),
+            .slider, .progress => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: value {d}.",
+                .{ action, @tagName(widget.kind), id, widget.value },
+            ),
+            .scroll_view, .list, .data_grid => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: offset {d}.",
+                .{ action, @tagName(widget.kind), id, widget.value },
+            ),
+            .text_field, .search_field => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}: {d} bytes.",
+                .{ action, @tagName(widget.kind), id, widget.text.len },
+            ),
+            else => try std.fmt.bufPrint(
+                &status_buffer,
+                "{s} {s} #{d}{s}.",
+                .{ action, @tagName(widget.kind), id, if (widget.state.selected) ": selected" else "" },
+            ),
+        };
+        try self.updateStatus(runtime, window_id, status);
     }
 
     fn reportFrameStatus(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
@@ -410,7 +467,7 @@ fn buildDashboardDisplayListFromWidgets(builder: *canvas.Builder) canvas.Error!v
 
 fn buildDashboardDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
     try builder.fillRect(.{ .id = 1, .rect = rect(0, 0, 720, 520), .fill = .{ .linear_gradient = .{ .start = pt(0, 0), .end = pt(720, 520), .stops = &bg_stops } } });
-    try builder.shadow(.{ .id = 2, .rect = rect(24, 24, 672, 472), .radius = canvas.Radius.all(22), .offset = .{ .dx = 0, .dy = 24 }, .blur = 48, .spread = -12, .color = canvas.Color.rgba8(16, 24, 40, 42) });
+    try builder.shadow(.{ .id = 2, .rect = rect(24, 24, 672, 472), .radius = canvas.Radius.all(22), .offset = .{ .dx = 0, .dy = 16 }, .blur = 22, .spread = -10, .color = canvas.Color.rgba8(16, 24, 40, 34) });
     try builder.fillRoundedRect(.{ .id = 3, .rect = rect(24, 24, 672, 472), .radius = canvas.Radius.all(22), .fill = .{ .color = color(255, 255, 255) } });
     try builder.fillRoundedRect(.{ .id = 4, .rect = rect(38, 38, 158, 444), .radius = canvas.Radius.all(16), .fill = .{ .linear_gradient = .{ .start = pt(38, 38), .end = pt(196, 482), .stops = &hero_stops } } });
 
@@ -446,8 +503,8 @@ fn dashboardWidgetTokens() canvas.DesignTokens {
             .xl = 18,
         },
         .shadow = .{
-            .sm = .{ .y = 10, .blur = 26, .spread = -12 },
-            .md = .{ .y = 18, .blur = 42, .spread = -18 },
+            .sm = .{ .y = 6, .blur = 14, .spread = -8 },
+            .md = .{ .y = 10, .blur = 20, .spread = -12 },
         },
         .motion = .{
             .slow_ms = 900,
@@ -855,6 +912,7 @@ pub fn main(init: std.process.Init) !void {
         .bundle_id = "dev.zero_native.gpu_dashboard",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
+        .restore_state = false,
         .js_window_api = false,
         .security = .{
             .permissions = &app_permissions,
@@ -955,7 +1013,7 @@ test "gpu dashboard display list renders through the reference surface" {
     const surface = try canvas.ReferenceRenderSurface.initWithScratch(720, 520, pixels, scratch);
     try surface.renderPass(frame.renderPass(), color(0, 0, 0));
 
-    try std.testing.expectEqual(@as(u64, 17535322711022946563), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 2271999717540283277), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(8, 8));
     try expectVisiblePixel(surface.pixelRgba8(64, 64));
     try expectVisiblePixel(surface.pixelRgba8(240, 140));
@@ -1300,19 +1358,22 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "risk") != null);
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "work units") != null);
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "dirty") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "idle risk") != null);
 
     const frame = try harness.runtime.gpuSurfaceFrame(1, "dashboard-canvas");
     try std.testing.expect(frame.canvas_revision > 1);
     try std.testing.expectEqual(@as(usize, 64), frame.canvas_command_count);
-    try std.testing.expect(frame.canvas_frame_requires_render);
+    try std.testing.expect(!frame.canvas_frame_requires_render);
     try std.testing.expect(!frame.canvas_frame_full_repaint);
-    try std.testing.expect(frame.canvas_frame_change_count > 0);
-    try std.testing.expect(frame.canvas_frame_dirty_bounds != null);
-    try std.testing.expect(frame.canvas_frame_batch_count >= 8);
-    try std.testing.expect(frame.canvas_frame_encoder_command_count >= frame.canvas_frame_batch_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_change_count);
+    try std.testing.expect(frame.canvas_frame_dirty_bounds == null);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_batch_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_encoder_command_count);
     try std.testing.expectEqual(frame.canvas_frame_batch_count, frame.canvas_frame_encoder_draw_batch_count);
-    try std.testing.expect(frame.canvas_frame_pipeline_count >= 4);
-    try std.testing.expect(frame.canvas_frame_pipeline_retain_count >= 4);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_pipeline_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_pipeline_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_profile_work_units);
+    try std.testing.expectEqual(zero_native.platform.CanvasFrameProfileRisk.idle, frame.canvas_frame_profile_risk);
 }
 
 test "gpu dashboard frame event adapter preserves renderer diagnostics" {

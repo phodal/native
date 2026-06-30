@@ -26,6 +26,7 @@ pub const RunOptions = struct {
     bundle_id: []const u8,
     icon_path: []const u8 = "assets/icon.icns",
     default_frame: zero_native.geometry.RectF = zero_native.geometry.RectF.init(0, 0, 1100, 760),
+    restore_state: bool = true,
     bridge: ?zero_native.BridgeDispatcher = null,
     builtin_bridge: zero_native.BridgePolicy = .{},
     js_window_api: bool = false,
@@ -44,6 +45,7 @@ pub const RunOptions = struct {
                 .label = "main",
                 .title = self.window_title,
                 .default_frame = self.default_frame,
+                .restore_state = self.restore_state,
             },
         };
         const windows = manifestWindowOptions(buffers);

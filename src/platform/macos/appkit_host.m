@@ -1021,7 +1021,7 @@ static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     };
     NSDictionary *layout = ZeroNativePacketDictionary(text[@"layout"]);
     if (!layout) {
-        [value drawAtPoint:origin withAttributes:baseAttributes];
+        [value drawAtPoint:NSMakePoint(origin.x, origin.y - size) withAttributes:baseAttributes];
         return YES;
     }
 

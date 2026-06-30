@@ -42,7 +42,7 @@ const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
 
 const ComponentVirtualScroll = struct {
     nav: f32 = 0,
-    behavior: f32 = 36,
+    behavior: f32 = 28,
     data: f32 = 28,
 };
 
@@ -263,7 +263,7 @@ const GpuComponentsApp = struct {
         const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
         const current = self.componentVirtualScrollValue(id) orelse return null;
         const delta = pointer_event.pointer.delta.dy * componentTokens().scroll.wheel_multiplier;
-        const next = std.math.clamp(@max(0, current + delta), 0, max_offset);
+        const next = snapComponentVirtualScrollOffset(node.widget, current, current + delta, max_offset);
         if (next == current) return id;
 
         try self.setComponentVirtualScrollValue(id, next);
@@ -285,13 +285,14 @@ const GpuComponentsApp = struct {
         const direct_target = target.id == id;
         const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
         const current = self.componentVirtualScrollValue(id) orelse return null;
-        const next = if (componentVirtualKeyboardScrollTarget(keyboard_event.keyboard, direct_target)) |scroll_target| switch (scroll_target) {
+        const raw_next = if (componentVirtualKeyboardScrollTarget(keyboard_event.keyboard, direct_target)) |scroll_target| switch (scroll_target) {
             .start => 0,
             .end => max_offset,
         } else if (componentVirtualKeyboardScrollDelta(viewport.height, keyboard_event.keyboard, direct_target)) |delta|
             std.math.clamp(current + delta, 0, max_offset)
         else
             return null;
+        const next = snapComponentVirtualScrollOffset(node.widget, current, raw_next, max_offset);
         if (next == current) return id;
 
         try self.setComponentVirtualScrollValue(id, next);
@@ -522,6 +523,27 @@ fn componentVirtualKeyboardScrollDelta(viewport_extent: f32, keyboard: canvas.Wi
     return null;
 }
 
+fn snapComponentVirtualScrollOffset(widget: canvas.Widget, current: f32, raw_next: f32, max_offset: f32) f32 {
+    const clamped = std.math.clamp(@max(0, raw_next), 0, max_offset);
+    if (clamped == current or max_offset <= 0) return clamped;
+    if (!std.math.isFinite(clamped)) return current;
+
+    const step = componentVirtualScrollStep(widget) orelse return clamped;
+    const scaled = clamped / step;
+    const snapped = if (clamped > current)
+        @ceil(scaled) * step
+    else
+        @floor(scaled) * step;
+    return std.math.clamp(snapped, 0, max_offset);
+}
+
+fn componentVirtualScrollStep(widget: canvas.Widget) ?f32 {
+    if (!widget.layout.virtualized) return null;
+    const item_extent = if (widget.layout.virtual_item_extent > 0) widget.layout.virtual_item_extent else return null;
+    const step = item_extent + @max(0, widget.layout.gap);
+    return if (step > 0) step else null;
+}
+
 fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
     try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = color(255, 255, 255) } });
     try layout.emitDisplayList(builder, componentTokens());
@@ -637,17 +659,18 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 166, .kind = .data_row, .frame = rect(0, 0, 0, 28), .children = &row4_cells },
     };
     const data_panel_children = [_]canvas.Widget{
-        .{ .id = 150, .kind = .data_grid, .frame = rect(16, 48, 304, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .gap = 2, .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
-        .{ .id = 160, .kind = .tooltip, .frame = rect(22, 124, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
+        .{ .id = 150, .kind = .data_grid, .frame = rect(16, 48, 304, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
+        .{ .id = 160, .kind = .tooltip, .frame = rect(22, 158, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
     };
     const top_widgets = [_]canvas.Widget{
+        .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
         .{ .id = 104, .kind = .button, .frame = rect(574, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
         .{ .id = 105, .kind = .icon_button, .frame = rect(706, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
-        .{ .id = 106, .kind = .column, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
-        .{ .id = 120, .kind = .list, .frame = rect(424, 142, 152, 28), .value = virtual_scroll.nav, .layout = .{ .gap = 8, .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
-        .{ .id = 130, .kind = .scroll_view, .frame = rect(604, 142, 164, 28), .value = virtual_scroll.behavior, .layout = .{ .gap = 8, .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
+        .{ .id = 106, .kind = .stack, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
+        .{ .id = 120, .kind = .list, .frame = rect(424, 142, 152, 28), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
+        .{ .id = 130, .kind = .scroll_view, .frame = rect(604, 142, 164, 28), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
         .{ .id = 140, .kind = .popover, .frame = rect(424, 286, 174, 88), .backdrop_blur = 5, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
-        .{ .id = 149, .kind = .column, .frame = rect(64, 408, 344, 174), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
+        .{ .id = 149, .kind = .stack, .frame = rect(64, 396, 344, 204), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
     return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, canvas_width, canvas_height), nodes);
 }
@@ -1095,7 +1118,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 13212317062719302072), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 5665255265391567107), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1281,7 +1304,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expect(widget_layout.nodeCount() >= 26);
     try std.testing.expectEqualStrings("Input controls", widget_layout.findById(106).?.widget.semantics.label);
-    try std.testing.expect(widget_layout.findById(151) != null);
+    try std.testing.expect(widget_layout.findById(151) == null);
     try std.testing.expect(widget_layout.findById(152) != null);
 
     var snapshot = harness.runtime.automationSnapshot("Components");
@@ -1460,13 +1483,13 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 130 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_scroll = componentSnapshotWidget(snapshot, 130).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 64), keyed_scroll.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 64), app.virtual_scroll.behavior, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_scroll.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.behavior, 0.001);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
 
     const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 56") != null);
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 120 increment");
@@ -1576,31 +1599,31 @@ test "gpu components pointer clicks update retained controls" {
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 120, 20);
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 22), scrolled_layout.findById(120).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 28), scrolled_layout.findById(120).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled list #120: offset 22") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled list #120: offset 28") != null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, 20);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 58), scrolled_layout.findById(130).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), scrolled_layout.findById(130).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled scroll_view #130: offset 58") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled scroll_view #130: offset 56") != null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 150, 20);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 50), scrolled_layout.findById(150).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), scrolled_layout.findById(150).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled data_grid #150: offset 50") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled data_grid #150: offset 56") != null);
 
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, 156);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 158);
     snapshot = harness.runtime.automationSnapshot("Components");
-    try std.testing.expect(componentSnapshotWidget(snapshot, 156).?.selected);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 158).?.selected);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 142);
@@ -1617,7 +1640,7 @@ test "gpu components pointer clicks update retained controls" {
     try std.testing.expect(componentSnapshotWidget(snapshot, 104).?.focused);
     const refreshed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expectEqual(@as(f32, 0), refreshed_layout.findById(120).?.widget.value);
-    try std.testing.expectEqual(@as(f32, 36), refreshed_layout.findById(130).?.widget.value);
+    try std.testing.expectEqual(@as(f32, 28), refreshed_layout.findById(130).?.widget.value);
     try std.testing.expectEqual(@as(f32, 28), refreshed_layout.findById(150).?.widget.value);
 }
 

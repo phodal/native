@@ -922,6 +922,27 @@ pub fn build(b: *std.Build) void {
         \\done
         \\case "$snapshot" in *'Keyed slider #115: value '*) ;; *) echo "slider automation increment did not update status" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#115 role=slider'*'value=0.62'*) echo "slider automation increment did not change value" >&2; exit 1 ;; *'widget @w1/components-canvas#115 role=slider'*) ;; *) echo "slider widget was missing after increment" >&2; exit 1 ;; esac
+        \\gpu_frame_before="$(gpu_frame_from_snapshot)"
+        \\case "$gpu_frame_before" in ''|*[!0-9]*) gpu_frame_before=0 ;; esac
+        \\gpu_frame_after="$gpu_frame_before"
+        \\"$cli" automate widget-drag components-canvas 115 0.25 0.82 >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
+        \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
+        \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ]; then
+        \\    case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*)
+        \\      case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
+        \\      ;;
+        \\    esac
+        \\  fi
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "slider automation drag did not request a GPU frame" >&2; exit 1; fi
+        \\case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*) ;; *) echo "slider automation drag did not update retained slider state" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "slider automation drag did not present an incremental GPU packet without pipeline uploads" >&2; exit 1 ;; esac
         \\"$cli" automate widget-action components-canvas 156 press >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do

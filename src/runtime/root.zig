@@ -2773,6 +2773,9 @@ pub const Runtime = struct {
             .widget_click => {
                 try self.dispatchAutomationWidgetClick(app, try parseAutomationWidgetTarget(command.value));
             },
+            .widget_drag => {
+                try self.dispatchAutomationWidgetPointerDrag(app, try parseAutomationWidgetPointerDrag(command.value));
+            },
             .widget_wheel => {
                 try self.dispatchAutomationWidgetWheel(app, try parseAutomationWidgetWheel(command.value));
             },
@@ -2870,6 +2873,54 @@ pub const Runtime = struct {
             .x = point.x,
             .y = point.y,
             .delta_y = wheel.delta_y,
+        } });
+    }
+
+    fn dispatchAutomationWidgetPointerDrag(self: *Runtime, app: App, drag: AutomationWidgetPointerDrag) anyerror!void {
+        const view_index = try self.automationWidgetTargetViewIndex(drag.target);
+        const layout = self.views[view_index].widgetLayoutTree();
+        if (!canvasWidgetInteractionTargetExists(layout, drag.target.id)) return error.InvalidCommand;
+        const node = layout.findById(drag.target.id) orelse return error.InvalidCommand;
+        const bounds = node.frame.normalized();
+        if (bounds.isEmpty()) return error.InvalidCommand;
+        const start = geometry.PointF.init(
+            bounds.x + bounds.width * drag.start_x_ratio,
+            bounds.y + bounds.height * drag.start_y_ratio,
+        );
+        const end = geometry.PointF.init(
+            bounds.x + bounds.width * drag.end_x_ratio,
+            bounds.y + bounds.height * drag.end_y_ratio,
+        );
+        const timestamp_ns = automationInputTimestampNs();
+
+        try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+            .window_id = self.views[view_index].window_id,
+            .label = self.views[view_index].label,
+            .kind = .pointer_down,
+            .timestamp_ns = timestamp_ns,
+            .x = start.x,
+            .y = start.y,
+            .button = 0,
+        } });
+        try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+            .window_id = self.views[view_index].window_id,
+            .label = self.views[view_index].label,
+            .kind = .pointer_drag,
+            .timestamp_ns = timestamp_ns,
+            .x = end.x,
+            .y = end.y,
+            .delta_x = end.x - start.x,
+            .delta_y = end.y - start.y,
+            .button = 0,
+        } });
+        try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+            .window_id = self.views[view_index].window_id,
+            .label = self.views[view_index].label,
+            .kind = .pointer_up,
+            .timestamp_ns = timestamp_ns,
+            .x = end.x,
+            .y = end.y,
+            .button = 0,
         } });
     }
 
@@ -8058,6 +8109,14 @@ const AutomationWidgetWheel = struct {
     delta_y: f32,
 };
 
+const AutomationWidgetPointerDrag = struct {
+    target: AutomationWidgetTarget,
+    start_x_ratio: f32,
+    end_x_ratio: f32,
+    start_y_ratio: f32 = 0.5,
+    end_y_ratio: f32 = 0.5,
+};
+
 const AutomationToken = struct {
     token: []const u8,
     rest: []const u8 = "",
@@ -8138,6 +8197,39 @@ fn parseAutomationWidgetWheel(value: []const u8) !AutomationWidgetWheel {
     return .{
         .target = .{ .view_label = view.token, .id = id },
         .delta_y = delta_y,
+    };
+}
+
+fn parseAutomationWidgetPointerDrag(value: []const u8) !AutomationWidgetPointerDrag {
+    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
+    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
+    const start_x_part = takeAutomationToken(id_part.rest) orelse return error.InvalidCommand;
+    const end_x_part = takeAutomationToken(start_x_part.rest) orelse return error.InvalidCommand;
+    const start_y_part = takeAutomationToken(end_x_part.rest);
+    const end_y_part = if (start_y_part) |part| takeAutomationToken(part.rest) else null;
+    if (end_y_part) |part| {
+        if (takeAutomationToken(part.rest) != null) return error.InvalidCommand;
+    } else if (start_y_part != null) {
+        return error.InvalidCommand;
+    }
+
+    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
+    if (id == 0) return error.InvalidCommand;
+    const start_x_ratio = std.fmt.parseFloat(f32, start_x_part.token) catch return error.InvalidCommand;
+    const end_x_ratio = std.fmt.parseFloat(f32, end_x_part.token) catch return error.InvalidCommand;
+    const start_y_ratio = if (start_y_part) |part| std.fmt.parseFloat(f32, part.token) catch return error.InvalidCommand else 0.5;
+    const end_y_ratio = if (end_y_part) |part| std.fmt.parseFloat(f32, part.token) catch return error.InvalidCommand else 0.5;
+    if (!std.math.isFinite(start_x_ratio) or
+        !std.math.isFinite(end_x_ratio) or
+        !std.math.isFinite(start_y_ratio) or
+        !std.math.isFinite(end_y_ratio)) return error.InvalidCommand;
+
+    return .{
+        .target = .{ .view_label = view.token, .id = id },
+        .start_x_ratio = start_x_ratio,
+        .end_x_ratio = end_x_ratio,
+        .start_y_ratio = start_y_ratio,
+        .end_y_ratio = end_y_ratio,
     };
 }
 
@@ -8414,6 +8506,32 @@ test "runtime parses automation widget wheel targets" {
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nope"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nan"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 18 extra"));
+}
+
+test "runtime parses automation widget pointer drags" {
+    const centered = try parseAutomationWidgetPointerDrag("canvas 42 0.25 0.82");
+    try std.testing.expectEqualStrings("canvas", centered.target.view_label);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 42), centered.target.id);
+    try std.testing.expectEqual(@as(f32, 0.25), centered.start_x_ratio);
+    try std.testing.expectEqual(@as(f32, 0.82), centered.end_x_ratio);
+    try std.testing.expectEqual(@as(f32, 0.5), centered.start_y_ratio);
+    try std.testing.expectEqual(@as(f32, 0.5), centered.end_y_ratio);
+
+    const diagonal = try parseAutomationWidgetPointerDrag("canvas 42 -0.1 1.1 0.2 0.9");
+    try std.testing.expectEqual(@as(f32, -0.1), diagonal.start_x_ratio);
+    try std.testing.expectEqual(@as(f32, 1.1), diagonal.end_x_ratio);
+    try std.testing.expectEqual(@as(f32, 0.2), diagonal.start_y_ratio);
+    try std.testing.expectEqual(@as(f32, 0.9), diagonal.end_y_ratio);
+
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag(""));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 0 0.2 0.8"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas nope 0.2 0.8"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 nope 0.8"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 nan"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 0.8 0.5"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 0.8 0.5 0.5 extra"));
 }
 
 fn validateCommandName(name: []const u8) !void {
@@ -14178,6 +14296,63 @@ test "runtime automation widget click dispatches pointer input" {
     try std.testing.expect(!snapshot.widgets[1].selected);
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 0"));
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 9"));
+}
+
+test "runtime automation widget drag dispatches pointer input" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-drag-automation", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 220, 100),
+    });
+
+    const controls = [_]canvas.Widget{.{
+        .id = 4,
+        .kind = .slider,
+        .frame = geometry.RectF.init(10, 20, 100, 32),
+        .value = 0.25,
+    }};
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &controls }, geometry.RectF.init(0, 0, 220, 100), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    harness.null_platform.gpu_surface_frame_request_count = 0;
+
+    try harness.runtime.dispatchAutomationCommand(app, "widget-drag canvas 4 0.25 0.82");
+    try std.testing.expect(harness.runtime.views[0].gpu_input_timestamp_ns > 0);
+    try std.testing.expect(harness.runtime.views[0].gpu_pending_input_timestamp_ns > 0);
+    try std.testing.expect(harness.null_platform.gpu_surface_frame_request_count > 0);
+    try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.gpu_surface_frame_request_window_id);
+    try std.testing.expectEqualStrings("canvas", harness.null_platform.gpu_surface_frame_request_label_storage[0..harness.null_platform.gpu_surface_frame_request_label_len]);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_pressed_id);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.82), retained.nodes[1].widget.value, 0.001);
+
+    const snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
+    try std.testing.expect(snapshot.widgets[0].focused);
+    try std.testing.expect(snapshot.widgets[0].hovered);
+    try std.testing.expect(!snapshot.widgets[0].pressed);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.82), snapshot.widgets[0].value.?, 0.001);
+
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "widget-drag canvas 0 0.25 0.82"));
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "widget-drag canvas 9 0.25 0.82"));
 }
 
 test "runtime reconciles canvas control state across layout replacement" {

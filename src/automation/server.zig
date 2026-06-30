@@ -165,4 +165,9 @@ test "server consumes automation command files" {
     const widget_click = (try server.takeCommand(&command_buffer)).?;
     try std.testing.expectEqual(protocol.Action.widget_click, widget_click.action);
     try std.testing.expectEqualStrings("canvas 2", widget_click.value);
+
+    try writePath(std.testing.io, command_path, "widget-drag canvas 2 0.25 0.82\n");
+    const widget_drag = (try server.takeCommand(&command_buffer)).?;
+    try std.testing.expectEqual(protocol.Action.widget_drag, widget_drag.action);
+    try std.testing.expectEqualStrings("canvas 2 0.25 0.82", widget_drag.value);
 }

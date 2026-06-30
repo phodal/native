@@ -106,6 +106,14 @@ The runtime polls `command.txt` and processes these actions:
       <td>Dispatch pointer down/up at a retained canvas widget</td>
     </tr>
     <tr>
+      <td><code>widget-drag &lt;view-label&gt; &lt;widget-id&gt; &lt;start-x-ratio&gt; &lt;end-x-ratio&gt; [&lt;start-y-ratio&gt; &lt;end-y-ratio&gt;]</code></td>
+      <td>Dispatch pointer down/drag/up across a retained canvas widget</td>
+    </tr>
+    <tr>
+      <td><code>widget-wheel &lt;view-label&gt; &lt;widget-id&gt; &lt;delta-y&gt;</code></td>
+      <td>Dispatch wheel input at a retained canvas widget</td>
+    </tr>
+    <tr>
       <td><code>shortcut &lt;id&gt;</code></td>
       <td>Dispatch a shortcut command event for the main window</td>
     </tr>

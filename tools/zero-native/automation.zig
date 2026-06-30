@@ -45,6 +45,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         const value = try std.fmt.allocPrint(allocator, "{s} {s}", .{ args[1], args[2] });
         defer allocator.free(value);
         try sendCommand(allocator, io, "widget-click", value);
+    } else if (std.mem.eql(u8, command, "widget-drag")) {
+        if (args.len != 5 and args.len != 7) return usage();
+        const value = if (args.len == 7)
+            try std.fmt.allocPrint(allocator, "{s} {s} {s} {s} {s} {s}", .{ args[1], args[2], args[3], args[4], args[5], args[6] })
+        else
+            try std.fmt.allocPrint(allocator, "{s} {s} {s} {s}", .{ args[1], args[2], args[3], args[4] });
+        defer allocator.free(value);
+        try sendCommand(allocator, io, "widget-drag", value);
     } else if (std.mem.eql(u8, command, "widget-wheel")) {
         if (args.len != 4) return usage();
         const value = try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ args[1], args[2], args[3] });
@@ -88,6 +96,7 @@ fn usage() void {
         \\  native-command <id> [view-label]
         \\  widget-action <view-label> <widget-id> <action> [value]
         \\  widget-click <view-label> <widget-id>
+        \\  widget-drag <view-label> <widget-id> <start-x-ratio> <end-x-ratio> [start-y-ratio end-y-ratio]
         \\  widget-wheel <view-label> <widget-id> <delta-y>
         \\  shortcut <id>
         \\  focus <view-label>

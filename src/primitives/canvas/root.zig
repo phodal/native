@@ -1537,6 +1537,11 @@ pub const CanvasFrameDiagnostics = struct {
     text_layout_upload_count: usize = 0,
     text_layout_retain_count: usize = 0,
     text_layout_evict_count: usize = 0,
+    gpu_packet_command_count: usize = 0,
+    gpu_packet_cache_action_count: usize = 0,
+    gpu_packet_cached_resource_command_count: usize = 0,
+    gpu_packet_unsupported_command_count: usize = 0,
+    gpu_packet_representable: bool = true,
     change_count: usize = 0,
     full_repaint: bool = false,
     requires_render: bool = false,
@@ -1579,7 +1584,7 @@ pub const CanvasFrameDiagnostics = struct {
             },
         );
         try writer.print(
-            ",\"imageCount\":{d},\"imageUploadCount\":{d},\"imageRetainCount\":{d},\"imageEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"visualEffectCount\":{d},\"visualEffectShadowCount\":{d},\"visualEffectBlurCount\":{d},\"visualEffectUploadCount\":{d},\"visualEffectRetainCount\":{d},\"visualEffectEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"changeCount\":{d},\"budgetExceededCount\":{d}",
+            ",\"imageCount\":{d},\"imageUploadCount\":{d},\"imageRetainCount\":{d},\"imageEvictCount\":{d},\"resourceCount\":{d},\"resourceUploadCount\":{d},\"resourceRetainCount\":{d},\"resourceEvictCount\":{d},\"visualEffectCount\":{d},\"visualEffectShadowCount\":{d},\"visualEffectBlurCount\":{d},\"visualEffectUploadCount\":{d},\"visualEffectRetainCount\":{d},\"visualEffectEvictCount\":{d},\"glyphAtlasEntryCount\":{d},\"glyphAtlasUploadCount\":{d},\"glyphAtlasRetainCount\":{d},\"glyphAtlasEvictCount\":{d},\"textLayoutCount\":{d},\"textLayoutLineCount\":{d},\"textLayoutUploadCount\":{d},\"textLayoutRetainCount\":{d},\"textLayoutEvictCount\":{d},\"gpuPacketCommandCount\":{d},\"gpuPacketCacheActionCount\":{d},\"gpuPacketCachedResourceCommandCount\":{d},\"gpuPacketUnsupportedCommandCount\":{d}",
             .{
                 self.image_count,
                 self.image_upload_count,
@@ -1604,10 +1609,15 @@ pub const CanvasFrameDiagnostics = struct {
                 self.text_layout_upload_count,
                 self.text_layout_retain_count,
                 self.text_layout_evict_count,
-                self.change_count,
-                self.budget_status.exceededCount(),
+                self.gpu_packet_command_count,
+                self.gpu_packet_cache_action_count,
+                self.gpu_packet_cached_resource_command_count,
+                self.gpu_packet_unsupported_command_count,
             },
         );
+        try writer.writeAll(",\"gpuPacketRepresentable\":");
+        try writer.writeAll(if (self.gpu_packet_representable) "true" else "false");
+        try writer.print(",\"changeCount\":{d},\"budgetExceededCount\":{d}", .{ self.change_count, self.budget_status.exceededCount() });
         try writer.writeAll(",\"budgetOk\":");
         try writer.writeAll(if (self.budgetOk()) "true" else "false");
         try writer.writeAll(",\"fullRepaint\":");
@@ -1987,6 +1997,22 @@ pub const CanvasGpuPacket = struct {
     }
 };
 
+pub const CanvasGpuPacketSummary = struct {
+    load_action: CanvasRenderPassLoadAction = .skip,
+    command_count: usize = 0,
+    cache_action_count: usize = 0,
+    cached_resource_command_count: usize = 0,
+    unsupported_command_count: usize = 0,
+
+    pub fn requiresRender(self: CanvasGpuPacketSummary) bool {
+        return self.load_action != .skip;
+    }
+
+    pub fn fullyRepresentable(self: CanvasGpuPacketSummary) bool {
+        return self.unsupported_command_count == 0;
+    }
+};
+
 pub const CanvasRenderPass = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
@@ -2160,6 +2186,21 @@ pub const CanvasRenderPass = struct {
         var planner = CanvasGpuPacketPlanner.init(output);
         return planner.build(self);
     }
+
+    pub fn gpuPacketSummary(self: CanvasRenderPass) CanvasGpuPacketSummary {
+        if (!self.requiresRender()) return .{};
+        var summary = CanvasGpuPacketSummary{
+            .load_action = self.loadAction(),
+            .command_count = self.commands.len,
+            .cache_action_count = self.encoderCacheActionCount(),
+        };
+        for (self.commands, 0..) |command, index| {
+            const gpu_command = canvasGpuCommandFromRenderCommand(command, index);
+            if (gpu_command.usesCachedResource()) summary.cached_resource_command_count += 1;
+            if (!gpu_command.supported()) summary.unsupported_command_count += 1;
+        }
+        return summary;
+    }
 };
 
 pub const CanvasFrame = struct {
@@ -2206,6 +2247,7 @@ pub const CanvasFrame = struct {
 
     fn diagnosticsWithoutBudgetStatus(self: CanvasFrame) CanvasFrameDiagnostics {
         const render_pass = self.renderPass();
+        const gpu_packet_summary = render_pass.gpuPacketSummary();
         return .{
             .frame_index = self.frame_index,
             .command_count = self.render_plan.commandCount(),
@@ -2254,6 +2296,11 @@ pub const CanvasFrame = struct {
             .text_layout_upload_count = self.text_layout_cache_plan.uploadCount(),
             .text_layout_retain_count = self.text_layout_cache_plan.retainCount(),
             .text_layout_evict_count = self.text_layout_cache_plan.evictCount(),
+            .gpu_packet_command_count = gpu_packet_summary.command_count,
+            .gpu_packet_cache_action_count = gpu_packet_summary.cache_action_count,
+            .gpu_packet_cached_resource_command_count = gpu_packet_summary.cached_resource_command_count,
+            .gpu_packet_unsupported_command_count = gpu_packet_summary.unsupported_command_count,
+            .gpu_packet_representable = gpu_packet_summary.fullyRepresentable(),
             .change_count = self.changes.len,
             .full_repaint = self.full_repaint,
             .requires_render = self.requiresRender(),
@@ -2304,6 +2351,10 @@ pub const CanvasFrame = struct {
 
     pub fn gpuPacket(self: CanvasFrame, output: []CanvasGpuCommand) Error!CanvasGpuPacket {
         return self.renderPass().gpuPacket(output);
+    }
+
+    pub fn gpuPacketSummary(self: CanvasFrame) CanvasGpuPacketSummary {
+        return self.renderPass().gpuPacketSummary();
     }
 };
 
@@ -16411,6 +16462,11 @@ test "canvas frame plan builds first frame renderer packet" {
     try std.testing.expect(!diagnostics.budget_status.text_layouts_over);
     try std.testing.expect(!diagnostics.budget_status.text_layout_lines_over);
     try std.testing.expect(!diagnostics.budget_status.changes_over);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.gpu_packet_command_count);
+    try std.testing.expectEqual(@as(usize, 7), diagnostics.gpu_packet_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 2), diagnostics.gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.gpu_packet_unsupported_command_count);
+    try std.testing.expect(diagnostics.gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 4), diagnostics.budget_status.exceededCount());
     try std.testing.expectEqual(@as(usize, 4), frame.budgetStatus().exceededCount());
 
@@ -16418,7 +16474,7 @@ test "canvas frame plan builds first frame renderer packet" {
     var diagnostics_json_writer = std.Io.Writer.fixed(&diagnostics_json_buffer);
     try frame.writeDiagnosticsJson(&diagnostics_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
+        "{\"frameIndex\":7,\"commandCount\":2,\"batchCount\":2,\"encoderCommandCount\":14,\"encoderCacheActionCount\":7,\"encoderBindPipelineCount\":2,\"encoderDrawBatchCount\":2,\"pipelineCount\":2,\"pipelineUploadCount\":2,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":2,\"resourceUploadCount\":2,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":2,\"glyphAtlasUploadCount\":2,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":1,\"textLayoutLineCount\":1,\"textLayoutUploadCount\":1,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"gpuPacketCommandCount\":2,\"gpuPacketCacheActionCount\":7,\"gpuPacketCachedResourceCommandCount\":2,\"gpuPacketUnsupportedCommandCount\":0,\"gpuPacketRepresentable\":true,\"changeCount\":0,\"budgetExceededCount\":4,\"budgetOk\":false,\"fullRepaint\":true,\"requiresRender\":true,\"dirtyBounds\":[0,0,320,200]}",
         diagnostics_json_writer.buffered(),
     );
 
@@ -16426,7 +16482,7 @@ test "canvas frame plan builds first frame renderer packet" {
     var clean_json_writer = std.Io.Writer.fixed(&clean_json_buffer);
     try (CanvasFrameDiagnostics{ .frame_index = 8 }).writeJson(&clean_json_writer);
     try std.testing.expectEqualStrings(
-        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
+        "{\"frameIndex\":8,\"commandCount\":0,\"batchCount\":0,\"encoderCommandCount\":0,\"encoderCacheActionCount\":0,\"encoderBindPipelineCount\":0,\"encoderDrawBatchCount\":0,\"pipelineCount\":0,\"pipelineUploadCount\":0,\"pipelineRetainCount\":0,\"pipelineEvictCount\":0,\"pathGeometryCount\":0,\"pathGeometryVertexCount\":0,\"pathGeometryIndexCount\":0,\"pathGeometryUploadCount\":0,\"pathGeometryRetainCount\":0,\"pathGeometryEvictCount\":0,\"layerCount\":0,\"layerOpacityCount\":0,\"layerClipCount\":0,\"layerTransformCount\":0,\"layerUploadCount\":0,\"layerRetainCount\":0,\"layerEvictCount\":0,\"imageCount\":0,\"imageUploadCount\":0,\"imageRetainCount\":0,\"imageEvictCount\":0,\"resourceCount\":0,\"resourceUploadCount\":0,\"resourceRetainCount\":0,\"resourceEvictCount\":0,\"visualEffectCount\":0,\"visualEffectShadowCount\":0,\"visualEffectBlurCount\":0,\"visualEffectUploadCount\":0,\"visualEffectRetainCount\":0,\"visualEffectEvictCount\":0,\"glyphAtlasEntryCount\":0,\"glyphAtlasUploadCount\":0,\"glyphAtlasRetainCount\":0,\"glyphAtlasEvictCount\":0,\"textLayoutCount\":0,\"textLayoutLineCount\":0,\"textLayoutUploadCount\":0,\"textLayoutRetainCount\":0,\"textLayoutEvictCount\":0,\"gpuPacketCommandCount\":0,\"gpuPacketCacheActionCount\":0,\"gpuPacketCachedResourceCommandCount\":0,\"gpuPacketUnsupportedCommandCount\":0,\"gpuPacketRepresentable\":true,\"changeCount\":0,\"budgetExceededCount\":0,\"budgetOk\":true,\"fullRepaint\":false,\"requiresRender\":false,\"dirtyBounds\":null}",
         clean_json_writer.buffered(),
     );
 }

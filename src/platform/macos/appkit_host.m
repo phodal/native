@@ -701,20 +701,25 @@ static BOOL ZeroNativePacketDrawEffect(NSDictionary *effect, CGFloat opacity) {
     return NO;
 }
 
-static BOOL ZeroNativePacketTransformIsIdentity(id value) {
+static BOOL ZeroNativePacketApplyTransform(id value) {
     NSArray *array = ZeroNativePacketArray(value, 6);
     if (!array) return YES;
-    return fabs(ZeroNativePacketNumber(array[0], 1) - 1) < 0.0001 &&
-        fabs(ZeroNativePacketNumber(array[1], 0)) < 0.0001 &&
-        fabs(ZeroNativePacketNumber(array[2], 0)) < 0.0001 &&
-        fabs(ZeroNativePacketNumber(array[3], 1) - 1) < 0.0001 &&
-        fabs(ZeroNativePacketNumber(array[4], 0)) < 0.0001 &&
-        fabs(ZeroNativePacketNumber(array[5], 0)) < 0.0001;
+    NSAffineTransformStruct transform = {
+        .m11 = ZeroNativePacketNumber(array[0], 1),
+        .m12 = ZeroNativePacketNumber(array[1], 0),
+        .m21 = ZeroNativePacketNumber(array[2], 0),
+        .m22 = ZeroNativePacketNumber(array[3], 1),
+        .tX = ZeroNativePacketNumber(array[4], 0),
+        .tY = ZeroNativePacketNumber(array[5], 0),
+    };
+    NSAffineTransform *affine = [NSAffineTransform transform];
+    [affine setTransformStruct:transform];
+    [affine concat];
+    return YES;
 }
 
 static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     if (!command) return NO;
-    if (!ZeroNativePacketTransformIsIdentity(command[@"transform"])) return NO;
 
     NSString *kind = [command[@"kind"] isKindOfClass:[NSString class]] ? command[@"kind"] : @"";
     CGFloat opacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(command[@"opacity"], 1)));
@@ -723,6 +728,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     [NSGraphicsContext saveGraphicsState];
     if ([clip isKindOfClass:[NSArray class]]) {
         [NSBezierPath clipRect:ZeroNativePacketRect(clip)];
+    }
+    if (!ZeroNativePacketApplyTransform(command[@"transform"])) {
+        [NSGraphicsContext restoreGraphicsState];
+        return NO;
     }
 
     BOOL ok = YES;

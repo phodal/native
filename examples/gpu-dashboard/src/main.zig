@@ -1065,6 +1065,7 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     var text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined;
     var text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined;
     var changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined;
+    var gpu_commands: [max_dashboard_commands]canvas.CanvasGpuCommand = undefined;
 
     const frame = try dashboardFrame(display_list, display_list, .{
         .surface_size = geometry.SizeF.init(720, 520),
@@ -1079,6 +1080,20 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     try std.testing.expect(frame.visual_effect_plan.effectCount() >= 5);
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expect(frame.dirty_bounds != null);
+
+    const packet = try frame.gpuPacket(&gpu_commands);
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expect(packet.fullyRepresentable());
+    var found_transformed_live_button = false;
+    for (packet.commands) |command| {
+        if (command.id) |id| {
+            if (id == live_button_fill_command_id) {
+                try std.testing.expect(command.transform.ty < 0);
+                found_transformed_live_button = true;
+            }
+        }
+    }
+    try std.testing.expect(found_transformed_live_button);
 }
 
 test "gpu dashboard app registers canvas display list on first gpu frame" {

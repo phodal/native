@@ -3449,6 +3449,9 @@ pub const ControlTokens = struct {
     button_outline: ControlVisualTokens = .{},
     button_ghost: ControlVisualTokens = .{},
     button_destructive: ControlVisualTokens = .{},
+    text_field: ControlVisualTokens = .{},
+    search_field: ControlVisualTokens = .{},
+    list_item: ControlVisualTokens = .{},
 };
 
 pub const ColorTokenOverrides = struct {
@@ -3640,6 +3643,9 @@ pub const ControlTokenOverrides = struct {
     button_outline: ControlVisualTokenOverrides = .{},
     button_ghost: ControlVisualTokenOverrides = .{},
     button_destructive: ControlVisualTokenOverrides = .{},
+    text_field: ControlVisualTokenOverrides = .{},
+    search_field: ControlVisualTokenOverrides = .{},
+    list_item: ControlVisualTokenOverrides = .{},
 
     pub fn apply(self: ControlTokenOverrides, base: ControlTokens) ControlTokens {
         var next = base;
@@ -3649,6 +3655,9 @@ pub const ControlTokenOverrides = struct {
         next.button_outline = self.button_outline.apply(next.button_outline);
         next.button_ghost = self.button_ghost.apply(next.button_ghost);
         next.button_destructive = self.button_destructive.apply(next.button_destructive);
+        next.text_field = self.text_field.apply(next.text_field);
+        next.search_field = self.search_field.apply(next.search_field);
+        next.list_item = self.list_item.apply(next.list_item);
         return next;
     }
 };
@@ -7346,7 +7355,8 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
-    const text_color = widgetForegroundColor(widget, tokens, tokens.colors.text);
+    const visual = textInputControlVisualTokens(widget, tokens);
+    const text_color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, text_color, layout_options);
     const selection_range = widgetTextSelectionRange(widget);
     const composition_range = widgetTextCompositionRange(widget);
@@ -7356,14 +7366,14 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, if (widget.state.disabled) tokens.colors.disabled else tokens.colors.surface),
+        .fill = textInputFill(widget, tokens, visual),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
         .stroke = .{
-            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, tokens.colors.border),
+            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else textInputBorderFill(widget, visual, tokens.colors.border),
             .width = if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7400,21 +7410,22 @@ fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const selection_range = widgetTextSelectionRange(widget);
     const composition_range = widgetTextCompositionRange(widget);
-    const text_color = widgetForegroundColor(widget, tokens, tokens.colors.text);
+    const visual = textInputControlVisualTokens(widget, tokens);
+    const text_color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, text_color, layout_options);
 
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, if (widget.state.disabled) tokens.colors.disabled else tokens.colors.surface),
+        .fill = textInputFill(widget, tokens, visual),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
         .stroke = .{
-            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, tokens.colors.border),
+            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else textInputBorderFill(widget, visual, tokens.colors.border),
             .width = if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7429,7 +7440,7 @@ fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
         var command = draw_text;
         command.id = widgetPartId(widget.id, 9);
         command.text = visible_text;
-        command.color = if (widget.text.len > 0) text_color else widgetForegroundColor(widget, tokens, tokens.colors.text_muted);
+        command.color = if (widget.text.len > 0) text_color else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted);
         try builder.drawText(command);
     }
     if (composition_range) |range| {
@@ -7455,7 +7466,8 @@ fn emitSearchFieldIcon(builder: *Builder, widget: Widget, tokens: DesignTokens, 
     const p2 = pixelSnapGeometryPoint(tokens, geometry.PointF.init(left + box, top + box));
     const p3 = pixelSnapGeometryPoint(tokens, geometry.PointF.init(left, top + box));
     const tail = pixelSnapGeometryPoint(tokens, geometry.PointF.init(left + icon_size, top + icon_size));
-    const stroke = Stroke{ .fill = colorFill(widgetForegroundColor(widget, tokens, tokens.colors.text_muted)), .width = tokens.stroke.regular };
+    const visual = textInputControlVisualTokens(widget, tokens);
+    const stroke = Stroke{ .fill = colorFill(widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted)), .width = tokens.stroke.regular };
 
     try builder.drawLine(.{ .id = widgetPartId(widget.id, 3), .from = p0, .to = p1, .stroke = stroke });
     try builder.drawLine(.{ .id = widgetPartId(widget.id, 4), .from = p1, .to = p2, .stroke = stroke });
@@ -7505,7 +7517,8 @@ fn emitMenuItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 
 fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = widgetRadius(widget, tokens.radius.md);
-    const fill = listItemFillColor(tokens, widget.state);
+    const visual = listItemControlVisualTokens(widget, tokens);
+    const fill = listItemFillColor(widget, tokens, widget.state);
     if (fill.a > 0) {
         try builder.fillRoundedRect(.{
             .id = widgetPartId(widget.id, 1),
@@ -7522,14 +7535,14 @@ fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
         .font_id = tokens.typography.font_id,
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-        .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
         .text = widget.text,
         .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none),
     });
 }
 
 fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
-    const state_fill = listItemFillColor(tokens, widget.state);
+    const state_fill = listItemFillColor(widget, tokens, widget.state);
     if (state_fill.a > 0) {
         try builder.fillRect(.{
             .id = widgetPartId(widget.id, 1),
@@ -8238,6 +8251,29 @@ fn buttonStateBackground(visual: ControlVisualTokens, active: bool, hovered: boo
     return visual.background orelse fallback;
 }
 
+fn textInputControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
+    return switch (widget.kind) {
+        .search_field => tokens.controls.search_field,
+        else => tokens.controls.text_field,
+    };
+}
+
+fn textInputFill(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Fill {
+    if (widget.state.disabled) return colorFill(tokens.colors.disabled);
+    return colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface)));
+}
+
+fn textInputBorderFill(widget: Widget, visual: ControlVisualTokens, fallback: Color) Fill {
+    return colorFill(widgetBorderColor(widget, visual.border orelse fallback));
+}
+
+fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
+    return switch (widget.kind) {
+        .list_item, .menu_item, .data_cell => tokens.controls.list_item,
+        else => .{},
+    };
+}
+
 fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     if (widget.style.stroke_width) |width| return nonNegative(width);
     return switch (widget.variant) {
@@ -8246,10 +8282,15 @@ fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     };
 }
 
-fn listItemFillColor(tokens: DesignTokens, state: WidgetState) Color {
-    if (state.selected or state.pressed) return tokens.colors.surface_pressed;
-    if (state.hovered) return tokens.colors.surface_subtle;
-    return transparentColor();
+fn listItemFillColor(widget: Widget, tokens: DesignTokens, state: WidgetState) Color {
+    const visual = listItemControlVisualTokens(widget, tokens);
+    const fallback = if (state.selected or state.pressed)
+        tokens.colors.surface_pressed
+    else if (state.hovered)
+        tokens.colors.surface_subtle
+    else
+        transparentColor();
+    return buttonStateBackground(visual, state.selected or state.pressed, state.hovered, fallback);
 }
 
 fn transparentColor() Color {
@@ -14380,6 +14421,20 @@ test "design token overrides compose with built-in themes" {
                 .hover_background = Color.rgb8(36, 42, 48),
                 .active_background = Color.rgb8(48, 56, 64),
             },
+            .text_field = .{
+                .background = Color.rgb8(15, 20, 25),
+                .foreground = Color.rgb8(225, 232, 240),
+                .border = Color.rgb8(65, 75, 85),
+            },
+            .search_field = .{
+                .background = Color.rgb8(18, 24, 30),
+                .foreground = Color.rgb8(210, 220, 230),
+            },
+            .list_item = .{
+                .hover_background = Color.rgb8(28, 34, 40),
+                .active_background = Color.rgb8(38, 46, 54),
+                .foreground = Color.rgb8(235, 240, 245),
+            },
         },
         .density = .spacious,
     };
@@ -14416,6 +14471,14 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expect(tokens.controls.button_secondary.background == null);
     try std.testing.expectEqualDeep(Color.rgb8(36, 42, 48), tokens.controls.button_secondary.hover_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(48, 56, 64), tokens.controls.button_secondary.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(15, 20, 25), tokens.controls.text_field.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(225, 232, 240), tokens.controls.text_field.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(65, 75, 85), tokens.controls.text_field.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(18, 24, 30), tokens.controls.search_field.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(210, 220, 230), tokens.controls.search_field.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(28, 34, 40), tokens.controls.list_item.hover_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(38, 46, 54), tokens.controls.list_item.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(235, 240, 245), tokens.controls.list_item.foreground.?);
     try std.testing.expectEqual(Density.spacious, tokens.density);
 
     const rebuilt = DesignTokens.themeWithOverrides(.{ .color_scheme = .dark, .reduce_motion = true }, overrides);
@@ -16823,6 +16886,76 @@ test "widget emitter applies button variant control tokens" {
     }
     switch (display_list.commands[8]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(4, 5, 6), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget emitter applies input and list control tokens" {
+    const tokens = DesignTokens{
+        .controls = .{
+            .text_field = .{
+                .background = Color.rgb8(20, 24, 28),
+                .foreground = Color.rgb8(238, 242, 246),
+                .border = Color.rgb8(80, 90, 100),
+            },
+            .search_field = .{
+                .background = Color.rgb8(24, 28, 32),
+                .foreground = Color.rgb8(210, 220, 230),
+                .border = Color.rgb8(90, 100, 110),
+            },
+            .list_item = .{
+                .hover_background = Color.rgb8(40, 48, 56),
+                .active_background = Color.rgb8(52, 62, 72),
+                .foreground = Color.rgb8(244, 248, 252),
+            },
+        },
+    };
+
+    var commands: [13]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, .{ .id = 50, .kind = .text_field, .frame = geometry.RectF.init(0, 0, 160, 34), .text = "Input" }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 51, .kind = .search_field, .frame = geometry.RectF.init(0, 44, 180, 34), .semantics = .{ .label = "Search" } }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 52, .kind = .list_item, .frame = geometry.RectF.init(0, 88, 180, 30), .text = "Inbox", .state = .{ .selected = true } }, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 13), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(20, 24, 28), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| try expectFillColor(Color.rgb8(80, 90, 100), stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(238, 242, 246), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(24, 28, 32), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[4]) {
+        .stroke_rect => |stroke| try expectFillColor(Color.rgb8(90, 100, 110), stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[5]) {
+        .draw_line => |line| try expectFillColor(Color.rgb8(210, 220, 230), line.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[10]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("Search", text.text);
+            try std.testing.expectEqualDeep(Color.rgb8(210, 220, 230), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[11]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(52, 62, 72), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[12]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(244, 248, 252), text.color),
         else => return error.TestUnexpectedResult,
     }
 }

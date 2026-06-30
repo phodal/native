@@ -266,7 +266,7 @@ const GpuComponentsApp = struct {
                 "{s} {s} #{d}: offset {d}.",
                 .{ action, @tagName(widget.kind), id, widget.value },
             ),
-            .text_field, .search_field, .textarea => try std.fmt.bufPrint(
+            .text_field, .search_field, .combobox, .textarea => try std.fmt.bufPrint(
                 &status_buffer,
                 "{s} {s} #{d}: {d} bytes.",
                 .{ action, @tagName(widget.kind), id, widget.text.len },
@@ -752,7 +752,7 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
     };
     const form_controls = [_]canvas.Widget{
         .{ .id = 111, .kind = .text_field, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
-        .{ .id = 112, .kind = .search_field, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component search" } },
+        .{ .id = 112, .kind = .combobox, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component combobox" } },
         .{ .id = 113, .kind = .checkbox, .frame = rect(0, 52, 132, 30), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
         .{ .id = 114, .kind = .switch_control, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live switch" } },
         .{ .id = 215, .kind = .toggle_button, .frame = rect(292, 52, 60, 30), .text = "Bold", .state = .{ .selected = true }, .semantics = .{ .label = "Bold toggle" } },
@@ -1382,7 +1382,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 5785905844824738462), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 13539410307128175070), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1628,12 +1628,12 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqualStrings("zero-native", project_name.text_value);
     try std.testing.expect(project_name.actions.set_text);
     try std.testing.expect(project_name.actions.set_selection);
-    const component_search = componentSnapshotWidget(snapshot, 112).?;
-    try std.testing.expectEqualStrings("textbox", component_search.role);
-    try std.testing.expectEqualStrings("Component search", component_search.name);
-    try std.testing.expectEqualStrings("components", component_search.text_value);
-    try std.testing.expect(component_search.actions.set_text);
-    try std.testing.expect(component_search.actions.set_selection);
+    const component_combobox = componentSnapshotWidget(snapshot, 112).?;
+    try std.testing.expectEqualStrings("textbox", component_combobox.role);
+    try std.testing.expectEqualStrings("Component combobox", component_combobox.name);
+    try std.testing.expectEqualStrings("components", component_combobox.text_value);
+    try std.testing.expect(component_combobox.actions.set_text);
+    try std.testing.expect(component_combobox.actions.set_selection);
     try std.testing.expect(componentSnapshotWidget(snapshot, 113).?.actions.toggle);
     try std.testing.expect(componentSnapshotWidget(snapshot, 114).?.selected);
     const bold_toggle = componentSnapshotWidget(snapshot, 215).?;

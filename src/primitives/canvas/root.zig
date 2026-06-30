@@ -3461,6 +3461,7 @@ pub const ControlTokens = struct {
     select: ControlVisualTokens = .{},
     text_field: ControlVisualTokens = .{},
     search_field: ControlVisualTokens = .{},
+    combobox: ControlVisualTokens = .{},
     textarea: ControlVisualTokens = .{},
     list_item: ControlVisualTokens = .{},
     segmented_control: ControlVisualTokens = .{},
@@ -3682,6 +3683,7 @@ pub const ControlTokenOverrides = struct {
     select: ControlVisualTokenOverrides = .{},
     text_field: ControlVisualTokenOverrides = .{},
     search_field: ControlVisualTokenOverrides = .{},
+    combobox: ControlVisualTokenOverrides = .{},
     textarea: ControlVisualTokenOverrides = .{},
     list_item: ControlVisualTokenOverrides = .{},
     segmented_control: ControlVisualTokenOverrides = .{},
@@ -3719,6 +3721,7 @@ pub const ControlTokenOverrides = struct {
         next.select = self.select.apply(next.select);
         next.text_field = self.text_field.apply(next.text_field);
         next.search_field = self.search_field.apply(next.search_field);
+        next.combobox = self.combobox.apply(next.combobox);
         next.textarea = self.textarea.apply(next.textarea);
         next.list_item = self.list_item.apply(next.list_item);
         next.segmented_control = self.segmented_control.apply(next.segmented_control);
@@ -3853,6 +3856,7 @@ pub const WidgetKind = enum {
     select,
     text_field,
     search_field,
+    combobox,
     textarea,
     tooltip,
     menu_item,
@@ -4109,7 +4113,7 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .button_group => builtinComponent(.button_group, .button_group, .group, true),
         .card => builtinComponent(.card, .card, .group, true),
         .checkbox => builtinComponent(.checkbox, .checkbox, .checkbox, false),
-        .combobox => builtinComponent(.combobox, .search_field, .textbox, true),
+        .combobox => builtinComponent(.combobox, .combobox, .textbox, true),
         .dialog => builtinComponent(.dialog, .dialog, .dialog, true),
         .drawer => builtinComponent(.drawer, .drawer, .dialog, true),
         .dropdown_menu => builtinComponent(.dropdown_menu, .menu_surface, .menu, true),
@@ -7283,7 +7287,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .icon_button => try emitIconButtonWidget(builder, paint_widget, tokens),
         .select => try emitSelectWidget(builder, paint_widget, tokens),
         .text_field, .textarea => try emitTextFieldWidget(builder, paint_widget, tokens),
-        .search_field => try emitSearchFieldWidget(builder, paint_widget, tokens),
+        .search_field, .combobox => try emitSearchFieldWidget(builder, paint_widget, tokens),
         .tooltip => try emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try emitListItemWidget(builder, paint_widget, tokens),
@@ -7388,7 +7392,7 @@ fn emitWidgetLayoutNodeContent(
         .icon_button => try emitIconButtonWidget(builder, paint_widget, tokens),
         .select => try emitSelectWidget(builder, paint_widget, tokens),
         .text_field, .textarea => try emitTextFieldWidget(builder, paint_widget, tokens),
-        .search_field => try emitSearchFieldWidget(builder, paint_widget, tokens),
+        .search_field, .combobox => try emitSearchFieldWidget(builder, paint_widget, tokens),
         .tooltip => try emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try emitListItemWidget(builder, paint_widget, tokens),
@@ -8342,6 +8346,26 @@ fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
             }
         }
     }
+    if (widget.kind == .combobox) {
+        try emitComboboxChevron(builder, widget, tokens, visual, text_size);
+    }
+}
+
+fn emitComboboxChevron(builder: *Builder, widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens, text_size: f32) Error!void {
+    const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
+    const chevron_size = @max(widgetSizedDensityValue(widget, tokens, 8), text_size - 4);
+    const center = geometry.PointF.init(widget.frame.x + widget.frame.width - inset - chevron_size * 0.5, widget.frame.y + widget.frame.height * 0.5);
+    const half = chevron_size * 0.36;
+    const drop = chevron_size * 0.28;
+    const left = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x - half, center.y - drop * 0.5));
+    const mid = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x, center.y + drop * 0.5));
+    const right = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x + half, center.y - drop * 0.5));
+    const stroke = Stroke{
+        .fill = colorFill(widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted)),
+        .width = tokens.stroke.regular,
+    };
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 12), .from = left, .to = mid, .stroke = stroke });
+    try builder.drawLine(.{ .id = widgetPartId(widget.id, 13), .from = mid, .to = right, .stroke = stroke });
 }
 
 fn emitSearchFieldIcon(builder: *Builder, widget: Widget, tokens: DesignTokens, icon_size: f32) Error!void {
@@ -8861,7 +8885,7 @@ fn widgetTextCompositionRange(widget: Widget) ?TextRange {
 
 fn widgetTextInputKind(kind: WidgetKind) bool {
     return switch (kind) {
-        .text_field, .search_field, .textarea => true,
+        .text_field, .search_field, .combobox, .textarea => true,
         else => false,
     };
 }
@@ -8913,8 +8937,9 @@ fn widgetTypographySize(widget: Widget, base: f32) f32 {
 
 fn widgetTextInputLayoutOptions(widget: Widget, text_size: f32, inset: f32) TextLayoutOptions {
     const line_height = widgetTextInputLineHeight(text_size);
+    const trailing_inset = widgetTextInputTrailingInset(widget, text_size, inset);
     return .{
-        .max_width = @max(1, widget.frame.width - inset * 2),
+        .max_width = @max(1, widget.frame.width - inset - trailing_inset),
         .line_height = line_height,
         .wrap = widgetTextInputWrap(widget, line_height),
     };
@@ -8961,9 +8986,14 @@ fn widgetTextInputDrawText(
 fn widgetTextInputInset(widget: Widget, tokens: DesignTokens) f32 {
     const text_size = widgetTextInputSize(widget, tokens);
     return switch (widget.kind) {
-        .search_field => widgetControlInset(widget, tokens, tokens.spacing.md) + @max(widgetSizedDensityValue(widget, tokens, 8), text_size - 2) + widgetControlInset(widget, tokens, tokens.spacing.sm),
+        .search_field, .combobox => widgetControlInset(widget, tokens, tokens.spacing.md) + @max(widgetSizedDensityValue(widget, tokens, 8), text_size - 2) + widgetControlInset(widget, tokens, tokens.spacing.sm),
         else => widgetControlInset(widget, tokens, tokens.spacing.md),
     };
+}
+
+fn widgetTextInputTrailingInset(widget: Widget, text_size: f32, inset: f32) f32 {
+    if (widget.kind == .combobox) return inset + @max(8, text_size - 4);
+    return inset;
 }
 
 fn widgetButtonInset(widget: Widget, tokens: DesignTokens) f32 {
@@ -9245,6 +9275,7 @@ fn buttonStateBackground(visual: ControlVisualTokens, active: bool, hovered: boo
 fn textInputControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
         .search_field => tokens.controls.search_field,
+        .combobox => controlVisualTokensWithFallback(tokens.controls.combobox, tokens.controls.search_field),
         .textarea => tokens.controls.textarea,
         else => tokens.controls.text_field,
     };
@@ -9451,7 +9482,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
-        .text, .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        .text, .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
     }
 
     return index;
@@ -9692,7 +9723,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .icon_button => intrinsicSquareControlSize(widget, tokens),
         .select => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
         .text_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetControlHeight(widget, tokens)),
-        .search_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
+        .search_field, .combobox => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
         .textarea => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetSizedDensityValue(widget, tokens, 80)),
         .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
         .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
@@ -9940,7 +9971,7 @@ pub fn cursorForWidgetHit(hit: ?WidgetHit) WidgetCursor {
 pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor {
     if (state.disabled) return .arrow;
     return switch (kind) {
-        .text_field, .search_field, .textarea => .text,
+        .text_field, .search_field, .combobox, .textarea => .text,
         .button,
         .toggle_button,
         .icon_button,
@@ -10603,7 +10634,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .badge => .text,
         .button, .toggle_button => .button,
         .icon_button, .select => .button,
-        .text_field, .search_field, .textarea => .textbox,
+        .text_field, .search_field, .combobox, .textarea => .textbox,
         .tooltip => .tooltip,
         .menu_item => .menuitem,
         .list_item => .listitem,
@@ -10637,7 +10668,7 @@ fn semanticValue(widget: Widget) ?f32 {
 
 fn semanticTextValue(widget: Widget) []const u8 {
     return switch (widget.kind) {
-        .text_field, .search_field, .textarea => widget.text,
+        .text_field, .search_field, .combobox, .textarea => widget.text,
         else => "",
     };
 }
@@ -10923,7 +10954,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
             actions.select = true;
             if (widget.command.len > 0) actions.press = true;
         },
-        .text_field, .search_field, .textarea => {
+        .text_field, .search_field, .combobox, .textarea => {
             actions.set_text = true;
             actions.set_selection = true;
         },
@@ -10942,7 +10973,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .scroll_view, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider => !widget.state.disabled,
+        .scroll_view, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -10970,7 +11001,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
@@ -11304,7 +11335,7 @@ fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
         .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .button, .toggle_button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         .select => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectControlVisualTokens(tokens), tokens.stroke.regular),
-        .text_field, .search_field, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
+        .text_field, .search_field, .combobox, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .segmented_control => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .data_cell => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, listItemControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .checkbox, .radio, .switch_control, .toggle, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
@@ -11322,6 +11353,7 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
         .select,
         .text_field,
         .search_field,
+        .combobox,
         .textarea,
         .menu_item,
         .list_item,
@@ -15646,17 +15678,21 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.badge, builtinComponentDescriptor(.badge).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.breadcrumb, builtinComponentDescriptor(.breadcrumb).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.bubble, builtinComponentDescriptor(.bubble).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.button, builtinComponentDescriptor(.button).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.button_group, builtinComponentDescriptor(.button_group).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.card, builtinComponentDescriptor(.card).root_widget_kind);
-    try std.testing.expectEqual(WidgetKind.search_field, builtinComponentDescriptor(.combobox).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.checkbox, builtinComponentDescriptor(.checkbox).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.combobox, builtinComponentDescriptor(.combobox).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.dialog, builtinComponentDescriptor(.dialog).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.drawer, builtinComponentDescriptor(.drawer).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.menu_surface, builtinComponentDescriptor(.dropdown_menu).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.input).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.pagination, builtinComponentDescriptor(.pagination).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.progress, builtinComponentDescriptor(.progress).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.radio_group, builtinComponentDescriptor(.radio_group).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.resizable, builtinComponentDescriptor(.resizable).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.separator, builtinComponentDescriptor(.separator).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.slider, builtinComponentDescriptor(.slider).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.skeleton, builtinComponentDescriptor(.skeleton).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.spinner, builtinComponentDescriptor(.spinner).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.switch_control, builtinComponentDescriptor(.switch_control).root_widget_kind);
@@ -16204,6 +16240,11 @@ test "design token overrides compose with built-in themes" {
                 .background = Color.rgb8(18, 24, 30),
                 .foreground = Color.rgb8(210, 220, 230),
             },
+            .combobox = .{
+                .background = Color.rgb8(20, 26, 32),
+                .foreground = Color.rgb8(212, 222, 232),
+                .border = Color.rgb8(69, 79, 89),
+            },
             .textarea = .{
                 .background = Color.rgb8(19, 25, 31),
                 .foreground = Color.rgb8(211, 221, 231),
@@ -16369,6 +16410,9 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqual(@as(f32, 1.5), tokens.controls.text_field.stroke_width.?);
     try std.testing.expectEqualDeep(Color.rgb8(18, 24, 30), tokens.controls.search_field.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(210, 220, 230), tokens.controls.search_field.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(20, 26, 32), tokens.controls.combobox.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(212, 222, 232), tokens.controls.combobox.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(69, 79, 89), tokens.controls.combobox.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(19, 25, 31), tokens.controls.textarea.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(211, 221, 231), tokens.controls.textarea.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(67, 77, 87), tokens.controls.textarea.border.?);
@@ -17175,6 +17219,52 @@ test "widget search fields expose textbox semantics and render search chrome" {
     }
     switch (display_list.commands[7]) {
         .draw_text => |text| try std.testing.expectEqualStrings("customers", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget comboboxes expose textbox semantics and render trigger chrome" {
+    const combobox = Widget{
+        .id = 14,
+        .kind = .combobox,
+        .frame = geometry.RectF.init(10, 12, 220, 36),
+        .text = "components",
+        .semantics = .{ .label = "Component combobox" },
+    };
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(combobox, combobox.frame, &nodes);
+    try std.testing.expectEqual(@as(ObjectId, 14), layout.focusTarget(null, .forward).?.id);
+    try std.testing.expectEqual(WidgetKind.combobox, layout.hitTest(geometry.PointF.init(20, 24)).?.kind);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
+    try std.testing.expectEqualStrings("Component combobox", semantics[0].label);
+    try std.testing.expectEqualStrings("components", semantics[0].text_value);
+    try std.testing.expect(semantics[0].actions.set_text);
+    try std.testing.expect(semantics[0].actions.set_selection);
+
+    var commands: [10]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, combobox, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
+    switch (display_list.commands[7]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("components", text.text);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expect(text.text_layout.?.max_width < combobox.frame.width);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[8]) {
+        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(14, 12)), line.id),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[9]) {
+        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(14, 13)), line.id),
         else => return error.TestUnexpectedResult,
     }
 }

@@ -14,7 +14,7 @@ const window_state = @import("../window_state/root.zig");
 const max_async_bridge_responses: usize = 64;
 const max_bridge_origin_bytes: usize = 512;
 const max_command_id_bytes: usize = 128;
-pub const max_canvas_commands_per_view: usize = 128;
+pub const max_canvas_commands_per_view: usize = 160;
 pub const max_canvas_gradient_stops_per_view: usize = 64;
 pub const max_canvas_path_elements_per_view: usize = 128;
 pub const max_canvas_glyphs_per_view: usize = 256;
@@ -5332,12 +5332,12 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .toggle_button, .icon_button, .select, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
 fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
-    return kind == .text_field or kind == .search_field or kind == .textarea;
+    return kind == .text_field or kind == .search_field or kind == .combobox or kind == .textarea;
 }
 
 fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
@@ -6881,7 +6881,7 @@ const RuntimeView = struct {
 
         if (keyboard.phase == .key_down and !keyboard.modifiers.shift and !keyboard.modifiers.hasNavigationModifier() and canvasWidgetEscapeKey(keyboard.key)) {
             if (widget.text_composition != null) return .cancel_composition;
-            if (widget.kind == .search_field) return .clear;
+            if (widget.kind == .search_field or widget.kind == .combobox) return .clear;
             return null;
         }
 

@@ -58,6 +58,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         const value = try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ args[1], args[2], args[3] });
         defer allocator.free(value);
         try sendCommand(allocator, io, "widget-wheel", value);
+    } else if (std.mem.eql(u8, command, "widget-key")) {
+        if (args.len < 3) return usage();
+        const value = try std.mem.join(allocator, " ", args[1..]);
+        defer allocator.free(value);
+        try sendCommand(allocator, io, "widget-key", value);
     } else if (std.mem.eql(u8, command, "shortcut")) {
         if (args.len != 2) return usage();
         try sendCommand(allocator, io, "shortcut", args[1]);
@@ -98,6 +103,7 @@ fn usage() void {
         \\  widget-click <view-label> <widget-id>
         \\  widget-drag <view-label> <widget-id> <start-x-ratio> <end-x-ratio> [start-y-ratio end-y-ratio]
         \\  widget-wheel <view-label> <widget-id> <delta-y>
+        \\  widget-key <view-label> <key> [text]
         \\  shortcut <id>
         \\  focus <view-label>
         \\  focus-next

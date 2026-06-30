@@ -901,6 +901,25 @@ pub fn build(b: *std.Build) void {
         \\case "$snapshot" in *'widget @w1/components-canvas#113 role=checkbox'*'value=1'*'actions=[focus,toggle]'*) ;; *) echo "checkbox widget was not initially selected" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#114 role=switch'*'value=1'*'actions=[focus,toggle]'*) ;; *) echo "switch widget was not initially selected" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#118 role=image name="GPU image preview"'*) ;; *) echo "image widget was missing from the component snapshot" >&2; exit 1 ;; esac
+        \\"$cli" automate widget-action components-canvas 111 focus >/dev/null 2>&1
+        \\"$cli" automate widget-key components-canvas z z >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-nativez"'*) break ;; esac
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-nativez"'*) ;; *) echo "widget keyboard automation did not update retained text" >&2; exit 1 ;; esac
+        \\"$cli" automate widget-key components-canvas tab >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  case "$snapshot" in *'widget @w1/components-canvas#112 role=textbox'*'focused=true'*) break ;; esac
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\case "$snapshot" in *'widget @w1/components-canvas#112 role=textbox'*'focused=true'*) ;; *) echo "widget keyboard automation did not move focus" >&2; exit 1 ;; esac
         \\"$cli" automate widget-action components-canvas 105 press >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do

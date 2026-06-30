@@ -1241,6 +1241,24 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqualStrings("tooltip", componentSnapshotWidget(snapshot, 160).?.role);
 
     resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 111 focus");
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-key components-canvas z z");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    var keyed_project = componentSnapshotWidget(snapshot, 111).?;
+    try std.testing.expect(keyed_project.focused);
+    try std.testing.expectEqualStrings("zero-nativez", keyed_project.text_value);
+    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 12, .end = 12 }, keyed_project.text_selection.?);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentTextCommand(display_list, project_text_id, "zero-nativez");
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-key components-canvas tab");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    keyed_project = componentSnapshotWidget(snapshot, 111).?;
+    try std.testing.expect(!keyed_project.focused);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 112).?.focused);
+
+    resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 111 set-text zero-canvas");
     snapshot = harness.runtime.automationSnapshot("Components");
     var edited_project = componentSnapshotWidget(snapshot, 111).?;

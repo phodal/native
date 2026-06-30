@@ -726,8 +726,8 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 135, .kind = .list_item, .text = "Dirty bounds" },
     };
     const segment_controls = [_]canvas.Widget{
-        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 72, 34), .text = "Small", .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
-        .{ .id = 119, .kind = .segmented_control, .frame = rect(76, 0, 72, 34), .text = "Large", .semantics = .{ .label = "Large density" } },
+        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 72, 34), .text = "Small", .size = .sm, .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
+        .{ .id = 119, .kind = .segmented_control, .frame = rect(76, 0, 72, 34), .text = "Large", .size = .lg, .semantics = .{ .label = "Large density" } },
     };
     const form_controls = [_]canvas.Widget{
         .{ .id = 111, .kind = .text_field, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
@@ -782,9 +782,9 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 160, .kind = .tooltip, .frame = rect(392, 0, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
     };
     const top_widgets = [_]canvas.Widget{
-        .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
+        .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components", .size = .lg },
         .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .variant = .primary, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
-        .{ .id = 105, .kind = .icon_button, .frame = rect(856, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
+        .{ .id = 105, .kind = .icon_button, .frame = rect(856, 54, 34, 34), .text = "+", .size = .icon, .semantics = .{ .label = "Add component" } },
         .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 236), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
         .{ .id = 120, .kind = .list, .frame = rect(456, 124, 170, 56), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
         .{ .id = 130, .kind = .scroll_view, .frame = rect(652, 124, 186, 56), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
@@ -1297,7 +1297,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 15752322175100837827), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 11901548007894975135), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

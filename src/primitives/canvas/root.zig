@@ -3528,6 +3528,13 @@ pub const WidgetVariant = enum {
     destructive,
 };
 
+pub const WidgetSize = enum {
+    default,
+    sm,
+    lg,
+    icon,
+};
+
 pub const WidgetRole = enum {
     none,
     group,
@@ -3611,6 +3618,7 @@ pub const Widget = struct {
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
     variant: WidgetVariant = .default,
+    size: WidgetSize = .default,
     style: WidgetStyle = .{},
     semantics: WidgetSemantics = .{},
     children: []const Widget = &.{},
@@ -6889,16 +6897,17 @@ fn emitMenuSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: Design
 }
 
 fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const text_size = widgetBodyTextSize(widget, tokens);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 1),
         .font_id = tokens.typography.font_id,
-        .size = tokens.typography.body_size,
-        .origin = pixelSnapTextPoint(tokens, textOrigin(widget.frame, tokens.typography.body_size, 0)),
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, textOrigin(widget.frame, text_size, 0)),
         .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
         .text_layout = .{
             .max_width = widget.frame.width,
-            .line_height = tokens.typography.body_size * 1.25,
+            .line_height = text_size * 1.25,
             .wrap = .word,
             .alignment = widget.text_alignment,
         },
@@ -6933,6 +6942,8 @@ fn emitImageWidget(builder: *Builder, widget: Widget) Error!void {
 
 fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = widgetRadius(widget, tokens.radius.md);
+    const text_size = widgetButtonTextSize(widget, tokens);
+    const text_inset = widgetButtonInset(widget, tokens);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -6962,11 +6973,11 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 4),
         .font_id = tokens.typography.font_id,
-        .size = tokens.typography.button_size,
-        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, tokens.typography.button_size, densityValue(tokens, tokens.spacing.md))),
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = buttonTextColorForWidget(widget, tokens),
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, tokens.typography.button_size, densityValue(tokens, tokens.spacing.md), .center, .none),
+        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none),
     });
 }
 
@@ -7002,7 +7013,7 @@ fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
 
 fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = widgetRadius(widget, tokens.radius.md);
-    const text_size = widgetTextInputSize(tokens);
+    const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
@@ -7053,7 +7064,7 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
 
 fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = widgetRadius(widget, tokens.radius.md);
-    const text_size = widgetTextInputSize(tokens);
+    const text_size = widgetTextInputSize(widget, tokens);
     const icon_size = @max(8, text_size - 2);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
@@ -7107,7 +7118,7 @@ fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
 }
 
 fn emitSearchFieldIcon(builder: *Builder, widget: Widget, tokens: DesignTokens, icon_size: f32) Error!void {
-    const left = widget.frame.x + densityValue(tokens, tokens.spacing.md);
+    const left = widget.frame.x + widgetControlInset(widget, tokens, tokens.spacing.md);
     const top = widget.frame.y + @max(0, (widget.frame.height - icon_size) * 0.5);
     const box = icon_size * 0.58;
     const p0 = pixelSnapGeometryPoint(tokens, geometry.PointF.init(left, top));
@@ -7145,14 +7156,16 @@ fn emitTooltipWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Er
         .fill = widgetAccentFill(widget, tokens.colors.accent),
     });
     if (widget.text.len > 0) {
+        const text_size = widgetLabelTextSize(widget, tokens);
+        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
         try builder.drawText(.{
             .id = widgetPartId(widget.id, 3),
             .font_id = tokens.typography.font_id,
-            .size = tokens.typography.label_size,
-            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, tokens.typography.label_size, densityValue(tokens, tokens.spacing.sm))),
+            .size = text_size,
+            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, tokens.typography.label_size, densityValue(tokens, tokens.spacing.sm), .start, .none),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none),
         });
     }
 }
@@ -7173,14 +7186,16 @@ fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
         });
     }
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 2);
+    const text_size = widgetBodyTextSize(widget, tokens);
+    const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 3),
         .font_id = tokens.typography.font_id,
-        .size = tokens.typography.body_size,
-        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, tokens.typography.body_size, densityValue(tokens, tokens.spacing.md))),
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, tokens.typography.body_size, densityValue(tokens, tokens.spacing.md), .start, .none),
+        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none),
     });
 }
 
@@ -7203,14 +7218,16 @@ fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
     });
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
     if (widget.text.len > 0) {
+        const text_size = widgetBodyTextSize(widget, tokens);
+        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
         try builder.drawText(.{
             .id = widgetPartId(widget.id, 4),
             .font_id = tokens.typography.font_id,
-            .size = tokens.typography.body_size,
-            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, tokens.typography.body_size, densityValue(tokens, tokens.spacing.md))),
+            .size = text_size,
+            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, tokens.typography.body_size, densityValue(tokens, tokens.spacing.md), .start, .none),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none),
         });
     }
 }
@@ -7218,6 +7235,8 @@ fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = widget.state.selected or widget.value >= 0.5;
     const radius = widgetRadius(widget, tokens.radius.md);
+    const text_size = widgetLabelTextSize(widget, tokens);
+    const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -7236,16 +7255,16 @@ fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignT
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 3),
         .font_id = tokens.typography.font_id,
-        .size = tokens.typography.label_size,
-        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, tokens.typography.label_size, densityValue(tokens, tokens.spacing.md))),
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = if (selected) widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text) else widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, tokens.typography.label_size, densityValue(tokens, tokens.spacing.md), .center, .none),
+        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none),
     });
 }
 
 fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
-    const box_size = @min(@max(densityValue(tokens, 14), widget.frame.height * 0.55), densityValue(tokens, 20));
+    const box_size = @min(@max(widgetSizedDensityValue(widget, tokens, 14), widget.frame.height * 0.55), widgetSizedDensityValue(widget, tokens, 20));
     const box = pixelSnapGeometryRect(tokens, geometry.RectF.init(
         widget.frame.x,
         widget.frame.y + (widget.frame.height - box_size) * 0.5,
@@ -7287,14 +7306,14 @@ fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
             .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text)), .width = 2 },
         });
     }
-    try emitControlLabel(builder, widget, tokens, box.x + box.width + densityValue(tokens, tokens.spacing.sm), 6);
+    try emitControlLabel(builder, widget, tokens, box.x + box.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 6);
 }
 
 fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = booleanControlSelected(widget);
-    const knob_inset = densityValue(tokens, 2);
-    const track_width = @min(widget.frame.width, @max(densityValue(tokens, 36), widget.frame.height * 1.75));
-    const track_height = @min(widget.frame.height, densityValue(tokens, 24));
+    const knob_inset = widgetSizedDensityValue(widget, tokens, 2);
+    const track_width = @min(widget.frame.width, @max(widgetSizedDensityValue(widget, tokens, 36), widget.frame.height * 1.75));
+    const track_height = @min(widget.frame.height, widgetSizedDensityValue(widget, tokens, 24));
     const track = pixelSnapGeometryRect(tokens, geometry.RectF.init(
         widget.frame.x,
         widget.frame.y + (widget.frame.height - track_height) * 0.5,
@@ -7331,12 +7350,12 @@ fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .fill = colorFill(if (selected) widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text) else tokens.colors.surface),
     });
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 4);
-    try emitControlLabel(builder, widget, tokens, track.x + track.width + densityValue(tokens, tokens.spacing.sm), 5);
+    try emitControlLabel(builder, widget, tokens, track.x + track.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5);
 }
 
 fn emitSliderWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const value = std.math.clamp(widget.value, 0, 1);
-    const track_height: f32 = densityValue(tokens, 4);
+    const track_height: f32 = widgetSizedDensityValue(widget, tokens, 4);
     const track = pixelSnapGeometryRect(tokens, geometry.RectF.init(
         widget.frame.x,
         widget.frame.y + (widget.frame.height - track_height) * 0.5,
@@ -7344,7 +7363,7 @@ fn emitSliderWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         track_height,
     ));
     const active = pixelSnapGeometryRect(tokens, geometry.RectF.init(track.x, track.y, track.width * value, track.height));
-    const knob_size = @min(@max(densityValue(tokens, 14), widget.frame.height * 0.55), densityValue(tokens, 20));
+    const knob_size = @min(@max(widgetSizedDensityValue(widget, tokens, 14), widget.frame.height * 0.55), widgetSizedDensityValue(widget, tokens, 20));
     const knob_x = std.math.clamp(
         widget.frame.x + widget.frame.width * value - knob_size * 0.5,
         widget.frame.x,
@@ -7421,14 +7440,15 @@ fn emitWidgetFocusRing(builder: *Builder, widget: Widget, tokens: DesignTokens, 
 
 fn emitControlLabel(builder: *Builder, widget: Widget, tokens: DesignTokens, x: f32, slot: ObjectId) Error!void {
     if (widget.text.len == 0) return;
+    const text_size = widgetLabelTextSize(widget, tokens);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, slot),
         .font_id = tokens.typography.font_id,
-        .size = tokens.typography.label_size,
-        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(labelFrameForControl(widget.frame, x), tokens.typography.label_size, 0)),
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(labelFrameForControl(widget.frame, x), text_size, 0)),
         .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
-        .text_layout = boundedTextLayout(labelFrameForControl(widget.frame, x), tokens.typography.label_size, 0, .start, .none),
+        .text_layout = boundedTextLayout(labelFrameForControl(widget.frame, x), text_size, 0, .start, .none),
     });
 }
 
@@ -7514,9 +7534,17 @@ fn alignedTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, inset: 
 }
 
 fn iconGlyphSize(widget: Widget, tokens: DesignTokens) f32 {
-    const min_size = densityValue(tokens, 12);
-    if (widget.frame.height > 0) return @min(@max(min_size, widget.frame.height * 0.48), @max(min_size, tokens.typography.title_size));
-    return tokens.typography.button_size;
+    const min_size = widgetSizedDensityValue(widget, tokens, 12);
+    if (widget.frame.height > 0) return @min(@max(min_size, widget.frame.height * widgetIconGlyphScale(widget)), @max(min_size, widgetTypographySize(widget, tokens.typography.title_size)));
+    return widgetButtonTextSize(widget, tokens);
+}
+
+fn widgetIconGlyphScale(widget: Widget) f32 {
+    return switch (widget.size) {
+        .sm => 0.44,
+        .default, .icon => 0.48,
+        .lg => 0.52,
+    };
 }
 
 fn widgetTextSelectionRange(widget: Widget) ?TextRange {
@@ -7543,7 +7571,7 @@ pub fn textSelectionForWidgetPoint(widget: Widget, point: geometry.PointF, ancho
 pub fn textOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, tokens: DesignTokens) ?usize {
     if (widget.kind != .text_field and widget.kind != .search_field) return null;
     if (widget.state.disabled) return null;
-    const text_size = widgetTextInputSize(tokens);
+    const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
@@ -7552,8 +7580,28 @@ pub fn textOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, tokens: 
     return layoutTextOffsetForPoint(draw_text, layout_options, point, &lines) catch null;
 }
 
-fn widgetTextInputSize(tokens: DesignTokens) f32 {
-    return tokens.typography.body_size;
+fn widgetButtonTextSize(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetTypographySize(widget, tokens.typography.button_size);
+}
+
+fn widgetBodyTextSize(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetTypographySize(widget, tokens.typography.body_size);
+}
+
+fn widgetLabelTextSize(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetTypographySize(widget, tokens.typography.label_size);
+}
+
+fn widgetTextInputSize(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetBodyTextSize(widget, tokens);
+}
+
+fn widgetTypographySize(widget: Widget, base: f32) f32 {
+    return switch (widget.size) {
+        .sm => @max(8, base - 1),
+        .default, .icon => base,
+        .lg => base + 1,
+    };
 }
 
 fn widgetTextInputLayoutOptions(widget: Widget, text_size: f32, inset: f32) TextLayoutOptions {
@@ -7578,7 +7626,7 @@ fn widgetTextInputOrigin(widget: Widget, tokens: DesignTokens, text_size: f32, i
     if (options.wrap != .none) {
         return geometry.PointF.init(
             widget.frame.x + inset,
-            widget.frame.y + densityValue(tokens, tokens.spacing.sm) + text_size,
+            widget.frame.y + widgetControlInset(widget, tokens, tokens.spacing.sm) + text_size,
         );
     }
     return textOrigin(widget.frame, text_size, inset);
@@ -7603,10 +7651,41 @@ fn widgetTextInputDrawText(
 }
 
 fn widgetTextInputInset(widget: Widget, tokens: DesignTokens) f32 {
-    const text_size = widgetTextInputSize(tokens);
+    const text_size = widgetTextInputSize(widget, tokens);
     return switch (widget.kind) {
-        .search_field => densityValue(tokens, tokens.spacing.md) + @max(densityValue(tokens, 8), text_size - 2) + densityValue(tokens, tokens.spacing.sm),
-        else => densityValue(tokens, tokens.spacing.md),
+        .search_field => widgetControlInset(widget, tokens, tokens.spacing.md) + @max(widgetSizedDensityValue(widget, tokens, 8), text_size - 2) + widgetControlInset(widget, tokens, tokens.spacing.sm),
+        else => widgetControlInset(widget, tokens, tokens.spacing.md),
+    };
+}
+
+fn widgetButtonInset(widget: Widget, tokens: DesignTokens) f32 {
+    return switch (widget.size) {
+        .icon => 0,
+        else => widgetControlInset(widget, tokens, tokens.spacing.md),
+    };
+}
+
+fn widgetControlInset(widget: Widget, tokens: DesignTokens, base: f32) f32 {
+    return densityValue(tokens, widgetSizedTokenValue(widget, base));
+}
+
+fn widgetSizedDensityValue(widget: Widget, tokens: DesignTokens, value: f32) f32 {
+    return densityValue(tokens, value) * widgetSizeScale(widget);
+}
+
+fn widgetSizedTokenValue(widget: Widget, value: f32) f32 {
+    return switch (widget.size) {
+        .sm => @max(0, value - 2),
+        .default, .icon => value,
+        .lg => value + 2,
+    };
+}
+
+fn widgetSizeScale(widget: Widget) f32 {
+    return switch (widget.size) {
+        .sm => 0.875,
+        .default, .icon => 1,
+        .lg => 1.125,
     };
 }
 
@@ -7666,7 +7745,16 @@ fn widgetAccentForegroundColor(widget: Widget, tokens: DesignTokens, fallback: C
 }
 
 fn widgetRadius(widget: Widget, fallback: f32) Radius {
-    return Radius.all(nonNegative(widget.style.radius orelse fallback));
+    if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
+    return Radius.all(nonNegative(widgetSizedRadiusValue(widget, fallback)));
+}
+
+fn widgetSizedRadiusValue(widget: Widget, fallback: f32) f32 {
+    return switch (widget.size) {
+        .sm => @max(0, fallback - 2),
+        .default, .icon => fallback,
+        .lg => fallback + 2,
+    };
 }
 
 fn widgetStrokeWidth(widget: Widget, fallback: f32) f32 {
@@ -8577,7 +8665,7 @@ pub fn textGeometryForWidget(widget: Widget, tokens: DesignTokens) WidgetTextGeo
     if (widget.kind != .text_field and widget.kind != .search_field) return value;
     if (widget.state.disabled) return value;
 
-    const text_size = widgetTextInputSize(tokens);
+    const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
@@ -9147,6 +9235,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         previous.widget.backdrop_blur_token != next.widget.backdrop_blur_token or
         previous.widget.text_alignment != next.widget.text_alignment or
         previous.widget.variant != next.widget.variant or
+        previous.widget.size != next.widget.size or
         !widgetStylesEqual(previous.widget.style, next.widget.style);
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const visibility_dirty = previous.widget.semantics.hidden != next.widget.semantics.hidden;
@@ -15069,6 +15158,35 @@ test "widget layout diff marks variant changes as paint dirty" {
     try expectRect(geometry.RectF.init(10, 10, 100, 30), invalidations[0].dirty_bounds);
 }
 
+test "widget layout diff marks size changes as paint dirty" {
+    const previous_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+    }};
+    const sized_child = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 10, 100, 30),
+        .text = "Run",
+        .size = .lg,
+    }};
+
+    var previous_nodes: [2]WidgetLayoutNode = undefined;
+    var sized_nodes: [2]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(.{ .kind = .stack, .children = &previous_child }, geometry.RectF.init(0, 0, 140, 80), &previous_nodes);
+    const sized = try layoutWidgetTree(.{ .kind = .stack, .children = &sized_child }, geometry.RectF.init(0, 0, 140, 80), &sized_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, sized, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expect(!invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expect(!invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(10, 10, 100, 30), invalidations[0].dirty_bounds);
+}
+
 test "widget layout diff marks grid column changes as layout dirty" {
     const children = [_]Widget{
         .{ .id = 2, .kind = .text, .text = "One" },
@@ -15827,6 +15945,56 @@ test "widget emitter applies button variants" {
     }
     switch (display_list.commands[14]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.destructive_text, text.color),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget emitter applies control sizes" {
+    const tokens = DesignTokens{};
+
+    var commands: [12]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, .{ .id = 40, .kind = .button, .frame = geometry.RectF.init(0, 0, 120, 32), .text = "Small", .size = .sm }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 41, .kind = .button, .frame = geometry.RectF.init(0, 40, 120, 32), .text = "Large", .size = .lg }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 42, .kind = .text_field, .frame = geometry.RectF.init(0, 80, 120, 32), .text = "Input", .size = .sm }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 43, .kind = .checkbox, .frame = geometry.RectF.init(0, 120, 80, 20), .size = .lg }, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 11), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(6), fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(f32, 13), text.size);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectApproxEqAbs(@as(f32, 100), text.text_layout.?.max_width, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(10), fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[5]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(f32, 15), text.size);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectApproxEqAbs(@as(f32, 92), text.text_layout.?.max_width, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[8]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(f32, 13), text.size);
+            try std.testing.expect(text.text_layout != null);
+            try std.testing.expectApproxEqAbs(@as(f32, 100), text.text_layout.?.max_width, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[9]) {
+        .fill_rounded_rect => |fill| try std.testing.expectApproxEqAbs(@as(f32, 15.75), fill.rect.width, 0.001),
         else => return error.TestUnexpectedResult,
     }
 }

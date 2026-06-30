@@ -3466,6 +3466,7 @@ pub const ControlTokens = struct {
     combobox: ControlVisualTokens = .{},
     textarea: ControlVisualTokens = .{},
     list_item: ControlVisualTokens = .{},
+    menu_item: ControlVisualTokens = .{},
     data_cell: ControlVisualTokens = .{},
     segmented_control: ControlVisualTokens = .{},
     checkbox: ControlVisualTokens = .{},
@@ -3692,6 +3693,7 @@ pub const ControlTokenOverrides = struct {
     combobox: ControlVisualTokenOverrides = .{},
     textarea: ControlVisualTokenOverrides = .{},
     list_item: ControlVisualTokenOverrides = .{},
+    menu_item: ControlVisualTokenOverrides = .{},
     data_cell: ControlVisualTokenOverrides = .{},
     segmented_control: ControlVisualTokenOverrides = .{},
     checkbox: ControlVisualTokenOverrides = .{},
@@ -3734,6 +3736,7 @@ pub const ControlTokenOverrides = struct {
         next.combobox = self.combobox.apply(next.combobox);
         next.textarea = self.textarea.apply(next.textarea);
         next.list_item = self.list_item.apply(next.list_item);
+        next.menu_item = self.menu_item.apply(next.menu_item);
         next.data_cell = self.data_cell.apply(next.data_cell);
         next.segmented_control = self.segmented_control.apply(next.segmented_control);
         next.checkbox = self.checkbox.apply(next.checkbox);
@@ -9339,7 +9342,8 @@ fn sheetControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
 fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
         .data_cell => controlVisualTokensWithFallback(tokens.controls.data_cell, tokens.controls.list_item),
-        .list_item, .menu_item => tokens.controls.list_item,
+        .menu_item => controlVisualTokensWithFallback(tokens.controls.menu_item, tokens.controls.list_item),
+        .list_item => tokens.controls.list_item,
         else => .{},
     };
 }
@@ -16319,6 +16323,12 @@ test "design token overrides compose with built-in themes" {
                 .active_background = Color.rgb8(38, 46, 54),
                 .foreground = Color.rgb8(235, 240, 245),
             },
+            .menu_item = .{
+                .hover_background = Color.rgb8(30, 36, 42),
+                .active_background = Color.rgb8(40, 48, 56),
+                .foreground = Color.rgb8(238, 244, 250),
+                .radius = 6,
+            },
             .data_cell = .{
                 .background = Color.rgb8(17, 23, 29),
                 .active_background = Color.rgb8(35, 43, 51),
@@ -16504,6 +16514,10 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(28, 34, 40), tokens.controls.list_item.hover_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(38, 46, 54), tokens.controls.list_item.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(235, 240, 245), tokens.controls.list_item.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(30, 36, 42), tokens.controls.menu_item.hover_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(40, 48, 56), tokens.controls.menu_item.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(238, 244, 250), tokens.controls.menu_item.foreground.?);
+    try std.testing.expectEqual(@as(f32, 6), tokens.controls.menu_item.radius.?);
     try std.testing.expectEqualDeep(Color.rgb8(17, 23, 29), tokens.controls.data_cell.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(35, 43, 51), tokens.controls.data_cell.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(232, 238, 244), tokens.controls.data_cell.foreground.?);
@@ -19531,6 +19545,50 @@ test "widget emitter applies data cell control tokens" {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("Revenue", text.text);
             try std.testing.expectEqualDeep(Color.rgb8(236, 242, 248), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget emitter applies menu item control tokens" {
+    const tokens = DesignTokens{
+        .controls = .{
+            .list_item = .{
+                .active_background = Color.rgb8(12, 18, 24),
+                .foreground = Color.rgb8(200, 210, 220),
+                .radius = 2,
+            },
+            .menu_item = .{
+                .active_background = Color.rgb8(36, 44, 52),
+                .foreground = Color.rgb8(240, 246, 252),
+                .radius = 5,
+            },
+        },
+    };
+
+    var commands: [3]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, .{
+        .id = 55,
+        .kind = .menu_item,
+        .frame = geometry.RectF.init(0, 0, 180, 30),
+        .text = "Copy token",
+        .state = .{ .selected = true },
+    }, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 2), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| {
+            try std.testing.expectEqualDeep(Radius.all(5), fill.radius);
+            try expectFillColor(Color.rgb8(36, 44, 52), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("Copy token", text.text);
+            try std.testing.expectEqualDeep(Color.rgb8(240, 246, 252), text.color);
         },
         else => return error.TestUnexpectedResult,
     }

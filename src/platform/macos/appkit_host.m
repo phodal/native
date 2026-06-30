@@ -1520,6 +1520,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     if (clearLoadAction) {
         [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
         NSRectFill(NSMakeRect(0, 0, surfaceWidth, surfaceHeight));
+    } else if (retainedLoadAction && hasScissor) {
+        [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
+        NSRectFill(scissorRect);
     }
     if (hasScissor) {
         [NSBezierPath clipRect:scissorRect];

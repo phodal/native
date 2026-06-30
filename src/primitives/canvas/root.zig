@@ -2284,11 +2284,15 @@ pub const CanvasRenderPass = struct {
         if (!self.requiresRender()) return .{};
         var summary = CanvasGpuPacketSummary{
             .load_action = self.loadAction(),
-            .command_count = self.commands.len,
             .cache_action_count = self.encoderCacheActionCount(),
         };
+        const scissor_bounds = self.scissorBounds();
         for (self.commands, 0..) |command, index| {
+            if (scissor_bounds) |scissor| {
+                if (!renderCommandIntersectsDirtyBounds(command, scissor)) continue;
+            }
             const gpu_command = canvasGpuCommandFromRenderCommand(command, index);
+            summary.command_count += 1;
             if (gpu_command.usesCachedResource()) summary.cached_resource_command_count += 1;
             if (!gpu_command.supported()) summary.unsupported_command_count += 1;
         }
@@ -2500,14 +2504,30 @@ pub const ReferenceRenderSurface = struct {
         }
     }
 
+    pub fn clearRect(self: ReferenceRenderSurface, rect: geometry.RectF, color: Color) void {
+        const pixel_rect = referencePixelRect(rect, self.width, self.height) orelse return;
+        const pixel = colorToRgba8(color);
+        var y = pixel_rect.y;
+        while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
+            var x = pixel_rect.x;
+            while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
+                const index = (y * self.width + x) * 4;
+                self.pixels[index + 0] = pixel[0];
+                self.pixels[index + 1] = pixel[1];
+                self.pixels[index + 2] = pixel[2];
+                self.pixels[index + 3] = pixel[3];
+            }
+        }
+    }
+
     pub fn renderPass(self: ReferenceRenderSurface, pass: CanvasRenderPass, clear_color: Color) Error!void {
+        const scale = referencePassScale(pass.scale);
+        const scissor = if (pass.scissorBounds()) |bounds| referenceScaleRect(bounds, scale) else null;
         switch (pass.loadAction()) {
             .skip => return,
             .clear => self.clear(clear_color),
-            .load => {},
+            .load => if (scissor) |bounds| self.clearRect(bounds, clear_color),
         }
-        const scale = referencePassScale(pass.scale);
-        const scissor = if (pass.scissorBounds()) |bounds| referenceScaleRect(bounds, scale) else null;
         for (pass.commands) |command| try self.renderCommand(referenceScaleCommand(command, scale), scissor);
     }
 
@@ -17971,6 +17991,10 @@ test "canvas frame plan clips incremental dirty bounds to surface" {
     try std.testing.expectEqual(CanvasRenderPassLoadAction.load, packet.load_action);
     try std.testing.expectEqual(@as(usize, 1), packet.commandCount());
     try std.testing.expectEqual(@as(?ObjectId, 1), packet.commands[0].id);
+    const packet_summary = frame.gpuPacketSummary();
+    try std.testing.expectEqual(packet.commandCount(), packet_summary.command_count);
+    try std.testing.expectEqual(packet.cachedResourceCommandCount(), packet_summary.cached_resource_command_count);
+    try std.testing.expectEqual(packet.unsupported_command_count, packet_summary.unsupported_command_count);
     try expectRect(geometry.RectF.init(0, 0, 50, 40), packet.scissor.?);
     var packet_json_buffer: [2048]u8 = undefined;
     var packet_json_writer = std.Io.Writer.fixed(&packet_json_buffer);
@@ -18323,6 +18347,31 @@ test "reference renderer applies render pass scissor on load" {
     try expectPixelRgba8(.{ 0, 0, 255, 255 }, surface, 0, 0);
     try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
     try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 2, 2);
+    try expectPixelRgba8(.{ 0, 0, 255, 255 }, surface, 3, 3);
+}
+
+test "reference renderer clears dirty rect on retained load" {
+    const commands = [_]RenderCommand{.{
+        .command = .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(1, 1, 1, 1),
+            .fill = .{ .color = Color.rgb8(255, 0, 0) },
+        } },
+        .local_bounds = geometry.RectF.init(1, 1, 1, 1),
+        .bounds = geometry.RectF.init(1, 1, 1, 1),
+    }};
+
+    var pixels: [4 * 4 * 4]u8 = undefined;
+    const surface = try ReferenceRenderSurface.init(4, 4, &pixels);
+    surface.clear(Color.rgb8(0, 0, 255));
+    try surface.renderPass(.{
+        .dirty_bounds = geometry.RectF.init(1, 1, 2, 2),
+        .commands = &commands,
+    }, Color.rgb8(0, 0, 0));
+
+    try expectPixelRgba8(.{ 0, 0, 255, 255 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 2, 2);
     try expectPixelRgba8(.{ 0, 0, 255, 255 }, surface, 3, 3);
 }
 

@@ -1563,9 +1563,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     id<MTLRenderPipelineState> pipeline = [self.device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&pipelineError];
     if (!pipeline) return NO;
 
+    // The canvas texture is already rasterized at backing scale; present it without filtering.
     MTLSamplerDescriptor *samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
-    samplerDescriptor.minFilter = MTLSamplerMinMagFilterLinear;
-    samplerDescriptor.magFilter = MTLSamplerMinMagFilterLinear;
+    samplerDescriptor.minFilter = MTLSamplerMinMagFilterNearest;
+    samplerDescriptor.magFilter = MTLSamplerMinMagFilterNearest;
     samplerDescriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
     samplerDescriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
     samplerDescriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;

@@ -4105,6 +4105,167 @@ pub const Widget = struct {
     children: []const Widget = &.{},
 };
 
+pub const BuiltinComponentOptions = struct {
+    id: ObjectId = 0,
+    frame: geometry.RectF = .{},
+    opacity: f32 = 1,
+    transform: Affine = .{},
+    backdrop_blur: f32 = 0,
+    backdrop_blur_token: ?BlurTokenRef = null,
+    text: []const u8 = "",
+    text_alignment: TextAlign = .start,
+    command: []const u8 = "",
+    image_id: ImageId = 0,
+    image_src: ?geometry.RectF = null,
+    image_fit: ImageFit = .stretch,
+    image_sampling: ImageSampling = .linear,
+    image_opacity: f32 = 1,
+    text_selection: ?TextSelection = null,
+    text_composition: ?TextRange = null,
+    value: f32 = 0,
+    layer: ?i32 = null,
+    state: WidgetState = .{},
+    layout: WidgetLayoutStyle = .{},
+    variant: ?WidgetVariant = null,
+    size: ?WidgetSize = null,
+    style: WidgetStyle = .{},
+    semantics: WidgetSemantics = .{},
+    children: []const Widget = &.{},
+};
+
+pub fn builtinComponentWidget(kind: BuiltinComponentKind, options: BuiltinComponentOptions) Widget {
+    const descriptor = builtinComponentDescriptor(kind);
+    return .{
+        .id = options.id,
+        .kind = descriptor.root_widget_kind,
+        .frame = options.frame,
+        .opacity = options.opacity,
+        .transform = options.transform,
+        .backdrop_blur = options.backdrop_blur,
+        .backdrop_blur_token = options.backdrop_blur_token,
+        .text = options.text,
+        .text_alignment = options.text_alignment,
+        .command = options.command,
+        .image_id = options.image_id,
+        .image_src = options.image_src,
+        .image_fit = options.image_fit,
+        .image_sampling = options.image_sampling,
+        .image_opacity = options.image_opacity,
+        .text_selection = options.text_selection,
+        .text_composition = options.text_composition,
+        .value = options.value,
+        .layer = options.layer,
+        .state = options.state,
+        .layout = builtinComponentLayout(kind, options.layout),
+        .variant = options.variant orelse builtinComponentDefaultVariant(kind),
+        .size = options.size orelse builtinComponentDefaultSize(kind),
+        .style = options.style,
+        .semantics = builtinComponentSemantics(descriptor, options.semantics),
+        .children = options.children,
+    };
+}
+
+fn builtinComponentDefaultVariant(kind: BuiltinComponentKind) WidgetVariant {
+    return switch (kind) {
+        .button => .primary,
+        .select => .outline,
+        .toggle => .ghost,
+        else => .default,
+    };
+}
+
+fn builtinComponentDefaultSize(kind: BuiltinComponentKind) WidgetSize {
+    return switch (kind) {
+        .spinner => .sm,
+        else => .default,
+    };
+}
+
+fn builtinComponentSemantics(descriptor: BuiltinComponentDescriptor, semantics: WidgetSemantics) WidgetSemantics {
+    var next = semantics;
+    if (next.role == .none and descriptor.role != .none) {
+        next.role = descriptor.role;
+    }
+    return next;
+}
+
+fn builtinComponentLayout(kind: BuiltinComponentKind, layout: WidgetLayoutStyle) WidgetLayoutStyle {
+    if (!widgetLayoutStyleIsDefault(layout)) return layout;
+
+    return switch (kind) {
+        .alert,
+        .bubble,
+        .card,
+        => .{
+            .padding = geometry.InsetsF.all(16),
+            .gap = 12,
+            .clip_content = true,
+        },
+        .accordion,
+        .resizable,
+        => .{
+            .padding = geometry.InsetsF.all(12),
+            .gap = 8,
+            .clip_content = true,
+        },
+        .dialog,
+        .drawer,
+        .sheet,
+        => .{
+            .padding = geometry.InsetsF.all(20),
+            .gap = 16,
+            .clip_content = true,
+        },
+        .dropdown_menu => .{
+            .padding = geometry.InsetsF.all(4),
+            .gap = 2,
+            .clip_content = true,
+        },
+        .breadcrumb,
+        .button_group,
+        .pagination,
+        .radio_group,
+        .tabs,
+        .toggle_group,
+        => .{
+            .gap = 4,
+            .cross_alignment = .center,
+        },
+        .table => .{
+            .clip_content = true,
+        },
+        .textarea => .{
+            .min_size = geometry.SizeF.init(160, 80),
+        },
+        .separator => .{
+            .min_size = geometry.SizeF.init(1, 1),
+        },
+        .skeleton => .{
+            .min_size = geometry.SizeF.init(120, 20),
+            .clip_content = true,
+        },
+        else => layout,
+    };
+}
+
+fn widgetLayoutStyleIsDefault(layout: WidgetLayoutStyle) bool {
+    return layout.padding.top == 0 and
+        layout.padding.right == 0 and
+        layout.padding.bottom == 0 and
+        layout.padding.left == 0 and
+        layout.gap == 0 and
+        layout.grow == 0 and
+        layout.main_alignment == .start and
+        layout.cross_alignment == .stretch and
+        !layout.clip_content and
+        layout.columns == 0 and
+        !layout.virtualized and
+        layout.virtual_item_extent == 0 and
+        layout.virtual_overscan == 0 and
+        layout.min_size.width == 0 and
+        layout.min_size.height == 0;
+}
+
 pub const max_widget_depth: usize = 32;
 pub const max_widget_text_range_rects: usize = 4;
 const max_widget_text_layout_lines: usize = 16;
@@ -14691,6 +14852,134 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expect(builtinComponentDescriptor(.accordion).composite);
     try std.testing.expect(builtinComponentDescriptor(.toggle_group).composite);
     try std.testing.expect(!builtinComponentDescriptor(.button).composite);
+}
+
+test "built-in component factory creates shadcn widget foundations" {
+    for (builtin_component_kinds, 0..) |kind, index| {
+        const descriptor = builtinComponentDescriptor(kind);
+        const widget = builtinComponentWidget(kind, .{
+            .id = @as(ObjectId, @intCast(index + 1)),
+            .text = descriptor.name,
+        });
+
+        try std.testing.expectEqual(descriptor.root_widget_kind, widget.kind);
+        if (descriptor.role != .none) {
+            try std.testing.expectEqual(descriptor.role, widget.semantics.role);
+        } else {
+            try std.testing.expectEqual(WidgetRole.none, widget.semantics.role);
+        }
+        try std.testing.expectEqualStrings(descriptor.name, widget.text);
+    }
+
+    try std.testing.expectEqual(WidgetVariant.primary, builtinComponentWidget(.button, .{}).variant);
+    try std.testing.expectEqual(WidgetVariant.outline, builtinComponentWidget(.select, .{}).variant);
+    try std.testing.expectEqual(WidgetVariant.ghost, builtinComponentWidget(.toggle, .{}).variant);
+    try std.testing.expectEqual(WidgetSize.sm, builtinComponentWidget(.spinner, .{}).size);
+}
+
+test "built-in component factory applies shadcn composite defaults" {
+    const button_children = [_]Widget{
+        builtinComponentWidget(.button, .{ .id = 2, .text = "One" }),
+        builtinComponentWidget(.button, .{ .id = 3, .text = "Two", .variant = .secondary }),
+    };
+    const card = builtinComponentWidget(.card, .{
+        .id = 1,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+        .children = &button_children,
+    });
+    try std.testing.expectEqual(WidgetKind.panel, card.kind);
+    try std.testing.expectEqual(@as(f32, 16), card.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 16), card.layout.padding.right);
+    try std.testing.expectEqual(@as(f32, 16), card.layout.padding.bottom);
+    try std.testing.expectEqual(@as(f32, 16), card.layout.padding.left);
+    try std.testing.expectEqual(@as(f32, 12), card.layout.gap);
+    try std.testing.expect(card.layout.clip_content);
+    try std.testing.expectEqual(@as(usize, 2), card.children.len);
+
+    const button_group = builtinComponentWidget(.button_group, .{});
+    try std.testing.expectEqual(WidgetKind.row, button_group.kind);
+    try std.testing.expectEqual(@as(f32, 4), button_group.layout.gap);
+    try std.testing.expectEqual(WidgetCrossAlignment.center, button_group.layout.cross_alignment);
+
+    const custom_card = builtinComponentWidget(.card, .{
+        .layout = .{ .gap = 24 },
+    });
+    try std.testing.expectEqual(@as(f32, 0), custom_card.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 24), custom_card.layout.gap);
+}
+
+test "built-in component widgets expose shadcn semantics and render tokens" {
+    const children = [_]Widget{
+        builtinComponentWidget(.button, .{
+            .id = 2,
+            .frame = geometry.RectF.init(16, 16, 96, 34),
+            .text = "Save",
+            .command = "settings.save",
+        }),
+        builtinComponentWidget(.input, .{
+            .id = 3,
+            .frame = geometry.RectF.init(16, 58, 160, 34),
+            .text = "zero-native",
+            .semantics = .{ .label = "Project name" },
+        }),
+        builtinComponentWidget(.switch_control, .{
+            .id = 4,
+            .frame = geometry.RectF.init(16, 104, 120, 30),
+            .text = "Live",
+            .value = 1,
+        }),
+        builtinComponentWidget(.table, .{
+            .id = 5,
+            .frame = geometry.RectF.init(16, 144, 180, 72),
+            .semantics = .{ .label = "Deployments" },
+        }),
+    };
+    const root = builtinComponentWidget(.card, .{
+        .id = 1,
+        .frame = geometry.RectF.init(0, 0, 240, 240),
+        .semantics = .{ .label = "Settings" },
+        .children = &children,
+    });
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, root.frame, &nodes);
+
+    var semantics_buffer: [8]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 5), semantics.len);
+    try std.testing.expectEqual(WidgetRole.group, semantics[0].role);
+    try std.testing.expectEqualStrings("Settings", semantics[0].label);
+    try std.testing.expectEqual(WidgetRole.button, semantics[1].role);
+    try std.testing.expectEqualStrings("Save", semantics[1].label);
+    try std.testing.expect(semantics[1].actions.press);
+    try std.testing.expectEqual(WidgetRole.textbox, semantics[2].role);
+    try std.testing.expectEqualStrings("Project name", semantics[2].label);
+    try std.testing.expectEqualStrings("zero-native", semantics[2].text_value);
+    try std.testing.expectEqual(WidgetRole.switch_control, semantics[3].role);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[3].value);
+    try std.testing.expect(semantics[3].actions.toggle);
+    try std.testing.expectEqual(WidgetRole.grid, semantics[4].role);
+    try std.testing.expectEqualStrings("Deployments", semantics[4].label);
+
+    const button = builtinComponentWidget(.button, .{
+        .id = 10,
+        .frame = geometry.RectF.init(0, 0, 120, 34),
+        .text = "Primary",
+    });
+    var commands: [4]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, button, .{});
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(ColorTokens.light().accent, fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(ColorTokens.light().accent_text, text.color),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "design token overrides compose with built-in themes" {

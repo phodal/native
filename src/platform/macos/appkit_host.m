@@ -5,6 +5,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <WebKit/WebKit.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <CoreText/CoreText.h>
 #import <dispatch/dispatch.h>
 #import <Security/Security.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -28,6 +29,7 @@ static NSRect constrainFrame(NSRect frame);
 static NSString *ZeroNativeAppKitBridgeScript(void);
 static NSString *ZeroNativeMimeTypeForPath(NSString *path);
 static NSString *ZeroNativeResolvedAssetRoot(NSString *rootPath);
+static void ZeroNativeRegisterBundledFonts(void);
 static NSString *ZeroNativeSafeAssetPath(NSURL *url, NSString *entryPath);
 static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath);
 static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback);
@@ -2431,6 +2433,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    ZeroNativeRegisterBundledFonts();
     self.appName = appName.length > 0 ? appName : @"zero-native";
     self.bundleIdentifier = bundleIdentifier.length > 0 ? bundleIdentifier : @"dev.zero_native.app";
     self.iconPath = iconPath ?: @"";
@@ -3481,6 +3484,48 @@ static NSString *ZeroNativeResolvedAssetRoot(NSString *rootPath) {
         if (isAppBundle || ZeroNativeDirectoryExists(resourceRoot)) return resourceRoot;
     }
     return cwdPath;
+}
+
+static BOOL ZeroNativeFontAssetExtension(NSString *path) {
+    NSString *extension = path.pathExtension.lowercaseString;
+    return [extension isEqualToString:@"ttf"] ||
+        [extension isEqualToString:@"otf"] ||
+        [extension isEqualToString:@"ttc"] ||
+        [extension isEqualToString:@"otc"] ||
+        [extension isEqualToString:@"woff"] ||
+        [extension isEqualToString:@"woff2"];
+}
+
+static void ZeroNativeRegisterFontsInDirectory(NSString *directoryPath) {
+    if (directoryPath.length == 0 || !ZeroNativeDirectoryExists(directoryPath)) return;
+    NSURL *directoryURL = [NSURL fileURLWithPath:directoryPath isDirectory:YES];
+    NSDirectoryEnumerator<NSURL *> *enumerator = [[NSFileManager defaultManager]
+        enumeratorAtURL:directoryURL
+        includingPropertiesForKeys:@[ NSURLIsRegularFileKey ]
+        options:NSDirectoryEnumerationSkipsHiddenFiles
+        errorHandler:nil];
+    for (NSURL *url in enumerator) {
+        NSNumber *isRegularFile = nil;
+        if (![url getResourceValue:&isRegularFile forKey:NSURLIsRegularFileKey error:nil] || !isRegularFile.boolValue) continue;
+        if (!ZeroNativeFontAssetExtension(url.path)) continue;
+        CFErrorRef error = NULL;
+        CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
+        if (error) CFRelease(error);
+    }
+}
+
+static void ZeroNativeRegisterBundledFonts(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSBundle *bundle = [NSBundle mainBundle];
+        BOOL isAppBundle = [bundle.bundlePath.pathExtension.lowercaseString isEqualToString:@"app"];
+        NSString *root = isAppBundle ? bundle.resourcePath : [[NSFileManager defaultManager] currentDirectoryPath];
+        if (root.length == 0) return;
+        NSArray<NSString *> *relativeFontRoots = @[ @"fonts", @"Fonts", @"assets/fonts" ];
+        for (NSString *relativePath in relativeFontRoots) {
+            ZeroNativeRegisterFontsInDirectory([root stringByAppendingPathComponent:relativePath]);
+        }
+    });
 }
 
 static BOOL ZeroNativePathHasUnsafeSegment(NSString *path) {

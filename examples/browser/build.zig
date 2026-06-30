@@ -193,6 +193,7 @@ fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.B
         if (b.sysroot) |sysroot| app_mod.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
         app_mod.linkFramework("AppKit", .{});
         app_mod.linkFramework("Foundation", .{});
+        app_mod.linkFramework("CoreText", .{});
         app_mod.linkFramework("UniformTypeIdentifiers", .{});
         app_mod.linkFramework("Security", .{});
         app_mod.linkFramework("Metal", .{});

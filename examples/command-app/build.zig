@@ -210,6 +210,7 @@ fn linkPlatform(b: *std.Build, target: std.Build.ResolvedTarget, app_mod: *std.B
         }
         app_mod.linkFramework("AppKit", .{});
         app_mod.linkFramework("Foundation", .{});
+        app_mod.linkFramework("CoreText", .{});
         app_mod.linkFramework("UniformTypeIdentifiers", .{});
         app_mod.linkFramework("Security", .{});
         app_mod.linkFramework("Metal", .{});

@@ -359,6 +359,14 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketNumber(layout[@\"maxWidth\"], 0)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[value drawWithRect:NSMakeRect(origin.x, origin.y - size, textWidth, textHeight)" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-font-assets", "Verify AppKit GPU packet text registers bundled font assets", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "#import <CoreText/CoreText.h>" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CTFontManagerRegisterFontsForURL" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "@[ @\"fonts\", @\"Fonts\", @\"assets/fonts\" ]" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeRegisterBundledFonts();" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketPreferredFont(text, size)" },
+        .{ .path = "src/tooling/templates.zig", .pattern = "app_mod.linkFramework(\"CoreText\", .{});" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "zero_native_appkit_set_view_cursor" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },

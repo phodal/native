@@ -8077,7 +8077,16 @@ fn focusTargetFromLayoutNode(layout: WidgetLayoutTree, index: usize) ?WidgetFocu
     if (index >= layout.nodes.len) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
     if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
-    return focusTargetFromNode(layout.nodes[index], index);
+    const node = layout.nodes[index];
+    if (node.widget.id == 0) return null;
+    if (!isFocusable(node.widget) and (node.widget.state.disabled or !widgetScrollSemantics(layout, index).scrollable)) return null;
+    return .{
+        .id = node.widget.id,
+        .kind = node.widget.kind,
+        .bounds = node.frame,
+        .index = index,
+        .state = node.widget.state,
+    };
 }
 
 fn spatialFocusCandidate(
@@ -8124,17 +8133,6 @@ fn rectsOverlapX(a: geometry.RectF, b: geometry.RectF) bool {
 
 fn rectsOverlapY(a: geometry.RectF, b: geometry.RectF) bool {
     return @min(a.maxY(), b.maxY()) > @max(a.y, b.y);
-}
-
-fn focusTargetFromNode(node: WidgetLayoutNode, index: usize) ?WidgetFocusTarget {
-    if (!isFocusable(node.widget)) return null;
-    return .{
-        .id = node.widget.id,
-        .kind = node.widget.kind,
-        .bounds = node.frame,
-        .index = index,
-        .state = node.widget.state,
-    };
 }
 
 fn widgetIndexById(layout: WidgetLayoutTree, id: ObjectId) ?usize {
@@ -8516,7 +8514,7 @@ const WidgetScrollSemantics = struct {
 fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetScrollSemantics {
     if (node_index >= layout.nodes.len) return .{};
     const node = layout.nodes[node_index];
-    if (node.widget.kind != .scroll_view) return .{};
+    if (!widgetExposesScrollSemantics(node.widget)) return .{};
 
     const viewport = node.frame.inset(node.widget.layout.padding).normalized();
     if (viewport.isEmpty()) return .{};
@@ -8533,6 +8531,14 @@ fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetScro
         },
         .value = if (max_offset > 0) offset / max_offset else 0,
         .scrollable = max_offset > 0,
+    };
+}
+
+fn widgetExposesScrollSemantics(widget: Widget) bool {
+    return switch (widget.kind) {
+        .scroll_view => true,
+        .list, .data_grid => widget.layout.virtualized,
+        else => false,
     };
 }
 
@@ -12160,6 +12166,15 @@ test "widget virtualized data grid lays out visible rows" {
     try std.testing.expectEqual(WidgetRole.grid, semantics[0].role);
     try std.testing.expectEqual(@as(?usize, 4), semantics[0].grid_row_count);
     try std.testing.expectEqual(@as(?usize, 0), semantics[0].grid_column_count);
+    try std.testing.expect(semantics[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 25), semantics[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 45), semantics[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 95), semantics[0].scroll.content_extent);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.focus);
+    try std.testing.expect(semantics[0].actions.increment);
+    try std.testing.expect(semantics[0].actions.decrement);
+    try std.testing.expectEqual(@as(ObjectId, 1), layout.focusTargetById(1).?.id);
 
     try std.testing.expectEqual(WidgetRole.row, semantics[1].role);
     try std.testing.expectEqual(@as(ObjectId, 3), semantics[1].id);
@@ -12408,6 +12423,15 @@ test "widget virtualized list exposes logical item semantics" {
     try std.testing.expectEqual(@as(usize, 6), semantics.len);
     try std.testing.expectEqual(WidgetRole.list, semantics[0].role);
     try std.testing.expect(!semantics[0].list.present);
+    try std.testing.expect(semantics[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 45), semantics[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 50), semantics[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 245), semantics[0].scroll.content_extent);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.focus);
+    try std.testing.expect(semantics[0].actions.increment);
+    try std.testing.expect(semantics[0].actions.decrement);
+    try std.testing.expectEqual(@as(ObjectId, 1), layout.focusTargetById(1).?.id);
 
     try std.testing.expectEqual(WidgetRole.listitem, semantics[1].role);
     try std.testing.expectEqual(@as(ObjectId, 2), semantics[1].id);

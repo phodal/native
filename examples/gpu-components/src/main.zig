@@ -1157,6 +1157,10 @@ test "gpu components semantics cover retained widget families" {
     try std.testing.expectEqual(@as(?f32, 0.62), slider.value);
     try std.testing.expect(slider.actions.increment);
     try std.testing.expect(slider.actions.decrement);
+    const nav_list = expectSemantic(semantics, 120);
+    try std.testing.expect(nav_list.scroll.present);
+    try std.testing.expect(nav_list.actions.increment);
+    try std.testing.expect(nav_list.actions.decrement);
     const scroll = expectSemantic(semantics, 130);
     try std.testing.expect(scroll.scroll.present);
     try std.testing.expect(scroll.actions.increment);
@@ -1165,8 +1169,12 @@ test "gpu components semantics cover retained widget families" {
     try std.testing.expect(selected_nav.state.selected);
     try std.testing.expect(selected_nav.list.present);
     try std.testing.expectEqual(@as(u32, 6), selected_nav.list.item_count);
-    try std.testing.expectEqual(@as(?usize, 5), expectSemantic(semantics, 150).grid_row_count);
-    try std.testing.expectEqual(@as(?usize, 2), expectSemantic(semantics, 150).grid_column_count);
+    const data_grid = expectSemantic(semantics, 150);
+    try std.testing.expect(data_grid.scroll.present);
+    try std.testing.expect(data_grid.actions.increment);
+    try std.testing.expect(data_grid.actions.decrement);
+    try std.testing.expectEqual(@as(?usize, 5), data_grid.grid_row_count);
+    try std.testing.expectEqual(@as(?usize, 2), data_grid.grid_column_count);
     try std.testing.expectEqual(@as(?usize, 1), expectSemantic(semantics, 156).grid_row_index);
     try std.testing.expectEqual(@as(?usize, 0), expectSemantic(semantics, 156).grid_column_index);
 }
@@ -1284,6 +1292,10 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(componentSnapshotWidget(snapshot, 115).?.actions.increment);
     try std.testing.expectEqualStrings("progressbar", componentSnapshotWidget(snapshot, 116).?.role);
     try std.testing.expectEqualStrings("tab", componentSnapshotWidget(snapshot, 117).?.role);
+    const snapshot_nav_list = componentSnapshotWidget(snapshot, 120).?;
+    try std.testing.expect(snapshot_nav_list.scroll.present);
+    try std.testing.expect(snapshot_nav_list.actions.increment);
+    try std.testing.expect(snapshot_nav_list.actions.decrement);
     try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.present);
     try std.testing.expectEqual(@as(f32, 28), componentSnapshotWidget(snapshot, 130).?.scroll.viewport_extent);
     try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.content_extent > 28);
@@ -1291,8 +1303,12 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqualStrings("menuitem", menu_item.role);
     try std.testing.expect(menu_item.bounds.width > 0);
     try std.testing.expect(menu_item.bounds.height >= 28);
-    try std.testing.expectEqual(@as(?usize, 5), componentSnapshotWidget(snapshot, 150).?.grid_row_count);
-    try std.testing.expectEqual(@as(?usize, 2), componentSnapshotWidget(snapshot, 150).?.grid_column_count);
+    const snapshot_data_grid = componentSnapshotWidget(snapshot, 150).?;
+    try std.testing.expect(snapshot_data_grid.scroll.present);
+    try std.testing.expect(snapshot_data_grid.actions.increment);
+    try std.testing.expect(snapshot_data_grid.actions.decrement);
+    try std.testing.expectEqual(@as(?usize, 5), snapshot_data_grid.grid_row_count);
+    try std.testing.expectEqual(@as(?usize, 2), snapshot_data_grid.grid_column_count);
     try std.testing.expectEqualStrings("gridcell", componentSnapshotWidget(snapshot, 156).?.role);
     try std.testing.expectEqual(@as(?usize, 1), componentSnapshotWidget(snapshot, 156).?.grid_row_index);
     try std.testing.expectEqual(@as(?usize, 0), componentSnapshotWidget(snapshot, 156).?.grid_column_index);
@@ -1439,6 +1455,24 @@ test "gpu components app registers component lab on first gpu frame" {
 
     const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 60") != null);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 120 increment");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    const keyed_list = componentSnapshotWidget(snapshot, 120).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 24), keyed_list.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 24), app.virtual_scroll.nav, 0.001);
+    const list_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 24") != null);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 150 increment");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    const keyed_grid = componentSnapshotWidget(snapshot, 150).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 54), keyed_grid.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 54), app.virtual_scroll.data, 0.001);
+    const grid_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, grid_status_view.text, "Keyed data_grid #150: offset 54") != null);
 }
 
 test "gpu components pointer clicks update retained controls" {

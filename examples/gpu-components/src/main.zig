@@ -726,8 +726,8 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 135, .kind = .list_item, .text = "Dirty bounds" },
     };
     const segment_controls = [_]canvas.Widget{
-        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 72, 34), .text = "Small", .size = .sm, .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
-        .{ .id = 119, .kind = .segmented_control, .frame = rect(76, 0, 72, 34), .text = "Large", .size = .lg, .semantics = .{ .label = "Large density" } },
+        .{ .id = 117, .kind = .segmented_control, .text = "Small", .size = .sm, .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
+        .{ .id = 119, .kind = .segmented_control, .text = "Large", .size = .lg, .semantics = .{ .label = "Large density" } },
     };
     const form_controls = [_]canvas.Widget{
         .{ .id = 111, .kind = .text_field, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
@@ -1297,7 +1297,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 11901548007894975135), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 17589498429082978135), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

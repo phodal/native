@@ -4047,8 +4047,12 @@ pub fn emitWidgetTree(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 }
 
 pub fn layoutWidgetTree(widget: Widget, bounds: geometry.RectF, output: []WidgetLayoutNode) Error!WidgetLayoutTree {
+    return layoutWidgetTreeWithTokens(widget, bounds, .{}, output);
+}
+
+pub fn layoutWidgetTreeWithTokens(widget: Widget, bounds: geometry.RectF, tokens: DesignTokens, output: []WidgetLayoutNode) Error!WidgetLayoutTree {
     var len: usize = 0;
-    _ = try layoutWidgetDepth(widget, bounds.normalized(), null, 0, output, &len);
+    _ = try layoutWidgetDepth(widget, bounds.normalized(), null, 0, output, &len, tokens);
     return .{ .nodes = output[0..len] };
 }
 
@@ -7614,7 +7618,7 @@ fn widgetTextInputLayoutOptions(widget: Widget, text_size: f32, inset: f32) Text
 }
 
 fn widgetTextInputLineHeight(text_size: f32) f32 {
-    return text_size * 1.25;
+    return widgetLineHeight(text_size);
 }
 
 fn widgetTextInputWrap(widget: Widget, line_height: f32) TextWrap {
@@ -7902,6 +7906,7 @@ fn layoutWidgetDepth(
     depth: usize,
     output: []WidgetLayoutNode,
     len: *usize,
+    tokens: DesignTokens,
 ) Error!usize {
     if (depth >= max_widget_depth) return error.WidgetDepthExceeded;
     if (len.* >= output.len) return error.WidgetLayoutListFull;
@@ -7917,26 +7922,26 @@ fn layoutWidgetDepth(
 
     const content = frame.inset(widget.layout.padding);
     switch (widget.kind) {
-        .row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout),
-        .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout),
-        .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns),
+        .row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
+        .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
+        .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns, tokens),
         .data_grid => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
         else
-            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout),
-        .data_row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout),
+            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
+        .data_row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
         .scroll_view => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
         else
-            try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value),
+            try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value, tokens),
         .list => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout)
+            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
         else
-            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout),
-        .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout),
+            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
+        .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         .stack, .panel, .popover => {
             for (widget.children) |child| {
-                _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len);
+                _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
         .text, .icon, .image, .button, .icon_button, .text_field, .search_field, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .toggle, .slider, .progress => {},
@@ -7959,6 +7964,7 @@ fn layoutAxisChildren(
     output: []WidgetLayoutNode,
     len: *usize,
     style: WidgetLayoutStyle,
+    tokens: DesignTokens,
 ) Error!void {
     if (children.len == 0) return;
 
@@ -7979,7 +7985,7 @@ fn layoutAxisChildren(
         if (grow > 0) {
             grow_total += grow;
         } else {
-            fixed_extent += preferredMainExtent(child, axis);
+            fixed_extent += preferredMainExtent(child, axis, tokens);
         }
     }
 
@@ -8001,14 +8007,14 @@ fn layoutAxisChildren(
         const main_extent = if (grow > 0 and grow_total > 0)
             @max(minMainExtent(child, axis), remaining * grow / grow_total)
         else
-            preferredMainExtent(child, axis);
-        const cross = preferredCrossExtent(child, axis, cross_extent);
+            preferredMainExtent(child, axis, tokens);
+        const cross = preferredCrossExtent(child, axis, cross_extent, style.cross_alignment, tokens);
         const cross_origin = alignedCrossAxisOrigin(content, axis, cross_extent, cross, child, style.cross_alignment);
         const child_frame = switch (axis) {
             .horizontal => geometry.RectF.init(cursor, cross_origin, main_extent, cross),
             .vertical => geometry.RectF.init(cross_origin, cursor, cross, main_extent),
         };
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len);
+        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
         cursor += main_extent + child_gap;
     }
 }
@@ -8065,6 +8071,7 @@ fn layoutGridChildren(
     len: *usize,
     gap: f32,
     requested_columns: usize,
+    tokens: DesignTokens,
 ) Error!void {
     if (children.len == 0) return;
 
@@ -8089,7 +8096,7 @@ fn layoutGridChildren(
             width,
             height,
         );
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len);
+        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
     }
 }
 
@@ -8101,10 +8108,11 @@ fn layoutScrollChildren(
     output: []WidgetLayoutNode,
     len: *usize,
     scroll_y: f32,
+    tokens: DesignTokens,
 ) Error!void {
     const scrolled_content = content.translate(geometry.OffsetF.init(0, -scroll_y));
     for (children) |child| {
-        _ = try layoutWidgetDepth(child, stackChildFrame(scrolled_content, child), parent_index, depth + 1, output, len);
+        _ = try layoutWidgetDepth(child, stackChildFrame(scrolled_content, child), parent_index, depth + 1, output, len, tokens);
     }
 }
 
@@ -8117,13 +8125,14 @@ fn layoutVirtualVerticalChildren(
     len: *usize,
     scroll_y: f32,
     style: WidgetLayoutStyle,
+    tokens: DesignTokens,
 ) Error!void {
     if (children.len == 0) return;
 
     const item_extent = if (style.virtual_item_extent > 0)
         style.virtual_item_extent
     else
-        preferredMainExtent(children[0], .vertical);
+        preferredMainExtent(children[0], .vertical, tokens);
     const range = virtualListRange(.{
         .item_count = children.len,
         .item_extent = item_extent,
@@ -8151,7 +8160,7 @@ fn layoutVirtualVerticalChildren(
             width,
             height,
         );
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len);
+        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
     }
 }
 
@@ -8166,15 +8175,106 @@ fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
     );
 }
 
-fn preferredMainExtent(widget: Widget, axis: LayoutAxis) f32 {
+pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    return switch (widget.kind) {
+        .text => intrinsicTextWidgetSize(widget, tokens, widgetBodyTextSize(widget, tokens)),
+        .icon => geometry.SizeF.init(intrinsicIconExtent(widget, tokens), intrinsicIconExtent(widget, tokens)),
+        .button => intrinsicButtonWidgetSize(widget, tokens),
+        .icon_button => intrinsicSquareControlSize(widget, tokens),
+        .text_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetControlHeight(widget, tokens)),
+        .search_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
+        .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
+        .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
+        .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
+        .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
+        .checkbox => intrinsicCheckboxWidgetSize(widget, tokens),
+        .toggle => intrinsicToggleWidgetSize(widget, tokens),
+        .slider => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), @max(widgetSizedDensityValue(widget, tokens, 28), widgetSizedDensityValue(widget, tokens, 20))),
+        .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 8)),
+        .stack, .row, .column, .grid, .data_grid, .scroll_view, .list, .panel, .popover, .menu_surface, .image => geometry.SizeF.zero(),
+    };
+}
+
+fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32) geometry.SizeF {
+    return geometry.SizeF.init(
+        estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size),
+        widgetLineHeight(text_size),
+    );
+}
+
+fn intrinsicPaddedTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32) geometry.SizeF {
+    const text = intrinsicTextWidgetSize(widget, tokens, text_size);
+    return geometry.SizeF.init(text.width + inset * 2, @max(widgetControlHeight(widget, tokens), text.height + widgetSizedDensityValue(widget, tokens, 8)));
+}
+
+fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const height = widgetControlHeight(widget, tokens);
+    if (widget.size == .icon) return geometry.SizeF.init(height, height);
+    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetButtonTextSize(widget, tokens));
+    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetButtonInset(widget, tokens) * 2);
+    return geometry.SizeF.init(width, height);
+}
+
+fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const height = widgetControlHeight(widget, tokens);
+    return geometry.SizeF.init(height, height);
+}
+
+fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetLabelTextSize(widget, tokens));
+    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetControlInset(widget, tokens, tokens.spacing.md) * 2);
+    return geometry.SizeF.init(width, widgetControlHeight(widget, tokens));
+}
+
+fn intrinsicRowTextWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const text_size = widgetBodyTextSize(widget, tokens);
+    const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
+    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size);
+    return geometry.SizeF.init(text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
+}
+
+fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const box_size = widgetSizedDensityValue(widget, tokens, 18);
+    const label_size = widgetLabelTextSize(widget, tokens);
+    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
+    const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
+    return geometry.SizeF.init(box_size + gap + label_width, @max(box_size, widgetLineHeight(label_size)));
+}
+
+fn intrinsicToggleWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const track_width = widgetSizedDensityValue(widget, tokens, 42);
+    const track_height = widgetSizedDensityValue(widget, tokens, 24);
+    const label_size = widgetLabelTextSize(widget, tokens);
+    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
+    const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
+    return geometry.SizeF.init(track_width + gap + label_width, @max(track_height, widgetLineHeight(label_size)));
+}
+
+fn intrinsicIconExtent(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetSizedDensityValue(widget, tokens, 18);
+}
+
+fn widgetControlHeight(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetSizedDensityValue(widget, tokens, 34);
+}
+
+fn widgetDefaultRowHeight(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetSizedDensityValue(widget, tokens, default_widget_row_extent);
+}
+
+fn widgetLineHeight(text_size: f32) f32 {
+    return text_size * 1.25;
+}
+
+fn preferredMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
     const value = switch (axis) {
         .horizontal => widget.frame.width,
         .vertical => widget.frame.height,
     };
-    return @max(minMainExtent(widget, axis), @max(defaultMainExtent(widget, axis), nonNegative(value)));
+    return @max(minMainExtent(widget, axis), if (value > 0) value else intrinsicMainExtent(widget, axis, tokens));
 }
 
-fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32) f32 {
+fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32, alignment: WidgetCrossAlignment, tokens: DesignTokens) f32 {
     const value = switch (axis) {
         .horizontal => widget.frame.height,
         .vertical => widget.frame.width,
@@ -8183,7 +8283,9 @@ fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32) f32 {
         .horizontal => widget.layout.min_size.height,
         .vertical => widget.layout.min_size.width,
     };
-    return @max(min_value, if (value > 0) value else available);
+    if (value > 0) return @max(min_value, value);
+    if (alignment == .stretch) return @max(min_value, available);
+    return @max(min_value, @min(available, intrinsicCrossExtent(widget, axis, tokens)));
 }
 
 fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
@@ -8193,11 +8295,19 @@ fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
     };
 }
 
-fn defaultMainExtent(widget: Widget, axis: LayoutAxis) f32 {
-    if (axis != .vertical) return 0;
-    return switch (widget.kind) {
-        .menu_item, .list_item, .data_row, .data_cell => default_widget_row_extent,
-        else => 0,
+fn intrinsicMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
+    const size = intrinsicWidgetSize(widget, tokens);
+    return switch (axis) {
+        .horizontal => size.width,
+        .vertical => size.height,
+    };
+}
+
+fn intrinsicCrossExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
+    const size = intrinsicWidgetSize(widget, tokens);
+    return switch (axis) {
+        .horizontal => size.height,
+        .vertical => size.width,
     };
 }
 
@@ -8996,6 +9106,10 @@ fn widgetScrollContentExtent(layout: WidgetLayoutTree, scroll_index: usize, view
 }
 
 pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {
+    return virtualWidgetScrollContentExtentWithTokens(widget, viewport_extent, .{});
+}
+
+pub fn virtualWidgetScrollContentExtentWithTokens(widget: Widget, viewport_extent: f32, tokens: DesignTokens) f32 {
     const item_count = if (widget.children.len > 0)
         widget.children.len
     else if (widget.semantics.list_item_count) |count|
@@ -9006,7 +9120,7 @@ pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f3
     const item_extent = if (widget.layout.virtual_item_extent > 0)
         widget.layout.virtual_item_extent
     else if (widget.children.len > 0)
-        preferredMainExtent(widget.children[0], .vertical)
+        preferredMainExtent(widget.children[0], .vertical, tokens)
     else
         return 0;
     return virtualListRange(.{
@@ -12289,6 +12403,37 @@ test "widget layout resolves row sizing and emits laid out commands" {
         .fill_rounded_rect => |fill| try expectRect(geometry.RectF.init(100, 12, 60, 8), fill.rect),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "widget layout uses intrinsic sizes for unframed controls" {
+    const tokens = DesignTokens{};
+    const button = Widget{ .id = 2, .kind = .button, .text = "Run" };
+    const search = Widget{ .id = 3, .kind = .search_field, .text = "Find" };
+    const icon_button = Widget{ .id = 4, .kind = .icon_button, .text = "+", .size = .icon };
+    const row_children = [_]Widget{ button, search, icon_button };
+    const row = Widget{
+        .id = 1,
+        .kind = .row,
+        .layout = .{ .gap = 8, .cross_alignment = .center },
+        .children = &row_children,
+    };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 64), tokens, &nodes);
+
+    const button_size = intrinsicWidgetSize(button, tokens);
+    const search_size = intrinsicWidgetSize(search, tokens);
+    const icon_size = intrinsicWidgetSize(icon_button, tokens);
+    try std.testing.expect(button_size.width > 0);
+    try std.testing.expect(search_size.width > button_size.width);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, (64 - button_size.height) * 0.5, button_size.width, button_size.height));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(button_size.width + 8, (64 - search_size.height) * 0.5, search_size.width, search_size.height));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(button_size.width + search_size.width + 16, (64 - icon_size.height) * 0.5, icon_size.width, icon_size.height));
+
+    var custom_nodes: [4]WidgetLayoutNode = undefined;
+    const custom_tokens = DesignTokens{ .typography = .{ .button_size = 18 } };
+    const custom_layout = try layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 64), custom_tokens, &custom_nodes);
+    try std.testing.expect(custom_layout.findById(2).?.frame.width > layout.findById(2).?.frame.width);
 }
 
 test "widget layout aligns row children on main and cross axes" {

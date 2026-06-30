@@ -10815,7 +10815,6 @@ const WidgetListSemantics = struct {
 fn widgetListSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetListSemantics {
     if (node_index >= layout.nodes.len) return .{};
     const node = layout.nodes[node_index];
-    if (node.widget.kind != .list_item) return .{};
 
     const list_index = node.parent_index orelse return .{};
     if (list_index >= layout.nodes.len or layout.nodes[list_index].widget.kind != .list) return .{};
@@ -10829,6 +10828,8 @@ fn widgetListSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetListSe
             } };
         }
     }
+
+    if (node.widget.kind != .list_item) return .{};
 
     const item_count = directChildCountByKind(layout, list_index, .list_item);
     if (item_count == 0) return .{};
@@ -15071,6 +15072,42 @@ test "widget virtualized list exposes logical item semantics" {
     try std.testing.expect(semantics[5].list.present);
     try std.testing.expectEqual(@as(u32, 4), semantics[5].list.item_index);
     try std.testing.expectEqual(@as(u32, 10), semantics[5].list.item_count);
+}
+
+test "widget virtualized list preserves component child roles and item metrics" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Button" },
+        .{ .id = 3, .kind = .checkbox, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Checkbox" },
+        .{ .id = 4, .kind = .alert, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Alert" },
+        .{ .id = 5, .kind = .badge, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Badge" },
+    };
+    const list = Widget{
+        .id = 1,
+        .kind = .list,
+        .layout = .{
+            .virtualized = true,
+            .virtual_item_extent = 20,
+        },
+        .children = &children,
+    };
+
+    var nodes: [5]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(list, geometry.RectF.init(0, 0, 120, 60), &nodes);
+    var semantics_buffer: [5]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+
+    try std.testing.expectEqual(@as(usize, 4), semantics.len);
+    try std.testing.expectEqual(WidgetRole.list, semantics[0].role);
+    try std.testing.expectEqual(WidgetRole.button, semantics[1].role);
+    try std.testing.expect(semantics[1].list.present);
+    try std.testing.expectEqual(@as(u32, 0), semantics[1].list.item_index);
+    try std.testing.expectEqual(@as(u32, 4), semantics[1].list.item_count);
+    try std.testing.expectEqual(WidgetRole.checkbox, semantics[2].role);
+    try std.testing.expect(semantics[2].list.present);
+    try std.testing.expectEqual(@as(u32, 1), semantics[2].list.item_index);
+    try std.testing.expectEqual(WidgetRole.group, semantics[3].role);
+    try std.testing.expect(semantics[3].list.present);
+    try std.testing.expectEqual(@as(u32, 2), semantics[3].list.item_index);
 }
 
 test "widget pointer route includes capture target and bubble phases" {

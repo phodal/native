@@ -83,6 +83,51 @@ const preview_images = [_]canvas.ReferenceImage{.{
     .pixels = &preview_image_pixels,
 }};
 
+const catalog_accordion_children = [_]canvas.Widget{
+    .{ .id = 18101, .kind = .text, .frame = rect(10, 5, 96, 18), .text = "Accordion", .size = .sm },
+};
+const catalog_breadcrumb_children = [_]canvas.Widget{
+    .{ .id = 18501, .kind = .text, .text = "Home", .size = .sm },
+    .{ .id = 18502, .kind = .text, .text = "Components", .size = .sm },
+};
+const catalog_bubble_children = [_]canvas.Widget{
+    .{ .id = 18601, .kind = .text, .frame = rect(10, 5, 76, 18), .text = "Bubble", .size = .sm },
+};
+const catalog_button_group_children = [_]canvas.Widget{
+    .{ .id = 18801, .kind = .button, .text = "One", .size = .sm, .layout = .{ .grow = 1 } },
+    .{ .id = 18802, .kind = .button, .text = "Two", .size = .sm, .variant = .secondary, .layout = .{ .grow = 1 } },
+};
+const catalog_dropdown_children = [_]canvas.Widget{
+    .{ .id = 19401, .kind = .menu_item, .text = "Copy" },
+};
+const catalog_pagination_children = [_]canvas.Widget{
+    .{ .id = 19601, .kind = .button, .text = "1", .size = .sm, .state = .{ .selected = true } },
+    .{ .id = 19602, .kind = .button, .text = "2", .size = .sm, .variant = .outline },
+    .{ .id = 19603, .kind = .button, .text = "Next", .size = .sm, .variant = .ghost },
+};
+const catalog_radio_group_children = [_]canvas.Widget{
+    .{ .id = 19801, .kind = .radio, .text = "A", .state = .{ .selected = true } },
+    .{ .id = 19802, .kind = .radio, .text = "B" },
+};
+const catalog_resizable_children = [_]canvas.Widget{
+    .{ .id = 19901, .kind = .text, .frame = rect(10, 5, 86, 18), .text = "Resizable", .size = .sm },
+};
+const catalog_table_row_cells = [_]canvas.Widget{
+    .{ .id = 20702, .kind = .data_cell, .text = "Name", .layout = .{ .grow = 1 } },
+    .{ .id = 20703, .kind = .data_cell, .text = "Status", .layout = .{ .grow = 1 } },
+};
+const catalog_table_rows = [_]canvas.Widget{
+    .{ .id = 20701, .kind = .data_row, .children = &catalog_table_row_cells },
+};
+const catalog_tabs_children = [_]canvas.Widget{
+    .{ .id = 20801, .kind = .segmented_control, .text = "One", .size = .sm, .state = .{ .selected = true } },
+    .{ .id = 20802, .kind = .segmented_control, .text = "Two", .size = .sm },
+};
+const catalog_toggle_group_children = [_]canvas.Widget{
+    .{ .id = 21101, .kind = .toggle_button, .text = "B", .size = .sm, .state = .{ .selected = true } },
+    .{ .id = 21102, .kind = .toggle_button, .text = "I", .size = .sm },
+};
+
 const html =
     \\<!doctype html>
     \\<html>
@@ -715,14 +760,44 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
 fn componentCatalogItems() [canvas.builtin_component_names.len]canvas.Widget {
     var items: [canvas.builtin_component_names.len]canvas.Widget = undefined;
     for (&items, 0..) |*item, index| {
-        item.* = .{
-            .id = @as(canvas.ObjectId, @intCast(181 + index)),
-            .kind = .list_item,
-            .text = canvas.builtin_component_names[index],
-            .state = .{ .selected = index == 0 },
-        };
+        item.* = componentCatalogItem(canvas.builtin_component_kinds[index], index);
     }
     return items;
+}
+
+fn componentCatalogItem(kind: canvas.BuiltinComponentKind, index: usize) canvas.Widget {
+    return canvas.builtinComponentWidget(kind, .{
+        .id = @as(canvas.ObjectId, @intCast(181 + index)),
+        .text = canvas.builtinComponentName(kind),
+        .state = .{ .selected = index == 0 },
+        .layout = componentCatalogPreviewLayout(kind),
+        .children = componentCatalogPreviewChildren(kind),
+        .semantics = .{ .label = canvas.builtinComponentName(kind) },
+    });
+}
+
+fn componentCatalogPreviewLayout(kind: canvas.BuiltinComponentKind) canvas.WidgetLayoutStyle {
+    return switch (kind) {
+        .textarea => .{ .min_size = geometry.SizeF.init(0, 28) },
+        else => .{},
+    };
+}
+
+fn componentCatalogPreviewChildren(kind: canvas.BuiltinComponentKind) []const canvas.Widget {
+    return switch (kind) {
+        .accordion => &catalog_accordion_children,
+        .breadcrumb => &catalog_breadcrumb_children,
+        .bubble => &catalog_bubble_children,
+        .button_group => &catalog_button_group_children,
+        .dropdown_menu => &catalog_dropdown_children,
+        .pagination => &catalog_pagination_children,
+        .radio_group => &catalog_radio_group_children,
+        .resizable => &catalog_resizable_children,
+        .table => &catalog_table_rows,
+        .tabs => &catalog_tabs_children,
+        .toggle_group => &catalog_toggle_group_children,
+        else => &.{},
+    };
 }
 
 fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode, virtual_scroll: ComponentVirtualScroll, surface_size: geometry.SizeF) canvas.Error!canvas.WidgetLayoutTree {
@@ -1382,11 +1457,31 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 13539410307128175070), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 7158215782385615385), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
     try std.testing.expectEqual(@as(u8, 255), surface.pixelRgba8(288, 190)[3]);
+}
+
+test "gpu components catalog previews use canonical built-in foundations" {
+    const items = componentCatalogItems();
+    try std.testing.expectEqual(canvas.builtin_component_kinds.len, items.len);
+
+    for (items, 0..) |item, index| {
+        const kind = canvas.builtin_component_kinds[index];
+        const descriptor = canvas.builtinComponentDescriptor(kind);
+        try std.testing.expectEqual(@as(canvas.ObjectId, @intCast(181 + index)), item.id);
+        try std.testing.expectEqual(descriptor.root_widget_kind, item.kind);
+        try std.testing.expectEqual(descriptor.role, item.semantics.role);
+        try std.testing.expectEqualStrings(descriptor.name, item.text);
+        try std.testing.expectEqualStrings(descriptor.name, item.semantics.label);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), componentCatalogPreviewChildren(.button_group).len);
+    try std.testing.expectEqual(@as(usize, 3), componentCatalogPreviewChildren(.pagination).len);
+    try std.testing.expectEqual(@as(usize, 1), componentCatalogPreviewChildren(.table).len);
+    try std.testing.expectEqual(@as(f32, 28), componentCatalogPreviewLayout(.textarea).min_size.height);
 }
 
 test "gpu components frame event adapter preserves packet status" {
@@ -1465,7 +1560,7 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 213, .group);
     try expectSemanticRole(semantics, 214, .group);
     try expectSemanticRole(semantics, 180, .list);
-    try expectSemanticRole(semantics, 181, .listitem);
+    try expectSemanticRole(semantics, 181, .group);
 
     const slider = expectSemantic(semantics, 115);
     try std.testing.expectEqual(@as(?f32, 0.62), slider.value);

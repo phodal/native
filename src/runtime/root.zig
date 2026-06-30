@@ -790,6 +790,7 @@ pub const Runtime = struct {
             .width = pixel_size.width,
             .height = pixel_size.height,
             .scale_factor = canvas_frame.scale,
+            .dirty_bounds = canvas_frame.dirty_bounds,
             .rgba8 = surface.pixels,
         });
         if (self.findViewIndex(window_id, label)) |index| {
@@ -10302,6 +10303,7 @@ test "runtime presents next canvas frame pixels" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 8), harness.null_platform.gpu_surface_present_height);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 4, 4), harness.null_platform.gpu_surface_present_dirty_bounds.?);
     try std.testing.expectEqual(@as(usize, 8 * 8 * 4), harness.null_platform.gpu_surface_present_byte_len);
     const presented_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
@@ -10309,6 +10311,24 @@ test "runtime presents next canvas frame pixels" {
     try std.testing.expect(presented_frame.canvas_frame_dirty_bounds == null);
     try std.testing.expectEqual(@as(usize, 0), presented_frame.canvas_frame_profile_work_units);
     try std.testing.expectEqual(platform.CanvasFrameProfileRisk.idle, presented_frame.canvas_frame_profile_risk);
+
+    const changed_commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(2, 1, 1, 2),
+        .fill = .{ .color = canvas.Color.rgb8(0, 128, 255) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &changed_commands });
+    const changed_frame = try harness.runtime.presentNextCanvasFramePixels(1, "canvas", .{
+        .frame_index = 2,
+        .surface_size = geometry.SizeF.init(4, 4),
+        .scale = 2,
+    }, frame_storage, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0));
+
+    try std.testing.expect(changed_frame.requiresRender());
+    try std.testing.expect(!changed_frame.full_repaint);
+    try std.testing.expect(changed_frame.dirty_bounds != null);
+    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqualDeep(changed_frame.dirty_bounds.?, harness.null_platform.gpu_surface_present_dirty_bounds.?);
 }
 
 test "runtime next canvas frame presents empty canvas once" {

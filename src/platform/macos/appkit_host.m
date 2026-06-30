@@ -248,7 +248,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
 - (void)updateDrawableSize;
-- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
+- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (BOOL)ensureCanvasPresenter;
 - (void)updateWidgetAccessibilityWithNodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (void)stopDisplayTimer;
@@ -334,7 +334,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)setNativeViewFrameInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height;
 - (BOOL)setNativeViewVisibleInWindow:(uint64_t)windowId label:(NSString *)label visible:(BOOL)visible;
 - (BOOL)focusNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
-- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
+- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (BOOL)nativeView:(NSView *)candidate isInSubtreeRootedAt:(NSView *)root;
 - (NSArray<NSString *> *)nativeViewKeysInSubtreeForWindow:(uint64_t)windowId rootKey:(NSString *)rootKey;
@@ -639,11 +639,12 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     if (changed) [self emitResizeEvent];
 }
 
-- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
+- (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
     if (![self isAvailable] || !rgba8 || width == 0 || height == 0) return NO;
     if (byteLength != width * height * 4) return NO;
     if (![self ensureCanvasPresenter]) return NO;
 
+    BOOL textureChanged = NO;
     if (!self.canvasTexture || self.canvasTextureWidth != width || self.canvasTextureHeight != height) {
         MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:width height:height mipmapped:NO];
         descriptor.usage = MTLTextureUsageShaderRead;
@@ -651,12 +652,35 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
         self.canvasTexture = [self.device newTextureWithDescriptor:descriptor];
         self.canvasTextureWidth = width;
         self.canvasTextureHeight = height;
+        textureChanged = YES;
     }
     if (!self.canvasTexture) return NO;
 
-    [self.canvasTexture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+    BOOL uploadFullTexture = textureChanged || !hasDirtyRect || scale <= 0 || dirtyWidth <= 0 || dirtyHeight <= 0;
+    NSUInteger uploadX = 0;
+    NSUInteger uploadY = 0;
+    NSUInteger uploadWidth = width;
+    NSUInteger uploadHeight = height;
+    if (!uploadFullTexture) {
+        CGFloat minX = floor(dirtyX * scale);
+        CGFloat minY = floor(dirtyY * scale);
+        CGFloat maxX = ceil((dirtyX + dirtyWidth) * scale);
+        CGFloat maxY = ceil((dirtyY + dirtyHeight) * scale);
+        minX = fmax(0.0, fmin((CGFloat)width, minX));
+        minY = fmax(0.0, fmin((CGFloat)height, minY));
+        maxX = fmax(minX, fmin((CGFloat)width, maxX));
+        maxY = fmax(minY, fmin((CGFloat)height, maxY));
+        uploadX = (NSUInteger)minX;
+        uploadY = (NSUInteger)minY;
+        uploadWidth = (NSUInteger)(maxX - minX);
+        uploadHeight = (NSUInteger)(maxY - minY);
+        if (uploadWidth == 0 || uploadHeight == 0) return YES;
+    }
+
+    const uint8_t *uploadBytes = rgba8 + ((uploadY * width + uploadX) * 4);
+    [self.canvasTexture replaceRegion:MTLRegionMake2D(uploadX, uploadY, uploadWidth, uploadHeight)
                           mipmapLevel:0
-                            withBytes:rgba8
+                            withBytes:uploadBytes
                           bytesPerRow:width * 4];
     self.hasCanvasTexture = YES;
     (void)scale;
@@ -1818,11 +1842,11 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     return [window makeFirstResponder:view];
 }
 
-- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
+- (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    return [(ZeroNativeMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale rgba8:rgba8 byteLength:byteLength];
+    return [(ZeroNativeMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
 }
 
 - (BOOL)setNativeViewCursorInWindow:(uint64_t)windowId label:(NSString *)label cursor:(NSInteger)cursor {
@@ -3275,10 +3299,10 @@ int zero_native_appkit_close_view(zero_native_appkit_host_t *host, uint64_t wind
     return [object closeNativeViewInWindow:window_id label:labelString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_present_gpu_surface_pixels(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, const uint8_t *rgba8, size_t rgba8_len) {
+int zero_native_appkit_present_gpu_surface_pixels(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
     ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
-    return [object presentGpuSurfacePixelsInWindow:window_id label:labelString ?: @"" width:width height:height scale:scale rgba8:rgba8 byteLength:rgba8_len] ? 1 : 0;
+    return [object presentGpuSurfacePixelsInWindow:window_id label:labelString ?: @"" width:width height:height scale:scale hasDirtyRect:(has_dirty_rect != 0) dirtyX:dirty_x dirtyY:dirty_y dirtyWidth:dirty_width dirtyHeight:dirty_height rgba8:rgba8 byteLength:rgba8_len] ? 1 : 0;
 }
 
 int zero_native_appkit_update_widget_accessibility(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const zero_native_appkit_widget_accessibility_node_t *nodes, size_t node_count) {

@@ -1089,6 +1089,7 @@ pub const GpuSurfacePixels = struct {
     width: usize,
     height: usize,
     scale_factor: f32 = 1,
+    dirty_bounds: ?geometry.RectF = null,
     rgba8: []const u8,
 
     pub fn expectedByteLen(self: GpuSurfacePixels) ?usize {
@@ -1711,6 +1712,7 @@ pub const NullPlatform = struct {
     gpu_surface_present_width: usize = 0,
     gpu_surface_present_height: usize = 0,
     gpu_surface_present_scale_factor: f32 = 1,
+    gpu_surface_present_dirty_bounds: ?geometry.RectF = null,
     gpu_surface_present_byte_len: usize = 0,
     gpu_surface_present_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
     gpu_surface_present_count: usize = 0,
@@ -2326,6 +2328,7 @@ pub const NullPlatform = struct {
         self.gpu_surface_present_width = pixels.width;
         self.gpu_surface_present_height = pixels.height;
         self.gpu_surface_present_scale_factor = pixels.scale_factor;
+        self.gpu_surface_present_dirty_bounds = pixels.dirty_bounds;
         self.gpu_surface_present_byte_len = pixels.rgba8.len;
         self.gpu_surface_present_sample_rgba = if (pixels.rgba8.len >= 4)
             .{ pixels.rgba8[0], pixels.rgba8[1], pixels.rgba8[2], pixels.rgba8[3] }
@@ -2985,6 +2988,7 @@ test "null platform records gpu surface pixel presentation" {
         .width = 2,
         .height = 1,
         .scale_factor = 2,
+        .dirty_bounds = geometry.RectF.init(0.5, 0, 0.5, 0.5),
         .rgba8 = &pixels,
     });
 
@@ -2993,6 +2997,7 @@ test "null platform records gpu surface pixel presentation" {
     try std.testing.expectEqual(@as(usize, 2), null_platform.gpu_surface_present_width);
     try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_present_height);
     try std.testing.expectEqual(@as(f32, 2), null_platform.gpu_surface_present_scale_factor);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0.5, 0, 0.5, 0.5), null_platform.gpu_surface_present_dirty_bounds.?);
     try std.testing.expectEqual(@as(usize, pixels.len), null_platform.gpu_surface_present_byte_len);
     try std.testing.expectEqualDeep([4]u8{ 12, 34, 56, 255 }, null_platform.gpu_surface_present_sample_rgba);
     try std.testing.expectError(error.InvalidGpuSurfacePixels, services.presentGpuSurfacePixels(.{

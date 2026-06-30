@@ -804,6 +804,39 @@ fn dispatchComponentPointerWheel(runtime: *zero_native.Runtime, app: zero_native
     } });
 }
 
+fn dispatchComponentPointerDrag(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, start_ratio: f32, end_ratio: f32) !void {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    const node = layout.findById(id) orelse return error.TestUnexpectedResult;
+    const start = geometry.PointF.init(node.frame.x + node.frame.width * start_ratio, node.frame.center().y);
+    const end = geometry.PointF.init(node.frame.x + node.frame.width * end_ratio, node.frame.center().y);
+    try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_down,
+        .x = start.x,
+        .y = start.y,
+        .button = 0,
+    } });
+    try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_drag,
+        .x = end.x,
+        .y = end.y,
+        .delta_x = end.x - start.x,
+        .delta_y = end.y - start.y,
+        .button = 0,
+    } });
+    try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_up,
+        .x = end.x,
+        .y = end.y,
+        .button = 0,
+    } });
+}
+
 fn color(r: u8, g: u8, b: u8) canvas.Color {
     return canvas.Color.rgb8(r, g, b);
 }
@@ -1396,6 +1429,71 @@ test "gpu components pointer clicks update retained controls" {
     try std.testing.expectEqual(@as(f32, 0), refreshed_layout.findById(120).?.widget.value);
     try std.testing.expectEqual(@as(f32, 36), refreshed_layout.findById(130).?.widget.value);
     try std.testing.expectEqual(@as(f32, 30), refreshed_layout.findById(150).?.widget.value);
+}
+
+test "gpu components slider drag presents incremental cached frame" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    const app_handle = app.app();
+    try harness.start(app_handle);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+    const initial_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!initial_frame.canvas_frame_requires_render);
+    try std.testing.expect(initial_frame.canvas_frame_gpu_packet_representable);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
+
+    resetComponentDirty(&harness.runtime);
+    const packet_count_before = harness.null_platform.gpu_surface_packet_present_count;
+    try dispatchComponentPointerDrag(&harness.runtime, app_handle, 115, 0.25, 0.82);
+
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    const dragged_slider = componentSnapshotWidget(snapshot, 115).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.82), dragged_slider.value.?, 0.001);
+    try std.testing.expect(dragged_slider.focused);
+    try std.testing.expect(!dragged_slider.pressed);
+    try std.testing.expect(harness.runtime.invalidated);
+    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115: value 0.82") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 2,
+        .timestamp_ns = 1_016_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(packet_count_before + 1, harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqual(@as(u64, 2), harness.null_platform.gpu_surface_packet_present_frame_index);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_requires_render);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_command_count > 0);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_cache_action_count > 0);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_cached_resource_command_count > 0);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_unsupported_command_count);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_json_len > 0);
+
+    const drag_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!drag_frame.canvas_frame_requires_render);
+    try std.testing.expect(!drag_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(@as(usize, 0), drag_frame.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(drag_frame.canvas_frame_gpu_packet_representable);
+    try std.testing.expect(drag_frame.canvas_frame_budget_ok);
+
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.82), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
 }
 
 fn expectComponentTextCommand(display_list: canvas.DisplayList, id: canvas.ObjectId, text: []const u8) !void {

@@ -17428,6 +17428,19 @@ test "canvas frame plan clips incremental dirty bounds to surface" {
     try std.testing.expectEqual(@as(usize, 1), render_pass.batchCount());
     try expectRect(geometry.RectF.init(0, 0, 50, 40), render_pass.scissorBounds());
 
+    var gpu_commands: [2]CanvasGpuCommand = undefined;
+    const packet = try frame.gpuPacket(&gpu_commands);
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expect(packet.fullyRepresentable());
+    try std.testing.expectEqual(CanvasRenderPassLoadAction.load, packet.load_action);
+    try expectRect(geometry.RectF.init(0, 0, 50, 40), packet.scissor.?);
+    var packet_json_buffer: [2048]u8 = undefined;
+    var packet_json_writer = std.Io.Writer.fixed(&packet_json_buffer);
+    try packet.writeJson(&packet_json_writer);
+    const packet_json = packet_json_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"loadAction\":\"load\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"scissorBounds\":[0,0,50,40]") != null);
+
     const profile = frame.profile();
     try std.testing.expect(profile.requires_render);
     try std.testing.expect(!profile.full_repaint);

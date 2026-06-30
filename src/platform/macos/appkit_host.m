@@ -240,6 +240,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) NSUInteger canvasTextureWidth;
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
+@property(nonatomic, strong) NSMutableData *canvasPacketPixels;
+@property(nonatomic, assign) NSUInteger canvasPacketPixelWidth;
+@property(nonatomic, assign) NSUInteger canvasPacketPixelHeight;
 @property(nonatomic, strong) NSCursor *surfaceCursor;
 @property(nonatomic, copy) NSString *markedText;
 @property(nonatomic, assign) NSRange markedTextRange;
@@ -966,6 +969,15 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
                           mipmapLevel:0
                             withBytes:uploadBytes
                           bytesPerRow:width * 4];
+    if (!self.canvasPacketPixels || self.canvasPacketPixelWidth != width || self.canvasPacketPixelHeight != height || self.canvasPacketPixels.length != byteLength) {
+        self.canvasPacketPixels = [NSMutableData dataWithLength:byteLength];
+        self.canvasPacketPixelWidth = width;
+        self.canvasPacketPixelHeight = height;
+    }
+    if (self.canvasPacketPixels && self.canvasPacketPixels.length == byteLength) {
+        void *backingBytes = self.canvasPacketPixels.mutableBytes;
+        if ((const void *)backingBytes != (const void *)rgba8) memcpy(backingBytes, rgba8, byteLength);
+    }
     self.hasCanvasTexture = YES;
     (void)scale;
     [self stopDisplayTimer];
@@ -989,14 +1001,25 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     NSDictionary *packet = ZeroNativePacketDictionary(packetObject);
     if (!packet || jsonError) return 0;
     NSString *loadAction = [packet[@"loadAction"] isKindOfClass:[NSString class]] ? packet[@"loadAction"] : @"";
-    if (![loadAction isEqualToString:@"clear"]) return 0;
+    BOOL clearLoadAction = [loadAction isEqualToString:@"clear"];
+    BOOL retainedLoadAction = [loadAction isEqualToString:@"load"];
+    if (!clearLoadAction && !retainedLoadAction) return 0;
     NSArray *commands = ZeroNativePacketArray(packet[@"commands"], 0);
     if (!commands) return 0;
     if (commandCount != 0 && commands.count != commandCount) return 0;
+    NSArray *scissor = ZeroNativePacketArray(packet[@"scissorBounds"], 4);
+    BOOL hasScissor = scissor != nil;
+    NSRect scissorRect = hasScissor ? ZeroNativePacketRect(scissor) : NSZeroRect;
 
     NSUInteger byteLengthRequired = pixelWidth * pixelHeight * 4;
-    NSMutableData *pixels = [NSMutableData dataWithLength:byteLengthRequired];
-    if (!pixels) return -1;
+    NSMutableData *pixels = nil;
+    if (clearLoadAction) {
+        pixels = [NSMutableData dataWithLength:byteLengthRequired];
+    } else {
+        if (!self.canvasPacketPixels || self.canvasPacketPixelWidth != pixelWidth || self.canvasPacketPixelHeight != pixelHeight || self.canvasPacketPixels.length != byteLengthRequired) return 0;
+        pixels = [self.canvasPacketPixels mutableCopy];
+    }
+    if (!pixels || pixels.length != byteLengthRequired) return -1;
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     if (!colorSpace) return -1;
     CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, pixelWidth, pixelHeight, 8, pixelWidth * 4, colorSpace, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
@@ -1011,8 +1034,13 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     NSGraphicsContext *graphics = [NSGraphicsContext graphicsContextWithCGContext:context flipped:NO];
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:graphics];
-    [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
-    NSRectFill(NSMakeRect(0, 0, surfaceWidth, surfaceHeight));
+    if (clearLoadAction) {
+        [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
+        NSRectFill(NSMakeRect(0, 0, surfaceWidth, surfaceHeight));
+    }
+    if (hasScissor) {
+        [NSBezierPath clipRect:scissorRect];
+    }
 
     BOOL supported = YES;
     for (id commandObject in commands) {
@@ -1026,7 +1054,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     CGContextRelease(context);
     if (!supported) return 0;
 
-    return [self presentPixelsWithWidth:pixelWidth height:pixelHeight scale:normalizedScale hasDirtyRect:NO dirtyX:0 dirtyY:0 dirtyWidth:0 dirtyHeight:0 rgba8:(const uint8_t *)pixels.bytes byteLength:pixels.length] ? 1 : -1;
+    BOOL uploadDirtyRect = retainedLoadAction && hasScissor;
+    return [self presentPixelsWithWidth:pixelWidth height:pixelHeight scale:normalizedScale hasDirtyRect:uploadDirtyRect dirtyX:scissorRect.origin.x dirtyY:scissorRect.origin.y dirtyWidth:scissorRect.size.width dirtyHeight:scissorRect.size.height rgba8:(const uint8_t *)pixels.bytes byteLength:pixels.length] ? 1 : -1;
 }
 
 - (BOOL)ensureCanvasPresenter {

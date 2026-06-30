@@ -19,7 +19,7 @@ const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_component_widgets: usize = 48;
-const component_chrome_prefix_commands: usize = 3;
+const component_chrome_prefix_commands: usize = 1;
 const component_chrome_suffix_commands: usize = 0;
 const refresh_command = "components.refresh";
 const theme_command = "components.theme";
@@ -43,18 +43,7 @@ const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
 const ComponentVirtualScroll = struct {
     nav: f32 = 0,
     behavior: f32 = 36,
-    data: f32 = 30,
-};
-
-const bg_stops = [_]canvas.GradientStop{
-    .{ .offset = 0, .color = color(247, 249, 252) },
-    .{ .offset = 0.56, .color = color(238, 245, 250) },
-    .{ .offset = 1, .color = color(242, 246, 240) },
-};
-
-const accent_stops = [_]canvas.GradientStop{
-    .{ .offset = 0, .color = color(38, 99, 235) },
-    .{ .offset = 1, .color = color(16, 185, 129) },
+    data: f32 = 28,
 };
 
 const preview_image_pixels = [_]u8{
@@ -521,7 +510,7 @@ fn componentVirtualKeyboardScrollTarget(keyboard: canvas.WidgetKeyboardEvent, di
 
 fn componentVirtualKeyboardScrollDelta(viewport_extent: f32, keyboard: canvas.WidgetKeyboardEvent, direct_target: bool) ?f32 {
     const line_step = @max(24, viewport_extent * 0.35);
-    const page_step = @max(line_step, viewport_extent * 0.85);
+    const page_step = @max(line_step, viewport_extent);
     if (direct_target and (std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft") or std.ascii.eqlIgnoreCase(keyboard.key, "arrowup"))) {
         return -line_step;
     }
@@ -534,8 +523,6 @@ fn componentVirtualKeyboardScrollDelta(viewport_extent: f32, keyboard: canvas.Wi
 }
 
 fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
-    try builder.fillRect(.{ .id = 1, .rect = rect(0, 0, canvas_width, canvas_height), .fill = .{ .linear_gradient = .{ .start = pt(0, 0), .end = pt(canvas_width, canvas_height), .stops = &bg_stops } } });
-    try builder.shadow(.{ .id = 2, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .offset = .{ .dx = 0, .dy = 16 }, .blur = 20, .spread = -12, .color = rgba(20, 28, 43, 30) });
     try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = color(255, 255, 255) } });
     try layout.emitDisplayList(builder, componentTokens());
 }
@@ -597,14 +584,17 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 134, .kind = .list_item, .text = "Logical ranges" },
         .{ .id = 135, .kind = .list_item, .text = "Dirty bounds" },
     };
+    const segment_controls = [_]canvas.Widget{
+        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 64, 30), .text = "Small", .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
+        .{ .id = 119, .kind = .segmented_control, .frame = rect(68, 0, 64, 30), .text = "Large", .semantics = .{ .label = "Large density" } },
+    };
     const form_controls = [_]canvas.Widget{
         .{ .id = 111, .kind = .text_field, .frame = rect(16, 48, 132, 30), .text = "zero-native", .semantics = .{ .label = "Project name" } },
         .{ .id = 112, .kind = .search_field, .frame = rect(158, 48, 148, 30), .text = "components", .semantics = .{ .label = "Component search" } },
         .{ .id = 113, .kind = .checkbox, .frame = rect(16, 92, 116, 28), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
         .{ .id = 114, .kind = .toggle, .frame = rect(150, 92, 100, 28), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live toggle" } },
         .{ .id = 115, .kind = .slider, .frame = rect(16, 138, 156, 26), .value = 0.62, .semantics = .{ .label = "Density slider" } },
-        .{ .id = 116, .kind = .progress, .frame = rect(188, 147, 116, 10), .value = 0.74, .semantics = .{ .label = "Build progress" } },
-        .{ .id = 117, .kind = .segmented_control, .frame = rect(16, 180, 132, 30), .text = "Small|Large", .value = 0.5, .state = .{ .selected = true }, .semantics = .{ .label = "Density segment" } },
+        .{ .id = 116, .kind = .row, .frame = rect(16, 180, 132, 30), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density segments" }, .children = &segment_controls },
         .{ .id = 118, .kind = .image, .frame = rect(198, 176, 106, 34), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
     };
     const menu_items = [_]canvas.Widget{
@@ -976,7 +966,7 @@ test "gpu components display list covers finished live controls" {
 
     try std.testing.expect(display_list.commandCount() >= 54);
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
-    try std.testing.expect(display_list.findCommandById(1) != null);
+    try std.testing.expect(display_list.findCommandById(3) != null);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
     try std.testing.expect(display_list.findCommandById(project_static_text_id) != null);
     try std.testing.expect(display_list.findCommandById(search_text_id) != null);
@@ -987,10 +977,10 @@ test "gpu components display list covers finished live controls" {
     try std.testing.expect(display_list.findCommandById(menu_item_text_id) != null);
     try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
     const bounds = display_list.bounds().?;
-    try std.testing.expect(bounds.x <= 0);
-    try std.testing.expect(bounds.y <= 0);
-    try std.testing.expect(bounds.width >= canvas_width);
-    try std.testing.expect(bounds.height >= canvas_height);
+    try std.testing.expect(bounds.x <= 28);
+    try std.testing.expect(bounds.y <= 26);
+    try std.testing.expect(bounds.width >= 916);
+    try std.testing.expect(bounds.height >= 616);
 }
 
 test "gpu components combined virtual scroll state stays within display budget" {
@@ -998,9 +988,9 @@ test "gpu components combined virtual scroll state stays within display budget" 
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     var builder = canvas.Builder.init(&commands);
     const layout = try buildComponentsWidgetLayoutWithScroll(&nodes, .{
-        .nav = 24,
-        .behavior = 58,
-        .data = 54,
+        .nav = 28,
+        .behavior = 56,
+        .data = 56,
     });
     try buildComponentsDisplayList(&builder, layout);
     const display_list = builder.displayList();
@@ -1008,9 +998,9 @@ test "gpu components combined virtual scroll state stays within display budget" 
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
     try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
-    try std.testing.expect(layout.findById(120).?.widget.value == 24);
-    try std.testing.expect(layout.findById(130).?.widget.value == 58);
-    try std.testing.expect(layout.findById(150).?.widget.value == 54);
+    try std.testing.expect(layout.findById(120).?.widget.value == 28);
+    try std.testing.expect(layout.findById(130).?.widget.value == 56);
+    try std.testing.expect(layout.findById(150).?.widget.value == 56);
 }
 
 test "gpu components frame plan stays within runtime budgets" {
@@ -1105,7 +1095,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 152232148717689583), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 11909946235935191872), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1157,9 +1147,10 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 113, .checkbox);
     try expectSemanticRole(semantics, 114, .switch_control);
     try expectSemanticRole(semantics, 115, .slider);
-    try expectSemanticRole(semantics, 116, .progressbar);
+    try expectSemanticRole(semantics, 116, .group);
     try expectSemanticRole(semantics, 117, .tab);
     try expectSemanticRole(semantics, 118, .image);
+    try expectSemanticRole(semantics, 119, .tab);
     try expectSemanticRole(semantics, 120, .list);
     try expectSemanticRole(semantics, 121, .listitem);
     try expectSemanticRole(semantics, 130, .group);
@@ -1289,7 +1280,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expect(widget_layout.nodeCount() >= 26);
     try std.testing.expectEqualStrings("Input controls", widget_layout.findById(106).?.widget.semantics.label);
-    try std.testing.expect(widget_layout.findById(151) == null);
+    try std.testing.expect(widget_layout.findById(151) != null);
     try std.testing.expect(widget_layout.findById(152) != null);
 
     var snapshot = harness.runtime.automationSnapshot("Components");
@@ -1309,7 +1300,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(componentSnapshotWidget(snapshot, 113).?.actions.toggle);
     try std.testing.expect(componentSnapshotWidget(snapshot, 114).?.selected);
     try std.testing.expect(componentSnapshotWidget(snapshot, 115).?.actions.increment);
-    try std.testing.expectEqualStrings("progressbar", componentSnapshotWidget(snapshot, 116).?.role);
+    try std.testing.expectEqualStrings("group", componentSnapshotWidget(snapshot, 116).?.role);
     try std.testing.expectEqualStrings("tab", componentSnapshotWidget(snapshot, 117).?.role);
     const snapshot_nav_list = componentSnapshotWidget(snapshot, 120).?;
     try std.testing.expect(snapshot_nav_list.scroll.present);
@@ -1467,31 +1458,38 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 130 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_scroll = componentSnapshotWidget(snapshot, 130).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 60), keyed_scroll.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 60), app.virtual_scroll.behavior, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 64), keyed_scroll.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 64), app.virtual_scroll.behavior, 0.001);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
 
     const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 60") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 64") != null);
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 120 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_list = componentSnapshotWidget(snapshot, 120).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 24), keyed_list.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 24), app.virtual_scroll.nav, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 28), keyed_list.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 28), app.virtual_scroll.nav, 0.001);
     const list_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 24") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 28") != null);
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 150 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_grid = componentSnapshotWidget(snapshot, 150).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 54), keyed_grid.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 54), app.virtual_scroll.data, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_grid.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.data, 0.001);
     const grid_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, grid_status_view.text, "Keyed data_grid #150: offset 54") != null);
+    try std.testing.expect(std.mem.indexOf(u8, grid_status_view.text, "Keyed data_grid #150: offset 56") != null);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 142 select");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    const selected_menu_item = componentSnapshotWidget(snapshot, 142).?;
+    try std.testing.expect(selected_menu_item.focused);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), selected_menu_item.value.?, 0.001);
 }
 
 test "gpu components pointer clicks update retained controls" {
@@ -1592,15 +1590,23 @@ test "gpu components pointer clicks update retained controls" {
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 150, 20);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 52), scrolled_layout.findById(150).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), scrolled_layout.findById(150).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled data_grid #150: offset 52") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled data_grid #150: offset 50") != null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 156);
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(componentSnapshotWidget(snapshot, 156).?.selected);
+
+    resetComponentDirty(&harness.runtime);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, 142);
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectApproxEqAbs(@as(f32, 1), componentSnapshotWidget(snapshot, 142).?.value.?, 0.001);
+    try std.testing.expect(harness.runtime.invalidated);
+    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked menu_item #142: selected.") != null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 104);
@@ -1610,7 +1616,7 @@ test "gpu components pointer clicks update retained controls" {
     const refreshed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expectEqual(@as(f32, 0), refreshed_layout.findById(120).?.widget.value);
     try std.testing.expectEqual(@as(f32, 36), refreshed_layout.findById(130).?.widget.value);
-    try std.testing.expectEqual(@as(f32, 30), refreshed_layout.findById(150).?.widget.value);
+    try std.testing.expectEqual(@as(f32, 28), refreshed_layout.findById(150).?.widget.value);
 }
 
 test "gpu components slider drag presents incremental cached frame" {

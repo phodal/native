@@ -1397,6 +1397,29 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(!clean_frame.canvas_frame_full_repaint);
     try std.testing.expectEqual(@as(usize, 0), clean_frame.canvas_frame_profile_work_units);
 
+    try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .frame = geometry.RectF.init(sidebar_width, toolbar_height, canvas_width + 320, canvas_height),
+        .scale_factor = 2,
+    } });
+    const packet_count_before_resize_frame = harness.null_platform.gpu_surface_packet_present_count;
+    try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width + 320, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 3,
+        .timestamp_ns = 1_032_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(packet_count_before_resize_frame + 1, harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqualDeep(geometry.SizeF.init(canvas_width + 320, canvas_height), harness.null_platform.gpu_surface_packet_present_surface_size);
+    const resized_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
+    try std.testing.expect(!resized_frame.canvas_frame_requires_render);
+    try std.testing.expect(!resized_frame.canvas_frame_full_repaint);
+    try std.testing.expectEqual(@as(f32, canvas_width + 320), resized_frame.size.width);
+    try std.testing.expectEqual(@as(f32, canvas_height), resized_frame.size.height);
+
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expect(widget_layout.nodeCount() >= 26);
     try std.testing.expectEqualStrings("Input controls", widget_layout.findById(106).?.widget.semantics.label);

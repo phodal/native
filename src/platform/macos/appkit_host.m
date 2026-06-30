@@ -1364,7 +1364,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     _metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     _metalLayer.framebufferOnly = NO;
     _metalLayer.opaque = YES;
-    _metalLayer.contentsGravity = kCAGravityResize;
+    _metalLayer.contentsGravity = kCAGravityTopLeft;
 
     self.wantsLayer = YES;
     self.layer = _metalLayer;
@@ -1451,7 +1451,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.metalLayer.drawableSize = drawableSize;
     self.lastDrawableSize = drawableSize;
     self.lastScale = scale;
-    if (changed) [self emitResizeEvent];
+    if (changed) {
+        [self emitResizeEvent];
+        [self requestRetainedCanvasFrame];
+    }
 }
 
 - (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
@@ -1787,7 +1790,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     id<MTLCommandBuffer> commandBuffer = [self.commandQueue commandBuffer];
     if (!commandBuffer) return;
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:descriptor];
-    if (self.hasCanvasTexture && self.canvasTexture && self.canvasRenderPipeline && self.canvasSampler) {
+    const BOOL canvasTextureMatchesDrawable = self.canvasTextureWidth == drawable.texture.width &&
+        self.canvasTextureHeight == drawable.texture.height;
+    if (self.hasCanvasTexture && canvasTextureMatchesDrawable && self.canvasTexture && self.canvasRenderPipeline && self.canvasSampler) {
         [encoder setRenderPipelineState:self.canvasRenderPipeline];
         [encoder setFragmentTexture:self.canvasTexture atIndex:0];
         [encoder setFragmentSamplerState:self.canvasSampler atIndex:0];

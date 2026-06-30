@@ -322,6 +322,12 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.height * scale)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "self.metalLayer.drawableSize = drawableSize" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-resize-repaints-retained-canvas", "Verify AppKit GPU resize requests a correctly sized retained frame", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "_metalLayer.contentsGravity = kCAGravityTopLeft" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (changed) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "canvasTextureMatchesDrawable" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-transforms", "Verify AppKit GPU packet presenter applies command transforms", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketApplyTransform(command[@\"transform\"])" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[affine setTransformStruct:transform]" },

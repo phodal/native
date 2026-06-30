@@ -37,6 +37,8 @@ const scroll_thumb_id: canvas.ObjectId = 130 * 16 + 3;
 const menu_item_text_id: canvas.ObjectId = 142 * 16 + 3;
 const data_cell_text_id: canvas.ObjectId = 156 * 16 + 4;
 const popover_blur_id: canvas.ObjectId = 140 * 16 + 12;
+const preview_image_id: canvas.ImageId = 42;
+const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
 
 const ComponentVirtualScroll = struct {
     nav: f32 = 0,
@@ -54,6 +56,20 @@ const accent_stops = [_]canvas.GradientStop{
     .{ .offset = 0, .color = color(38, 99, 235) },
     .{ .offset = 1, .color = color(16, 185, 129) },
 };
+
+const preview_image_pixels = [_]u8{
+    38, 99,  235, 255, 16,  185, 129, 255, 250, 204, 21,  255, 244, 63,  94,  255,
+    99, 102, 241, 255, 14,  165, 233, 255, 255, 255, 255, 255, 15,  23,  42,  255,
+    45, 212, 191, 255, 59,  130, 246, 255, 168, 85,  247, 255, 248, 250, 252, 255,
+    15, 23,  42,  255, 100, 116, 139, 255, 226, 232, 240, 255, 248, 113, 113, 255,
+};
+
+const preview_images = [_]canvas.ReferenceImage{.{
+    .id = preview_image_id,
+    .width = 4,
+    .height = 4,
+    .pixels = &preview_image_pixels,
+}};
 
 const html =
     \\<!doctype html>
@@ -101,6 +117,9 @@ const GpuComponentsApp = struct {
     packet_json: [zero_native.platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
     render_commands: [max_component_commands]canvas.RenderCommand = undefined,
     render_batches: [max_component_commands]canvas.RenderBatch = undefined,
+    images: [max_component_commands]canvas.RenderImage = undefined,
+    image_cache_entries: [max_component_commands]canvas.RenderImageCacheEntry = undefined,
+    image_cache_actions: [max_component_commands * 2]canvas.RenderImageCacheAction = undefined,
     pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined,
     pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined,
     layers: [max_component_commands]canvas.RenderLayer = undefined,
@@ -295,6 +314,7 @@ const GpuComponentsApp = struct {
                 .surface_size = surface_size,
                 .scale = scale_factor,
                 .full_repaint = full_repaint,
+                .image_resources = &preview_images,
             },
             self.frameStorage(),
             color(247, 249, 252),
@@ -332,6 +352,7 @@ const GpuComponentsApp = struct {
                 .surface_size = surface_size,
                 .scale = scale_factor,
                 .full_repaint = full_repaint,
+                .image_resources = &preview_images,
             },
             self.frameStorage(),
             &self.gpu_commands,
@@ -365,6 +386,9 @@ const GpuComponentsApp = struct {
         return .{
             .render_commands = &self.render_commands,
             .render_batches = &self.render_batches,
+            .images = &self.images,
+            .image_cache_entries = &self.image_cache_entries,
+            .image_cache_actions = &self.image_cache_actions,
             .pipeline_cache_entries = &self.pipeline_cache_entries,
             .pipeline_cache_actions = &self.pipeline_cache_actions,
             .layers = &self.layers,
@@ -526,6 +550,7 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 115, .kind = .slider, .frame = rect(16, 138, 156, 26), .value = 0.62, .semantics = .{ .label = "Density slider" } },
         .{ .id = 116, .kind = .progress, .frame = rect(188, 147, 116, 10), .value = 0.74, .semantics = .{ .label = "Build progress" } },
         .{ .id = 117, .kind = .segmented_control, .frame = rect(16, 180, 132, 30), .text = "Small|Large", .value = 0.5, .state = .{ .selected = true }, .semantics = .{ .label = "Density segment" } },
+        .{ .id = 118, .kind = .image, .frame = rect(198, 176, 106, 34), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
     };
     const menu_items = [_]canvas.Widget{
         .{ .id = 142, .kind = .menu_item, .text = "Copy token" },
@@ -572,7 +597,6 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
     const top_widgets = [_]canvas.Widget{
         .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
         .{ .id = 102, .kind = .text, .frame = rect(64, 88, 360, 18), .text = "Retained widgets, semantics, and GPU display-list output." },
-        .{ .id = 103, .kind = .icon, .frame = rect(528, 58, 28, 28), .text = "*", .semantics = .{ .label = "Accent icon" } },
         .{ .id = 104, .kind = .button, .frame = rect(574, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
         .{ .id = 105, .kind = .icon_button, .frame = rect(706, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
         .{ .id = 106, .kind = .column, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
@@ -599,6 +623,9 @@ fn componentFrameStorage(
     resources: []canvas.RenderResource,
     cache_entries: []canvas.RenderResourceCacheEntry,
     cache_actions: []canvas.RenderResourceCacheAction,
+    images: []canvas.RenderImage,
+    image_cache_entries: []canvas.RenderImageCacheEntry,
+    image_cache_actions: []canvas.RenderImageCacheAction,
     visual_effects: []canvas.VisualEffect,
     visual_effect_cache_entries: []canvas.VisualEffectCacheEntry,
     visual_effect_cache_actions: []canvas.VisualEffectCacheAction,
@@ -622,6 +649,9 @@ fn componentFrameStorage(
         .resources = resources,
         .resource_cache_entries = cache_entries,
         .resource_cache_actions = cache_actions,
+        .images = images,
+        .image_cache_entries = image_cache_entries,
+        .image_cache_actions = image_cache_actions,
         .visual_effects = visual_effects,
         .visual_effect_cache_entries = visual_effect_cache_entries,
         .visual_effect_cache_actions = visual_effect_cache_actions,
@@ -898,6 +928,7 @@ test "gpu components display list covers finished live controls" {
     try std.testing.expect(display_list.findCommandById(search_text_id) != null);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
     try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
+    try std.testing.expect(display_list.findCommandById(preview_image_command_id) != null);
     try std.testing.expect(display_list.findCommandById(popover_blur_id) != null);
     try std.testing.expect(display_list.findCommandById(menu_item_text_id) != null);
     try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
@@ -924,6 +955,9 @@ test "gpu components frame plan stays within runtime budgets" {
     var resources: [max_component_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var images: [max_component_commands]canvas.RenderImage = undefined;
+    var image_cache_entries: [max_component_commands]canvas.RenderImageCacheEntry = undefined;
+    var image_cache_actions: [max_component_commands * 2]canvas.RenderImageCacheAction = undefined;
     var visual_effects: [max_component_commands]canvas.VisualEffect = undefined;
     var visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined;
     var visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined;
@@ -938,11 +972,14 @@ test "gpu components frame plan stays within runtime budgets" {
     const frame = try componentFrame(display_list, null, .{
         .surface_size = geometry.SizeF.init(canvas_width, canvas_height),
         .full_repaint = true,
-    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+        .image_resources = &preview_images,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &images, &image_cache_entries, &image_cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
+    try std.testing.expectEqual(@as(usize, 1), frame.image_plan.imageCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.image_cache_plan.uploadCount());
     try std.testing.expect(frame.visual_effect_plan.effectCount() >= 3);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 12);
     try std.testing.expect(frame.profile().work_units > 0);
@@ -965,6 +1002,9 @@ test "gpu components display list renders stable reference snapshot" {
     var resources: [max_component_commands]canvas.RenderResource = undefined;
     var cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined;
     var cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var images: [max_component_commands]canvas.RenderImage = undefined;
+    var image_cache_entries: [max_component_commands]canvas.RenderImageCacheEntry = undefined;
+    var image_cache_actions: [max_component_commands * 2]canvas.RenderImageCacheAction = undefined;
     var visual_effects: [max_component_commands]canvas.VisualEffect = undefined;
     var visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined;
     var visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined;
@@ -979,7 +1019,8 @@ test "gpu components display list renders stable reference snapshot" {
     const frame = try componentFrame(display_list, null, .{
         .surface_size = geometry.SizeF.init(canvas_width, canvas_height),
         .full_repaint = true,
-    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+        .image_resources = &preview_images,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &images, &image_cache_entries, &image_cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
 
     const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
     const pixels = try std.testing.allocator.alloc(u8, pixel_count);
@@ -987,10 +1028,10 @@ test "gpu components display list renders stable reference snapshot" {
     const scratch = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(scratch);
     @memset(pixels, 0);
-    const surface = try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch);
+    const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 5328701958156580146), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 152232148717689583), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1034,7 +1075,6 @@ test "gpu components semantics cover retained widget families" {
     var semantics_buffer: [max_component_widgets]canvas.WidgetSemanticsNode = undefined;
     const semantics = try layout.collectSemantics(&semantics_buffer);
 
-    try expectSemanticRole(semantics, 103, .image);
     try expectSemanticRole(semantics, 104, .button);
     try expectSemanticRole(semantics, 105, .button);
     try expectSemanticRole(semantics, 106, .group);
@@ -1045,6 +1085,7 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 115, .slider);
     try expectSemanticRole(semantics, 116, .progressbar);
     try expectSemanticRole(semantics, 117, .tab);
+    try expectSemanticRole(semantics, 118, .image);
     try expectSemanticRole(semantics, 120, .list);
     try expectSemanticRole(semantics, 121, .listitem);
     try expectSemanticRole(semantics, 130, .group);
@@ -1080,7 +1121,7 @@ test "gpu components image widget exposes image semantics and display command" {
         .id = 190,
         .kind = .image,
         .frame = rect(12, 14, 86, 54),
-        .image_id = 42,
+        .image_id = preview_image_id,
         .image_src = rect(0, 0, 320, 192),
         .image_fit = .cover,
         .image_sampling = .nearest,
@@ -1103,7 +1144,7 @@ test "gpu components image widget exposes image semantics and display command" {
     switch (display_list.commands[0]) {
         .draw_image => |draw| {
             try std.testing.expectEqual(@as(canvas.ObjectId, 190 * 16 + 1), draw.id);
-            try std.testing.expectEqual(@as(canvas.ImageId, 42), draw.image_id);
+            try std.testing.expectEqual(@as(canvas.ImageId, preview_image_id), draw.image_id);
             try std.testing.expectEqual(canvas.ImageFit.cover, draw.fit);
             try std.testing.expectEqual(canvas.ImageSampling.nearest, draw.sampling);
             try std.testing.expectEqual(@as(f32, 0.82), draw.opacity);

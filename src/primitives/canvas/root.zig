@@ -1939,6 +1939,45 @@ pub const CanvasGpuPaint = union(enum) {
     linear_gradient: LinearGradient,
 };
 
+pub const CanvasGpuImage = struct {
+    image_id: ImageId = 0,
+    src: ?geometry.RectF = null,
+    dst: geometry.RectF = .{},
+    opacity: f32 = 1,
+    fit: ImageFit = .stretch,
+    sampling: ImageSampling = .linear,
+};
+
+pub const CanvasGpuText = struct {
+    font_id: FontId = 0,
+    size: f32 = 0,
+    origin: geometry.PointF = .{},
+    color: Color = .{},
+    text: []const u8 = "",
+    glyphs: []const Glyph = &.{},
+    text_layout: ?TextLayoutOptions = null,
+};
+
+pub const CanvasGpuShadow = struct {
+    rect: geometry.RectF = .{},
+    radius: Radius = .{},
+    offset: geometry.OffsetF = .{},
+    blur: f32 = 0,
+    spread: f32 = 0,
+    color: Color = .{},
+};
+
+pub const CanvasGpuBlur = struct {
+    rect: geometry.RectF = .{},
+    radius: f32 = 0,
+};
+
+pub const CanvasGpuEffect = union(enum) {
+    none,
+    shadow: CanvasGpuShadow,
+    blur: CanvasGpuBlur,
+};
+
 pub const CanvasGpuCommand = struct {
     command_index: usize,
     id: ?ObjectId = null,
@@ -1948,6 +1987,9 @@ pub const CanvasGpuCommand = struct {
     shape: CanvasGpuShape = .none,
     paint: CanvasGpuPaint = .none,
     stroke_width: f32 = 0,
+    image: ?CanvasGpuImage = null,
+    text: ?CanvasGpuText = null,
+    effect: CanvasGpuEffect = .none,
     clip: ?geometry.RectF = null,
     opacity: f32 = 1,
     transform: Affine = .{},
@@ -4635,9 +4677,17 @@ fn canvasGpuCommandFromRenderCommand(command: RenderCommand, command_index: usiz
             packet_command.uses_path_geometry = true;
             packet_command.uses_resource = canvasGpuFillUsesResource(value.stroke.fill);
         },
-        .draw_image => {
+        .draw_image => |value| {
             packet_command.kind = .draw_image;
             packet_command.pipeline = .image;
+            packet_command.image = .{
+                .image_id = value.image_id,
+                .src = value.src,
+                .dst = value.dst.normalized(),
+                .opacity = value.opacity,
+                .fit = value.fit,
+                .sampling = value.sampling,
+            };
             packet_command.uses_image = true;
             packet_command.uses_resource = true;
         },
@@ -4645,19 +4695,40 @@ fn canvasGpuCommandFromRenderCommand(command: RenderCommand, command_index: usiz
             packet_command.kind = .draw_text;
             packet_command.pipeline = .glyph_run;
             packet_command.paint = .{ .color = value.color };
+            packet_command.text = .{
+                .font_id = value.font_id,
+                .size = value.size,
+                .origin = value.origin,
+                .color = value.color,
+                .text = value.text,
+                .glyphs = value.glyphs,
+                .text_layout = value.text_layout,
+            };
             packet_command.uses_resource = true;
             packet_command.uses_glyph_atlas = true;
             packet_command.uses_text_layout = value.text_layout != null;
         },
-        .shadow => {
+        .shadow => |value| {
             packet_command.kind = .shadow;
             packet_command.pipeline = .shadow;
+            packet_command.effect = .{ .shadow = .{
+                .rect = value.rect.normalized(),
+                .radius = value.radius,
+                .offset = value.offset,
+                .blur = value.blur,
+                .spread = value.spread,
+                .color = value.color,
+            } };
             packet_command.uses_resource = true;
             packet_command.uses_visual_effect = true;
         },
-        .blur => {
+        .blur => |value| {
             packet_command.kind = .blur;
             packet_command.pipeline = .blur;
+            packet_command.effect = .{ .blur = .{
+                .rect = value.rect.normalized(),
+                .radius = value.radius,
+            } };
             packet_command.uses_resource = true;
             packet_command.uses_visual_effect = true;
         },
@@ -16604,7 +16675,15 @@ test "canvas render pass builds gpu packet for backend handoff" {
             .width = 3,
         } } },
         .{ .fill_path = .{ .id = 3, .elements = &path, .fill = .{ .color = Color.rgb8(15, 23, 42) } } },
-        .{ .draw_image = .{ .id = 4, .image_id = 42, .dst = geometry.RectF.init(44, 0, 16, 16) } },
+        .{ .draw_image = .{
+            .id = 4,
+            .image_id = 42,
+            .src = geometry.RectF.init(4, 8, 32, 24),
+            .dst = geometry.RectF.init(44, 0, 16, 16),
+            .opacity = 0.75,
+            .fit = .cover,
+            .sampling = .nearest,
+        } },
         .{ .draw_text = .{
             .id = 5,
             .font_id = 7,
@@ -16614,7 +16693,15 @@ test "canvas render pass builds gpu packet for backend handoff" {
             .text = "Hi",
             .text_layout = .{ .max_width = 80, .line_height = 16 },
         } },
-        .{ .shadow = .{ .id = 6, .rect = geometry.RectF.init(0, 36, 40, 20), .radius = Radius.all(6), .blur = 8, .color = Color.rgba8(15, 23, 42, 60) } },
+        .{ .shadow = .{
+            .id = 6,
+            .rect = geometry.RectF.init(0, 36, 40, 20),
+            .radius = Radius.all(6),
+            .offset = geometry.OffsetF.init(2, 3),
+            .blur = 8,
+            .spread = 1,
+            .color = Color.rgba8(15, 23, 42, 60),
+        } },
         .{ .blur = .{ .id = 7, .rect = geometry.RectF.init(44, 36, 20, 20), .radius = 4 } },
     };
 
@@ -16745,14 +16832,48 @@ test "canvas render pass builds gpu packet for backend handoff" {
     try expectGpuPaintColor(Color.rgb8(15, 23, 42), packet.commands[4].paint);
     try std.testing.expectEqual(CanvasGpuCommandKind.draw_image, packet.commands[5].kind);
     try std.testing.expect(packet.commands[5].uses_image);
+    try std.testing.expect(packet.commands[5].image != null);
+    try std.testing.expectEqual(@as(ImageId, 42), packet.commands[5].image.?.image_id);
+    try std.testing.expectEqualDeep(geometry.RectF.init(4, 8, 32, 24), packet.commands[5].image.?.src.?);
+    try std.testing.expectEqualDeep(geometry.RectF.init(44, 0, 16, 16), packet.commands[5].image.?.dst);
+    try std.testing.expectEqual(@as(f32, 0.75), packet.commands[5].image.?.opacity);
+    try std.testing.expectEqual(ImageFit.cover, packet.commands[5].image.?.fit);
+    try std.testing.expectEqual(ImageSampling.nearest, packet.commands[5].image.?.sampling);
     try std.testing.expectEqual(CanvasGpuCommandKind.draw_text, packet.commands[6].kind);
     try std.testing.expect(packet.commands[6].uses_glyph_atlas);
     try std.testing.expect(packet.commands[6].uses_text_layout);
     try expectGpuPaintColor(Color.rgb8(15, 23, 42), packet.commands[6].paint);
+    try std.testing.expect(packet.commands[6].text != null);
+    try std.testing.expectEqual(@as(FontId, 7), packet.commands[6].text.?.font_id);
+    try std.testing.expectEqual(@as(f32, 12), packet.commands[6].text.?.size);
+    try std.testing.expectEqualDeep(geometry.PointF.init(0, 32), packet.commands[6].text.?.origin);
+    try std.testing.expectEqualDeep(Color.rgb8(15, 23, 42), packet.commands[6].text.?.color);
+    try std.testing.expectEqualStrings("Hi", packet.commands[6].text.?.text);
+    try std.testing.expect(packet.commands[6].text.?.text_layout != null);
+    try std.testing.expectEqual(@as(f32, 80), packet.commands[6].text.?.text_layout.?.max_width);
+    try std.testing.expectEqual(@as(f32, 16), packet.commands[6].text.?.text_layout.?.line_height);
     try std.testing.expectEqual(CanvasGpuCommandKind.shadow, packet.commands[7].kind);
     try std.testing.expect(packet.commands[7].uses_visual_effect);
+    switch (packet.commands[7].effect) {
+        .shadow => |shadow| {
+            try std.testing.expectEqualDeep(geometry.RectF.init(0, 36, 40, 20), shadow.rect);
+            try std.testing.expectEqualDeep(Radius.all(6), shadow.radius);
+            try std.testing.expectEqualDeep(geometry.OffsetF.init(2, 3), shadow.offset);
+            try std.testing.expectEqual(@as(f32, 8), shadow.blur);
+            try std.testing.expectEqual(@as(f32, 1), shadow.spread);
+            try std.testing.expectEqualDeep(Color.rgba8(15, 23, 42, 60), shadow.color);
+        },
+        else => return error.TestExpectedEqual,
+    }
     try std.testing.expectEqual(CanvasGpuCommandKind.blur, packet.commands[8].kind);
     try std.testing.expect(packet.commands[8].uses_visual_effect);
+    switch (packet.commands[8].effect) {
+        .blur => |blur| {
+            try std.testing.expectEqualDeep(geometry.RectF.init(44, 36, 20, 20), blur.rect);
+            try std.testing.expectEqual(@as(f32, 4), blur.radius);
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "canvas gpu packet skips clean passes and reports output overflow" {

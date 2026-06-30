@@ -282,17 +282,51 @@ const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!canvas.CanvasFrame {
+    fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!void {
         const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, canvas_height) else frame_event.size;
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
-        const present_scale = referencePresentScale(scale_factor);
-        try self.ensurePixelBuffers(surface_size, present_scale);
-        const result = try runtime.presentNextCanvasFrame(
+        const packet = runtime.presentNextCanvasGpuPacket(
             frame_event.window_id,
             canvas_label,
             .{
                 .frame_index = frame_event.frame_index,
                 .timestamp_ns = frame_event.timestamp_ns,
+                .surface_size = surface_size,
+                .scale = scale_factor,
+                .full_repaint = full_repaint,
+            },
+            self.frameStorage(),
+            color(247, 249, 252),
+            &self.gpu_commands,
+            &self.packet_json,
+        ) catch |err| switch (err) {
+            error.UnsupportedService => {
+                try self.presentComponentsCanvasPixels(runtime, frame_event.window_id, surface_size, scale_factor, frame_event.frame_index, frame_event.timestamp_ns, full_repaint);
+                return;
+            },
+            else => return err,
+        };
+        if (!packet.fullyRepresentable()) return error.UnsupportedCommand;
+    }
+
+    fn presentComponentsCanvasPixels(
+        self: *@This(),
+        runtime: *zero_native.Runtime,
+        window_id: zero_native.WindowId,
+        surface_size: geometry.SizeF,
+        scale_factor: f32,
+        frame_index: u64,
+        timestamp_ns: u64,
+        full_repaint: bool,
+    ) anyerror!void {
+        const present_scale = referencePresentScale(scale_factor);
+        try self.ensurePixelBuffers(surface_size, present_scale);
+        _ = try runtime.presentNextCanvasFrame(
+            window_id,
+            canvas_label,
+            .{
+                .frame_index = frame_index,
+                .timestamp_ns = timestamp_ns,
                 .surface_size = surface_size,
                 .scale = scale_factor,
                 .full_repaint = full_repaint,
@@ -305,7 +339,6 @@ const GpuComponentsApp = struct {
             color(247, 249, 252),
             present_scale,
         );
-        return result.frame;
     }
 
     fn referencePresentScale(scale_factor: f32) f32 {
@@ -1068,6 +1101,8 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqualDeep(geometry.SizeF.init(canvas_width, canvas_height), harness.null_platform.gpu_surface_packet_present_surface_size);
     try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_packet_present_scale_factor);
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
+    try std.testing.expect(app.pixels == null);
+    try std.testing.expect(app.scratch == null);
     const presented_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
     try std.testing.expect(!presented_frame.canvas_frame_full_repaint);

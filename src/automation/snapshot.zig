@@ -206,7 +206,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.canvas_frame_visual_effect_retain_count,
                 view.canvas_frame_visual_effect_evict_count,
             });
-            try writer.print(" canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_text_layouts={d} canvas_frame_text_lines={d} canvas_frame_text_uploads={d} canvas_frame_text_retains={d} canvas_frame_text_evicts={d} canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
+            try writer.print(" canvas_frame_glyphs={d} canvas_frame_glyph_uploads={d} canvas_frame_glyph_retains={d} canvas_frame_glyph_evicts={d} canvas_frame_text_layouts={d} canvas_frame_text_lines={d} canvas_frame_text_uploads={d} canvas_frame_text_retains={d} canvas_frame_text_evicts={d}", .{
                 view.canvas_frame_glyph_atlas_entry_count,
                 view.canvas_frame_glyph_atlas_upload_count,
                 view.canvas_frame_glyph_atlas_retain_count,
@@ -216,6 +216,15 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.canvas_frame_text_layout_upload_count,
                 view.canvas_frame_text_layout_retain_count,
                 view.canvas_frame_text_layout_evict_count,
+            });
+            try writer.print(" canvas_frame_gpu_packet_commands={d} canvas_frame_gpu_packet_cache_actions={d} canvas_frame_gpu_packet_cached_resources={d} canvas_frame_gpu_packet_unsupported={d} canvas_frame_gpu_packet_representable={any}", .{
+                view.canvas_frame_gpu_packet_command_count,
+                view.canvas_frame_gpu_packet_cache_action_count,
+                view.canvas_frame_gpu_packet_cached_resource_command_count,
+                view.canvas_frame_gpu_packet_unsupported_command_count,
+                view.canvas_frame_gpu_packet_representable,
+            });
+            try writer.print(" canvas_frame_changes={d} canvas_frame_budget_exceeded={d} canvas_frame_budget_ok={any}", .{
                 view.canvas_frame_change_count,
                 view.canvas_frame_budget_exceeded_count,
                 view.canvas_frame_budget_ok,
@@ -537,6 +546,11 @@ test "snapshot emits GPU surface frame proof" {
         .canvas_frame_text_layout_upload_count = 1,
         .canvas_frame_text_layout_retain_count = 1,
         .canvas_frame_text_layout_evict_count = 0,
+        .canvas_frame_gpu_packet_command_count = 5,
+        .canvas_frame_gpu_packet_cache_action_count = 7,
+        .canvas_frame_gpu_packet_cached_resource_command_count = 4,
+        .canvas_frame_gpu_packet_unsupported_command_count = 0,
+        .canvas_frame_gpu_packet_representable = true,
         .canvas_frame_change_count = 0,
         .canvas_frame_budget_exceeded_count = 2,
         .canvas_frame_budget_ok = false,
@@ -608,6 +622,11 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_lines=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_uploads=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_text_retains=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_gpu_packet_commands=5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_gpu_packet_cache_actions=7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_gpu_packet_cached_resources=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_gpu_packet_unsupported=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_gpu_packet_representable=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_changes=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_exceeded=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_budget_ok=false") != null);

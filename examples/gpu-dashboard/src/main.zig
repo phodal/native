@@ -796,6 +796,11 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_text_layout_upload_count = frame.canvas_frame_text_layout_upload_count,
         .canvas_frame_text_layout_retain_count = frame.canvas_frame_text_layout_retain_count,
         .canvas_frame_text_layout_evict_count = frame.canvas_frame_text_layout_evict_count,
+        .canvas_frame_gpu_packet_command_count = frame.canvas_frame_gpu_packet_command_count,
+        .canvas_frame_gpu_packet_cache_action_count = frame.canvas_frame_gpu_packet_cache_action_count,
+        .canvas_frame_gpu_packet_cached_resource_command_count = frame.canvas_frame_gpu_packet_cached_resource_command_count,
+        .canvas_frame_gpu_packet_unsupported_command_count = frame.canvas_frame_gpu_packet_unsupported_command_count,
+        .canvas_frame_gpu_packet_representable = frame.canvas_frame_gpu_packet_representable,
         .canvas_frame_change_count = frame.canvas_frame_change_count,
         .canvas_frame_budget_exceeded_count = frame.canvas_frame_budget_exceeded_count,
         .canvas_frame_budget_ok = frame.canvas_frame_budget_ok,
@@ -814,12 +819,13 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
 fn dashboardFrameStatus(buffer: []u8, frame_event: zero_native.GpuSurfaceFrameEvent) std.fmt.BufPrintError![]u8 {
     return std.fmt.bufPrint(
         buffer,
-        "Canvas frame: {s} risk, {d} work units, {d} commands, {d} batches, dirty {d}%.",
+        "Canvas frame: {s} risk, {d} work units, {d} commands, {d} batches, packet {s}, dirty {d}%.",
         .{
             @tagName(frame_event.canvas_frame_profile_risk),
             frame_event.canvas_frame_profile_work_units,
             frame_event.canvas_command_count,
             frame_event.canvas_frame_batch_count,
+            if (frame_event.canvas_frame_gpu_packet_representable) "ok" else "fallback",
             dashboardDirtyPercent(frame_event.canvas_frame_profile_dirty_ratio),
         },
     );
@@ -1442,6 +1448,11 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
         .canvas_frame_text_layout_upload_count = 1,
         .canvas_frame_text_layout_retain_count = 9,
         .canvas_frame_text_layout_evict_count = 0,
+        .canvas_frame_gpu_packet_command_count = 62,
+        .canvas_frame_gpu_packet_cache_action_count = 14,
+        .canvas_frame_gpu_packet_cached_resource_command_count = 11,
+        .canvas_frame_gpu_packet_unsupported_command_count = 0,
+        .canvas_frame_gpu_packet_representable = true,
         .canvas_frame_change_count = 0,
         .canvas_frame_budget_exceeded_count = 0,
         .canvas_frame_budget_ok = true,
@@ -1470,6 +1481,11 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
     try std.testing.expectEqual(frame.canvas_frame_layer_transform_count, event_value.canvas_frame_layer_transform_count);
     try std.testing.expectEqual(frame.canvas_frame_visual_effect_shadow_count, event_value.canvas_frame_visual_effect_shadow_count);
     try std.testing.expectEqual(frame.canvas_frame_text_layout_retain_count, event_value.canvas_frame_text_layout_retain_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_command_count, event_value.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_cache_action_count, event_value.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_cached_resource_command_count, event_value.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_unsupported_command_count, event_value.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_representable, event_value.canvas_frame_gpu_packet_representable);
     try std.testing.expectEqualDeep(frame.canvas_frame_dirty_bounds.?, event_value.canvas_frame_dirty_bounds.?);
     try std.testing.expectEqual(frame.canvas_frame_profile_work_units, event_value.canvas_frame_profile_work_units);
     try std.testing.expectEqual(frame.canvas_frame_profile_risk, event_value.canvas_frame_profile_risk);
@@ -1480,7 +1496,7 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
 
     var status_buffer: [128]u8 = undefined;
     const status = try dashboardFrameStatus(&status_buffer, event_value);
-    try std.testing.expectEqualStrings("Canvas frame: moderate risk, 88 work units, 62 commands, 12 batches, dirty 0%.", status);
+    try std.testing.expectEqualStrings("Canvas frame: moderate risk, 88 work units, 62 commands, 12 batches, packet ok, dirty 0%.", status);
 }
 
 fn expectVisiblePixel(pixel: [4]u8) !void {

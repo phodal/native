@@ -1987,6 +1987,7 @@ pub const Runtime = struct {
                         .scale = frame_event.scale_factor,
                     }, self.canvasFrameScratchStorage(), false);
                     const preview_render_pass = preview_frame.renderPass();
+                    const preview_gpu_packet_summary = preview_frame.gpuPacketSummary();
                     const preview_budget_status = preview_frame.budgetStatus();
                     enriched_frame_event.canvas_revision = self.views[index].canvas_revision;
                     enriched_frame_event.input_timestamp_ns = self.views[index].gpu_input_timestamp_ns;
@@ -2042,6 +2043,11 @@ pub const Runtime = struct {
                     enriched_frame_event.canvas_frame_text_layout_upload_count = preview_frame.text_layout_cache_plan.uploadCount();
                     enriched_frame_event.canvas_frame_text_layout_retain_count = preview_frame.text_layout_cache_plan.retainCount();
                     enriched_frame_event.canvas_frame_text_layout_evict_count = preview_frame.text_layout_cache_plan.evictCount();
+                    enriched_frame_event.canvas_frame_gpu_packet_command_count = preview_gpu_packet_summary.command_count;
+                    enriched_frame_event.canvas_frame_gpu_packet_cache_action_count = preview_gpu_packet_summary.cache_action_count;
+                    enriched_frame_event.canvas_frame_gpu_packet_cached_resource_command_count = preview_gpu_packet_summary.cached_resource_command_count;
+                    enriched_frame_event.canvas_frame_gpu_packet_unsupported_command_count = preview_gpu_packet_summary.unsupported_command_count;
+                    enriched_frame_event.canvas_frame_gpu_packet_representable = preview_gpu_packet_summary.fullyRepresentable();
                     enriched_frame_event.canvas_frame_change_count = preview_frame.changes.len;
                     enriched_frame_event.canvas_frame_budget_exceeded_count = preview_budget_status.exceededCount();
                     enriched_frame_event.canvas_frame_budget_ok = preview_budget_status.ok();
@@ -5250,6 +5256,11 @@ const RuntimeView = struct {
     canvas_frame_text_layout_upload_count: usize = 0,
     canvas_frame_text_layout_retain_count: usize = 0,
     canvas_frame_text_layout_evict_count: usize = 0,
+    canvas_frame_gpu_packet_command_count: usize = 0,
+    canvas_frame_gpu_packet_cache_action_count: usize = 0,
+    canvas_frame_gpu_packet_cached_resource_command_count: usize = 0,
+    canvas_frame_gpu_packet_unsupported_command_count: usize = 0,
+    canvas_frame_gpu_packet_representable: bool = true,
     canvas_frame_change_count: usize = 0,
     canvas_frame_budget: canvas.CanvasFrameBudget = .{},
     canvas_frame_budget_status: canvas.CanvasFrameBudgetStatus = .{},
@@ -5366,6 +5377,11 @@ const RuntimeView = struct {
             .canvas_frame_text_layout_upload_count = self.canvas_frame_text_layout_upload_count,
             .canvas_frame_text_layout_retain_count = self.canvas_frame_text_layout_retain_count,
             .canvas_frame_text_layout_evict_count = self.canvas_frame_text_layout_evict_count,
+            .canvas_frame_gpu_packet_command_count = self.canvas_frame_gpu_packet_command_count,
+            .canvas_frame_gpu_packet_cache_action_count = self.canvas_frame_gpu_packet_cache_action_count,
+            .canvas_frame_gpu_packet_cached_resource_command_count = self.canvas_frame_gpu_packet_cached_resource_command_count,
+            .canvas_frame_gpu_packet_unsupported_command_count = self.canvas_frame_gpu_packet_unsupported_command_count,
+            .canvas_frame_gpu_packet_representable = self.canvas_frame_gpu_packet_representable,
             .canvas_frame_change_count = self.canvas_frame_change_count,
             .canvas_frame_budget_exceeded_count = self.canvas_frame_budget_status.exceededCount(),
             .canvas_frame_budget_ok = self.canvas_frame_budget_status.ok(),
@@ -5596,6 +5612,7 @@ const RuntimeView = struct {
 
     fn recordCanvasFrame(self: *RuntimeView, frame: canvas.CanvasFrame) void {
         const render_pass = frame.renderPass();
+        const gpu_packet_summary = frame.gpuPacketSummary();
         self.canvas_frame_requires_render = frame.requiresRender();
         self.canvas_frame_full_repaint = frame.full_repaint;
         self.canvas_frame_batch_count = frame.batch_plan.batchCount();
@@ -5643,6 +5660,11 @@ const RuntimeView = struct {
         self.canvas_frame_text_layout_upload_count = frame.text_layout_cache_plan.uploadCount();
         self.canvas_frame_text_layout_retain_count = frame.text_layout_cache_plan.retainCount();
         self.canvas_frame_text_layout_evict_count = frame.text_layout_cache_plan.evictCount();
+        self.canvas_frame_gpu_packet_command_count = gpu_packet_summary.command_count;
+        self.canvas_frame_gpu_packet_cache_action_count = gpu_packet_summary.cache_action_count;
+        self.canvas_frame_gpu_packet_cached_resource_command_count = gpu_packet_summary.cached_resource_command_count;
+        self.canvas_frame_gpu_packet_unsupported_command_count = gpu_packet_summary.unsupported_command_count;
+        self.canvas_frame_gpu_packet_representable = gpu_packet_summary.fullyRepresentable();
         self.canvas_frame_change_count = frame.changes.len;
         self.canvas_frame_budget = frame.budget;
         self.canvas_frame_budget_status = frame.budgetStatus();
@@ -7429,12 +7451,21 @@ fn writeViewJsonToWriter(view: platform.ViewInfo, writer: anytype) !void {
         view.canvas_frame_glyph_atlas_retain_count,
         view.canvas_frame_glyph_atlas_evict_count,
     });
-    try writer.print(",\"canvasFrameTextLayoutCount\":{d},\"canvasFrameTextLayoutLineCount\":{d},\"canvasFrameTextLayoutUploadCount\":{d},\"canvasFrameTextLayoutRetainCount\":{d},\"canvasFrameTextLayoutEvictCount\":{d},\"canvasFrameChangeCount\":{d},\"canvasFrameBudgetExceededCount\":{d},\"canvasFrameBudgetOk\":{},\"canvasFrameDirtyBounds\":", .{
+    try writer.print(",\"canvasFrameTextLayoutCount\":{d},\"canvasFrameTextLayoutLineCount\":{d},\"canvasFrameTextLayoutUploadCount\":{d},\"canvasFrameTextLayoutRetainCount\":{d},\"canvasFrameTextLayoutEvictCount\":{d}", .{
         view.canvas_frame_text_layout_count,
         view.canvas_frame_text_layout_line_count,
         view.canvas_frame_text_layout_upload_count,
         view.canvas_frame_text_layout_retain_count,
         view.canvas_frame_text_layout_evict_count,
+    });
+    try writer.print(",\"canvasFrameGpuPacketCommandCount\":{d},\"canvasFrameGpuPacketCacheActionCount\":{d},\"canvasFrameGpuPacketCachedResourceCommandCount\":{d},\"canvasFrameGpuPacketUnsupportedCommandCount\":{d},\"canvasFrameGpuPacketRepresentable\":{}", .{
+        view.canvas_frame_gpu_packet_command_count,
+        view.canvas_frame_gpu_packet_cache_action_count,
+        view.canvas_frame_gpu_packet_cached_resource_command_count,
+        view.canvas_frame_gpu_packet_unsupported_command_count,
+        view.canvas_frame_gpu_packet_representable,
+    });
+    try writer.print(",\"canvasFrameChangeCount\":{d},\"canvasFrameBudgetExceededCount\":{d},\"canvasFrameBudgetOk\":{},\"canvasFrameDirtyBounds\":", .{
         view.canvas_frame_change_count,
         view.canvas_frame_budget_exceeded_count,
         view.canvas_frame_budget_ok,
@@ -9391,6 +9422,7 @@ test "runtime next canvas frame retains renderer cache families" {
         .surface_size = geometry.SizeF.init(96, 48),
         .render_overrides = &overrides,
     }, harness.runtime.canvasFrameScratchStorage());
+    const first_gpu_packet_summary = first_frame.gpuPacketSummary();
     try std.testing.expect(first_frame.full_repaint);
     try std.testing.expectEqual(@as(usize, 1), first_frame.path_geometry_plan.geometryCount());
     try std.testing.expect(first_frame.path_geometry_plan.vertexCount() > 0);
@@ -9416,6 +9448,11 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_layer_upload_count);
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_count);
     try std.testing.expectEqual(@as(usize, 1), first_info.canvas_frame_visual_effect_upload_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.command_count, first_info.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.cache_action_count, first_info.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.cached_resource_command_count, first_info.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), first_info.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(first_info.canvas_frame_gpu_packet_representable);
     try std.testing.expect(first_info.canvas_frame_profile_work_units > 0);
     try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, first_info.canvas_frame_profile_risk);
     try std.testing.expectEqual(@as(f32, 4608), first_info.canvas_frame_profile_surface_area);
@@ -9427,6 +9464,11 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_image_count);
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_layer_count);
     try std.testing.expectEqual(@as(usize, 1), first_gpu_frame.canvas_frame_visual_effect_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.command_count, first_gpu_frame.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.cache_action_count, first_gpu_frame.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(first_gpu_packet_summary.cached_resource_command_count, first_gpu_frame.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), first_gpu_frame.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(first_gpu_frame.canvas_frame_gpu_packet_representable);
     try std.testing.expect(first_gpu_frame.canvas_frame_profile_work_units > 0);
     try std.testing.expectEqual(platform.CanvasFrameProfileRisk.high, first_gpu_frame.canvas_frame_profile_risk);
     try std.testing.expectEqual(@as(f32, 4608), first_gpu_frame.canvas_frame_profile_surface_area);
@@ -9439,6 +9481,11 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameImageCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameLayerCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameVisualEffectCount\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCommandCount\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCacheActionCount\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCachedResourceCommandCount\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketUnsupportedCommandCount\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketRepresentable\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileWorkUnits\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileRisk\":\"high\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameProfileSurfaceArea\":4608") != null);
@@ -9465,6 +9512,11 @@ test "runtime next canvas frame retains renderer cache families" {
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_image_retain_count);
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_layer_retain_count);
     try std.testing.expectEqual(@as(usize, 1), retained_info.canvas_frame_visual_effect_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(retained_info.canvas_frame_gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 0), retained_info.canvas_frame_profile_work_units);
     try std.testing.expectEqual(platform.CanvasFrameProfileRisk.idle, retained_info.canvas_frame_profile_risk);
 }
@@ -9480,6 +9532,11 @@ test "runtime GPU surface frame event exposes renderer cache family counters" {
         last_layer_upload_count: usize = 0,
         last_visual_effect_count: usize = 0,
         last_visual_effect_upload_count: usize = 0,
+        last_gpu_packet_command_count: usize = 0,
+        last_gpu_packet_cache_action_count: usize = 0,
+        last_gpu_packet_cached_resource_command_count: usize = 0,
+        last_gpu_packet_unsupported_command_count: usize = 0,
+        last_gpu_packet_representable: bool = false,
 
         fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
             _ = runtime;
@@ -9495,6 +9552,11 @@ test "runtime GPU surface frame event exposes renderer cache family counters" {
                     self.last_layer_upload_count = frame_event.canvas_frame_layer_upload_count;
                     self.last_visual_effect_count = frame_event.canvas_frame_visual_effect_count;
                     self.last_visual_effect_upload_count = frame_event.canvas_frame_visual_effect_upload_count;
+                    self.last_gpu_packet_command_count = frame_event.canvas_frame_gpu_packet_command_count;
+                    self.last_gpu_packet_cache_action_count = frame_event.canvas_frame_gpu_packet_cache_action_count;
+                    self.last_gpu_packet_cached_resource_command_count = frame_event.canvas_frame_gpu_packet_cached_resource_command_count;
+                    self.last_gpu_packet_unsupported_command_count = frame_event.canvas_frame_gpu_packet_unsupported_command_count;
+                    self.last_gpu_packet_representable = frame_event.canvas_frame_gpu_packet_representable;
                 },
                 else => {},
             }
@@ -9577,12 +9639,22 @@ test "runtime GPU surface frame event exposes renderer cache family counters" {
     try std.testing.expectEqual(@as(usize, 1), app_state.last_layer_upload_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_visual_effect_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_visual_effect_upload_count);
+    try std.testing.expect(app_state.last_gpu_packet_command_count > 0);
+    try std.testing.expect(app_state.last_gpu_packet_cache_action_count > 0);
+    try std.testing.expect(app_state.last_gpu_packet_cached_resource_command_count > 0);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_gpu_packet_unsupported_command_count);
+    try std.testing.expect(app_state.last_gpu_packet_representable);
 
     const frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_path_geometry_count);
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_image_count);
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_layer_count);
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_visual_effect_count);
+    try std.testing.expectEqual(app_state.last_gpu_packet_command_count, frame.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(app_state.last_gpu_packet_cache_action_count, frame.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(app_state.last_gpu_packet_cached_resource_command_count, frame.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(frame.canvas_frame_gpu_packet_representable);
 }
 
 test "runtime next canvas frame retains and evicts glyph atlas cache" {
@@ -15974,6 +16046,11 @@ test "runtime dispatches GPU surface events" {
         last_canvas_frame_resource_retain_count: usize = 0,
         last_canvas_frame_resource_evict_count: usize = 0,
         last_canvas_frame_glyph_atlas_entry_count: usize = 0,
+        last_canvas_frame_gpu_packet_command_count: usize = 0,
+        last_canvas_frame_gpu_packet_cache_action_count: usize = 0,
+        last_canvas_frame_gpu_packet_cached_resource_command_count: usize = 0,
+        last_canvas_frame_gpu_packet_unsupported_command_count: usize = 0,
+        last_canvas_frame_gpu_packet_representable: bool = false,
         last_canvas_frame_change_count: usize = 0,
         last_canvas_frame_budget_exceeded_count: usize = 0,
         last_canvas_frame_budget_ok: bool = true,
@@ -16024,6 +16101,11 @@ test "runtime dispatches GPU surface events" {
                     self.last_canvas_frame_resource_retain_count = frame_event.canvas_frame_resource_retain_count;
                     self.last_canvas_frame_resource_evict_count = frame_event.canvas_frame_resource_evict_count;
                     self.last_canvas_frame_glyph_atlas_entry_count = frame_event.canvas_frame_glyph_atlas_entry_count;
+                    self.last_canvas_frame_gpu_packet_command_count = frame_event.canvas_frame_gpu_packet_command_count;
+                    self.last_canvas_frame_gpu_packet_cache_action_count = frame_event.canvas_frame_gpu_packet_cache_action_count;
+                    self.last_canvas_frame_gpu_packet_cached_resource_command_count = frame_event.canvas_frame_gpu_packet_cached_resource_command_count;
+                    self.last_canvas_frame_gpu_packet_unsupported_command_count = frame_event.canvas_frame_gpu_packet_unsupported_command_count;
+                    self.last_canvas_frame_gpu_packet_representable = frame_event.canvas_frame_gpu_packet_representable;
                     self.last_canvas_frame_change_count = frame_event.canvas_frame_change_count;
                     self.last_canvas_frame_budget_exceeded_count = frame_event.canvas_frame_budget_exceeded_count;
                     self.last_canvas_frame_budget_ok = frame_event.canvas_frame_budget_ok;
@@ -16160,6 +16242,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_resource_retain_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_resource_evict_count);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_glyph_atlas_entry_count);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_command_count > 0);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_cache_action_count > 0);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_change_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
@@ -16210,6 +16297,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_resource_retain_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_resource_evict_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_glyph_atlas_entry_count);
+    try std.testing.expectEqual(app_state.last_canvas_frame_gpu_packet_command_count, frame.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(app_state.last_canvas_frame_gpu_packet_cache_action_count, frame.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(frame.canvas_frame_gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_change_count);
     try std.testing.expectEqual(@as(usize, 1), frame.canvas_frame_budget_exceeded_count);
     try std.testing.expect(!frame.canvas_frame_budget_ok);
@@ -16255,6 +16347,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameResourceRetainCount\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameResourceEvictCount\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGlyphAtlasEntryCount\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCommandCount\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCacheActionCount\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketCachedResourceCommandCount\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketUnsupportedCommandCount\":0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameGpuPacketRepresentable\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameChangeCount\":0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameBudgetExceededCount\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, view_json, "\"canvasFrameBudgetOk\":false") != null);
@@ -16284,6 +16381,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_cache_action_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_bind_pipeline_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_encoder_draw_batch_count);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_command_count > 0);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_cache_action_count > 0);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(app_state.last_canvas_frame_gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_canvas_frame_change_count);
     try std.testing.expectEqual(@as(usize, 1), app_state.last_canvas_frame_budget_exceeded_count);
     try std.testing.expect(!app_state.last_canvas_frame_budget_ok);
@@ -16308,6 +16410,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_cache_action_count);
     try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_bind_pipeline_count);
     try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_encoder_draw_batch_count);
+    try std.testing.expectEqual(app_state.last_canvas_frame_gpu_packet_command_count, preview_frame.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(app_state.last_canvas_frame_gpu_packet_cache_action_count, preview_frame.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 0), preview_frame.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), preview_frame.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expect(preview_frame.canvas_frame_gpu_packet_representable);
     try std.testing.expectEqual(@as(usize, 1), preview_frame.canvas_frame_budget_exceeded_count);
     try std.testing.expect(!preview_frame.canvas_frame_budget_ok);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), preview_frame.canvas_frame_dirty_bounds.?);

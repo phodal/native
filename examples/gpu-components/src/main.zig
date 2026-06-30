@@ -676,6 +676,11 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .canvas_frame_text_layout_upload_count = frame.canvas_frame_text_layout_upload_count,
         .canvas_frame_text_layout_retain_count = frame.canvas_frame_text_layout_retain_count,
         .canvas_frame_text_layout_evict_count = frame.canvas_frame_text_layout_evict_count,
+        .canvas_frame_gpu_packet_command_count = frame.canvas_frame_gpu_packet_command_count,
+        .canvas_frame_gpu_packet_cache_action_count = frame.canvas_frame_gpu_packet_cache_action_count,
+        .canvas_frame_gpu_packet_cached_resource_command_count = frame.canvas_frame_gpu_packet_cached_resource_command_count,
+        .canvas_frame_gpu_packet_unsupported_command_count = frame.canvas_frame_gpu_packet_unsupported_command_count,
+        .canvas_frame_gpu_packet_representable = frame.canvas_frame_gpu_packet_representable,
         .canvas_frame_change_count = frame.canvas_frame_change_count,
         .canvas_frame_budget_exceeded_count = frame.canvas_frame_budget_exceeded_count,
         .canvas_frame_budget_ok = frame.canvas_frame_budget_ok,
@@ -694,11 +699,12 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
 fn componentFrameStatus(buffer: []u8, frame_event: zero_native.GpuSurfaceFrameEvent) std.fmt.BufPrintError![]u8 {
     return std.fmt.bufPrint(
         buffer,
-        "Component frame: {s} risk, {d} commands, {d} batches, {d} semantics nodes.",
+        "Component frame: {s} risk, {d} commands, {d} batches, packet {s}, {d} semantics nodes.",
         .{
             @tagName(frame_event.canvas_frame_profile_risk),
             frame_event.canvas_command_count,
             frame_event.canvas_frame_batch_count,
+            if (frame_event.canvas_frame_gpu_packet_representable) "ok" else "fallback",
             frame_event.widget_semantics_count,
         },
     );
@@ -873,6 +879,37 @@ test "gpu components frame plan stays within runtime budgets" {
     try std.testing.expect(frame.text_layout_plan.planCount() >= 12);
     try std.testing.expect(frame.profile().work_units > 0);
     try std.testing.expect(frame.profile().surface_area > 0);
+}
+
+test "gpu components frame event adapter preserves packet status" {
+    const frame = zero_native.platform.GpuFrame{
+        .window_id = 1,
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 9,
+        .timestamp_ns = 1_000,
+        .canvas_command_count = 54,
+        .canvas_frame_batch_count = 9,
+        .canvas_frame_gpu_packet_command_count = 54,
+        .canvas_frame_gpu_packet_cache_action_count = 12,
+        .canvas_frame_gpu_packet_cached_resource_command_count = 8,
+        .canvas_frame_gpu_packet_unsupported_command_count = 1,
+        .canvas_frame_gpu_packet_representable = false,
+        .canvas_frame_profile_risk = .low,
+        .widget_semantics_count = 17,
+    };
+    const event_value = gpuFrameEvent(frame);
+
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_command_count, event_value.canvas_frame_gpu_packet_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_cache_action_count, event_value.canvas_frame_gpu_packet_cache_action_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_cached_resource_command_count, event_value.canvas_frame_gpu_packet_cached_resource_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_unsupported_command_count, event_value.canvas_frame_gpu_packet_unsupported_command_count);
+    try std.testing.expectEqual(frame.canvas_frame_gpu_packet_representable, event_value.canvas_frame_gpu_packet_representable);
+
+    var status_buffer: [128]u8 = undefined;
+    const status = try componentFrameStatus(&status_buffer, event_value);
+    try std.testing.expectEqualStrings("Component frame: low risk, 54 commands, 9 batches, packet fallback, 17 semantics nodes.", status);
 }
 
 test "gpu components semantics cover retained widget families" {

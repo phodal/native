@@ -769,6 +769,10 @@ fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFra
         .input_latency_budget_ns = frame.input_latency_budget_ns,
         .input_latency_budget_exceeded_count = frame.input_latency_budget_exceeded_count,
         .input_latency_budget_ok = frame.input_latency_budget_ok,
+        .first_frame_latency_ns = frame.first_frame_latency_ns,
+        .first_frame_latency_budget_ns = frame.first_frame_latency_budget_ns,
+        .first_frame_latency_budget_exceeded_count = frame.first_frame_latency_budget_exceeded_count,
+        .first_frame_latency_budget_ok = frame.first_frame_latency_budget_ok,
         .nonblank = frame.nonblank,
         .sample_color = frame.sample_color,
         .backend = frame.backend,
@@ -1439,6 +1443,10 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
         .scale_factor = 2,
         .frame_index = 42,
         .timestamp_ns = 1234,
+        .first_frame_latency_ns = 54,
+        .first_frame_latency_budget_ns = 150,
+        .first_frame_latency_budget_exceeded_count = 0,
+        .first_frame_latency_budget_ok = true,
         .nonblank = true,
         .sample_color = 0xff112233,
         .backend = .metal,
@@ -1524,6 +1532,10 @@ test "gpu dashboard frame event adapter preserves renderer diagnostics" {
     try std.testing.expectEqual(frame.alpha_mode, event_value.alpha_mode);
     try std.testing.expectEqual(frame.color_space, event_value.color_space);
     try std.testing.expectEqual(frame.vsync, event_value.vsync);
+    try std.testing.expectEqual(frame.first_frame_latency_ns, event_value.first_frame_latency_ns);
+    try std.testing.expectEqual(frame.first_frame_latency_budget_ns, event_value.first_frame_latency_budget_ns);
+    try std.testing.expectEqual(frame.first_frame_latency_budget_exceeded_count, event_value.first_frame_latency_budget_exceeded_count);
+    try std.testing.expectEqual(frame.first_frame_latency_budget_ok, event_value.first_frame_latency_budget_ok);
     try std.testing.expectEqual(frame.canvas_frame_path_geometry_count, event_value.canvas_frame_path_geometry_count);
     try std.testing.expectEqual(frame.canvas_frame_path_geometry_vertex_count, event_value.canvas_frame_path_geometry_vertex_count);
     try std.testing.expectEqual(frame.canvas_frame_image_count, event_value.canvas_frame_image_count);

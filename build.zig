@@ -756,6 +756,76 @@ pub fn build(b: *std.Build) void {
     gpu_surface_smoke_run.step.dependOn(&cli_exe.step);
     gpu_surface_smoke_step.dependOn(&gpu_surface_smoke_run.step);
 
+    const gpu_dashboard_smoke_step = b.step("test-gpu-dashboard-smoke", "Run macOS GPU dashboard automation smoke test");
+    const gpu_dashboard_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
+    gpu_dashboard_smoke_build.setCwd(b.path("examples/gpu-dashboard"));
+    const gpu_dashboard_smoke_run = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -eu
+        \\cd examples/gpu-dashboard
+        \\app="zig-out/bin/gpu-dashboard"
+        \\cli="$1"
+        \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
+        \\automation_dir=".zig-cache/zero-native-automation"
+        \\mkdir -p "$automation_dir"
+        \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt"
+        \\"$app" > .zig-cache/zero-native-gpu-dashboard-smoke.log 2>&1 &
+        \\pid=$!
+        \\trap 'kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true' EXIT
+        \\ready="$("$cli" automate wait 2>&1)"
+        \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-dashboard automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\case "$snapshot" in *'window @w1 "zero-native GPU Dashboard"'*) ;; *) echo "gpu-dashboard window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'accessibility_label="Native-rendered product dashboard canvas"'*) ;; *) echo "dashboard GPU canvas was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/inspector kind=webview'*) ;; *) echo "dashboard inspector WebView was missing from snapshot" >&2; exit 1 ;; esac
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_nonblank=true'*'canvas_commands=64'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_nonblank=true'*'canvas_commands=64'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "dashboard GPU canvas did not present the retained display list as a packet" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'canvas_commands=64'*'widget_semantics=31'*) ;; *) echo "dashboard GPU canvas was missing retained commands or widget semantics" >&2; exit 1 ;; esac
+        \\first_frame_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_first_frame_latency_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$first_frame_latency" in ''|*[!0-9]*) echo "dashboard GPU first frame latency was missing" >&2; exit 1 ;; esac
+        \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt 5000000000 ]; then echo "dashboard GPU first frame latency was out of bounds: $first_frame_latency ns" >&2; exit 1; fi
+        \\case "$snapshot" in *'widget @w1/dashboard-canvas#103 role=button'*'actions=[focus,press]'*) ;; *) echo "dashboard live render button semantics were missing" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'widget @w1/dashboard-canvas#131 role=textbox'*'text="$13.4M"'*) ;; *) echo "dashboard forecast textbox semantics were missing" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'widget @w1/dashboard-canvas#140 role=dialog'*'name="Revenue filter popover"'*) ;; *) echo "dashboard popover semantics were missing" >&2; exit 1 ;; esac
+        \\gpu_frame_from_snapshot() {
+        \\  printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_frame=\([0-9][0-9]*\).*/\1/p'
+        \\}
+        \\gpu_frame_before="$(gpu_frame_from_snapshot)"
+        \\case "$gpu_frame_before" in ''|*[!0-9]*) gpu_frame_before=0 ;; esac
+        \\gpu_frame_after="$gpu_frame_before"
+        \\"$cli" automate widget-click dashboard-canvas 133 >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
+        \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
+        \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ]; then
+        \\    case "$snapshot" in *'Clicked toggle #133: off.'*'widget @w1/dashboard-canvas#133 role=switch'*'value=0'*)
+        \\      case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
+        \\      ;;
+        \\    esac
+        \\  fi
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "dashboard switch click did not request a GPU frame" >&2; exit 1; fi
+        \\case "$snapshot" in *'Clicked toggle #133: off.'*'widget @w1/dashboard-canvas#133 role=switch'*'value=0'*) ;; *) echo "dashboard switch click did not route through pointer input" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "dashboard switch click did not present an incremental GPU packet" >&2; exit 1 ;; esac
+        \\echo "gpu-dashboard smoke ok"
+        ,
+        "sh",
+    });
+    gpu_dashboard_smoke_run.addFileArg(cli_exe.getEmittedBin());
+    gpu_dashboard_smoke_run.step.dependOn(&gpu_dashboard_smoke_build.step);
+    gpu_dashboard_smoke_run.step.dependOn(&cli_exe.step);
+    gpu_dashboard_smoke_step.dependOn(&gpu_dashboard_smoke_run.step);
+
     const gpu_components_smoke_step = b.step("test-gpu-components-smoke", "Run macOS GPU components automation smoke test");
     const gpu_components_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
     gpu_components_smoke_build.setCwd(b.path("examples/gpu-components"));

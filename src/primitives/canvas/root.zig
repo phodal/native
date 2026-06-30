@@ -17992,6 +17992,151 @@ test "reference renderer applies render pass scissor on load" {
     try expectPixelRgba8(.{ 0, 0, 255, 255 }, surface, 3, 3);
 }
 
+test "reference renderer captures Phase 2 primitive signature" {
+    const stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(248, 250, 252) },
+        .{ .offset = 1, .color = Color.rgb8(48, 111, 237) },
+    };
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 4 },
+        .{ .id = 2, .x = 5, .y = 0, .advance = 4 },
+    };
+    const image_pixels = [_]u8{
+        16,  185, 129, 255,
+        255, 255, 255, 255,
+        15,  23,  42,  255,
+        48,  111, 237, 255,
+    };
+    const images = [_]ReferenceImage{.{
+        .id = 7,
+        .width = 2,
+        .height = 2,
+        .pixels = &image_pixels,
+    }};
+    const commands = [_]CanvasCommand{
+        .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 32, 24),
+            .fill = .{ .linear_gradient = .{ .start = geometry.PointF.init(0, 0), .end = geometry.PointF.init(32, 24), .stops = &stops } },
+        } },
+        .{ .shadow = .{
+            .id = 2,
+            .rect = geometry.RectF.init(4, 4, 18, 10),
+            .radius = Radius.all(3),
+            .offset = .{ .dx = 0, .dy = 2 },
+            .blur = 2,
+            .spread = 0,
+            .color = Color.rgba8(15, 23, 42, 64),
+        } },
+        .{ .push_clip = .{ .id = 3, .rect = geometry.RectF.init(2, 2, 28, 20), .radius = Radius.all(2) } },
+        .{ .push_opacity = 0.84 },
+        .{ .transform = Affine.translate(1, 1) },
+        .{ .fill_rounded_rect = .{
+            .id = 4,
+            .rect = geometry.RectF.init(4, 4, 18, 10),
+            .radius = Radius.all(3),
+            .fill = .{ .color = Color.rgb8(255, 255, 255) },
+        } },
+        .{ .stroke_rect = .{
+            .id = 5,
+            .rect = geometry.RectF.init(4, 4, 18, 10),
+            .radius = Radius.all(3),
+            .stroke = .{ .fill = .{ .color = Color.rgb8(15, 23, 42) }, .width = 1 },
+        } },
+        .{ .draw_image = .{
+            .id = 6,
+            .image_id = 7,
+            .dst = geometry.RectF.init(18, 5, 8, 8),
+            .fit = .cover,
+            .sampling = .nearest,
+        } },
+        .{ .draw_text = .{
+            .id = 7,
+            .font_id = 1,
+            .size = 4,
+            .origin = geometry.PointF.init(6, 18),
+            .color = Color.rgb8(15, 23, 42),
+            .text = "UI",
+            .glyphs = &glyphs,
+        } },
+        .pop_opacity,
+        .pop_clip,
+        .{ .blur = .{
+            .id = 8,
+            .rect = geometry.RectF.init(24, 2, 6, 6),
+            .radius = 1,
+        } },
+    };
+
+    var render_commands: [commands.len]RenderCommand = undefined;
+    var render_batches: [commands.len]RenderBatch = undefined;
+    var pipeline_cache_entries: [8]RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [16]RenderPipelineCacheAction = undefined;
+    var layers: [commands.len]RenderLayer = undefined;
+    var layer_cache_entries: [commands.len]RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [commands.len * 2]RenderLayerCacheAction = undefined;
+    var resources: [8]RenderResource = undefined;
+    var resource_cache_entries: [8]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [16]RenderResourceCacheAction = undefined;
+    var visual_effects: [4]VisualEffect = undefined;
+    var visual_effect_cache_entries: [4]VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [8]VisualEffectCacheAction = undefined;
+    var glyph_atlas_entries: [8]GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [8]GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [16]GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [4]TextLayoutPlan = undefined;
+    var text_layout_lines: [8]TextLine = undefined;
+    var text_layout_cache_entries: [4]TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [8]TextLayoutCacheAction = undefined;
+    var changes: [commands.len]DiffChange = undefined;
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .surface_size = geometry.SizeF.init(32, 24),
+        .full_repaint = true,
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .pipeline_cache_entries = &pipeline_cache_entries,
+        .pipeline_cache_actions = &pipeline_cache_actions,
+        .layers = &layers,
+        .layer_cache_entries = &layer_cache_entries,
+        .layer_cache_actions = &layer_cache_actions,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .visual_effects = &visual_effects,
+        .visual_effect_cache_entries = &visual_effect_cache_entries,
+        .visual_effect_cache_actions = &visual_effect_cache_actions,
+        .glyph_atlas_entries = &glyph_atlas_entries,
+        .glyph_atlas_cache_entries = &glyph_cache_entries,
+        .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .text_layout_plans = &text_layout_plans,
+        .text_layout_lines = &text_layout_lines,
+        .text_layout_cache_entries = &text_layout_cache_entries,
+        .text_layout_cache_actions = &text_layout_cache_actions,
+        .changes = &changes,
+    });
+
+    try std.testing.expect(frame.requiresRender());
+    try std.testing.expect(frame.batch_plan.batchCount() >= 5);
+    try std.testing.expectEqual(@as(usize, 1), frame.layer_plan.opacityLayerCount());
+    try std.testing.expectEqual(@as(usize, 1), frame.layer_plan.clipLayerCount());
+    try std.testing.expectEqual(@as(usize, 2), frame.layer_plan.transformLayerCount());
+    try std.testing.expect(frame.resource_plan.resourceCount() >= 3);
+    try std.testing.expect(frame.visual_effect_plan.shadowCount() >= 1);
+    try std.testing.expect(frame.visual_effect_plan.blurCount() >= 1);
+    try std.testing.expectEqual(@as(usize, 2), frame.glyph_atlas_plan.entryCount());
+
+    var pixels: [32 * 24 * 4]u8 = undefined;
+    var scratch: [32 * 24 * 4]u8 = undefined;
+    const surface = (try ReferenceRenderSurface.initWithScratch(32, 24, &pixels, &scratch)).withImages(&images);
+    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+
+    try std.testing.expectEqual(@as(u64, 12197497484215834747), referenceSurfaceSignature(&pixels));
+    try expectVisiblePixel(surface.pixelRgba8(6, 6));
+    try expectVisiblePixel(surface.pixelRgba8(20, 8));
+    try expectVisiblePixel(surface.pixelRgba8(6, 16));
+}
+
 test "reference renderer applies clip transform and opacity" {
     const commands = [_]CanvasCommand{
         .{ .push_clip = .{ .rect = geometry.RectF.init(1, 1, 2, 2) } },
@@ -19500,6 +19645,19 @@ fn expectRect(expected: geometry.RectF, actual: ?geometry.RectF) !void {
 
 fn expectPixelRgba8(expected: [4]u8, surface: ReferenceRenderSurface, x: usize, y: usize) !void {
     try std.testing.expectEqualDeep(expected, surface.pixelRgba8(x, y));
+}
+
+fn expectVisiblePixel(pixel: [4]u8) !void {
+    try std.testing.expect(pixel[3] > 0);
+    try std.testing.expect(pixel[0] != 0 or pixel[1] != 0 or pixel[2] != 0);
+}
+
+fn referenceSurfaceSignature(pixels: []const u8) u64 {
+    var hash: u64 = 14695981039346656037;
+    for (pixels) |byte| {
+        hash = (hash ^ byte) *% 1099511628211;
+    }
+    return hash;
 }
 
 fn expectLayoutFrame(layout: WidgetLayoutTree, id: ObjectId, expected: geometry.RectF) !void {

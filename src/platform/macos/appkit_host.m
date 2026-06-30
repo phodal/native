@@ -255,6 +255,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
 - (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor;
+- (NSAccessibilityElement *)focusedTextAccessibilityElement;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
 - (void)setSurfaceCursor:(NSCursor *)cursor;
 @end
@@ -1074,15 +1075,56 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (NSUInteger)characterIndexForPoint:(NSPoint)point {
-    (void)point;
-    return 0;
+    NSAccessibilityElement *element = [self focusedTextAccessibilityElement];
+    if (!element || !self.window) return 0;
+
+    NSRect frame = element.accessibilityFrameInParentSpace;
+    if (NSIsEmptyRect(frame)) return 0;
+
+    NSPoint windowPoint = [self.window convertPointFromScreen:point];
+    NSPoint localPoint = [self convertPoint:windowPoint fromView:nil];
+    CGFloat inset = MIN(12.0, MAX(4.0, frame.size.width * 0.08));
+    CGFloat usableWidth = MAX(1.0, frame.size.width - inset * 2.0);
+    CGFloat x = MIN(MAX(localPoint.x, frame.origin.x + inset), frame.origin.x + inset + usableWidth);
+    NSInteger characterCount = MAX(0, element.accessibilityNumberOfCharacters);
+    if (characterCount <= 0) return 0;
+    CGFloat ratio = (x - frame.origin.x - inset) / usableWidth;
+    return (NSUInteger)MIN((CGFloat)characterCount, MAX(0.0, round(ratio * (CGFloat)characterCount)));
 }
 
 - (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
-    if (actualRange) *actualRange = range;
-    NSRect localRect = NSMakeRect(0, 0, 1, MAX(1, self.bounds.size.height));
+    NSAccessibilityElement *element = [self focusedTextAccessibilityElement];
+    NSRect localRect = NSZeroRect;
+    if (element) {
+        NSRect frame = element.accessibilityFrameInParentSpace;
+        NSInteger characterCount = MAX(0, element.accessibilityNumberOfCharacters);
+        NSUInteger location = range.location == NSNotFound ? 0 : MIN(range.location, (NSUInteger)characterCount);
+        NSUInteger length = range.location == NSNotFound ? 0 : MIN(range.length, (NSUInteger)characterCount - location);
+        if (actualRange) *actualRange = NSMakeRange(location, length);
+
+        CGFloat inset = MIN(12.0, MAX(4.0, frame.size.width * 0.08));
+        CGFloat usableWidth = MAX(1.0, frame.size.width - inset * 2.0);
+        CGFloat denominator = MAX(1.0, (CGFloat)MAX(1, characterCount));
+        CGFloat startRatio = (CGFloat)location / denominator;
+        CGFloat endRatio = (CGFloat)(location + MAX((NSUInteger)1, length)) / denominator;
+        CGFloat x = frame.origin.x + inset + usableWidth * MIN(1.0, MAX(0.0, startRatio));
+        CGFloat width = MAX(1.0, usableWidth * (MIN(1.0, MAX(0.0, endRatio)) - MIN(1.0, MAX(0.0, startRatio))));
+        localRect = NSMakeRect(x, frame.origin.y, width, MAX(1.0, frame.size.height));
+    }
+    if (NSIsEmptyRect(localRect)) {
+        if (actualRange) *actualRange = range;
+        localRect = NSMakeRect(0, 0, 1, MAX(1, self.bounds.size.height));
+    }
     NSRect windowRect = [self convertRect:localRect toView:nil];
     return self.window ? [self.window convertRectToScreen:windowRect] : windowRect;
+}
+
+- (NSAccessibilityElement *)focusedTextAccessibilityElement {
+    for (NSAccessibilityElement *element in self.widgetAccessibilityElements ?: @[]) {
+        if (!element.accessibilityFocused) continue;
+        if ([element.accessibilityRole isEqualToString:NSAccessibilityTextFieldRole]) return element;
+    }
+    return nil;
 }
 
 - (void)insertText:(id)string replacementRange:(NSRange)replacementRange {

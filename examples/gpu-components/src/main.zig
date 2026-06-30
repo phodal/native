@@ -814,6 +814,7 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 130, .kind = .scroll_view, .frame = rect(652, 124, 186, 56), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
         .{ .id = 179, .kind = .text, .frame = rect(652, 210, 186, 22), .text = "Built-in components", .size = .sm },
         .{ .id = 180, .kind = .list, .frame = rect(652, 238, 186, 112), .value = virtual_scroll.catalog, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Shadcn-style built-in component catalog" }, .children = &component_catalog_items },
+        .{ .id = 173, .kind = .alert, .frame = rect(652, 374, 238, 70), .text = "Web-inspired. Native-rendered.", .semantics = .{ .label = "Built-in alert" } },
         .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur_token = .sm, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
         .{ .id = 149, .kind = .stack, .frame = rect(64, 540, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
@@ -1174,6 +1175,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 180, rect(652, 238, 186, 112));
     try expectComponentWidgetFrame(layout, 181, rect(652, 238, 186, 28));
     try expectComponentWidgetFrame(layout, 184, rect(652, 322, 186, 28));
+    try expectComponentWidgetFrame(layout, 173, rect(652, 374, 238, 70));
     try expectComponentWidgetFrame(layout, 140, rect(456, 248, 174, 88));
     try expectComponentWidgetsDoNotOverlap(layout, 111, 112);
     try expectComponentWidgetsDoNotOverlap(layout, 113, 114);
@@ -1188,6 +1190,8 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetsDoNotOverlap(layout, 130, 140);
     try expectComponentWidgetsDoNotOverlap(layout, 130, 180);
     try expectComponentWidgetsDoNotOverlap(layout, 140, 180);
+    try expectComponentWidgetsDoNotOverlap(layout, 173, 180);
+    try expectComponentWidgetsDoNotOverlap(layout, 173, 140);
 
     try std.testing.expect(layout.findById(151) == null);
     try expectComponentWidgetFrame(layout, 150, rect(64, 540, 360, 28));
@@ -1342,7 +1346,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 5674415884419601371), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 4346297393555601411), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1415,6 +1419,7 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 170, .radio);
     try expectSemanticRole(semantics, 171, .textbox);
     try expectSemanticRole(semantics, 172, .button);
+    try expectSemanticRole(semantics, 173, .group);
     try expectSemanticRole(semantics, 180, .list);
     try expectSemanticRole(semantics, 181, .listitem);
 

@@ -289,7 +289,7 @@ const GpuComponentsApp = struct {
         const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
         const current = self.componentVirtualScrollValue(id) orelse return null;
         const delta = pointer_event.pointer.delta.dy * self.componentTokens().scroll.wheel_multiplier;
-        const next = snapComponentVirtualScrollOffset(node.widget, current, current + delta, max_offset);
+        const next = clampComponentVirtualScrollOffset(current + delta, max_offset, current);
         if (next == current) return id;
 
         try self.setComponentVirtualScrollValue(id, next);
@@ -569,9 +569,8 @@ fn componentVirtualKeyboardScrollDelta(viewport_extent: f32, keyboard: canvas.Wi
 }
 
 fn snapComponentVirtualScrollOffset(widget: canvas.Widget, current: f32, raw_next: f32, max_offset: f32) f32 {
-    const clamped = std.math.clamp(@max(0, raw_next), 0, max_offset);
+    const clamped = clampComponentVirtualScrollOffset(raw_next, max_offset, current);
     if (clamped == current or max_offset <= 0) return clamped;
-    if (!std.math.isFinite(clamped)) return current;
 
     const step = componentVirtualScrollStep(widget) orelse return clamped;
     const scaled = clamped / step;
@@ -580,6 +579,11 @@ fn snapComponentVirtualScrollOffset(widget: canvas.Widget, current: f32, raw_nex
     else
         @floor(scaled) * step;
     return std.math.clamp(snapped, 0, max_offset);
+}
+
+fn clampComponentVirtualScrollOffset(raw_next: f32, max_offset: f32, fallback: f32) f32 {
+    if (!std.math.isFinite(raw_next)) return fallback;
+    return std.math.clamp(@max(0, raw_next), 0, @max(0, max_offset));
 }
 
 fn componentVirtualScrollStep(widget: canvas.Widget) ?f32 {
@@ -1152,6 +1156,14 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(scrolled_layout, 153, rect(64, 410, 360, 28));
     try expectComponentWidgetFrame(scrolled_layout, 158, rect(64, 410, 180, 28));
     try expectComponentWidgetFrame(scrolled_layout, 159, rect(244, 410, 180, 28));
+
+    var smooth_scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    const smooth_scrolled_layout = try buildComponentsWidgetLayoutWithScroll(&smooth_scrolled_nodes, .{
+        .behavior = 11,
+    });
+    try expectComponentWidgetFrame(smooth_scrolled_layout, 131, rect(652, 113, 186, 28));
+    try expectComponentWidgetFrame(smooth_scrolled_layout, 132, rect(652, 141, 186, 28));
+    try expectComponentWidgetFrame(smooth_scrolled_layout, 133, rect(652, 169, 186, 28));
 }
 
 test "gpu components combined virtual scroll state stays within display budget" {
@@ -1266,7 +1278,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 11091941260883283703), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 14019114436458432869), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1808,27 +1820,33 @@ test "gpu components pointer clicks update retained controls" {
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
 
     resetComponentDirty(&harness.runtime);
+    var before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    const before_nav_scroll = before_scroll_layout.findById(120).?.widget.value;
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 120, 20);
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 28), scrolled_layout.findById(120).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(before_nav_scroll + 22, scrolled_layout.findById(120).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled") == null);
 
     resetComponentDirty(&harness.runtime);
+    before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    const before_behavior_scroll = before_scroll_layout.findById(130).?.widget.value;
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, 20);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 56), scrolled_layout.findById(130).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(before_behavior_scroll + 22, scrolled_layout.findById(130).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled") == null);
 
     resetComponentDirty(&harness.runtime);
+    before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    const before_data_scroll = before_scroll_layout.findById(150).?.widget.value;
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 150, 20);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expectApproxEqAbs(@as(f32, 56), scrolled_layout.findById(150).?.widget.value, 0.001);
+    try std.testing.expectApproxEqAbs(before_data_scroll + 22, scrolled_layout.findById(150).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);

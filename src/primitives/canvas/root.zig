@@ -7052,11 +7052,13 @@ fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 
 fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const state_fill = listItemFillColor(tokens, widget.state);
-    try builder.fillRect(.{
-        .id = widgetPartId(widget.id, 1),
-        .rect = widget.frame,
-        .fill = .{ .color = if (state_fill.a > 0) state_fill else tokens.colors.surface },
-    });
+    if (state_fill.a > 0) {
+        try builder.fillRect(.{
+            .id = widgetPartId(widget.id, 1),
+            .rect = widget.frame,
+            .fill = .{ .color = state_fill },
+        });
+    }
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
@@ -12222,12 +12224,12 @@ test "widget data grid exposes rows cells semantics and display list" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 12), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 8), display_list.commandCount());
     switch (display_list.commands[0]) {
-        .fill_rect => |fill| try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 1)), fill.id),
+        .stroke_rect => |stroke| try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 2)), stroke.id),
         else => return error.UnexpectedCommand,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .draw_text => |text| try std.testing.expectEqualStrings("Name", text.text),
         else => return error.UnexpectedCommand,
     }

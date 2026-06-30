@@ -31,6 +31,7 @@ pub const Error = error{
     ReferenceRenderSurfaceTooSmall,
     ReferenceRenderUnsupportedCommand,
     RenderEncoderListFull,
+    CanvasGpuCommandListFull,
     RenderStackOverflow,
     RenderStackUnderflow,
     InvalidTransform,
@@ -1879,6 +1880,113 @@ pub const RenderEncoderPlan = struct {
     }
 };
 
+pub const CanvasGpuCommandKind = enum {
+    fill_rect_solid,
+    fill_rect_gradient,
+    fill_rounded_rect_solid,
+    fill_rounded_rect_gradient,
+    stroke_rect_solid,
+    stroke_rect_gradient,
+    draw_line_solid,
+    draw_line_gradient,
+    fill_path,
+    stroke_path,
+    draw_image,
+    draw_text,
+    shadow,
+    blur,
+    unsupported,
+};
+
+pub const CanvasGpuCommand = struct {
+    command_index: usize,
+    id: ?ObjectId = null,
+    kind: CanvasGpuCommandKind,
+    pipeline: ?RenderPipelineKind = null,
+    bounds: geometry.RectF = .{},
+    clip: ?geometry.RectF = null,
+    opacity: f32 = 1,
+    transform: Affine = .{},
+    uses_path_geometry: bool = false,
+    uses_image: bool = false,
+    uses_resource: bool = false,
+    uses_visual_effect: bool = false,
+    uses_glyph_atlas: bool = false,
+    uses_text_layout: bool = false,
+
+    pub fn supported(self: CanvasGpuCommand) bool {
+        return self.kind != .unsupported;
+    }
+
+    pub fn usesCachedResource(self: CanvasGpuCommand) bool {
+        return self.uses_path_geometry or
+            self.uses_image or
+            self.uses_resource or
+            self.uses_visual_effect or
+            self.uses_glyph_atlas or
+            self.uses_text_layout;
+    }
+};
+
+pub const CanvasGpuPacket = struct {
+    frame_index: u64 = 0,
+    timestamp_ns: u64 = 0,
+    load_action: CanvasRenderPassLoadAction = .skip,
+    surface_size: geometry.SizeF = .{},
+    scale: f32 = 1,
+    scissor: ?geometry.RectF = null,
+    commands: []const CanvasGpuCommand = &.{},
+    batch_count: usize = 0,
+    pipeline_action_count: usize = 0,
+    path_geometry_count: usize = 0,
+    path_geometry_action_count: usize = 0,
+    image_count: usize = 0,
+    image_action_count: usize = 0,
+    layer_count: usize = 0,
+    layer_action_count: usize = 0,
+    resource_count: usize = 0,
+    resource_action_count: usize = 0,
+    visual_effect_count: usize = 0,
+    visual_effect_action_count: usize = 0,
+    glyph_atlas_entry_count: usize = 0,
+    glyph_atlas_action_count: usize = 0,
+    text_layout_count: usize = 0,
+    text_layout_line_count: usize = 0,
+    text_layout_action_count: usize = 0,
+    unsupported_command_count: usize = 0,
+
+    pub fn requiresRender(self: CanvasGpuPacket) bool {
+        return self.load_action != .skip;
+    }
+
+    pub fn commandCount(self: CanvasGpuPacket) usize {
+        return self.commands.len;
+    }
+
+    pub fn cacheActionCount(self: CanvasGpuPacket) usize {
+        return self.pipeline_action_count +
+            self.path_geometry_action_count +
+            self.image_action_count +
+            self.layer_action_count +
+            self.resource_action_count +
+            self.visual_effect_action_count +
+            self.glyph_atlas_action_count +
+            self.text_layout_action_count;
+    }
+
+    pub fn cachedResourceCommandCount(self: CanvasGpuPacket) usize {
+        var count: usize = 0;
+        for (self.commands) |command| {
+            if (command.usesCachedResource()) count += 1;
+        }
+        return count;
+    }
+
+    pub fn fullyRepresentable(self: CanvasGpuPacket) bool {
+        return self.unsupported_command_count == 0;
+    }
+};
+
 pub const CanvasRenderPass = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
@@ -2047,6 +2155,11 @@ pub const CanvasRenderPass = struct {
         var planner = RenderEncoderPlanner.init(output);
         return planner.build(self);
     }
+
+    pub fn gpuPacket(self: CanvasRenderPass, output: []CanvasGpuCommand) Error!CanvasGpuPacket {
+        var planner = CanvasGpuPacketPlanner.init(output);
+        return planner.build(self);
+    }
 };
 
 pub const CanvasFrame = struct {
@@ -2187,6 +2300,10 @@ pub const CanvasFrame = struct {
             .text_layouts = self.text_layout_plan.plans,
             .text_layout_actions = self.text_layout_cache_plan.actions,
         };
+    }
+
+    pub fn gpuPacket(self: CanvasFrame, output: []CanvasGpuCommand) Error!CanvasGpuPacket {
+        return self.renderPass().gpuPacket(output);
     }
 };
 
@@ -4297,6 +4414,189 @@ pub const RenderEncoderPlanner = struct {
         self.len += 1;
     }
 };
+
+pub const CanvasGpuPacketPlanner = struct {
+    commands: []CanvasGpuCommand,
+    len: usize = 0,
+    unsupported_count: usize = 0,
+
+    pub fn init(commands: []CanvasGpuCommand) CanvasGpuPacketPlanner {
+        return .{ .commands = commands };
+    }
+
+    pub fn reset(self: *CanvasGpuPacketPlanner) void {
+        self.len = 0;
+        self.unsupported_count = 0;
+    }
+
+    pub fn build(self: *CanvasGpuPacketPlanner, pass: CanvasRenderPass) Error!CanvasGpuPacket {
+        self.reset();
+        if (!pass.requiresRender()) {
+            return .{
+                .frame_index = pass.frame_index,
+                .timestamp_ns = pass.timestamp_ns,
+                .load_action = .skip,
+                .surface_size = pass.surface_size,
+                .scale = pass.scale,
+            };
+        }
+
+        for (pass.commands, 0..) |command, index| {
+            try self.append(canvasGpuCommandFromRenderCommand(command, index));
+        }
+
+        return .{
+            .frame_index = pass.frame_index,
+            .timestamp_ns = pass.timestamp_ns,
+            .load_action = pass.loadAction(),
+            .surface_size = pass.surface_size,
+            .scale = pass.scale,
+            .scissor = pass.scissorBounds(),
+            .commands = self.commands[0..self.len],
+            .batch_count = pass.batchCount(),
+            .pipeline_action_count = pass.pipelineActionCount(),
+            .path_geometry_count = pass.pathGeometryCount(),
+            .path_geometry_action_count = pass.pathGeometryActionCount(),
+            .image_count = pass.imageCount(),
+            .image_action_count = pass.imageActionCount(),
+            .layer_count = pass.layerCount(),
+            .layer_action_count = pass.layerActionCount(),
+            .resource_count = pass.resourceCount(),
+            .resource_action_count = pass.resourceActionCount(),
+            .visual_effect_count = pass.visualEffectCount(),
+            .visual_effect_action_count = pass.visualEffectActionCount(),
+            .glyph_atlas_entry_count = pass.glyphAtlasEntryCount(),
+            .glyph_atlas_action_count = pass.glyphAtlasActionCount(),
+            .text_layout_count = pass.textLayoutCount(),
+            .text_layout_line_count = pass.textLayoutLineCount(),
+            .text_layout_action_count = pass.textLayoutActionCount(),
+            .unsupported_command_count = self.unsupported_count,
+        };
+    }
+
+    fn append(self: *CanvasGpuPacketPlanner, command: CanvasGpuCommand) Error!void {
+        if (self.len >= self.commands.len) return error.CanvasGpuCommandListFull;
+        if (!command.supported()) self.unsupported_count += 1;
+        self.commands[self.len] = command;
+        self.len += 1;
+    }
+};
+
+fn canvasGpuCommandFromRenderCommand(command: RenderCommand, command_index: usize) CanvasGpuCommand {
+    var packet_command = CanvasGpuCommand{
+        .command_index = command_index,
+        .id = command.id,
+        .kind = .unsupported,
+        .bounds = command.bounds,
+        .clip = command.clip,
+        .opacity = command.opacity,
+        .transform = command.transform,
+    };
+
+    switch (command.command) {
+        .fill_rect => |value| {
+            packet_command.kind = canvasGpuFillRectKind(value.fill);
+            packet_command.pipeline = canvasGpuFillPipeline(value.fill);
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.fill);
+        },
+        .fill_rounded_rect => |value| {
+            packet_command.kind = canvasGpuRoundedRectKind(value.fill);
+            packet_command.pipeline = canvasGpuFillPipeline(value.fill);
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.fill);
+        },
+        .stroke_rect => |value| {
+            packet_command.kind = canvasGpuStrokeRectKind(value.stroke.fill);
+            packet_command.pipeline = canvasGpuFillPipeline(value.stroke.fill);
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.stroke.fill);
+        },
+        .draw_line => |value| {
+            packet_command.kind = canvasGpuLineKind(value.stroke.fill);
+            packet_command.pipeline = canvasGpuFillPipeline(value.stroke.fill);
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.stroke.fill);
+        },
+        .fill_path => |value| {
+            packet_command.kind = .fill_path;
+            packet_command.pipeline = .path;
+            packet_command.uses_path_geometry = true;
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.fill);
+        },
+        .stroke_path => |value| {
+            packet_command.kind = .stroke_path;
+            packet_command.pipeline = .path;
+            packet_command.uses_path_geometry = true;
+            packet_command.uses_resource = canvasGpuFillUsesResource(value.stroke.fill);
+        },
+        .draw_image => {
+            packet_command.kind = .draw_image;
+            packet_command.pipeline = .image;
+            packet_command.uses_image = true;
+            packet_command.uses_resource = true;
+        },
+        .draw_text => |value| {
+            packet_command.kind = .draw_text;
+            packet_command.pipeline = .glyph_run;
+            packet_command.uses_resource = true;
+            packet_command.uses_glyph_atlas = true;
+            packet_command.uses_text_layout = value.text_layout != null;
+        },
+        .shadow => {
+            packet_command.kind = .shadow;
+            packet_command.pipeline = .shadow;
+            packet_command.uses_resource = true;
+            packet_command.uses_visual_effect = true;
+        },
+        .blur => {
+            packet_command.kind = .blur;
+            packet_command.pipeline = .blur;
+            packet_command.uses_resource = true;
+            packet_command.uses_visual_effect = true;
+        },
+        .push_clip, .pop_clip, .push_opacity, .pop_opacity, .transform => {},
+    }
+    return packet_command;
+}
+
+fn canvasGpuFillPipeline(fill: Fill) RenderPipelineKind {
+    return switch (fill) {
+        .color => .solid,
+        .linear_gradient => .linear_gradient,
+    };
+}
+
+fn canvasGpuFillUsesResource(fill: Fill) bool {
+    return switch (fill) {
+        .color => false,
+        .linear_gradient => true,
+    };
+}
+
+fn canvasGpuFillRectKind(fill: Fill) CanvasGpuCommandKind {
+    return switch (fill) {
+        .color => .fill_rect_solid,
+        .linear_gradient => .fill_rect_gradient,
+    };
+}
+
+fn canvasGpuRoundedRectKind(fill: Fill) CanvasGpuCommandKind {
+    return switch (fill) {
+        .color => .fill_rounded_rect_solid,
+        .linear_gradient => .fill_rounded_rect_gradient,
+    };
+}
+
+fn canvasGpuStrokeRectKind(fill: Fill) CanvasGpuCommandKind {
+    return switch (fill) {
+        .color => .stroke_rect_solid,
+        .linear_gradient => .stroke_rect_gradient,
+    };
+}
+
+fn canvasGpuLineKind(fill: Fill) CanvasGpuCommandKind {
+    return switch (fill) {
+        .color => .draw_line_solid,
+        .linear_gradient => .draw_line_gradient,
+    };
+}
 
 pub const RenderImagePlanner = struct {
     images: []RenderImage,
@@ -16149,6 +16449,152 @@ test "render encoder plan skips clean passes and reports output overflow" {
 
     var too_small: [3]RenderEncoderCommand = undefined;
     try std.testing.expectError(error.RenderEncoderListFull, pass.encoderPlan(&too_small));
+}
+
+test "canvas render pass builds gpu packet for backend handoff" {
+    const stops = [_]GradientStop{
+        .{ .offset = 0, .color = Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = Color.rgb8(37, 99, 235) },
+    };
+    const path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(12, 0), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(0, 12), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close },
+    };
+    const commands = [_]CanvasCommand{
+        .{ .fill_rect = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 12, 12), .fill = .{ .color = Color.rgb8(255, 255, 255) } } },
+        .{ .fill_rounded_rect = .{ .id = 2, .rect = geometry.RectF.init(16, 0, 24, 12), .radius = Radius.all(4), .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(16, 0),
+            .end = geometry.PointF.init(40, 12),
+            .stops = &stops,
+        } } } },
+        .{ .fill_path = .{ .id = 3, .elements = &path, .fill = .{ .color = Color.rgb8(15, 23, 42) } } },
+        .{ .draw_image = .{ .id = 4, .image_id = 42, .dst = geometry.RectF.init(44, 0, 16, 16) } },
+        .{ .draw_text = .{
+            .id = 5,
+            .font_id = 7,
+            .size = 12,
+            .origin = geometry.PointF.init(0, 32),
+            .color = Color.rgb8(15, 23, 42),
+            .text = "Hi",
+            .text_layout = .{ .max_width = 80, .line_height = 16 },
+        } },
+        .{ .shadow = .{ .id = 6, .rect = geometry.RectF.init(0, 36, 40, 20), .radius = Radius.all(6), .blur = 8, .color = Color.rgba8(15, 23, 42, 60) } },
+        .{ .blur = .{ .id = 7, .rect = geometry.RectF.init(44, 36, 20, 20), .radius = 4 } },
+    };
+
+    var render_commands: [commands.len]RenderCommand = undefined;
+    var render_batches: [commands.len]RenderBatch = undefined;
+    var pipeline_cache_entries: [commands.len]RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [commands.len]RenderPipelineCacheAction = undefined;
+    var path_geometries: [1]RenderPathGeometry = undefined;
+    var path_geometry_cache_entries: [1]RenderPathGeometryCacheEntry = undefined;
+    var path_geometry_cache_actions: [1]RenderPathGeometryCacheAction = undefined;
+    var images: [1]RenderImage = undefined;
+    var image_cache_entries: [1]RenderImageCacheEntry = undefined;
+    var image_cache_actions: [1]RenderImageCacheAction = undefined;
+    var resources: [5]RenderResource = undefined;
+    var resource_cache_entries: [5]RenderResourceCacheEntry = undefined;
+    var resource_cache_actions: [5]RenderResourceCacheAction = undefined;
+    var visual_effects: [2]VisualEffect = undefined;
+    var visual_effect_cache_entries: [2]VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [2]VisualEffectCacheAction = undefined;
+    var glyphs: [2]GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [2]GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [2]GlyphAtlasCacheAction = undefined;
+    var text_layouts: [1]TextLayoutPlan = undefined;
+    var text_layout_lines: [1]TextLine = undefined;
+    var text_layout_cache_entries: [1]TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [1]TextLayoutCacheAction = undefined;
+    var changes: [commands.len]DiffChange = undefined;
+    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+        .frame_index = 11,
+        .timestamp_ns = 1234,
+        .surface_size = geometry.SizeF.init(96, 72),
+    }, .{
+        .render_commands = &render_commands,
+        .render_batches = &render_batches,
+        .pipeline_cache_entries = &pipeline_cache_entries,
+        .pipeline_cache_actions = &pipeline_cache_actions,
+        .path_geometries = &path_geometries,
+        .path_geometry_cache_entries = &path_geometry_cache_entries,
+        .path_geometry_cache_actions = &path_geometry_cache_actions,
+        .images = &images,
+        .image_cache_entries = &image_cache_entries,
+        .image_cache_actions = &image_cache_actions,
+        .resources = &resources,
+        .resource_cache_entries = &resource_cache_entries,
+        .resource_cache_actions = &resource_cache_actions,
+        .visual_effects = &visual_effects,
+        .visual_effect_cache_entries = &visual_effect_cache_entries,
+        .visual_effect_cache_actions = &visual_effect_cache_actions,
+        .glyph_atlas_entries = &glyphs,
+        .glyph_atlas_cache_entries = &glyph_cache_entries,
+        .glyph_atlas_cache_actions = &glyph_cache_actions,
+        .text_layout_plans = &text_layouts,
+        .text_layout_lines = &text_layout_lines,
+        .text_layout_cache_entries = &text_layout_cache_entries,
+        .text_layout_cache_actions = &text_layout_cache_actions,
+        .changes = &changes,
+    });
+
+    var gpu_commands: [commands.len]CanvasGpuCommand = undefined;
+    const packet = try frame.gpuPacket(&gpu_commands);
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expect(packet.fullyRepresentable());
+    try std.testing.expectEqual(@as(u64, 11), packet.frame_index);
+    try std.testing.expectEqual(@as(u64, 1234), packet.timestamp_ns);
+    try std.testing.expectEqual(CanvasRenderPassLoadAction.clear, packet.load_action);
+    try expectRect(geometry.RectF.init(0, 0, 96, 72), packet.scissor.?);
+    try std.testing.expectEqual(@as(usize, commands.len), packet.commandCount());
+    try std.testing.expectEqual(frame.renderPass().batchCount(), packet.batch_count);
+    try std.testing.expectEqual(frame.renderPass().encoderCacheActionCount(), packet.cacheActionCount());
+    try std.testing.expectEqual(@as(usize, 6), packet.cachedResourceCommandCount());
+    try std.testing.expectEqual(@as(usize, 0), packet.unsupported_command_count);
+
+    try std.testing.expectEqual(CanvasGpuCommandKind.fill_rect_solid, packet.commands[0].kind);
+    try std.testing.expectEqual(@as(?RenderPipelineKind, .solid), packet.commands[0].pipeline);
+    try std.testing.expect(!packet.commands[0].usesCachedResource());
+    try std.testing.expectEqual(CanvasGpuCommandKind.fill_rounded_rect_gradient, packet.commands[1].kind);
+    try std.testing.expectEqual(@as(?RenderPipelineKind, .linear_gradient), packet.commands[1].pipeline);
+    try std.testing.expect(packet.commands[1].uses_resource);
+    try std.testing.expectEqual(CanvasGpuCommandKind.fill_path, packet.commands[2].kind);
+    try std.testing.expect(packet.commands[2].uses_path_geometry);
+    try std.testing.expectEqual(CanvasGpuCommandKind.draw_image, packet.commands[3].kind);
+    try std.testing.expect(packet.commands[3].uses_image);
+    try std.testing.expectEqual(CanvasGpuCommandKind.draw_text, packet.commands[4].kind);
+    try std.testing.expect(packet.commands[4].uses_glyph_atlas);
+    try std.testing.expect(packet.commands[4].uses_text_layout);
+    try std.testing.expectEqual(CanvasGpuCommandKind.shadow, packet.commands[5].kind);
+    try std.testing.expect(packet.commands[5].uses_visual_effect);
+    try std.testing.expectEqual(CanvasGpuCommandKind.blur, packet.commands[6].kind);
+    try std.testing.expect(packet.commands[6].uses_visual_effect);
+}
+
+test "canvas gpu packet skips clean passes and reports output overflow" {
+    var clean_gpu_commands: [1]CanvasGpuCommand = undefined;
+    const clean_packet = try (CanvasRenderPass{}).gpuPacket(&clean_gpu_commands);
+    try std.testing.expect(!clean_packet.requiresRender());
+    try std.testing.expect(clean_packet.fullyRepresentable());
+    try std.testing.expectEqual(@as(usize, 0), clean_packet.commandCount());
+
+    const render_commands = [_]RenderCommand{.{
+        .command = .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 10, 10),
+            .fill = .{ .color = Color.rgb8(255, 255, 255) },
+        } },
+        .id = 1,
+        .local_bounds = geometry.RectF.init(0, 0, 10, 10),
+        .bounds = geometry.RectF.init(0, 0, 10, 10),
+    }};
+    const pass = CanvasRenderPass{
+        .full_repaint = true,
+        .commands = &render_commands,
+    };
+    var no_gpu_commands: [0]CanvasGpuCommand = .{};
+    try std.testing.expectError(error.CanvasGpuCommandListFull, pass.gpuPacket(&no_gpu_commands));
 }
 
 test "canvas frame plan carries path geometry cache actions" {

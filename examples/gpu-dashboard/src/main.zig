@@ -14,7 +14,6 @@ const sidebar_width: f32 = 196;
 const canvas_pixel_width: usize = 860;
 const canvas_width: f32 = @floatFromInt(canvas_pixel_width);
 const statusbar_height: f32 = 34;
-const reference_present_scale_limit: f32 = 1;
 const max_dashboard_pipelines: usize = 8;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
@@ -408,7 +407,7 @@ const GpuDashboardApp = struct {
 
     fn referencePresentScale(scale_factor: f32) f32 {
         const normalized = if (scale_factor > 0) scale_factor else 1;
-        return @min(normalized, reference_present_scale_limit);
+        return normalized;
     }
 
     fn scheduleDashboardAnimations(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, start_ns: u64) anyerror!void {
@@ -1269,7 +1268,7 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqualDeep(geometry.SizeF.init(canvas_width, 520), harness.null_platform.gpu_surface_packet_present_surface_size);
-    try std.testing.expectEqual(@as(f32, 1), harness.null_platform.gpu_surface_packet_present_scale_factor);
+    try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_packet_present_scale_factor);
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
     try std.testing.expect(app.pixels == null);
     try std.testing.expect(app.scratch == null);

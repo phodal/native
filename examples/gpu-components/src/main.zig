@@ -14,7 +14,6 @@ const sidebar_width: f32 = 208;
 const statusbar_height: f32 = 32;
 const canvas_width: f32 = window_width - sidebar_width;
 const canvas_height: f32 = window_height - toolbar_height - statusbar_height;
-const reference_present_scale_limit: f32 = 1;
 const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
@@ -415,7 +414,7 @@ const GpuComponentsApp = struct {
 
     fn referencePresentScale(scale_factor: f32) f32 {
         const normalized = if (scale_factor > 0) scale_factor else 1;
-        return @min(normalized, reference_present_scale_limit);
+        return normalized;
     }
 
     fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
@@ -1403,7 +1402,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqualDeep(geometry.SizeF.init(canvas_width, canvas_height), harness.null_platform.gpu_surface_packet_present_surface_size);
-    try std.testing.expectEqual(@as(f32, 1), harness.null_platform.gpu_surface_packet_present_scale_factor);
+    try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_packet_present_scale_factor);
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
     try std.testing.expect(app.pixels == null);
     try std.testing.expect(app.scratch == null);

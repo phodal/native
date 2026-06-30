@@ -1499,7 +1499,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     CGContextTranslateCTM(context, 0, (CGFloat)pixelHeight);
     CGContextScaleCTM(context, normalizedScale, -normalizedScale);
 
-    NSGraphicsContext *graphics = [NSGraphicsContext graphicsContextWithCGContext:context flipped:NO];
+    NSGraphicsContext *graphics = [NSGraphicsContext graphicsContextWithCGContext:context flipped:YES];
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:graphics];
     if (clearLoadAction) {

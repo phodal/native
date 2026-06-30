@@ -6971,6 +6971,12 @@ const RuntimeView = struct {
         const widget = self.widget_layout_nodes[index].widget;
 
         const intent = canvas.widgetKeyboardControlIntent(widget, keyboard) orelse return null;
+        return self.applyCanvasWidgetControlIntent(index, intent);
+    }
+
+    fn applyCanvasWidgetControlIntent(self: *RuntimeView, index: usize, intent: canvas.WidgetControlIntent) anyerror!?geometry.RectF {
+        if (index >= self.widget_layout_node_count) return null;
+        const id = self.widget_layout_nodes[index].widget.id;
         return switch (intent.kind) {
             .toggle => try self.toggleCanvasWidgetBooleanControl(id),
             .set_value => if (intent.value) |next_value| try self.setCanvasWidgetValue(index, next_value) else null,

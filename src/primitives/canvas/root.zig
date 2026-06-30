@@ -3713,6 +3713,14 @@ pub const WidgetControlIntent = struct {
     delta: f32 = 0,
 };
 
+pub const WidgetSemanticAction = enum {
+    press,
+    toggle,
+    select,
+    increment,
+    decrement,
+};
+
 pub const WidgetFileDropEvent = struct {
     point: geometry.PointF,
     paths: []const []const u8 = &.{},
@@ -8500,6 +8508,36 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
     };
 }
 
+pub fn widgetSemanticControlIntent(widget: Widget, action: WidgetSemanticAction) ?WidgetControlIntent {
+    return widgetSemanticControlIntentWithActions(widget, action, semanticActions(widget));
+}
+
+pub fn widgetSemanticControlIntentWithActions(widget: Widget, action: WidgetSemanticAction, actions: WidgetActions) ?WidgetControlIntent {
+    if (widget.state.disabled or widget.semantics.hidden) return null;
+    return switch (action) {
+        .press => if (actions.press)
+            .{ .kind = .press, .actions = .{ .press = true } }
+        else
+            null,
+        .toggle => if (actions.toggle)
+            .{ .kind = .toggle, .actions = .{ .toggle = true } }
+        else
+            null,
+        .select => if (actions.select)
+            .{
+                .kind = .select,
+                .actions = .{
+                    .select = true,
+                    .press = actions.press,
+                },
+            }
+        else
+            null,
+        .increment => widgetSemanticStepControlIntent(widget, .increment, actions),
+        .decrement => widgetSemanticStepControlIntent(widget, .decrement, actions),
+    };
+}
+
 pub fn isWidgetActivationKey(key: []const u8) bool {
     return std.ascii.eqlIgnoreCase(key, "space") or std.ascii.eqlIgnoreCase(key, "enter");
 }
@@ -8548,6 +8586,42 @@ pub fn widgetScrollKeyboardDelta(widget: Widget, keyboard: WidgetKeyboardEvent) 
     if (std.ascii.eqlIgnoreCase(keyboard.key, "pageup")) return -page_step;
     if (std.ascii.eqlIgnoreCase(keyboard.key, "pagedown")) return page_step;
     return null;
+}
+
+const WidgetSemanticStepDirection = enum {
+    increment,
+    decrement,
+};
+
+fn widgetSemanticStepControlIntent(widget: Widget, direction: WidgetSemanticStepDirection, actions: WidgetActions) ?WidgetControlIntent {
+    const increment = direction == .increment;
+    if (increment and !actions.increment) return null;
+    if (!increment and !actions.decrement) return null;
+
+    const intent_actions = WidgetActions{
+        .increment = increment,
+        .decrement = !increment,
+    };
+    return switch (widget.kind) {
+        .slider => .{
+            .kind = .set_value,
+            .actions = intent_actions,
+            .value = std.math.clamp(widget.value + if (increment) @as(f32, 0.05) else @as(f32, -0.05), 0, 1),
+        },
+        .scroll_view, .list, .data_grid => .{
+            .kind = .scroll_by,
+            .actions = intent_actions,
+            .delta = widgetSemanticScrollDelta(widget, direction),
+        },
+        else => null,
+    };
+}
+
+fn widgetSemanticScrollDelta(widget: Widget, direction: WidgetSemanticStepDirection) f32 {
+    const viewport = widget.frame.inset(widget.layout.padding).normalized();
+    const line_step = @max(24, viewport.height * 0.35);
+    const page_step = @max(line_step, viewport.height * 0.85);
+    return if (direction == .increment) page_step else -page_step;
 }
 
 fn routeWidgetFileDropEvent(layout: WidgetLayoutTree, event: WidgetFileDropEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
@@ -20304,6 +20378,56 @@ test "widget keyboard control intents map slider and scroll keys" {
 
     try std.testing.expectEqual(WidgetControlIntentKind.scroll_to_start, widgetKeyboardControlIntent(scroll, .{ .phase = .key_down, .key = "home" }).?.kind);
     try std.testing.expectEqual(WidgetControlIntentKind.scroll_to_end, widgetKeyboardControlIntent(scroll, .{ .phase = .key_down, .key = "end" }).?.kind);
+}
+
+test "widget semantic control intents map built-in actions" {
+    const press = widgetSemanticControlIntent(.{ .kind = .button, .text = "Save" }, .press).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.press, press.kind);
+    try std.testing.expect(press.actions.press);
+
+    const toggle = widgetSemanticControlIntent(.{ .kind = .checkbox, .text = "Selected" }, .toggle).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.toggle, toggle.kind);
+    try std.testing.expect(toggle.actions.toggle);
+
+    const selected = widgetSemanticControlIntent(.{ .kind = .segmented_control, .text = "Revenue", .command = "mode.change" }, .select).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.select, selected.kind);
+    try std.testing.expect(selected.actions.select);
+    try std.testing.expect(selected.actions.press);
+
+    try std.testing.expect(widgetSemanticControlIntent(.{ .kind = .button, .text = "Save" }, .toggle) == null);
+    try std.testing.expect(widgetSemanticControlIntent(.{ .kind = .button, .text = "Save", .state = .{ .disabled = true } }, .press) == null);
+    try std.testing.expect(widgetSemanticControlIntent(.{ .kind = .button, .text = "Save", .semantics = .{ .hidden = true } }, .press) == null);
+}
+
+test "widget semantic control intents map slider and scroll actions" {
+    const slider = Widget{ .kind = .slider, .value = 0.5 };
+    const increment = widgetSemanticControlIntent(slider, .increment).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.set_value, increment.kind);
+    try std.testing.expect(increment.actions.increment);
+    try std.testing.expect(!increment.actions.decrement);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.55), increment.value.?, 0.001);
+
+    const decrement = widgetSemanticControlIntent(slider, .decrement).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.set_value, decrement.kind);
+    try std.testing.expect(decrement.actions.decrement);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.45), decrement.value.?, 0.001);
+
+    const max_slider = Widget{ .kind = .slider, .value = 0.98 };
+    try std.testing.expectApproxEqAbs(@as(f32, 1), widgetSemanticControlIntent(max_slider, .increment).?.value.?, 0.001);
+
+    const scroll = Widget{ .kind = .scroll_view, .frame = geometry.RectF.init(0, 0, 120, 100) };
+    try std.testing.expect(widgetSemanticControlIntent(scroll, .increment) == null);
+
+    const scroll_actions = WidgetActions{ .increment = true, .decrement = true };
+    const page_down = widgetSemanticControlIntentWithActions(scroll, .increment, scroll_actions).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.scroll_by, page_down.kind);
+    try std.testing.expect(page_down.actions.increment);
+    try std.testing.expectApproxEqAbs(@as(f32, 85), page_down.delta, 0.001);
+
+    const page_up = widgetSemanticControlIntentWithActions(scroll, .decrement, scroll_actions).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.scroll_by, page_up.kind);
+    try std.testing.expect(page_up.actions.decrement);
+    try std.testing.expectApproxEqAbs(@as(f32, -85), page_up.delta, 0.001);
 }
 
 test "widget keyboard events map to text edit events" {

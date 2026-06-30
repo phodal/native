@@ -3451,7 +3451,9 @@ pub const ControlTokens = struct {
     button_outline: ControlVisualTokens = .{},
     button_ghost: ControlVisualTokens = .{},
     button_destructive: ControlVisualTokens = .{},
+    accordion: ControlVisualTokens = .{},
     alert: ControlVisualTokens = .{},
+    bubble: ControlVisualTokens = .{},
     card: ControlVisualTokens = .{},
     dialog: ControlVisualTokens = .{},
     drawer: ControlVisualTokens = .{},
@@ -3468,6 +3470,7 @@ pub const ControlTokens = struct {
     slider: ControlVisualTokens = .{},
     progress: ControlVisualTokens = .{},
     panel: ControlVisualTokens = .{},
+    resizable: ControlVisualTokens = .{},
     popover: ControlVisualTokens = .{},
     menu_surface: ControlVisualTokens = .{},
     tooltip: ControlVisualTokens = .{},
@@ -3669,7 +3672,9 @@ pub const ControlTokenOverrides = struct {
     button_outline: ControlVisualTokenOverrides = .{},
     button_ghost: ControlVisualTokenOverrides = .{},
     button_destructive: ControlVisualTokenOverrides = .{},
+    accordion: ControlVisualTokenOverrides = .{},
     alert: ControlVisualTokenOverrides = .{},
+    bubble: ControlVisualTokenOverrides = .{},
     card: ControlVisualTokenOverrides = .{},
     dialog: ControlVisualTokenOverrides = .{},
     drawer: ControlVisualTokenOverrides = .{},
@@ -3686,6 +3691,7 @@ pub const ControlTokenOverrides = struct {
     slider: ControlVisualTokenOverrides = .{},
     progress: ControlVisualTokenOverrides = .{},
     panel: ControlVisualTokenOverrides = .{},
+    resizable: ControlVisualTokenOverrides = .{},
     popover: ControlVisualTokenOverrides = .{},
     menu_surface: ControlVisualTokenOverrides = .{},
     tooltip: ControlVisualTokenOverrides = .{},
@@ -3703,7 +3709,9 @@ pub const ControlTokenOverrides = struct {
         next.button_outline = self.button_outline.apply(next.button_outline);
         next.button_ghost = self.button_ghost.apply(next.button_ghost);
         next.button_destructive = self.button_destructive.apply(next.button_destructive);
+        next.accordion = self.accordion.apply(next.accordion);
         next.alert = self.alert.apply(next.alert);
+        next.bubble = self.bubble.apply(next.bubble);
         next.card = self.card.apply(next.card);
         next.dialog = self.dialog.apply(next.dialog);
         next.drawer = self.drawer.apply(next.drawer);
@@ -3720,6 +3728,7 @@ pub const ControlTokenOverrides = struct {
         next.slider = self.slider.apply(next.slider);
         next.progress = self.progress.apply(next.progress);
         next.panel = self.panel.apply(next.panel);
+        next.resizable = self.resizable.apply(next.resizable);
         next.popover = self.popover.apply(next.popover);
         next.menu_surface = self.menu_surface.apply(next.menu_surface);
         next.tooltip = self.tooltip.apply(next.tooltip);
@@ -3822,6 +3831,9 @@ pub const WidgetKind = enum {
     radio_group,
     tabs,
     toggle_group,
+    accordion,
+    bubble,
+    resizable,
     alert,
     card,
     dialog,
@@ -4086,12 +4098,12 @@ pub fn builtinComponentName(kind: BuiltinComponentKind) []const u8 {
 
 pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDescriptor {
     return switch (kind) {
-        .accordion => builtinComponent(.accordion, .panel, .group, true),
+        .accordion => builtinComponent(.accordion, .accordion, .group, true),
         .alert => builtinComponent(.alert, .alert, .group, true),
         .avatar => builtinComponent(.avatar, .avatar, .image, false),
         .badge => builtinComponent(.badge, .badge, .text, false),
         .breadcrumb => builtinComponent(.breadcrumb, .breadcrumb, .group, true),
-        .bubble => builtinComponent(.bubble, .panel, .group, true),
+        .bubble => builtinComponent(.bubble, .bubble, .group, true),
         .button => builtinComponent(.button, .button, .button, false),
         .button_group => builtinComponent(.button_group, .button_group, .group, true),
         .card => builtinComponent(.card, .card, .group, true),
@@ -4104,7 +4116,7 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .pagination => builtinComponent(.pagination, .pagination, .group, true),
         .progress => builtinComponent(.progress, .progress, .progressbar, false),
         .radio_group => builtinComponent(.radio_group, .radio_group, .group, true),
-        .resizable => builtinComponent(.resizable, .panel, .group, true),
+        .resizable => builtinComponent(.resizable, .resizable, .group, true),
         .select => builtinComponent(.select, .select, .button, true),
         .separator => builtinComponent(.separator, .separator, .none, false),
         .sheet => builtinComponent(.sheet, .sheet, .dialog, true),
@@ -7258,7 +7270,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .dialog => try emitDialogSurfaceWidget(builder, paint_widget, tokens, depth),
         .drawer => try emitDrawerSurfaceWidget(builder, paint_widget, tokens, depth),
         .sheet => try emitSheetSurfaceWidget(builder, paint_widget, tokens, depth),
-        .panel => try emitPanelWidget(builder, paint_widget, tokens, depth),
+        .accordion, .bubble, .resizable, .panel => try emitPanelWidget(builder, paint_widget, tokens, depth),
         .popover => try emitPopoverWidget(builder, paint_widget, tokens, depth),
         .menu_surface => try emitMenuSurfaceWidget(builder, paint_widget, tokens, depth),
         .text => try emitTextWidget(builder, paint_widget, tokens),
@@ -7363,7 +7375,7 @@ fn emitWidgetLayoutNodeContent(
         .dialog => try emitDialogSurfaceWidgetChrome(builder, paint_widget, tokens),
         .drawer => try emitDrawerSurfaceWidgetChrome(builder, paint_widget, tokens),
         .sheet => try emitSheetSurfaceWidgetChrome(builder, paint_widget, tokens),
-        .panel => try emitPanelWidgetChrome(builder, paint_widget, tokens),
+        .accordion, .bubble, .resizable, .panel => try emitPanelWidgetChrome(builder, paint_widget, tokens),
         .popover => try emitPopoverWidgetChrome(builder, paint_widget, tokens),
         .menu_surface => try emitMenuSurfaceWidgetChrome(builder, paint_widget, tokens),
         .text => try emitTextWidget(builder, paint_widget, tokens),
@@ -7473,7 +7485,7 @@ fn widgetContentClip(widget: Widget, tokens: DesignTokens) Clip {
 fn widgetContentClipRadius(widget: Widget, tokens: DesignTokens) Radius {
     if (!widget.layout.clip_content) return .{};
     return switch (widget.kind) {
-        .alert, .card, .panel, .menu_surface => Radius.all(tokens.radius.lg),
+        .accordion, .alert, .bubble, .card, .resizable, .panel, .menu_surface => Radius.all(tokens.radius.lg),
         .dialog, .popover => Radius.all(tokens.radius.xl),
         .drawer, .sheet => Radius.all(tokens.radius.lg),
         .tooltip => Radius.all(tokens.radius.md),
@@ -9246,8 +9258,16 @@ fn textInputBorderFill(widget: Widget, visual: ControlVisualTokens, fallback: Co
     return colorFill(widgetBorderColor(widget, visual.border orelse fallback));
 }
 
+fn accordionControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.accordion, tokens.controls.panel);
+}
+
 fn alertControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
     return controlVisualTokensWithFallback(tokens.controls.alert, tokens.controls.panel);
+}
+
+fn bubbleControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.bubble, tokens.controls.panel);
 }
 
 fn cardControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
@@ -9287,17 +9307,24 @@ fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVis
 
 fn surfaceControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
+        .accordion => accordionControlVisualTokens(tokens),
         .alert => alertControlVisualTokens(tokens),
+        .bubble => bubbleControlVisualTokens(tokens),
         .card => cardControlVisualTokens(tokens),
         .dialog => dialogControlVisualTokens(tokens),
         .drawer => drawerControlVisualTokens(tokens),
         .sheet => sheetControlVisualTokens(tokens),
         .panel => tokens.controls.panel,
+        .resizable => resizableControlVisualTokens(tokens),
         .popover => tokens.controls.popover,
         .menu_surface => tokens.controls.menu_surface,
         .tooltip => tokens.controls.tooltip,
         else => .{},
     };
+}
+
+fn resizableControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
+    return controlVisualTokensWithFallback(tokens.controls.resizable, tokens.controls.panel);
 }
 
 fn componentControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
@@ -9418,7 +9445,7 @@ fn layoutWidgetDepth(
         else
             try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         .menu_surface => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .stack, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover => {
+        .stack, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover => {
             for (widget.children) |child| {
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
@@ -9681,7 +9708,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .alert => intrinsicAlertWidgetSize(widget, tokens),
         .card => intrinsicCardWidgetSize(widget, tokens),
         .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens),
-        .stack, .row, .column, .grid, .data_grid, .scroll_view, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .panel, .popover, .menu_surface, .image => geometry.SizeF.zero(),
+        .stack, .row, .column, .grid, .data_grid, .scroll_view, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .accordion, .bubble, .resizable, .panel, .popover, .menu_surface, .image => geometry.SizeF.zero(),
     };
 }
 
@@ -10563,7 +10590,7 @@ fn nearestSemanticParent(stack: []const ?usize) ?usize {
 fn semanticRole(widget: Widget) WidgetRole {
     if (widget.semantics.role != .none) return widget.semantics.role;
     return switch (widget.kind) {
-        .stack, .row, .column, .grid, .scroll_view, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .alert, .card, .panel => .group,
+        .stack, .row, .column, .grid, .scroll_view, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .accordion, .bubble, .resizable, .alert, .card, .panel => .group,
         .data_grid => .grid,
         .data_row => .row,
         .dialog, .drawer, .sheet, .popover => .dialog,
@@ -10941,7 +10968,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
@@ -11272,7 +11299,7 @@ fn widgetFocusPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF 
 
 fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
-        .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
+        .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         .select => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectControlVisualTokens(tokens), tokens.stroke.regular),
         .text_field, .search_field, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
@@ -11309,7 +11336,7 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
 
 fn widgetShadowPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
     const token = switch (widget.kind) {
-        .panel, .tooltip => tokens.shadow.sm,
+        .accordion, .bubble, .resizable, .panel, .tooltip => tokens.shadow.sm,
         .dialog, .drawer, .sheet, .popover, .menu_surface => tokens.shadow.md,
         else => return null,
     };
@@ -11334,7 +11361,7 @@ fn widgetShadowRadius(widget: Widget, tokens: DesignTokens) Radius {
     return switch (widget.kind) {
         .dialog, .drawer, .popover => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.xl),
         .sheet => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.lg),
-        .alert, .card, .panel, .menu_surface => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.lg),
+        .accordion, .alert, .bubble, .card, .resizable, .panel, .menu_surface => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.lg),
         .tooltip => controlRadius(widget, surfaceControlVisualTokens(widget, tokens), tokens.radius.md),
         else => Radius.all(0),
     };
@@ -15610,11 +15637,12 @@ test "built-in component catalog covers shadcn component set" {
 }
 
 test "built-in component catalog maps to retained widget foundations" {
-    try std.testing.expectEqual(WidgetKind.panel, builtinComponentDescriptor(.accordion).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.accordion, builtinComponentDescriptor(.accordion).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.alert, builtinComponentDescriptor(.alert).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.avatar, builtinComponentDescriptor(.avatar).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.badge, builtinComponentDescriptor(.badge).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.breadcrumb, builtinComponentDescriptor(.breadcrumb).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.bubble, builtinComponentDescriptor(.bubble).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.button_group, builtinComponentDescriptor(.button_group).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.card, builtinComponentDescriptor(.card).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.search_field, builtinComponentDescriptor(.combobox).root_widget_kind);
@@ -15624,6 +15652,7 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.input).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.pagination, builtinComponentDescriptor(.pagination).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.radio_group, builtinComponentDescriptor(.radio_group).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.resizable, builtinComponentDescriptor(.resizable).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.separator, builtinComponentDescriptor(.separator).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.skeleton, builtinComponentDescriptor(.skeleton).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.spinner, builtinComponentDescriptor(.spinner).root_widget_kind);
@@ -15701,6 +15730,17 @@ test "built-in component factory applies shadcn composite defaults" {
         try std.testing.expectEqual(WidgetCrossAlignment.center, component.layout.cross_alignment);
         try std.testing.expectEqual(WidgetRole.group, component.semantics.role);
     }
+
+    const panel_components = [_]BuiltinComponentKind{ .accordion, .bubble, .resizable };
+    const panel_kinds = [_]WidgetKind{ .accordion, .bubble, .resizable };
+    for (panel_components, panel_kinds) |kind, widget_kind| {
+        const component = builtinComponentWidget(kind, .{});
+        try std.testing.expectEqual(widget_kind, component.kind);
+        try std.testing.expect(component.layout.clip_content);
+        try std.testing.expectEqual(WidgetRole.group, component.semantics.role);
+    }
+    try std.testing.expectEqual(@as(f32, 12), builtinComponentWidget(.accordion, .{}).layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 16), builtinComponentWidget(.bubble, .{}).layout.padding.top);
 
     const custom_card = builtinComponentWidget(.card, .{
         .layout = .{ .gap = 24 },
@@ -16187,10 +16227,20 @@ test "design token overrides compose with built-in themes" {
                 .background = Color.rgb8(54, 60, 66),
                 .active_background = Color.rgb8(66, 84, 102),
             },
+            .accordion = .{
+                .background = Color.rgb8(13, 19, 25),
+                .foreground = Color.rgb8(235, 241, 247),
+                .border = Color.rgb8(59, 69, 79),
+            },
             .alert = .{
                 .background = Color.rgb8(14, 20, 26),
                 .foreground = Color.rgb8(236, 242, 248),
                 .border = Color.rgb8(60, 70, 80),
+            },
+            .bubble = .{
+                .background = Color.rgb8(14, 20, 27),
+                .foreground = Color.rgb8(236, 243, 250),
+                .border = Color.rgb8(60, 71, 82),
             },
             .card = .{
                 .background = Color.rgb8(15, 21, 27),
@@ -16217,6 +16267,11 @@ test "design token overrides compose with built-in themes" {
                 .border = Color.rgb8(58, 68, 78),
                 .radius = 16,
                 .stroke_width = 2.5,
+            },
+            .resizable = .{
+                .background = Color.rgb8(17, 23, 30),
+                .foreground = Color.rgb8(238, 244, 251),
+                .border = Color.rgb8(63, 73, 84),
             },
             .popover = .{
                 .background = Color.rgb8(18, 24, 32),
@@ -16321,9 +16376,15 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(245, 248, 250), tokens.controls.slider.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(54, 60, 66), tokens.controls.progress.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(66, 84, 102), tokens.controls.progress.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(13, 19, 25), tokens.controls.accordion.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(235, 241, 247), tokens.controls.accordion.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(59, 69, 79), tokens.controls.accordion.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(14, 20, 26), tokens.controls.alert.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(236, 242, 248), tokens.controls.alert.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(60, 70, 80), tokens.controls.alert.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(14, 20, 27), tokens.controls.bubble.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(236, 243, 250), tokens.controls.bubble.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(60, 71, 82), tokens.controls.bubble.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(15, 21, 27), tokens.controls.card.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(237, 243, 249), tokens.controls.card.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(61, 71, 81), tokens.controls.card.border.?);
@@ -16340,6 +16401,9 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(58, 68, 78), tokens.controls.panel.border.?);
     try std.testing.expectEqual(@as(f32, 16), tokens.controls.panel.radius.?);
     try std.testing.expectEqual(@as(f32, 2.5), tokens.controls.panel.stroke_width.?);
+    try std.testing.expectEqualDeep(Color.rgb8(17, 23, 30), tokens.controls.resizable.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(238, 244, 251), tokens.controls.resizable.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(63, 73, 84), tokens.controls.resizable.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(18, 24, 32), tokens.controls.popover.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(62, 72, 84), tokens.controls.popover.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(20, 26, 34), tokens.controls.menu_surface.background.?);

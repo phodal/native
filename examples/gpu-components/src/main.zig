@@ -805,6 +805,15 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 150, .kind = .data_grid, .frame = rect(0, 0, 360, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
         .{ .id = 160, .kind = .tooltip, .frame = rect(392, 0, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
     };
+    const accordion_children = [_]canvas.Widget{
+        .{ .id = 220, .kind = .text, .frame = rect(12, 10, 132, 18), .text = "Accordion", .size = .sm },
+    };
+    const bubble_children = [_]canvas.Widget{
+        .{ .id = 221, .kind = .text, .frame = rect(12, 10, 132, 18), .text = "Bubble", .size = .sm },
+    };
+    const resizable_children = [_]canvas.Widget{
+        .{ .id = 222, .kind = .text, .frame = rect(12, 10, 132, 18), .text = "Resizable", .size = .sm },
+    };
     const top_widgets = [_]canvas.Widget{
         .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components", .size = .lg },
         .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .variant = .primary, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
@@ -819,6 +828,9 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 175, .kind = .dialog, .frame = rect(456, 462, 170, 58), .text = "Dialog", .semantics = .{ .label = "Built-in dialog" } },
         .{ .id = 176, .kind = .drawer, .frame = rect(644, 462, 118, 58), .text = "Drawer", .semantics = .{ .label = "Built-in drawer" } },
         .{ .id = 177, .kind = .sheet, .frame = rect(778, 462, 112, 58), .text = "Sheet", .semantics = .{ .label = "Built-in sheet" } },
+        .{ .id = 178, .kind = .accordion, .frame = rect(704, 540, 186, 36), .semantics = .{ .label = "Built-in accordion" }, .children = &accordion_children },
+        .{ .id = 213, .kind = .bubble, .frame = rect(704, 586, 90, 36), .semantics = .{ .label = "Built-in bubble" }, .children = &bubble_children },
+        .{ .id = 214, .kind = .resizable, .frame = rect(804, 586, 86, 36), .semantics = .{ .label = "Built-in resizable" }, .children = &resizable_children },
         .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur_token = .sm, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
         .{ .id = 149, .kind = .stack, .frame = rect(64, 540, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
@@ -1184,6 +1196,9 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 175, rect(456, 462, 170, 58));
     try expectComponentWidgetFrame(layout, 176, rect(644, 462, 118, 58));
     try expectComponentWidgetFrame(layout, 177, rect(778, 462, 112, 58));
+    try expectComponentWidgetFrame(layout, 178, rect(704, 540, 186, 36));
+    try expectComponentWidgetFrame(layout, 213, rect(704, 586, 90, 36));
+    try expectComponentWidgetFrame(layout, 214, rect(804, 586, 86, 36));
     try expectComponentWidgetFrame(layout, 140, rect(456, 248, 174, 88));
     try expectComponentWidgetsDoNotOverlap(layout, 111, 112);
     try expectComponentWidgetsDoNotOverlap(layout, 113, 114);
@@ -1207,6 +1222,9 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetsDoNotOverlap(layout, 176, 177);
     try expectComponentWidgetsDoNotOverlap(layout, 177, 173);
     try expectComponentWidgetsDoNotOverlap(layout, 175, 149);
+    try expectComponentWidgetsDoNotOverlap(layout, 178, 149);
+    try expectComponentWidgetsDoNotOverlap(layout, 178, 213);
+    try expectComponentWidgetsDoNotOverlap(layout, 213, 214);
 
     try std.testing.expect(layout.findById(151) == null);
     try expectComponentWidgetFrame(layout, 150, rect(64, 540, 360, 28));
@@ -1361,7 +1379,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 2297421397985403337), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 17925554458023128078), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1439,6 +1457,9 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 175, .dialog);
     try expectSemanticRole(semantics, 176, .dialog);
     try expectSemanticRole(semantics, 177, .dialog);
+    try expectSemanticRole(semantics, 178, .group);
+    try expectSemanticRole(semantics, 213, .group);
+    try expectSemanticRole(semantics, 214, .group);
     try expectSemanticRole(semantics, 180, .list);
     try expectSemanticRole(semantics, 181, .listitem);
 

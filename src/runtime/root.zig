@@ -35,7 +35,7 @@ const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
 const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
-const max_canvas_text_layouts_per_view: usize = 32;
+const max_canvas_text_layouts_per_view: usize = 64;
 const max_canvas_surface_extent_pixels: f32 = 16_384;
 threadlocal var canvas_frame_text_layout_plans_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutPlan = undefined;
 threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layouts_per_view]canvas.TextLine = undefined;
@@ -5332,7 +5332,7 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 

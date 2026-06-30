@@ -6753,7 +6753,7 @@ fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .id = widgetPartId(widget.id, 4),
         .font_id = tokens.typography.font_id,
         .size = tokens.typography.button_size,
-        .origin = textOrigin(widget.frame, tokens.typography.button_size, densityValue(tokens, tokens.spacing.md)),
+        .origin = alignedTextOrigin(widget.frame, widget.text, tokens.typography.button_size, densityValue(tokens, tokens.spacing.md), .center),
         .color = buttonTextColor(tokens, widget.state),
         .text = widget.text,
     });
@@ -7020,7 +7020,7 @@ fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignT
         .id = widgetPartId(widget.id, 3),
         .font_id = tokens.typography.font_id,
         .size = tokens.typography.label_size,
-        .origin = textOrigin(widget.frame, tokens.typography.label_size, densityValue(tokens, tokens.spacing.md)),
+        .origin = alignedTextOrigin(widget.frame, widget.text, tokens.typography.label_size, densityValue(tokens, tokens.spacing.md), .center),
         .color = if (selected) tokens.colors.accent_text else tokens.colors.text,
         .text = widget.text,
     });
@@ -7225,9 +7225,10 @@ fn widgetPartId(id: ObjectId, slot: ObjectId) ObjectId {
 }
 
 fn textOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.PointF {
+    const line_height = size * 1.25;
     return geometry.PointF.init(
         frame.x + inset,
-        frame.y + @max(size, (frame.height + size * 0.5) * 0.5),
+        frame.y + @max(size, (frame.height - line_height) * 0.5 + size),
     );
 }
 
@@ -7243,9 +7244,10 @@ fn alignedTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, inset: 
         .center => @max(0, (available_width - width) * 0.5),
         .end => @max(0, available_width - width),
     };
+    const line_height = size * 1.25;
     return geometry.PointF.init(
         frame.x + inset + offset,
-        frame.y + @max(size, (frame.height + size * 0.5) * 0.5),
+        frame.y + @max(size, (frame.height - line_height) * 0.5 + size),
     );
 }
 
@@ -11777,7 +11779,7 @@ test "widget text alignment emits local text layout options" {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 1)), text.id);
             try std.testing.expectApproxEqAbs(@as(f32, 10), text.origin.x, 0.001);
-            try std.testing.expectApproxEqAbs(@as(f32, 32.5), text.origin.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 33.75), text.origin.y, 0.001);
             try std.testing.expect(text.text_layout != null);
             try std.testing.expectEqual(@as(f32, 100), text.text_layout.?.max_width);
             try std.testing.expectEqual(TextAlign.center, text.text_layout.?.alignment);
@@ -13612,7 +13614,7 @@ test "widget search fields expose textbox semantics and render search chrome" {
     try std.testing.expect(semantics[0].focusable);
     try std.testing.expectEqualDeep(TextRange.init(9, 9), semantics[0].text_selection.?);
     const search_geometry = layout.textGeometry(10, .{}).?;
-    try expectRect(geometry.RectF.init(105, 19.5, 1, 17.5), search_geometry.caret_bounds.?);
+    try expectRect(geometry.RectF.init(105, 21.25, 1, 17.5), search_geometry.caret_bounds.?);
     try std.testing.expectEqual(@as(usize, 0), search_geometry.selection_rect_count);
 
     const tokens = DesignTokens{
@@ -13666,9 +13668,9 @@ test "widget text fields render selection caret and composition ranges" {
     const text_geometry = layout.textGeometry(9, .{}).?;
     try std.testing.expect(text_geometry.caret_bounds == null);
     try std.testing.expectEqual(@as(usize, 1), text_geometry.selection_rect_count);
-    try expectRect(geometry.RectF.init(27, 17.5, 21, 17.5), text_geometry.selection_bounds.?);
+    try expectRect(geometry.RectF.init(27, 19.25, 21, 17.5), text_geometry.selection_bounds.?);
     try std.testing.expectEqual(@as(usize, 1), text_geometry.composition_rect_count);
-    try expectRect(geometry.RectF.init(34, 17.5, 14, 17.5), text_geometry.composition_bounds.?);
+    try expectRect(geometry.RectF.init(34, 19.25, 14, 17.5), text_geometry.composition_bounds.?);
 
     var commands: [6]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
@@ -15104,7 +15106,7 @@ test "widget emitter applies density tokens to spacing and affordances" {
     var compact_button_builder = Builder.init(&compact_button_commands);
     try emitWidgetTree(&compact_button_builder, button, .{ .density = .compact });
     switch (compact_button_builder.displayList().commands[2]) {
-        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 10.5), text.origin.x, 0.001),
+        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 45.5), text.origin.x, 0.001),
         else => return error.TestUnexpectedResult,
     }
 
@@ -15112,7 +15114,7 @@ test "widget emitter applies density tokens to spacing and affordances" {
     var regular_button_builder = Builder.init(&regular_button_commands);
     try emitWidgetTree(&regular_button_builder, button, .{ .density = .regular });
     switch (regular_button_builder.displayList().commands[2]) {
-        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 12), text.origin.x, 0.001),
+        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 45.5), text.origin.x, 0.001),
         else => return error.TestUnexpectedResult,
     }
 
@@ -15120,7 +15122,7 @@ test "widget emitter applies density tokens to spacing and affordances" {
     var spacious_button_builder = Builder.init(&spacious_button_commands);
     try emitWidgetTree(&spacious_button_builder, button, .{ .density = .spacious });
     switch (spacious_button_builder.displayList().commands[2]) {
-        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 13.5), text.origin.x, 0.001),
+        .draw_text => |text| try std.testing.expectApproxEqAbs(@as(f32, 45.5), text.origin.x, 0.001),
         else => return error.TestUnexpectedResult,
     }
 

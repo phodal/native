@@ -46,6 +46,28 @@ const ComponentVirtualScroll = struct {
     data: f32 = 28,
 };
 
+const ComponentThemeMode = enum {
+    light,
+    dark,
+    high,
+
+    fn next(self: ComponentThemeMode) ComponentThemeMode {
+        return switch (self) {
+            .light => .dark,
+            .dark => .high,
+            .high => .light,
+        };
+    }
+
+    fn label(self: ComponentThemeMode) []const u8 {
+        return switch (self) {
+            .light => "Light",
+            .dark => "Dark",
+            .high => "High contrast",
+        };
+    }
+};
+
 const preview_image_pixels = [_]u8{
     38, 99,  235, 255, 16,  185, 129, 255, 250, 204, 21,  255, 244, 63,  94,  255,
     99, 102, 241, 255, 14,  165, 233, 255, 255, 255, 255, 255, 15,  23,  42,  255,
@@ -97,6 +119,7 @@ const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
 const GpuComponentsApp = struct {
     refresh_count: u32 = 0,
     theme_count: u32 = 0,
+    theme_mode: ComponentThemeMode = .light,
     canvas_installed: bool = false,
     reported_planned_frame: bool = false,
     virtual_scroll: ComponentVirtualScroll = .{},
@@ -178,7 +201,7 @@ const GpuComponentsApp = struct {
     fn handleGpuFrame(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
         if (!std.mem.eql(u8, frame_event.label, canvas_label)) return;
         if (!self.canvas_installed) {
-            try installComponentsCanvasModel(runtime, frame_event.window_id, self.virtual_scroll);
+            try installComponentsCanvasModel(runtime, frame_event.window_id, self.virtual_scroll, self.componentTokens());
             _ = try self.presentComponentsCanvas(runtime, frame_event, true);
             try self.updateStatus(runtime, frame_event.window_id, "Component lab display list presented on the GPU surface.");
             self.canvas_installed = true;
@@ -229,7 +252,7 @@ const GpuComponentsApp = struct {
             ),
             .slider, .progress => try std.fmt.bufPrint(
                 &status_buffer,
-                "{s} {s} #{d}: value {d}.",
+                "{s} {s} #{d}: value {d:.2}.",
                 .{ action, @tagName(widget.kind), id, widget.value },
             ),
             .scroll_view, .list, .data_grid => try std.fmt.bufPrint(
@@ -262,7 +285,7 @@ const GpuComponentsApp = struct {
 
         const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
         const current = self.componentVirtualScrollValue(id) orelse return null;
-        const delta = pointer_event.pointer.delta.dy * componentTokens().scroll.wheel_multiplier;
+        const delta = pointer_event.pointer.delta.dy * self.componentTokens().scroll.wheel_multiplier;
         const next = snapComponentVirtualScrollOffset(node.widget, current, current + delta, max_offset);
         if (next == current) return id;
 
@@ -302,9 +325,8 @@ const GpuComponentsApp = struct {
 
     fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
         self.refresh_count += 1;
-        self.reported_planned_frame = false;
         self.virtual_scroll = .{};
-        try installComponentsCanvasModel(runtime, command.window_id, self.virtual_scroll);
+        try installComponentsCanvasModel(runtime, command.window_id, self.virtual_scroll, self.componentTokens());
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, canvas_label);
         _ = try self.presentComponentsCanvas(runtime, gpuFrameEvent(gpu_frame), true);
 
@@ -315,8 +337,17 @@ const GpuComponentsApp = struct {
 
     fn changeTheme(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
         self.theme_count += 1;
+        self.theme_mode = self.theme_mode.next();
+        try installComponentsCanvasModel(runtime, command.window_id, self.virtual_scroll, self.componentTokens());
+        const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, canvas_label);
+        _ = try self.presentComponentsCanvas(runtime, gpuFrameEvent(gpu_frame), true);
+
         var status_buffer: [160]u8 = undefined;
-        const status = try std.fmt.bufPrint(&status_buffer, "Native theme selector changed from {s}. Count {d}.", .{ @tagName(command.source), self.theme_count });
+        const status = try std.fmt.bufPrint(
+            &status_buffer,
+            "GPU component theme: {s} from {s}. Count {d}.",
+            .{ self.theme_mode.label(), @tagName(command.source), self.theme_count },
+        );
         try self.updateStatus(runtime, command.window_id, status);
     }
 
@@ -336,7 +367,7 @@ const GpuComponentsApp = struct {
                 .image_resources = &preview_images,
             },
             self.frameStorage(),
-            color(247, 249, 252),
+            self.componentTokens().colors.background,
             &self.gpu_commands,
             &self.packet_json,
             present_scale,
@@ -378,7 +409,7 @@ const GpuComponentsApp = struct {
             &self.packet_json,
             self.pixels.?,
             self.scratch.?,
-            color(247, 249, 252),
+            self.componentTokens().colors.background,
             present_scale,
         );
     }
@@ -436,6 +467,10 @@ const GpuComponentsApp = struct {
         _ = try runtime.setCanvasWidgetLayout(window_id, canvas_label, layout);
     }
 
+    fn componentTokens(self: @This()) canvas.DesignTokens {
+        return componentTokensFor(self.theme_mode);
+    }
+
     fn componentVirtualScrollValue(self: *@This(), id: canvas.ObjectId) ?f32 {
         return switch (id) {
             120 => self.virtual_scroll.nav,
@@ -467,15 +502,15 @@ const GpuComponentsApp = struct {
     }
 };
 
-fn installComponentsCanvasModel(runtime: *zero_native.Runtime, window_id: zero_native.WindowId, virtual_scroll: ComponentVirtualScroll) anyerror!void {
+fn installComponentsCanvasModel(runtime: *zero_native.Runtime, window_id: zero_native.WindowId, virtual_scroll: ComponentVirtualScroll, tokens: canvas.DesignTokens) anyerror!void {
     var commands: [max_component_commands]canvas.CanvasCommand = undefined;
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     var builder = canvas.Builder.init(&commands);
     const layout = try buildComponentsWidgetLayoutWithScroll(&nodes, virtual_scroll);
-    try buildComponentsDisplayList(&builder, layout);
+    try buildComponentsDisplayList(&builder, layout, tokens);
     _ = try runtime.setCanvasDisplayList(window_id, canvas_label, builder.displayList());
     _ = try runtime.setCanvasWidgetLayout(window_id, canvas_label, layout);
-    _ = try runtime.emitCanvasWidgetDisplayListWithChrome(window_id, canvas_label, componentTokens(), .{
+    _ = try runtime.emitCanvasWidgetDisplayListWithChrome(window_id, canvas_label, tokens, .{
         .prefix_command_count = component_chrome_prefix_commands,
         .suffix_command_count = component_chrome_suffix_commands,
     });
@@ -484,7 +519,7 @@ fn installComponentsCanvasModel(runtime: *zero_native.Runtime, window_id: zero_n
 fn buildComponentsDisplayListFromWidgets(builder: *canvas.Builder) canvas.Error!void {
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const layout = try buildComponentsWidgetLayout(&nodes);
-    try buildComponentsDisplayList(builder, layout);
+    try buildComponentsDisplayList(builder, layout, componentTokens());
 }
 
 fn componentVirtualScrollTarget(route: []const canvas.WidgetEventRouteEntry) ?canvas.ObjectId {
@@ -544,26 +579,18 @@ fn componentVirtualScrollStep(widget: canvas.Widget) ?f32 {
     return if (step > 0) step else null;
 }
 
-fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree) canvas.Error!void {
-    try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = color(255, 255, 255) } });
-    try layout.emitDisplayList(builder, componentTokens());
+fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens) canvas.Error!void {
+    try builder.fillRoundedRect(.{ .id = 3, .rect = rect(28, 26, 916, 616), .radius = canvas.Radius.all(20), .fill = .{ .color = tokens.colors.surface } });
+    try layout.emitDisplayList(builder, tokens);
 }
 
 fn componentTokens() canvas.DesignTokens {
+    return componentTokensFor(.light);
+}
+
+fn componentTokensFor(mode: ComponentThemeMode) canvas.DesignTokens {
     return .{
-        .colors = .{
-            .surface = rgba(255, 255, 255, 238),
-            .surface_subtle = color(248, 250, 252),
-            .surface_pressed = rgba(38, 99, 235, 24),
-            .text = color(17, 24, 39),
-            .text_muted = color(97, 111, 126),
-            .border = color(224, 231, 239),
-            .accent = color(38, 99, 235),
-            .accent_text = color(255, 255, 255),
-            .focus_ring = color(20, 184, 166),
-            .shadow = rgba(15, 23, 42, 28),
-            .disabled = color(226, 232, 240),
-        },
+        .colors = componentThemeColors(mode),
         .typography = .{
             .font_id = 1,
             .body_size = 12,
@@ -583,6 +610,53 @@ fn componentTokens() canvas.DesignTokens {
         },
         .motion = .{ .normal_ms = 180, .slow_ms = 520, .easing = .emphasized },
         .scroll = .{ .wheel_multiplier = 1.1, .wheel_velocity_scale = 72, .deceleration_per_second = 0.88, .stop_velocity = 4 },
+    };
+}
+
+fn componentThemeColors(mode: ComponentThemeMode) canvas.ColorTokens {
+    return switch (mode) {
+        .light => .{
+            .background = color(247, 249, 252),
+            .surface = rgba(255, 255, 255, 238),
+            .surface_subtle = color(248, 250, 252),
+            .surface_pressed = rgba(38, 99, 235, 24),
+            .text = color(17, 24, 39),
+            .text_muted = color(97, 111, 126),
+            .border = color(224, 231, 239),
+            .accent = color(38, 99, 235),
+            .accent_text = color(255, 255, 255),
+            .focus_ring = color(20, 184, 166),
+            .shadow = rgba(15, 23, 42, 28),
+            .disabled = color(226, 232, 240),
+        },
+        .dark => .{
+            .background = color(8, 13, 23),
+            .surface = rgba(18, 24, 38, 244),
+            .surface_subtle = color(31, 41, 58),
+            .surface_pressed = rgba(96, 165, 250, 34),
+            .text = color(241, 245, 249),
+            .text_muted = color(148, 163, 184),
+            .border = rgba(148, 163, 184, 72),
+            .accent = color(96, 165, 250),
+            .accent_text = color(7, 12, 20),
+            .focus_ring = color(45, 212, 191),
+            .shadow = rgba(0, 0, 0, 120),
+            .disabled = color(51, 65, 85),
+        },
+        .high => .{
+            .background = color(0, 0, 0),
+            .surface = color(8, 8, 8),
+            .surface_subtle = color(24, 24, 27),
+            .surface_pressed = rgba(255, 255, 255, 48),
+            .text = color(255, 255, 255),
+            .text_muted = color(229, 231, 235),
+            .border = rgba(255, 255, 255, 210),
+            .accent = color(255, 255, 255),
+            .accent_text = color(0, 0, 0),
+            .focus_ring = color(250, 204, 21),
+            .shadow = rgba(0, 0, 0, 220),
+            .disabled = color(82, 82, 91),
+        },
     };
 }
 
@@ -607,18 +681,18 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 135, .kind = .list_item, .text = "Dirty bounds" },
     };
     const segment_controls = [_]canvas.Widget{
-        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 64, 30), .text = "Small", .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
-        .{ .id = 119, .kind = .segmented_control, .frame = rect(68, 0, 64, 30), .text = "Large", .semantics = .{ .label = "Large density" } },
+        .{ .id = 117, .kind = .segmented_control, .frame = rect(0, 0, 72, 34), .text = "Small", .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
+        .{ .id = 119, .kind = .segmented_control, .frame = rect(76, 0, 72, 34), .text = "Large", .semantics = .{ .label = "Large density" } },
     };
     const form_controls = [_]canvas.Widget{
-        .{ .id = 111, .kind = .text_field, .frame = rect(16, 48, 132, 30), .text = "zero-native", .semantics = .{ .label = "Project name" } },
-        .{ .id = 112, .kind = .search_field, .frame = rect(158, 48, 148, 30), .text = "components", .semantics = .{ .label = "Component search" } },
-        .{ .id = 113, .kind = .checkbox, .frame = rect(16, 92, 116, 28), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
-        .{ .id = 114, .kind = .toggle, .frame = rect(150, 92, 100, 28), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live toggle" } },
-        .{ .id = 115, .kind = .slider, .frame = rect(16, 138, 156, 26), .value = 0.62, .semantics = .{ .label = "Density slider" } },
-        .{ .id = 116, .kind = .progress, .frame = rect(188, 147, 116, 10), .value = 1, .semantics = .{ .label = "Build progress" } },
-        .{ .id = 168, .kind = .row, .frame = rect(16, 180, 132, 30), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density segments" }, .children = &segment_controls },
-        .{ .id = 118, .kind = .image, .frame = rect(198, 176, 106, 34), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
+        .{ .id = 111, .kind = .text_field, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
+        .{ .id = 112, .kind = .search_field, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component search" } },
+        .{ .id = 113, .kind = .checkbox, .frame = rect(0, 52, 132, 30), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
+        .{ .id = 114, .kind = .toggle, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live toggle" } },
+        .{ .id = 115, .kind = .slider, .frame = rect(0, 108, 176, 28), .value = 0.62, .semantics = .{ .label = "Density slider" } },
+        .{ .id = 116, .kind = .progress, .frame = rect(202, 118, 134, 8), .value = 1, .semantics = .{ .label = "Build progress" } },
+        .{ .id = 168, .kind = .row, .frame = rect(0, 164, 148, 34), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density segments" }, .children = &segment_controls },
+        .{ .id = 118, .kind = .image, .frame = rect(190, 160, 124, 54), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
     };
     const menu_items = [_]canvas.Widget{
         .{ .id = 142, .kind = .menu_item, .text = "Copy token" },
@@ -659,18 +733,18 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 166, .kind = .data_row, .frame = rect(0, 0, 0, 28), .children = &row4_cells },
     };
     const data_panel_children = [_]canvas.Widget{
-        .{ .id = 150, .kind = .data_grid, .frame = rect(16, 48, 304, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
-        .{ .id = 160, .kind = .tooltip, .frame = rect(22, 158, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
+        .{ .id = 150, .kind = .data_grid, .frame = rect(0, 0, 360, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
+        .{ .id = 160, .kind = .tooltip, .frame = rect(392, 0, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
     };
     const top_widgets = [_]canvas.Widget{
         .{ .id = 101, .kind = .text, .frame = rect(64, 56, 240, 26), .text = "Finished Components" },
-        .{ .id = 104, .kind = .button, .frame = rect(574, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
-        .{ .id = 105, .kind = .icon_button, .frame = rect(706, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
-        .{ .id = 106, .kind = .stack, .frame = rect(64, 130, 328, 246), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
-        .{ .id = 120, .kind = .list, .frame = rect(424, 142, 152, 28), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
-        .{ .id = 130, .kind = .scroll_view, .frame = rect(604, 142, 164, 28), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
-        .{ .id = 140, .kind = .popover, .frame = rect(424, 286, 174, 88), .backdrop_blur = 5, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
-        .{ .id = 149, .kind = .stack, .frame = rect(64, 396, 344, 204), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
+        .{ .id = 104, .kind = .button, .frame = rect(724, 54, 118, 34), .text = "Primary", .state = .{ .selected = true }, .command = refresh_command, .semantics = .{ .label = "Primary action" } },
+        .{ .id = 105, .kind = .icon_button, .frame = rect(856, 54, 34, 34), .text = "+", .semantics = .{ .label = "Add component" } },
+        .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 236), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
+        .{ .id = 120, .kind = .list, .frame = rect(456, 124, 170, 56), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
+        .{ .id = 130, .kind = .scroll_view, .frame = rect(652, 124, 186, 56), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
+        .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur = 5, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
+        .{ .id = 149, .kind = .stack, .frame = rect(64, 410, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
     return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, canvas_width, canvas_height), nodes);
 }
@@ -1010,26 +1084,33 @@ test "gpu components layout keeps finished controls visually separated" {
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const layout = try buildComponentsWidgetLayoutWithScroll(&nodes, .{});
 
-    try expectComponentWidgetFrame(layout, 111, rect(80, 178, 132, 30));
-    try expectComponentWidgetFrame(layout, 112, rect(222, 178, 148, 30));
-    try expectComponentWidgetFrame(layout, 113, rect(80, 222, 116, 28));
-    try expectComponentWidgetFrame(layout, 114, rect(214, 222, 100, 28));
-    try expectComponentWidgetFrame(layout, 115, rect(80, 268, 156, 26));
-    try expectComponentWidgetFrame(layout, 116, rect(252, 277, 116, 10));
-    try expectComponentWidgetFrame(layout, 168, rect(80, 310, 132, 30));
-    try expectComponentWidgetFrame(layout, 118, rect(262, 306, 106, 34));
+    try expectComponentWidgetFrame(layout, 111, rect(64, 124, 148, 34));
+    try expectComponentWidgetFrame(layout, 112, rect(230, 124, 172, 34));
+    try expectComponentWidgetFrame(layout, 113, rect(64, 176, 132, 30));
+    try expectComponentWidgetFrame(layout, 114, rect(230, 176, 116, 30));
+    try expectComponentWidgetFrame(layout, 115, rect(64, 232, 176, 28));
+    try expectComponentWidgetFrame(layout, 116, rect(266, 242, 134, 8));
+    try expectComponentWidgetFrame(layout, 168, rect(64, 288, 148, 34));
+    try expectComponentWidgetFrame(layout, 118, rect(254, 284, 124, 54));
+    try expectComponentWidgetFrame(layout, 120, rect(456, 124, 170, 56));
+    try expectComponentWidgetFrame(layout, 130, rect(652, 124, 186, 56));
+    try expectComponentWidgetFrame(layout, 140, rect(456, 248, 174, 88));
     try expectComponentWidgetsDoNotOverlap(layout, 111, 112);
     try expectComponentWidgetsDoNotOverlap(layout, 113, 114);
     try expectComponentWidgetsDoNotOverlap(layout, 115, 116);
     try expectComponentWidgetsDoNotOverlap(layout, 168, 118);
+    try expectComponentWidgetsDoNotOverlap(layout, 106, 120);
+    try expectComponentWidgetsDoNotOverlap(layout, 120, 130);
+    try expectComponentWidgetsDoNotOverlap(layout, 130, 140);
 
     try std.testing.expect(layout.findById(151) == null);
-    try expectComponentWidgetFrame(layout, 150, rect(80, 444, 304, 28));
-    try expectComponentWidgetFrame(layout, 152, rect(80, 444, 304, 28));
-    try expectComponentWidgetFrame(layout, 156, rect(80, 444, 152, 28));
-    try expectComponentWidgetFrame(layout, 157, rect(232, 444, 152, 28));
-    try expectComponentWidgetFrame(layout, 160, rect(86, 554, 176, 32));
+    try expectComponentWidgetFrame(layout, 150, rect(64, 410, 360, 28));
+    try expectComponentWidgetFrame(layout, 152, rect(64, 410, 360, 28));
+    try expectComponentWidgetFrame(layout, 156, rect(64, 410, 180, 28));
+    try expectComponentWidgetFrame(layout, 157, rect(244, 410, 180, 28));
+    try expectComponentWidgetFrame(layout, 160, rect(456, 410, 176, 32));
     try expectComponentWidgetsDoNotOverlap(layout, 150, 160);
+    try expectComponentWidgetsDoNotOverlap(layout, 140, 149);
 
     var scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const scrolled_layout = try buildComponentsWidgetLayoutWithScroll(&scrolled_nodes, .{
@@ -1038,13 +1119,15 @@ test "gpu components layout keeps finished controls visually separated" {
         .data = 56,
     });
     try std.testing.expect(scrolled_layout.findById(121) == null);
-    try expectComponentWidgetFrame(scrolled_layout, 122, rect(424, 142, 152, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 122, rect(456, 124, 170, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 123, rect(456, 152, 170, 28));
     try std.testing.expect(scrolled_layout.findById(132) == null);
-    try expectComponentWidgetFrame(scrolled_layout, 133, rect(604, 142, 164, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 133, rect(652, 124, 186, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 134, rect(652, 152, 186, 28));
     try std.testing.expect(scrolled_layout.findById(152) == null);
-    try expectComponentWidgetFrame(scrolled_layout, 153, rect(80, 444, 304, 28));
-    try expectComponentWidgetFrame(scrolled_layout, 158, rect(80, 444, 152, 28));
-    try expectComponentWidgetFrame(scrolled_layout, 159, rect(232, 444, 152, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 153, rect(64, 410, 360, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 158, rect(64, 410, 180, 28));
+    try expectComponentWidgetFrame(scrolled_layout, 159, rect(244, 410, 180, 28));
 }
 
 test "gpu components combined virtual scroll state stays within display budget" {
@@ -1056,7 +1139,7 @@ test "gpu components combined virtual scroll state stays within display budget" 
         .behavior = 56,
         .data = 56,
     });
-    try buildComponentsDisplayList(&builder, layout);
+    try buildComponentsDisplayList(&builder, layout, componentTokens());
     const display_list = builder.displayList();
 
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
@@ -1159,7 +1242,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 5665255265391567107), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 11091941260883283703), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -1373,8 +1456,8 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(snapshot_nav_list.actions.increment);
     try std.testing.expect(snapshot_nav_list.actions.decrement);
     try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.present);
-    try std.testing.expectEqual(@as(f32, 28), componentSnapshotWidget(snapshot, 130).?.scroll.viewport_extent);
-    try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.content_extent > 28);
+    try std.testing.expectEqual(@as(f32, 56), componentSnapshotWidget(snapshot, 130).?.scroll.viewport_extent);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 130).?.scroll.content_extent > 56);
     const menu_item = componentSnapshotWidget(snapshot, 142).?;
     try std.testing.expectEqualStrings("menuitem", menu_item.role);
     try std.testing.expect(menu_item.bounds.width > 0);
@@ -1524,22 +1607,22 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 130 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_scroll = componentSnapshotWidget(snapshot, 130).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_scroll.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.behavior, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 84), keyed_scroll.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 84), app.virtual_scroll.behavior, 0.001);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
 
     const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 56") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 84") != null);
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 120 increment");
     snapshot = harness.runtime.automationSnapshot("Components");
     const keyed_list = componentSnapshotWidget(snapshot, 120).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 28), keyed_list.scroll.offset, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 28), app.virtual_scroll.nav, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_list.scroll.offset, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.nav, 0.001);
     const list_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 28") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 56") != null);
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 150 increment");
@@ -1556,6 +1639,69 @@ test "gpu components app registers component lab on first gpu frame" {
     const selected_menu_item = componentSnapshotWidget(snapshot, 142).?;
     try std.testing.expect(selected_menu_item.focused);
     try std.testing.expectApproxEqAbs(@as(f32, 1), selected_menu_item.value.?, 0.001);
+}
+
+test "gpu components native theme command updates retained design tokens" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    const app_handle = app.app();
+    try harness.start(app_handle);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqualDeep(componentTokensFor(.light), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
+    var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensFor(.light).colors.surface);
+    try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensFor(.light).colors.accent);
+
+    resetComponentDirty(&harness.runtime);
+    const packet_count_before_dark = harness.null_platform.gpu_surface_packet_present_count;
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
+        .name = theme_command,
+        .window_id = 1,
+        .view_label = "theme-mode",
+    } });
+
+    try std.testing.expectEqual(ComponentThemeMode.dark, app.theme_mode);
+    try std.testing.expectEqual(@as(u32, 1), app.theme_count);
+    try std.testing.expectEqualDeep(componentTokensFor(.dark), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_dark);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensFor(.dark).colors.surface);
+    try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensFor(.dark).colors.accent);
+    var status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "GPU component theme: Dark from toolbar") != null);
+
+    const packet_count_before_high = harness.null_platform.gpu_surface_packet_present_count;
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
+        .name = theme_command,
+        .window_id = 1,
+        .view_label = "theme-mode",
+    } });
+
+    try std.testing.expectEqual(ComponentThemeMode.high, app.theme_mode);
+    try std.testing.expectEqual(@as(u32, 2), app.theme_count);
+    try std.testing.expectEqualDeep(componentTokensFor(.high), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_high);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensFor(.high).colors.surface);
+    try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensFor(.high).colors.accent);
+    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "GPU component theme: High contrast from toolbar") != null);
+
+    const themed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try expectComponentWidgetFrame(themed_layout, 111, rect(64, 124, 148, 34));
+    try expectComponentWidgetFrame(themed_layout, 160, rect(456, 410, 176, 32));
 }
 
 test "gpu components pointer clicks update retained controls" {
@@ -1754,6 +1900,17 @@ fn expectComponentTextCommand(display_list: canvas.DisplayList, id: canvas.Objec
     const command_ref = display_list.findCommandById(id) orelse return error.TestUnexpectedResult;
     switch (command_ref.command) {
         .draw_text => |draw| try std.testing.expectEqualStrings(text, draw.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+fn expectComponentFillRoundedRectColor(display_list: canvas.DisplayList, id: canvas.ObjectId, expected: canvas.Color) !void {
+    const command_ref = display_list.findCommandById(id) orelse return error.TestUnexpectedResult;
+    switch (command_ref.command) {
+        .fill_rounded_rect => |fill| switch (fill.fill) {
+            .color => |actual| try std.testing.expectEqualDeep(expected, actual),
+            else => return error.TestUnexpectedResult,
+        },
         else => return error.TestUnexpectedResult,
     }
 }

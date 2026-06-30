@@ -898,6 +898,9 @@ pub fn build(b: *std.Build) void {
         \\gpu_frame_from_snapshot() {
         \\  printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_frame=\([0-9][0-9]*\).*/\1/p'
         \\}
+        \\canvas_revision_from_snapshot() {
+        \\  printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* canvas_revision=\([0-9][0-9]*\).*/\1/p'
+        \\}
         \\case "$snapshot" in *'widget @w1/components-canvas#113 role=checkbox'*'value=1'*'actions=[focus,toggle]'*) ;; *) echo "checkbox widget was not initially selected" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#114 role=switch'*'value=1'*'actions=[focus,toggle]'*) ;; *) echo "switch widget was not initially selected" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#116 role=progressbar'*'value=1'*) ;; *) echo "progress widget was missing from the initial snapshot" >&2; exit 1 ;; esac
@@ -905,6 +908,29 @@ pub fn build(b: *std.Build) void {
         \\case "$snapshot" in *'widget @w1/components-canvas#119 role=tab'*'value=0'*'actions=[focus,select]'*) ;; *) echo "large segmented control was not initially available" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#142 role=menuitem'*'actions=[focus,press,select]'*) ;; *) echo "menu item widget was not initially actionable" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/components-canvas#118 role=image name="GPU image preview"'*) ;; *) echo "image widget was missing from the component snapshot" >&2; exit 1 ;; esac
+        \\gpu_frame_before="$(gpu_frame_from_snapshot)"
+        \\case "$gpu_frame_before" in ''|*[!0-9]*) gpu_frame_before=0 ;; esac
+        \\gpu_frame_after="$gpu_frame_before"
+        \\canvas_revision_before="$(canvas_revision_from_snapshot)"
+        \\case "$canvas_revision_before" in ''|*[!0-9]*) canvas_revision_before=0 ;; esac
+        \\canvas_revision_after="$canvas_revision_before"
+        \\"$cli" automate native-command components.theme theme-mode >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
+        \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
+        \\  canvas_revision_after="$(canvas_revision_from_snapshot)"
+        \\  case "$canvas_revision_after" in ''|*[!0-9]*) canvas_revision_after=0 ;; esac
+        \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ] || [ "$canvas_revision_after" -gt "$canvas_revision_before" ]; then
+        \\    case "$snapshot" in *'GPU component theme: Dark from toolbar. Count 1.'*'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
+        \\  fi
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ] && [ "$canvas_revision_after" -le "$canvas_revision_before" ]; then echo "theme automation command did not update the retained GPU canvas" >&2; exit 1; fi
+        \\case "$snapshot" in *'GPU component theme: Dark from toolbar. Count 1.'*) ;; *) echo "theme automation command did not update status" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "theme automation command did not present a packet-renderable GPU frame" >&2; exit 1 ;; esac
         \\"$cli" automate widget-action components-canvas 111 focus >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
@@ -973,7 +999,7 @@ pub fn build(b: *std.Build) void {
         \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
         \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
         \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ]; then
-        \\    case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*)
+        \\    case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*|*'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.819'*)
         \\      case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
         \\      ;;
         \\    esac
@@ -982,7 +1008,7 @@ pub fn build(b: *std.Build) void {
         \\  sleep 0.1
         \\done
         \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "slider automation drag did not request a GPU frame" >&2; exit 1; fi
-        \\case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*) ;; *) echo "slider automation drag did not update retained slider state" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.82'*|*'Clicked slider #115: value 0.82.'*'widget @w1/components-canvas#115 role=slider'*'value=0.819'*) ;; *) echo "slider automation drag did not update retained slider state" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "slider automation drag did not present an incremental GPU packet without interaction-time uploads" >&2; exit 1 ;; esac
         \\"$cli" automate widget-action components-canvas 156 press >/dev/null 2>&1
         \\attempts=0
@@ -1105,7 +1131,7 @@ pub fn build(b: *std.Build) void {
         \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
         \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
         \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ]; then
-        \\    case "$snapshot" in *'Keyed list #120: offset 28.'*'widget @w1/components-canvas#120 role=list'*'scroll=[offset=28,viewport=28,content=168]'*)
+        \\    case "$snapshot" in *'Keyed list #120: offset 56.'*'widget @w1/components-canvas#120 role=list'*'scroll=[offset=56,viewport=56,content=168]'*)
         \\      case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
         \\      ;;
         \\    esac
@@ -1114,7 +1140,7 @@ pub fn build(b: *std.Build) void {
         \\  sleep 0.1
         \\done
         \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "list automation increment did not request a GPU frame" >&2; exit 1; fi
-        \\case "$snapshot" in *'Keyed list #120: offset 28.'*'widget @w1/components-canvas#120 role=list'*'scroll=[offset=28,viewport=28,content=168]'*) ;; *) echo "list automation increment did not update retained scroll semantics" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'Keyed list #120: offset 56.'*'widget @w1/components-canvas#120 role=list'*'scroll=[offset=56,viewport=56,content=168]'*) ;; *) echo "list automation increment did not update retained scroll semantics" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "list automation increment did not present an incremental GPU packet without interaction-time uploads" >&2; exit 1 ;; esac
         \\gpu_frame_before="$(gpu_frame_from_snapshot)"
         \\case "$gpu_frame_before" in ''|*[!0-9]*) gpu_frame_before=0 ;; esac
@@ -1147,7 +1173,7 @@ pub fn build(b: *std.Build) void {
         \\  gpu_frame_after="$(gpu_frame_from_snapshot)"
         \\  case "$gpu_frame_after" in ''|*[!0-9]*) gpu_frame_after=0 ;; esac
         \\  if [ "$gpu_frame_after" -gt "$gpu_frame_before" ]; then
-        \\    case "$snapshot" in *'Scrolled scroll_view #130: offset 56.'*'widget @w1/components-canvas#130 role=group'*'scroll=[offset=56,viewport=28,content=140]'*)
+        \\    case "$snapshot" in *'Scrolled scroll_view #130: offset 56.'*'widget @w1/components-canvas#130 role=group'*'scroll=[offset=56,viewport=56,content=140]'*)
         \\      case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
         \\      ;;
         \\    esac
@@ -1156,7 +1182,7 @@ pub fn build(b: *std.Build) void {
         \\  sleep 0.1
         \\done
         \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "scroll automation wheel did not request a GPU frame" >&2; exit 1; fi
-        \\case "$snapshot" in *'Scrolled scroll_view #130: offset 56.'*'widget @w1/components-canvas#130 role=group'*'scroll=[offset=56,viewport=28,content=140]'*) ;; *) echo "scroll automation wheel did not update retained scroll semantics" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'Scrolled scroll_view #130: offset 56.'*'widget @w1/components-canvas#130 role=group'*'scroll=[offset=56,viewport=56,content=140]'*) ;; *) echo "scroll automation wheel did not update retained scroll semantics" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_image_uploads=0'*'canvas_frame_glyph_uploads=0'*'canvas_frame_text_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "scroll automation wheel did not present an incremental GPU packet without interaction-time uploads" >&2; exit 1 ;; esac
         \\input_timestamp="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_input_timestamp_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$input_timestamp" in ''|*[!0-9]*) echo "components GPU input timestamp was missing after widget interaction" >&2; exit 1 ;; esac

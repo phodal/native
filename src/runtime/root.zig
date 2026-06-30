@@ -1858,10 +1858,15 @@ pub const Runtime = struct {
             return;
         }
 
-        const direction = canvasWidgetSpatialFocusDirection(input_event) orelse return;
         const focused_id = current_id orelse return;
         const layout = self.views[index].widgetLayoutTree();
         const focused = layout.focusTargetById(focused_id) orelse return;
+        if (canvasWidgetGroupFocusEdgeFromInput(input_event)) |edge| {
+            const target = canvasWidgetGroupFocusEdgeTarget(layout, focused, edge) orelse return;
+            try self.setCanvasWidgetFocusFromKeyboard(index, target.id);
+            return;
+        }
+        const direction = canvasWidgetSpatialFocusDirection(input_event) orelse return;
         const target = layout.focusTarget(focused_id, direction) orelse return;
         if (!canvasWidgetSpatialFocusAllowed(focused.kind, target.kind, direction)) return;
         try self.setCanvasWidgetFocusFromKeyboard(index, target.id);
@@ -5470,9 +5475,22 @@ const CanvasWidgetStepDirection = enum {
     decrement,
 };
 
+const CanvasWidgetGroupFocusEdge = enum {
+    first,
+    last,
+};
+
 fn canvasWidgetScrollKeyboardTarget(keyboard: canvas.WidgetKeyboardEvent) ?CanvasWidgetScrollKeyboardTarget {
     if (std.ascii.eqlIgnoreCase(keyboard.key, "home")) return .start;
     if (std.ascii.eqlIgnoreCase(keyboard.key, "end")) return .end;
+    return null;
+}
+
+fn canvasWidgetGroupFocusEdgeFromInput(input_event: GpuSurfaceInputEvent) ?CanvasWidgetGroupFocusEdge {
+    if (input_event.kind != .key_down) return null;
+    if (input_event.modifiers.control or input_event.modifiers.option or input_event.modifiers.command or input_event.modifiers.primary or input_event.modifiers.shift) return null;
+    if (std.ascii.eqlIgnoreCase(input_event.key, "home")) return .first;
+    if (std.ascii.eqlIgnoreCase(input_event.key, "end")) return .last;
     return null;
 }
 
@@ -5494,6 +5512,37 @@ fn canvasWidgetSpatialFocusAllowed(focused_kind: canvas.WidgetKind, target_kind:
         .segmented_control => direction == .left or direction == .right,
         else => false,
     };
+}
+
+fn canvasWidgetGroupHomeEndFocusKind(kind: canvas.WidgetKind) bool {
+    return switch (kind) {
+        .list_item, .menu_item, .segmented_control => true,
+        else => false,
+    };
+}
+
+fn canvasWidgetGroupFocusEdgeTarget(layout: canvas.WidgetLayoutTree, focused: canvas.WidgetFocusTarget, edge: CanvasWidgetGroupFocusEdge) ?canvas.WidgetFocusTarget {
+    if (!canvasWidgetGroupHomeEndFocusKind(focused.kind)) return null;
+    if (focused.index >= layout.nodes.len) return null;
+    const parent_index = layout.nodes[focused.index].parent_index;
+    switch (edge) {
+        .first => {
+            for (layout.nodes) |node| {
+                if (node.parent_index != parent_index or node.widget.kind != focused.kind) continue;
+                if (layout.focusTargetById(node.widget.id)) |target| return target;
+            }
+        },
+        .last => {
+            var index = layout.nodes.len;
+            while (index > 0) {
+                index -= 1;
+                const node = layout.nodes[index];
+                if (node.parent_index != parent_index or node.widget.kind != focused.kind) continue;
+                if (layout.focusTargetById(node.widget.id)) |target| return target;
+            }
+        },
+    }
+    return null;
 }
 
 const PresentedCanvasCommand = struct {
@@ -15878,6 +15927,36 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 12), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 12), app_state.last_target_id);
 
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "home",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), app_state.last_target_id);
+    try std.testing.expectEqualStrings("home", app_state.last_key);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "end",
+        .modifiers = .{ .shift = true },
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), app_state.last_target_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "end",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 12), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 12), app_state.last_target_id);
+    try std.testing.expectEqualStrings("end", app_state.last_key);
+
     harness.runtime.views[0].canvas_widget_focused_id = 21;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
@@ -15889,6 +15968,24 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 22), app_state.last_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.menu_item, app_state.last_target_kind);
 
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "home",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 21), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 21), app_state.last_target_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "end",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 22), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 22), app_state.last_target_id);
+
     harness.runtime.views[0].canvas_widget_focused_id = 31;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
@@ -15899,6 +15996,24 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 32), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 32), app_state.last_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.segmented_control, app_state.last_target_kind);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "home",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 31), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 31), app_state.last_target_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "end",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 32), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 32), app_state.last_target_id);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
@@ -15919,7 +16034,7 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 40), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 40), app_state.last_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_target_kind);
-    try std.testing.expectEqual(@as(u32, 6), app_state.widget_keyboard_count);
+    try std.testing.expectEqual(@as(u32, 13), app_state.widget_keyboard_count);
 }
 
 test "runtime publishes canvas widget accessibility snapshots to platform" {

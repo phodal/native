@@ -857,16 +857,29 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
     CGFloat mix = fmax(0.0, fmin(1.0, opacity));
     if (mix <= 0) return YES;
 
+    NSUInteger expandedMinX = minX > radius ? minX - radius : 0;
+    NSUInteger expandedMaxX = MIN((NSUInteger)width, maxX + radius);
     NSUInteger expandedMinY = minY > radius ? minY - radius : 0;
     NSUInteger expandedMaxY = MIN((NSUInteger)height, maxY + radius);
-    const size_t byteLength = bytesPerRow * height;
-    NSMutableData *sourceData = [NSMutableData dataWithLength:byteLength];
-    NSMutableData *horizontalData = [NSMutableData dataWithLength:byteLength];
+    if (expandedMaxX <= expandedMinX || expandedMaxY <= expandedMinY) return YES;
+
+    NSUInteger regionWidth = expandedMaxX - expandedMinX;
+    NSUInteger regionHeight = expandedMaxY - expandedMinY;
+    size_t regionBytesPerRow = regionWidth * 4;
+    size_t regionByteLength = regionBytesPerRow * regionHeight;
+    NSMutableData *sourceData = [NSMutableData dataWithLength:regionByteLength];
+    NSMutableData *horizontalData = [NSMutableData dataWithLength:regionByteLength];
     if (!sourceData || !horizontalData) return NO;
     uint8_t *destination = (uint8_t *)contextData;
     uint8_t *source = (uint8_t *)sourceData.mutableBytes;
     uint8_t *horizontal = (uint8_t *)horizontalData.mutableBytes;
-    memcpy(source, destination, byteLength);
+    for (NSUInteger row = 0; row < regionHeight; row++) {
+        memcpy(
+            source + row * regionBytesPerRow,
+            destination + (expandedMinY + row) * bytesPerRow + expandedMinX * 4,
+            regionBytesPerRow
+        );
+    }
 
     for (NSUInteger y = expandedMinY; y < expandedMaxY; y++) {
         for (NSUInteger x = minX; x < maxX; x++) {
@@ -874,14 +887,14 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
             NSUInteger sampleMaxX = MIN((NSUInteger)width - 1, x + radius);
             uint64_t sums[4] = {0, 0, 0, 0};
             for (NSUInteger sx = sampleMinX; sx <= sampleMaxX; sx++) {
-                const uint8_t *pixel = source + y * bytesPerRow + sx * 4;
+                const uint8_t *pixel = source + (y - expandedMinY) * regionBytesPerRow + (sx - expandedMinX) * 4;
                 sums[0] += pixel[0];
                 sums[1] += pixel[1];
                 sums[2] += pixel[2];
                 sums[3] += pixel[3];
             }
             NSUInteger count = sampleMaxX - sampleMinX + 1;
-            uint8_t *out = horizontal + y * bytesPerRow + x * 4;
+            uint8_t *out = horizontal + (y - expandedMinY) * regionBytesPerRow + (x - expandedMinX) * 4;
             out[0] = (uint8_t)(sums[0] / count);
             out[1] = (uint8_t)(sums[1] / count);
             out[2] = (uint8_t)(sums[2] / count);
@@ -895,7 +908,7 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
             NSUInteger sampleMaxY = MIN((NSUInteger)height - 1, y + radius);
             uint64_t sums[4] = {0, 0, 0, 0};
             for (NSUInteger sy = sampleMinY; sy <= sampleMaxY; sy++) {
-                const uint8_t *pixel = horizontal + sy * bytesPerRow + x * 4;
+                const uint8_t *pixel = horizontal + (sy - expandedMinY) * regionBytesPerRow + (x - expandedMinX) * 4;
                 sums[0] += pixel[0];
                 sums[1] += pixel[1];
                 sums[2] += pixel[2];
@@ -905,7 +918,7 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
             uint8_t *out = destination + y * bytesPerRow + x * 4;
             for (NSUInteger channel = 0; channel < 4; channel++) {
                 CGFloat blurred = (CGFloat)(sums[channel] / count);
-                CGFloat original = (CGFloat)source[y * bytesPerRow + x * 4 + channel];
+                CGFloat original = (CGFloat)source[(y - expandedMinY) * regionBytesPerRow + (x - expandedMinX) * 4 + channel];
                 out[channel] = (uint8_t)llround(original + (blurred - original) * mix);
             }
         }

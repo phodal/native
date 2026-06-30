@@ -3474,6 +3474,7 @@ pub const ControlTokens = struct {
     toggle: ControlVisualTokens = .{},
     slider: ControlVisualTokens = .{},
     progress: ControlVisualTokens = .{},
+    scrollbar: ControlVisualTokens = .{},
     panel: ControlVisualTokens = .{},
     resizable: ControlVisualTokens = .{},
     popover: ControlVisualTokens = .{},
@@ -3701,6 +3702,7 @@ pub const ControlTokenOverrides = struct {
     toggle: ControlVisualTokenOverrides = .{},
     slider: ControlVisualTokenOverrides = .{},
     progress: ControlVisualTokenOverrides = .{},
+    scrollbar: ControlVisualTokenOverrides = .{},
     panel: ControlVisualTokenOverrides = .{},
     resizable: ControlVisualTokenOverrides = .{},
     popover: ControlVisualTokenOverrides = .{},
@@ -3744,6 +3746,7 @@ pub const ControlTokenOverrides = struct {
         next.toggle = self.toggle.apply(next.toggle);
         next.slider = self.slider.apply(next.slider);
         next.progress = self.progress.apply(next.progress);
+        next.scrollbar = self.scrollbar.apply(next.scrollbar);
         next.panel = self.panel.apply(next.panel);
         next.resizable = self.resizable.apply(next.resizable);
         next.popover = self.popover.apply(next.popover);
@@ -7753,18 +7756,21 @@ fn emitScrollViewScrollbar(builder: *Builder, frame: geometry.RectF, metrics: Wi
     const scrollbar = scrollViewScrollbarGeometry(frame, metrics, tokens) orelse return;
     const track = pixelSnapGeometryRect(tokens, scrollbar.track);
     const thumb = pixelSnapGeometryRect(tokens, scrollbar.thumb);
-    const radius = Radius.all(track.width * 0.5);
+    const visual = tokens.controls.scrollbar;
+    const radius = Radius.all(if (visual.radius) |value| nonNegative(value) else track.width * 0.5);
+    const track_fill = visual.background orelse colorWithAlpha(tokens.colors.border, @min(tokens.colors.border.a, 0.22));
+    const thumb_fill = visual.foreground orelse visual.active_background orelse colorWithAlpha(tokens.colors.text_muted, 0.55);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(id, 2),
         .rect = track,
         .radius = radius,
-        .fill = .{ .color = colorWithAlpha(tokens.colors.border, @min(tokens.colors.border.a, 0.22)) },
+        .fill = colorFill(track_fill),
     });
     try builder.fillRoundedRect(.{
         .id = widgetPartId(id, 3),
         .rect = thumb,
         .radius = radius,
-        .fill = .{ .color = colorWithAlpha(tokens.colors.text_muted, 0.55) },
+        .fill = colorFill(thumb_fill),
     });
 }
 
@@ -14784,6 +14790,51 @@ test "widget scroll view offsets children and clips display list" {
     try std.testing.expect(semantics[0].actions.decrement);
 }
 
+test "widget scroll view scrollbars use control visual tokens" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 80, 0, 32), .text = "Three" },
+    };
+    const scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .value = 20,
+        .children = &children,
+    };
+    const tokens = DesignTokens{
+        .controls = .{
+            .scrollbar = .{
+                .background = Color.rgb8(25, 31, 37),
+                .foreground = Color.rgb8(132, 144, 156),
+                .radius = 4,
+            },
+        },
+    };
+
+    var nodes: [5]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 120, 60), &nodes);
+
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, tokens);
+    const display_list = builder.displayList();
+    switch (display_list.findCommandById(widgetPartId(1, 2)).?.command) {
+        .fill_rounded_rect => |track| {
+            try std.testing.expectEqualDeep(Radius.all(4), track.radius);
+            try expectFillColor(Color.rgb8(25, 31, 37), track.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(1, 3)).?.command) {
+        .fill_rounded_rect => |thumb| {
+            try std.testing.expectEqualDeep(Radius.all(4), thumb.radius);
+            try expectFillColor(Color.rgb8(132, 144, 156), thumb.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "widget focus traversal skips scroll clipped children" {
     const children = [_]Widget{
         .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
@@ -16363,6 +16414,11 @@ test "design token overrides compose with built-in themes" {
                 .background = Color.rgb8(54, 60, 66),
                 .active_background = Color.rgb8(66, 84, 102),
             },
+            .scrollbar = .{
+                .background = Color.rgb8(24, 30, 36),
+                .foreground = Color.rgb8(148, 160, 172),
+                .radius = 4,
+            },
             .accordion = .{
                 .background = Color.rgb8(13, 19, 25),
                 .foreground = Color.rgb8(235, 241, 247),
@@ -16538,6 +16594,9 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(245, 248, 250), tokens.controls.slider.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(54, 60, 66), tokens.controls.progress.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(66, 84, 102), tokens.controls.progress.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(24, 30, 36), tokens.controls.scrollbar.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(148, 160, 172), tokens.controls.scrollbar.foreground.?);
+    try std.testing.expectEqual(@as(f32, 4), tokens.controls.scrollbar.radius.?);
     try std.testing.expectEqualDeep(Color.rgb8(13, 19, 25), tokens.controls.accordion.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(235, 241, 247), tokens.controls.accordion.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(59, 69, 79), tokens.controls.accordion.border.?);

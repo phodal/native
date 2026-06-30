@@ -45,6 +45,11 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         const value = try std.fmt.allocPrint(allocator, "{s} {s}", .{ args[1], args[2] });
         defer allocator.free(value);
         try sendCommand(allocator, io, "widget-click", value);
+    } else if (std.mem.eql(u8, command, "widget-wheel")) {
+        if (args.len != 4) return usage();
+        const value = try std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ args[1], args[2], args[3] });
+        defer allocator.free(value);
+        try sendCommand(allocator, io, "widget-wheel", value);
     } else if (std.mem.eql(u8, command, "shortcut")) {
         if (args.len != 2) return usage();
         try sendCommand(allocator, io, "shortcut", args[1]);
@@ -83,6 +88,7 @@ fn usage() void {
         \\  native-command <id> [view-label]
         \\  widget-action <view-label> <widget-id> <action> [value]
         \\  widget-click <view-label> <widget-id>
+        \\  widget-wheel <view-label> <widget-id> <delta-y>
         \\  shortcut <id>
         \\  focus <view-label>
         \\  focus-next

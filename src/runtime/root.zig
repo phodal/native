@@ -2773,6 +2773,9 @@ pub const Runtime = struct {
             .widget_click => {
                 try self.dispatchAutomationWidgetClick(app, try parseAutomationWidgetTarget(command.value));
             },
+            .widget_wheel => {
+                try self.dispatchAutomationWidgetWheel(app, try parseAutomationWidgetWheel(command.value));
+            },
             .menu_command => {
                 try self.dispatchPlatformEvent(app, .{ .menu_command = .{
                     .name = try parseAutomationCommandName(command.value),
@@ -2844,6 +2847,24 @@ pub const Runtime = struct {
             .x = point.x,
             .y = point.y,
             .button = 0,
+        } });
+    }
+
+    fn dispatchAutomationWidgetWheel(self: *Runtime, app: App, wheel: AutomationWidgetWheel) anyerror!void {
+        const view_index = try self.automationWidgetTargetViewIndex(wheel.target);
+        const layout = self.views[view_index].widgetLayoutTree();
+        if (!canvasWidgetInteractionTargetExists(layout, wheel.target.id)) return error.InvalidCommand;
+        const node = layout.findById(wheel.target.id) orelse return error.InvalidCommand;
+        const bounds = node.frame.normalized();
+        if (bounds.isEmpty()) return error.InvalidCommand;
+        const point = bounds.center();
+        try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+            .window_id = self.views[view_index].window_id,
+            .label = self.views[view_index].label,
+            .kind = .scroll,
+            .x = point.x,
+            .y = point.y,
+            .delta_y = wheel.delta_y,
         } });
     }
 
@@ -8022,6 +8043,11 @@ const AutomationWidgetTarget = struct {
     id: canvas.ObjectId,
 };
 
+const AutomationWidgetWheel = struct {
+    target: AutomationWidgetTarget,
+    delta_y: f32,
+};
+
 const AutomationToken = struct {
     token: []const u8,
     rest: []const u8 = "",
@@ -8088,6 +8114,21 @@ fn parseAutomationWidgetTarget(value: []const u8) !AutomationWidgetTarget {
     const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
     if (id == 0) return error.InvalidCommand;
     return .{ .view_label = view.token, .id = id };
+}
+
+fn parseAutomationWidgetWheel(value: []const u8) !AutomationWidgetWheel {
+    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
+    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
+    const delta_part = takeAutomationToken(id_part.rest) orelse return error.InvalidCommand;
+    if (takeAutomationToken(delta_part.rest) != null) return error.InvalidCommand;
+    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
+    if (id == 0) return error.InvalidCommand;
+    const delta_y = std.fmt.parseFloat(f32, delta_part.token) catch return error.InvalidCommand;
+    if (!std.math.isFinite(delta_y)) return error.InvalidCommand;
+    return .{
+        .target = .{ .view_label = view.token, .id = id },
+        .delta_y = delta_y,
+    };
 }
 
 fn takeAutomationToken(value: []const u8) ?AutomationToken {
@@ -8348,6 +8389,21 @@ test "runtime parses automation widget click targets" {
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 0"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas nope"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 42 extra"));
+}
+
+test "runtime parses automation widget wheel targets" {
+    const wheel = try parseAutomationWidgetWheel("canvas 42 18.5");
+    try std.testing.expectEqualStrings("canvas", wheel.target.view_label);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 42), wheel.target.id);
+    try std.testing.expectEqual(@as(f32, 18.5), wheel.delta_y);
+
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel(""));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 0 18"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas nope 18"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nope"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nan"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 18 extra"));
 }
 
 fn validateCommandName(name: []const u8) !void {

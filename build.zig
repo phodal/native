@@ -305,6 +305,12 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)requestRetainedCanvasFrame" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-input-paces-retained-canvas", "Verify GPU input frame requests are paced to the display interval", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeRetainedFrameIntervalNanoseconds" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "retainedFrameLastEmitNs" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "dispatch_after(dispatch_time(DISPATCH_TIME_NOW" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)emitRetainedCanvasFrameRequest" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-drawable-integral-pixels", "Verify AppKit GPU surfaces use integral drawable pixels", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.width * scale)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.height * scale)" },

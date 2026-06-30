@@ -5,6 +5,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <WebKit/WebKit.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <dispatch/dispatch.h>
 #import <Security/Security.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
@@ -17,6 +18,7 @@ static const NSUInteger ZeroNativeMaxChildWebViews = 16;
 static const NSUInteger ZeroNativeMaxNativeViews = 32;
 static const NSInteger ZeroNativeBridgeFrameKeepaliveFrames = 600;
 static const NSTimeInterval ZeroNativeAutomationFramePollInterval = 0.05;
+static const uint64_t ZeroNativeNanosecondsPerSecond = 1000000000ull;
 static const uint32_t ZeroNativeShortcutModifierPrimary = 1u << 0;
 static const uint32_t ZeroNativeShortcutModifierCommand = 1u << 1;
 static const uint32_t ZeroNativeShortcutModifierControl = 1u << 2;
@@ -37,6 +39,7 @@ static BOOL ZeroNativeShortcutModifiersMatch(uint32_t shortcutModifiers, NSEvent
 static NSEventModifierFlags ZeroNativeMenuModifierFlags(uint32_t modifiers);
 static uint32_t ZeroNativeModifierFlagsForEvent(NSEvent *event);
 static uint64_t ZeroNativeTimestampNanoseconds(void);
+static uint64_t ZeroNativeRetainedFrameIntervalNanoseconds(NSScreen *screen);
 static NSAccessibilityRole ZeroNativeAccessibilityRoleForNativeViewKind(NSInteger kind);
 static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger role);
 static NSCursor *ZeroNativeCursorForKind(NSInteger kind);
@@ -62,6 +65,13 @@ static NSString *ZeroNativeStringFromTextInput(id value) {
 
 static uint64_t ZeroNativeTimestampNanoseconds(void) {
     return (uint64_t)([[NSDate date] timeIntervalSince1970] * 1000000000.0);
+}
+
+static uint64_t ZeroNativeRetainedFrameIntervalNanoseconds(NSScreen *screen) {
+    NSInteger framesPerSecond = screen ? screen.maximumFramesPerSecond : 0;
+    if (framesPerSecond <= 0) framesPerSecond = 60;
+    framesPerSecond = MAX(30, MIN(120, framesPerSecond));
+    return ZeroNativeNanosecondsPerSecond / (uint64_t)framesPerSecond;
 }
 
 static uint32_t ZeroNativeModifierFlagsForEvent(NSEvent *event) {
@@ -250,6 +260,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
 @property(nonatomic, assign) BOOL retainedFrameRequestPending;
+@property(nonatomic, assign) uint64_t retainedFrameLastEmitNs;
 @property(nonatomic, strong) NSMutableData *canvasPacketPixels;
 @property(nonatomic, assign) NSUInteger canvasPacketPixelWidth;
 @property(nonatomic, assign) NSUInteger canvasPacketPixelHeight;
@@ -269,6 +280,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)updateWidgetAccessibilityWithNodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (void)stopDisplayTimer;
 - (void)requestRetainedCanvasFrame;
+- (void)emitRetainedCanvasFrameRequest;
 - (void)renderFrame;
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
@@ -1682,19 +1694,30 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (void)requestRetainedCanvasFrame {
     if (!self.hasCanvasTexture || self.retainedFrameRequestPending) return;
     self.retainedFrameRequestPending = YES;
+    const uint64_t now = ZeroNativeTimestampNanoseconds();
+    const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    uint64_t delayNs = 0;
+    if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
+        delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
+    }
     __weak ZeroNativeMetalSurfaceView *weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
         ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
-        strongSelf.retainedFrameRequestPending = NO;
-        if (![strongSelf isAvailable] || strongSelf.hidden || !strongSelf.hasCanvasTexture || strongSelf.bounds.size.width <= 0 || strongSelf.bounds.size.height <= 0) return;
-        [strongSelf updateDrawableSize];
-        const NSUInteger requestedFrameIndex = strongSelf.frameIndex;
-        strongSelf.frameIndex += 1;
-        const BOOL nonblank = strongSelf.verifiedNonblankFrame || strongSelf.hasCanvasTexture;
-        const uint32_t sampleColor = strongSelf.verifiedNonblankFrame ? strongSelf.lastSampleColor : 0;
-        [strongSelf emitFrameEventWithFrameIndex:requestedFrameIndex sampleColor:sampleColor nonblank:nonblank];
+        [strongSelf emitRetainedCanvasFrameRequest];
     });
+}
+
+- (void)emitRetainedCanvasFrameRequest {
+    self.retainedFrameRequestPending = NO;
+    if (![self isAvailable] || self.hidden || !self.hasCanvasTexture || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
+    [self updateDrawableSize];
+    self.retainedFrameLastEmitNs = ZeroNativeTimestampNanoseconds();
+    const NSUInteger requestedFrameIndex = self.frameIndex;
+    self.frameIndex += 1;
+    const BOOL nonblank = self.verifiedNonblankFrame || self.hasCanvasTexture;
+    const uint32_t sampleColor = self.verifiedNonblankFrame ? self.lastSampleColor : 0;
+    [self emitFrameEventWithFrameIndex:requestedFrameIndex sampleColor:sampleColor nonblank:nonblank];
 }
 
 - (void)renderFrame {

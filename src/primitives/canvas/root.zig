@@ -9063,13 +9063,13 @@ fn densityScale(density: Density) f32 {
     };
 }
 
-fn textSelectionFillColor(tokens: DesignTokens) Color {
-    return Color.rgba(
-        tokens.colors.focus_ring.r,
-        tokens.colors.focus_ring.g,
-        tokens.colors.focus_ring.b,
-        0.18,
-    );
+fn textInputAffordanceColor(widget: Widget, tokens: DesignTokens) Color {
+    const visual = textInputControlVisualTokens(widget, tokens);
+    return widget.style.focus_ring orelse widget.style.accent orelse visual.active_background orelse tokens.colors.focus_ring;
+}
+
+fn textSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
+    return colorWithAlpha(textInputAffordanceColor(widget, tokens), 0.18);
 }
 
 fn colorWithAlpha(color: Color, alpha: f32) Color {
@@ -9163,7 +9163,7 @@ fn emitWidgetTextSelectionRects(
             .id = widgetPartId(widget.id, widgetTextRangePart(first_part, overflow_first_part, index)),
             .rect = pixelSnapGeometryRect(tokens, selection.rect),
             .radius = Radius.all(tokens.radius.sm),
-            .fill = .{ .color = textSelectionFillColor(tokens) },
+            .fill = .{ .color = textSelectionFillColor(widget, tokens) },
         });
     }
 }
@@ -9188,7 +9188,7 @@ fn emitWidgetTextCompositionLines(
             .id = widgetPartId(widget.id, widgetTextRangePart(first_part, overflow_first_part, index)),
             .from = pixelSnapGeometryPoint(tokens, geometry.PointF.init(selection.rect.x, y)),
             .to = pixelSnapGeometryPoint(tokens, geometry.PointF.init(selection.rect.x + selection.rect.width, y)),
-            .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = 1 },
+            .stroke = .{ .fill = .{ .color = textInputAffordanceColor(widget, tokens) }, .width = 1 },
         });
     }
 }
@@ -9214,7 +9214,7 @@ fn emitWidgetTextCaret(
         .id = widgetPartId(widget.id, part),
         .from = geometry.PointF.init(snapped.x, snapped.y),
         .to = geometry.PointF.init(snapped.x, snapped.y + snapped.height),
-        .stroke = .{ .fill = .{ .color = tokens.colors.focus_ring }, .width = tokens.stroke.regular },
+        .stroke = .{ .fill = .{ .color = textInputAffordanceColor(widget, tokens) }, .width = tokens.stroke.regular },
     });
 }
 
@@ -17552,8 +17552,12 @@ test "widget textareas expose multiline textbox semantics and render wrapped tex
 }
 
 test "widget text fields render selection caret and composition ranges" {
+    const affordance_color = Color.rgb8(40, 80, 120);
     const tokens = DesignTokens{
         .colors = .{ .focus_ring = Color.rgb8(10, 20, 30) },
+        .controls = .{
+            .text_field = .{ .active_background = affordance_color },
+        },
     };
     const composing = Widget{
         .id = 9,
@@ -17586,7 +17590,7 @@ test "widget text fields render selection caret and composition ranges" {
     const display_list = builder.displayList();
     try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
     switch (display_list.commands[2]) {
-        .fill_rounded_rect => |selection| try expectFillColor(textSelectionFillColor(tokens), selection.fill),
+        .fill_rounded_rect => |selection| try expectFillColor(textSelectionFillColor(composing, tokens), selection.fill),
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[3]) {
@@ -17598,7 +17602,7 @@ test "widget text fields render selection caret and composition ranges" {
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[4]) {
-        .draw_line => |line| try expectFillColor(tokens.colors.focus_ring, line.stroke.fill),
+        .draw_line => |line| try expectFillColor(affordance_color, line.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
 
@@ -17617,7 +17621,7 @@ test "widget text fields render selection caret and composition ranges" {
     try std.testing.expectEqual(@as(usize, 4), caret_display_list.commandCount());
     switch (caret_display_list.commands[3]) {
         .draw_line => |line| {
-            try expectFillColor(tokens.colors.focus_ring, line.stroke.fill);
+            try expectFillColor(affordance_color, line.stroke.fill);
             try std.testing.expectEqual(line.from.x, line.to.x);
         },
         else => return error.TestUnexpectedResult,

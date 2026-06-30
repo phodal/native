@@ -3452,6 +3452,11 @@ pub const ControlTokens = struct {
     text_field: ControlVisualTokens = .{},
     search_field: ControlVisualTokens = .{},
     list_item: ControlVisualTokens = .{},
+    segmented_control: ControlVisualTokens = .{},
+    checkbox: ControlVisualTokens = .{},
+    toggle: ControlVisualTokens = .{},
+    slider: ControlVisualTokens = .{},
+    progress: ControlVisualTokens = .{},
 };
 
 pub const ColorTokenOverrides = struct {
@@ -3646,6 +3651,11 @@ pub const ControlTokenOverrides = struct {
     text_field: ControlVisualTokenOverrides = .{},
     search_field: ControlVisualTokenOverrides = .{},
     list_item: ControlVisualTokenOverrides = .{},
+    segmented_control: ControlVisualTokenOverrides = .{},
+    checkbox: ControlVisualTokenOverrides = .{},
+    toggle: ControlVisualTokenOverrides = .{},
+    slider: ControlVisualTokenOverrides = .{},
+    progress: ControlVisualTokenOverrides = .{},
 
     pub fn apply(self: ControlTokenOverrides, base: ControlTokens) ControlTokens {
         var next = base;
@@ -3658,6 +3668,11 @@ pub const ControlTokenOverrides = struct {
         next.text_field = self.text_field.apply(next.text_field);
         next.search_field = self.search_field.apply(next.search_field);
         next.list_item = self.list_item.apply(next.list_item);
+        next.segmented_control = self.segmented_control.apply(next.segmented_control);
+        next.checkbox = self.checkbox.apply(next.checkbox);
+        next.toggle = self.toggle.apply(next.toggle);
+        next.slider = self.slider.apply(next.slider);
+        next.progress = self.progress.apply(next.progress);
         return next;
     }
 };
@@ -7542,6 +7557,7 @@ fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 }
 
 fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const visual = listItemControlVisualTokens(widget, tokens);
     const state_fill = listItemFillColor(widget, tokens, widget.state);
     if (state_fill.a > 0) {
         try builder.fillRect(.{
@@ -7554,7 +7570,7 @@ fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .stroke = .{
-            .fill = widgetBorderFill(widget, tokens.colors.border),
+            .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
             .width = widgetStrokeWidth(widget, tokens.stroke.hairline),
         },
     });
@@ -7567,7 +7583,7 @@ fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
             .font_id = tokens.typography.font_id,
             .size = text_size,
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-            .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
+            .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
             .text = widget.text,
             .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none),
         });
@@ -7576,6 +7592,7 @@ fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 
 fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = widget.state.selected or widget.value >= 0.5;
+    const visual = selectionControlVisualTokens(widget, tokens);
     const radius = widgetRadius(widget, tokens.radius.md);
     const text_size = widgetLabelTextSize(widget, tokens);
     const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
@@ -7583,14 +7600,17 @@ fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignT
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = if (selected) widgetAccentFill(widget, tokens.colors.accent) else widgetBackgroundFill(widget, tokens.colors.surface),
+        .fill = if (selected)
+            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
+        else
+            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
         .stroke = .{
-            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, tokens.colors.border),
+            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, visual.border orelse tokens.colors.border),
             .width = if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7599,13 +7619,14 @@ fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignT
         .font_id = tokens.typography.font_id,
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-        .color = if (selected) widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text) else widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .color = if (selected) widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text) else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
         .text = widget.text,
         .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none),
     });
 }
 
 fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const visual = selectionControlVisualTokens(widget, tokens);
     const box_size = @min(@max(widgetSizedDensityValue(widget, tokens, 14), widget.frame.height * 0.55), widgetSizedDensityValue(widget, tokens, 20));
     const box = pixelSnapGeometryRect(tokens, geometry.RectF.init(
         widget.frame.x,
@@ -7619,14 +7640,17 @@ fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
         .id = widgetPartId(widget.id, 1),
         .rect = box,
         .radius = radius,
-        .fill = if (selected) widgetAccentFill(widget, tokens.colors.accent) else widgetBackgroundFill(widget, tokens.colors.surface),
+        .fill = if (selected)
+            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
+        else
+            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = box,
         .radius = radius,
         .stroke = .{
-            .fill = if (selected) widgetAccentFill(widget, tokens.colors.accent) else widgetBorderFill(widget, tokens.colors.border),
+            .fill = if (selected) widgetAccentFill(widget, visual.border orelse visual.active_background orelse tokens.colors.accent) else widgetBorderFill(widget, visual.border orelse tokens.colors.border),
             .width = widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7639,20 +7663,21 @@ fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
             .id = widgetPartId(widget.id, 4),
             .from = left,
             .to = mid,
-            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text)), .width = 2 },
+            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)), .width = 2 },
         });
         try builder.drawLine(.{
             .id = widgetPartId(widget.id, 5),
             .from = mid,
             .to = right,
-            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text)), .width = 2 },
+            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)), .width = 2 },
         });
     }
-    try emitControlLabel(builder, widget, tokens, box.x + box.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 6);
+    try emitControlLabelWithColor(builder, widget, tokens, box.x + box.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 6, visual.foreground orelse tokens.colors.text);
 }
 
 fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = booleanControlSelected(widget);
+    const visual = selectionControlVisualTokens(widget, tokens);
     const knob_inset = widgetSizedDensityValue(widget, tokens, 2);
     const track_width = @min(widget.frame.width, @max(widgetSizedDensityValue(widget, tokens, 36), widget.frame.height * 1.75));
     const track_height = @min(widget.frame.height, widgetSizedDensityValue(widget, tokens, 24));
@@ -7674,14 +7699,17 @@ fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .id = widgetPartId(widget.id, 1),
         .rect = track,
         .radius = track_radius,
-        .fill = if (selected) widgetAccentFill(widget, tokens.colors.accent) else widgetBackgroundFill(widget, tokens.colors.surface_pressed),
+        .fill = if (selected)
+            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
+        else
+            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = track,
         .radius = track_radius,
         .stroke = .{
-            .fill = widgetBorderFill(widget, tokens.colors.border),
+            .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
             .width = widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7689,14 +7717,15 @@ fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .id = widgetPartId(widget.id, 3),
         .rect = knob,
         .radius = Radius.all(knob.height * 0.5),
-        .fill = colorFill(if (selected) widgetAccentForegroundColor(widget, tokens, tokens.colors.accent_text) else tokens.colors.surface),
+        .fill = colorFill(if (selected) widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text) else widgetBackgroundColor(widget, visual.foreground orelse tokens.colors.surface)),
     });
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 4);
-    try emitControlLabel(builder, widget, tokens, track.x + track.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5);
+    try emitControlLabelWithColor(builder, widget, tokens, track.x + track.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5, visual.foreground orelse tokens.colors.text);
 }
 
 fn emitSliderWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const value = std.math.clamp(widget.value, 0, 1);
+    const visual = selectionControlVisualTokens(widget, tokens);
     const track_height: f32 = widgetSizedDensityValue(widget, tokens, 4);
     const track = pixelSnapGeometryRect(tokens, geometry.RectF.init(
         widget.frame.x,
@@ -7722,26 +7751,26 @@ fn emitSliderWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .id = widgetPartId(widget.id, 1),
         .rect = track,
         .radius = Radius.all(track.height * 0.5),
-        .fill = widgetBackgroundFill(widget, tokens.colors.surface_pressed),
+        .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_pressed)),
     });
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 2),
         .rect = active,
         .radius = Radius.all(active.height * 0.5),
-        .fill = widgetAccentFill(widget, tokens.colors.accent),
+        .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent)),
     });
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 3),
         .rect = knob,
         .radius = Radius.all(knob.height * 0.5),
-        .fill = colorFill(if (widget.state.disabled) tokens.colors.disabled else tokens.colors.surface),
+        .fill = colorFill(if (widget.state.disabled) tokens.colors.disabled else widgetBackgroundColor(widget, visual.foreground orelse tokens.colors.surface)),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 4),
         .rect = knob,
         .radius = Radius.all(knob.height * 0.5),
         .stroke = .{
-            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, tokens.colors.border),
+            .fill = if (widget.state.focused) widgetFocusRingFill(widget, tokens) else widgetBorderFill(widget, visual.border orelse tokens.colors.border),
             .width = if (widget.state.focused) tokens.stroke.focus else widgetStrokeWidth(widget, tokens.stroke.regular),
         },
     });
@@ -7750,12 +7779,13 @@ fn emitSliderWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
 fn emitProgressWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const radius = widgetRadius(widget, @min(tokens.radius.md, widget.frame.height * 0.5));
     const progress = std.math.clamp(widget.value, 0, 1);
+    const visual = selectionControlVisualTokens(widget, tokens);
     if (progress < 1) {
         try builder.fillRoundedRect(.{
             .id = widgetPartId(widget.id, 1),
             .rect = widget.frame,
             .radius = radius,
-            .fill = widgetBackgroundFill(widget, tokens.colors.surface_pressed),
+            .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_pressed)),
         });
     }
     if (progress > 0) {
@@ -7763,7 +7793,7 @@ fn emitProgressWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
             .id = widgetPartId(widget.id, 2),
             .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(widget.frame.x, widget.frame.y, widget.frame.width * progress, widget.frame.height)),
             .radius = radius,
-            .fill = widgetAccentFill(widget, tokens.colors.accent),
+            .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent)),
         });
     }
 }
@@ -7781,6 +7811,10 @@ fn emitWidgetFocusRing(builder: *Builder, widget: Widget, tokens: DesignTokens, 
 }
 
 fn emitControlLabel(builder: *Builder, widget: Widget, tokens: DesignTokens, x: f32, slot: ObjectId) Error!void {
+    return emitControlLabelWithColor(builder, widget, tokens, x, slot, tokens.colors.text);
+}
+
+fn emitControlLabelWithColor(builder: *Builder, widget: Widget, tokens: DesignTokens, x: f32, slot: ObjectId, color: Color) Error!void {
     if (widget.text.len == 0) return;
     const text_size = widgetLabelTextSize(widget, tokens);
     try builder.drawText(.{
@@ -7788,7 +7822,7 @@ fn emitControlLabel(builder: *Builder, widget: Widget, tokens: DesignTokens, x: 
         .font_id = tokens.typography.font_id,
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(labelFrameForControl(widget.frame, x), text_size, 0)),
-        .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .color = widgetForegroundColor(widget, tokens, color),
         .text = widget.text,
         .text_layout = boundedTextLayout(labelFrameForControl(widget.frame, x), text_size, 0, .start, .none),
     });
@@ -8270,6 +8304,17 @@ fn textInputBorderFill(widget: Widget, visual: ControlVisualTokens, fallback: Co
 fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return switch (widget.kind) {
         .list_item, .menu_item, .data_cell => tokens.controls.list_item,
+        else => .{},
+    };
+}
+
+fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
+    return switch (widget.kind) {
+        .segmented_control => tokens.controls.segmented_control,
+        .checkbox => tokens.controls.checkbox,
+        .toggle => tokens.controls.toggle,
+        .slider => tokens.controls.slider,
+        .progress => tokens.controls.progress,
         else => .{},
     };
 }
@@ -14435,6 +14480,29 @@ test "design token overrides compose with built-in themes" {
                 .active_background = Color.rgb8(38, 46, 54),
                 .foreground = Color.rgb8(235, 240, 245),
             },
+            .segmented_control = .{
+                .active_background = Color.rgb8(42, 50, 58),
+                .foreground = Color.rgb8(250, 252, 255),
+            },
+            .checkbox = .{
+                .active_background = Color.rgb8(44, 54, 64),
+                .foreground = Color.rgb8(248, 250, 252),
+                .border = Color.rgb8(76, 88, 100),
+            },
+            .toggle = .{
+                .background = Color.rgb8(50, 56, 64),
+                .active_background = Color.rgb8(58, 72, 86),
+                .foreground = Color.rgb8(252, 252, 253),
+            },
+            .slider = .{
+                .background = Color.rgb8(52, 58, 64),
+                .active_background = Color.rgb8(62, 78, 94),
+                .foreground = Color.rgb8(245, 248, 250),
+            },
+            .progress = .{
+                .background = Color.rgb8(54, 60, 66),
+                .active_background = Color.rgb8(66, 84, 102),
+            },
         },
         .density = .spacious,
     };
@@ -14479,6 +14547,19 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(28, 34, 40), tokens.controls.list_item.hover_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(38, 46, 54), tokens.controls.list_item.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(235, 240, 245), tokens.controls.list_item.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(42, 50, 58), tokens.controls.segmented_control.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(250, 252, 255), tokens.controls.segmented_control.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(44, 54, 64), tokens.controls.checkbox.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(248, 250, 252), tokens.controls.checkbox.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(76, 88, 100), tokens.controls.checkbox.border.?);
+    try std.testing.expectEqualDeep(Color.rgb8(50, 56, 64), tokens.controls.toggle.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(58, 72, 86), tokens.controls.toggle.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(252, 252, 253), tokens.controls.toggle.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(52, 58, 64), tokens.controls.slider.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(62, 78, 94), tokens.controls.slider.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(245, 248, 250), tokens.controls.slider.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(54, 60, 66), tokens.controls.progress.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(66, 84, 102), tokens.controls.progress.active_background.?);
     try std.testing.expectEqual(Density.spacious, tokens.density);
 
     const rebuilt = DesignTokens.themeWithOverrides(.{ .color_scheme = .dark, .reduce_motion = true }, overrides);
@@ -16956,6 +17037,98 @@ test "widget emitter applies input and list control tokens" {
     }
     switch (display_list.commands[12]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(244, 248, 252), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget emitter applies selection and range control tokens" {
+    const tokens = DesignTokens{
+        .controls = .{
+            .segmented_control = .{
+                .active_background = Color.rgb8(30, 50, 70),
+                .foreground = Color.rgb8(245, 248, 252),
+                .border = Color.rgb8(80, 96, 112),
+            },
+            .checkbox = .{
+                .active_background = Color.rgb8(32, 64, 96),
+                .foreground = Color.rgb8(250, 252, 255),
+                .border = Color.rgb8(88, 104, 120),
+            },
+            .toggle = .{
+                .background = Color.rgb8(48, 54, 60),
+                .active_background = Color.rgb8(34, 70, 108),
+                .foreground = Color.rgb8(248, 250, 252),
+                .border = Color.rgb8(84, 94, 104),
+            },
+            .slider = .{
+                .background = Color.rgb8(50, 56, 64),
+                .active_background = Color.rgb8(38, 76, 114),
+                .foreground = Color.rgb8(246, 248, 250),
+                .border = Color.rgb8(82, 92, 102),
+            },
+            .progress = .{
+                .background = Color.rgb8(52, 58, 66),
+                .active_background = Color.rgb8(40, 80, 120),
+            },
+        },
+    };
+
+    var commands: [18]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, .{ .id = 60, .kind = .segmented_control, .frame = geometry.RectF.init(0, 0, 120, 32), .text = "Open", .state = .{ .selected = true } }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 61, .kind = .checkbox, .frame = geometry.RectF.init(0, 40, 140, 32), .text = "Check", .state = .{ .selected = true } }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 62, .kind = .toggle, .frame = geometry.RectF.init(0, 80, 140, 32), .text = "Live", .value = 1 }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 63, .kind = .slider, .frame = geometry.RectF.init(0, 124, 160, 32), .value = 0.25 }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 64, .kind = .progress, .frame = geometry.RectF.init(0, 172, 160, 8), .value = 0.5 }, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 18), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(30, 50, 70), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(245, 248, 252), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(32, 64, 96), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[4]) {
+        .stroke_rect => |stroke| try expectFillColor(Color.rgb8(88, 104, 120), stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[5]) {
+        .draw_line => |line| try expectFillColor(Color.rgb8(250, 252, 255), line.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[8]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(34, 70, 108), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[10]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(248, 250, 252), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[12]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(50, 56, 64), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[13]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(38, 76, 114), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[14]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(246, 248, 250), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[16]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(52, 58, 66), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[17]) {
+        .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(40, 80, 120), fill.fill),
         else => return error.TestUnexpectedResult,
     }
 }

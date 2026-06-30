@@ -604,7 +604,7 @@ static NSColor *ZeroNativePacketColor(id value, CGFloat opacity) {
 }
 
 static NSBezierPath *ZeroNativePacketRoundedRectPath(NSRect rect, id radiusValue) {
-    rect = NSStandardizeRect(rect);
+    rect = CGRectStandardize(rect);
     CGFloat maxRadius = fmax(0.0, fmin(rect.size.width, rect.size.height) * 0.5);
     CGFloat topLeft = ZeroNativePacketRadiusAt(radiusValue, 0, maxRadius);
     CGFloat topRight = ZeroNativePacketRadiusAt(radiusValue, 1, maxRadius);
@@ -772,6 +772,146 @@ static BOOL ZeroNativePacketDrawPaintedPath(NSBezierPath *path, NSDictionary *pa
     return NO;
 }
 
+static NSPoint ZeroNativePacketTransformPoint(id value, NSPoint point) {
+    NSArray *array = ZeroNativePacketArray(value, 6);
+    if (!array) return point;
+    CGFloat a = ZeroNativePacketNumber(array[0], 1);
+    CGFloat b = ZeroNativePacketNumber(array[1], 0);
+    CGFloat c = ZeroNativePacketNumber(array[2], 0);
+    CGFloat d = ZeroNativePacketNumber(array[3], 1);
+    CGFloat tx = ZeroNativePacketNumber(array[4], 0);
+    CGFloat ty = ZeroNativePacketNumber(array[5], 0);
+    return NSMakePoint(a * point.x + c * point.y + tx, b * point.x + d * point.y + ty);
+}
+
+static NSRect ZeroNativePacketTransformRect(id value, NSRect rect) {
+    NSArray *array = ZeroNativePacketArray(value, 6);
+    if (!array) return rect;
+    rect = CGRectStandardize(rect);
+    NSPoint points[4] = {
+        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMinY(rect))),
+        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMinY(rect))),
+        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMaxY(rect))),
+        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMaxY(rect))),
+    };
+    CGFloat minX = points[0].x;
+    CGFloat maxX = points[0].x;
+    CGFloat minY = points[0].y;
+    CGFloat maxY = points[0].y;
+    for (NSUInteger index = 1; index < 4; index++) {
+        minX = fmin(minX, points[index].x);
+        maxX = fmax(maxX, points[index].x);
+        minY = fmin(minY, points[index].y);
+        maxY = fmax(maxY, points[index].y);
+    }
+    return NSMakeRect(minX, minY, maxX - minX, maxY - minY);
+}
+
+static CGFloat ZeroNativePacketTransformScale(id value) {
+    NSArray *array = ZeroNativePacketArray(value, 6);
+    if (!array) return 1;
+    CGFloat a = ZeroNativePacketNumber(array[0], 1);
+    CGFloat b = ZeroNativePacketNumber(array[1], 0);
+    CGFloat c = ZeroNativePacketNumber(array[2], 0);
+    CGFloat d = ZeroNativePacketNumber(array[3], 1);
+    CGFloat xScale = sqrt(a * a + b * b);
+    CGFloat yScale = sqrt(c * c + d * d);
+    return fmax(0.0001, fmax(xScale, yScale));
+}
+
+static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
+    if (!effect || !context) return NO;
+    void *contextData = CGBitmapContextGetData(context);
+    if (!contextData) return NO;
+    const size_t width = CGBitmapContextGetWidth(context);
+    const size_t height = CGBitmapContextGetHeight(context);
+    const size_t bytesPerRow = CGBitmapContextGetBytesPerRow(context);
+    if (width == 0 || height == 0 || bytesPerRow < width * 4) return NO;
+
+    NSRect rect = CGRectStandardize(ZeroNativePacketTransformRect(transformValue, ZeroNativePacketRect(effect[@"rect"])));
+    if (hasClip) {
+        rect = NSIntersectionRect(rect, clipRect);
+    }
+    if (NSIsEmptyRect(rect)) return YES;
+
+    CGFloat normalizedScale = scale > 0 ? scale : 1;
+    CGFloat minXFloat = floor(NSMinX(rect) * normalizedScale);
+    CGFloat minYFloat = floor(NSMinY(rect) * normalizedScale);
+    CGFloat maxXFloat = ceil(NSMaxX(rect) * normalizedScale);
+    CGFloat maxYFloat = ceil(NSMaxY(rect) * normalizedScale);
+    minXFloat = fmax(0.0, fmin((CGFloat)width, minXFloat));
+    minYFloat = fmax(0.0, fmin((CGFloat)height, minYFloat));
+    maxXFloat = fmax(minXFloat, fmin((CGFloat)width, maxXFloat));
+    maxYFloat = fmax(minYFloat, fmin((CGFloat)height, maxYFloat));
+
+    NSUInteger minX = (NSUInteger)minXFloat;
+    NSUInteger minY = (NSUInteger)minYFloat;
+    NSUInteger maxX = (NSUInteger)maxXFloat;
+    NSUInteger maxY = (NSUInteger)maxYFloat;
+    if (maxX <= minX || maxY <= minY) return YES;
+
+    NSUInteger radius = (NSUInteger)llround(fmax(0.0, ZeroNativePacketNumber(effect[@"radius"], 0) * normalizedScale * ZeroNativePacketTransformScale(transformValue)));
+    radius = MIN(radius, (NSUInteger)64);
+    if (radius == 0) return YES;
+    CGFloat mix = fmax(0.0, fmin(1.0, opacity));
+    if (mix <= 0) return YES;
+
+    NSUInteger expandedMinY = minY > radius ? minY - radius : 0;
+    NSUInteger expandedMaxY = MIN((NSUInteger)height, maxY + radius);
+    const size_t byteLength = bytesPerRow * height;
+    NSMutableData *sourceData = [NSMutableData dataWithLength:byteLength];
+    NSMutableData *horizontalData = [NSMutableData dataWithLength:byteLength];
+    if (!sourceData || !horizontalData) return NO;
+    uint8_t *destination = (uint8_t *)contextData;
+    uint8_t *source = (uint8_t *)sourceData.mutableBytes;
+    uint8_t *horizontal = (uint8_t *)horizontalData.mutableBytes;
+    memcpy(source, destination, byteLength);
+
+    for (NSUInteger y = expandedMinY; y < expandedMaxY; y++) {
+        for (NSUInteger x = minX; x < maxX; x++) {
+            NSUInteger sampleMinX = x > radius ? x - radius : 0;
+            NSUInteger sampleMaxX = MIN((NSUInteger)width - 1, x + radius);
+            uint64_t sums[4] = {0, 0, 0, 0};
+            for (NSUInteger sx = sampleMinX; sx <= sampleMaxX; sx++) {
+                const uint8_t *pixel = source + y * bytesPerRow + sx * 4;
+                sums[0] += pixel[0];
+                sums[1] += pixel[1];
+                sums[2] += pixel[2];
+                sums[3] += pixel[3];
+            }
+            NSUInteger count = sampleMaxX - sampleMinX + 1;
+            uint8_t *out = horizontal + y * bytesPerRow + x * 4;
+            out[0] = (uint8_t)(sums[0] / count);
+            out[1] = (uint8_t)(sums[1] / count);
+            out[2] = (uint8_t)(sums[2] / count);
+            out[3] = (uint8_t)(sums[3] / count);
+        }
+    }
+
+    for (NSUInteger y = minY; y < maxY; y++) {
+        for (NSUInteger x = minX; x < maxX; x++) {
+            NSUInteger sampleMinY = y > radius ? y - radius : 0;
+            NSUInteger sampleMaxY = MIN((NSUInteger)height - 1, y + radius);
+            uint64_t sums[4] = {0, 0, 0, 0};
+            for (NSUInteger sy = sampleMinY; sy <= sampleMaxY; sy++) {
+                const uint8_t *pixel = horizontal + sy * bytesPerRow + x * 4;
+                sums[0] += pixel[0];
+                sums[1] += pixel[1];
+                sums[2] += pixel[2];
+                sums[3] += pixel[3];
+            }
+            NSUInteger count = sampleMaxY - sampleMinY + 1;
+            uint8_t *out = destination + y * bytesPerRow + x * 4;
+            for (NSUInteger channel = 0; channel < 4; channel++) {
+                CGFloat blurred = (CGFloat)(sums[channel] / count);
+                CGFloat original = (CGFloat)source[y * bytesPerRow + x * 4 + channel];
+                out[channel] = (uint8_t)llround(original + (blurred - original) * mix);
+            }
+        }
+    }
+    return YES;
+}
+
 static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     if (!text) return NO;
     NSString *value = [text[@"text"] isKindOfClass:[NSString class]] ? text[@"text"] : @"";
@@ -787,11 +927,11 @@ static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     return YES;
 }
 
-static BOOL ZeroNativePacketDrawEffect(NSDictionary *effect, CGFloat opacity) {
+static BOOL ZeroNativePacketDrawEffect(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
     if (!effect) return NO;
     NSString *kind = [effect[@"kind"] isKindOfClass:[NSString class]] ? effect[@"kind"] : @"";
     if ([kind isEqualToString:@"blur"]) {
-        return YES;
+        return ZeroNativePacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect);
     }
     if ([kind isEqualToString:@"shadow"]) {
         NSColor *color = ZeroNativePacketColor(effect[@"color"], opacity);
@@ -831,16 +971,24 @@ static BOOL ZeroNativePacketApplyTransform(id value) {
     return YES;
 }
 
-static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
+static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef context, CGFloat scale, BOOL hasClip, NSRect clipRect) {
     if (!command) return NO;
 
     NSString *kind = [command[@"kind"] isKindOfClass:[NSString class]] ? command[@"kind"] : @"";
     CGFloat opacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(command[@"opacity"], 1)));
     id clip = command[@"clip"];
+    BOOL hasEffectiveClip = hasClip;
+    NSRect effectiveClip = clipRect;
 
     [NSGraphicsContext saveGraphicsState];
+    if (hasClip) {
+        [NSBezierPath clipRect:clipRect];
+    }
     if ([clip isKindOfClass:[NSArray class]]) {
-        [NSBezierPath clipRect:ZeroNativePacketRect(clip)];
+        NSRect commandClip = ZeroNativePacketRect(clip);
+        [NSBezierPath clipRect:commandClip];
+        effectiveClip = hasEffectiveClip ? NSIntersectionRect(effectiveClip, commandClip) : commandClip;
+        hasEffectiveClip = YES;
     }
     if (!ZeroNativePacketApplyTransform(command[@"transform"])) {
         [NSGraphicsContext restoreGraphicsState];
@@ -865,7 +1013,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     } else if ([kind isEqualToString:@"draw_text"]) {
         ok = ZeroNativePacketDrawText(ZeroNativePacketDictionary(command[@"text"]), opacity);
     } else if ([kind isEqualToString:@"shadow"] || [kind isEqualToString:@"blur"]) {
-        ok = ZeroNativePacketDrawEffect(ZeroNativePacketDictionary(command[@"effect"]), opacity);
+        ok = ZeroNativePacketDrawEffect(ZeroNativePacketDictionary(command[@"effect"]), opacity, context, scale, command[@"transform"], hasEffectiveClip, effectiveClip);
     } else if ([kind isEqualToString:@"draw_image"]) {
         NSDictionary *image = ZeroNativePacketDictionary(command[@"image"]);
         NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:ZeroNativePacketRect(image[@"dst"]) xRadius:8 yRadius:8];
@@ -1098,7 +1246,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command) {
     BOOL supported = YES;
     for (id commandObject in commands) {
         NSDictionary *command = ZeroNativePacketDictionary(commandObject);
-        if (!ZeroNativePacketDrawCommand(command)) {
+        if (!ZeroNativePacketDrawCommand(command, context, normalizedScale, hasScissor, scissorRect)) {
             supported = NO;
             break;
         }

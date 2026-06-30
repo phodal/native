@@ -326,6 +326,13 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self.canvasPacketPixels mutableCopy]" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "hasDirtyRect:uploadDirtyRect" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-blur-effects", "Verify AppKit GPU packet presenter applies blur effects", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketApplyBlur" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGBitmapContextGetData(context)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSIntersectionRect(rect, clipRect)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketTransformRect(transformValue, ZeroNativePacketRect(effect[@\"rect\"]))" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "return ZeroNativePacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect)" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "zero_native_appkit_set_view_cursor" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },

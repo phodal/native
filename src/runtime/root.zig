@@ -823,8 +823,8 @@ pub const Runtime = struct {
             };
             if (packet.fullyRepresentable()) {
                 var writer = std.Io.Writer.fixed(packet_json_buffer);
-                try packet.writeJson(&writer);
                 const packet_presented = blk: {
+                    packet.writeJson(&writer) catch break :blk false;
                     self.options.platform.services.presentGpuSurfacePacket(.{
                         .window_id = window_id,
                         .label = label,
@@ -10011,6 +10011,49 @@ test "runtime presents next canvas frame through packet presenter when available
     try std.testing.expectEqualDeep([4]u8{ 20, 24, 32, 255 }, harness.null_platform.gpu_surface_packet_present_clear_color_rgba8);
     const presented_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
+}
+
+test "runtime falls back to pixels when packet JSON buffer is too small" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-packet-buffer-fallback", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 4, 4),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(1, 1, 2, 2),
+        .fill = .{ .color = canvas.Color.rgb8(37, 99, 235) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_json_buffer: [32]u8 = undefined;
+    var pixels: [4 * 4 * 4]u8 = undefined;
+    var scratch: [4 * 4 * 4]u8 = undefined;
+    const result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 22,
+        .timestamp_ns = 89_000,
+        .surface_size = geometry.SizeF.init(4, 4),
+        .scale = 1,
+    }, harness.runtime.canvasFrameScratchStorage(), &gpu_commands, &packet_json_buffer, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0), null);
+
+    try std.testing.expectEqual(CanvasPresentationMode.pixels, result.mode);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
 }
 
 test "runtime falls back to pixel presentation when packet presenter is unavailable" {

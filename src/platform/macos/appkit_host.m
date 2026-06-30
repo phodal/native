@@ -243,6 +243,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, strong) NSMutableData *canvasPacketPixels;
 @property(nonatomic, assign) NSUInteger canvasPacketPixelWidth;
 @property(nonatomic, assign) NSUInteger canvasPacketPixelHeight;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSImage *> *canvasImageCache;
 @property(nonatomic, strong) NSCursor *surfaceCursor;
 @property(nonatomic, copy) NSString *markedText;
 @property(nonatomic, assign) NSRange markedTextRange;
@@ -1013,7 +1014,147 @@ static BOOL ZeroNativePacketApplyTransform(id value) {
     return YES;
 }
 
-static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef context, CGFloat scale, BOOL hasClip, NSRect clipRect) {
+static NSString *ZeroNativePacketImageCacheKey(id value) {
+    if (![value respondsToSelector:@selector(unsignedLongLongValue)]) return nil;
+    return [NSString stringWithFormat:@"%llu", [value unsignedLongLongValue]];
+}
+
+static NSRect ZeroNativePacketNormalizedRect(NSRect rect) {
+    if (rect.size.width < 0) {
+        rect.origin.x += rect.size.width;
+        rect.size.width = -rect.size.width;
+    }
+    if (rect.size.height < 0) {
+        rect.origin.y += rect.size.height;
+        rect.size.height = -rect.size.height;
+    }
+    return rect;
+}
+
+static NSData *ZeroNativePacketImagePixelData(NSArray *pixels, NSUInteger byteLength) {
+    if (!pixels || pixels.count < byteLength) return nil;
+    NSMutableData *data = [NSMutableData dataWithLength:byteLength];
+    if (!data) return nil;
+    uint8_t *bytes = data.mutableBytes;
+    for (NSUInteger index = 0; index < byteLength; index++) {
+        bytes[index] = (uint8_t)llround(fmax(0.0, fmin(255.0, ZeroNativePacketNumber(pixels[index], 0))));
+    }
+    return data;
+}
+
+static NSImage *ZeroNativePacketCreateImage(NSDictionary *image) {
+    if (!image) return nil;
+    NSUInteger width = (NSUInteger)llround(ZeroNativePacketNumber(image[@"width"], 0));
+    NSUInteger height = (NSUInteger)llround(ZeroNativePacketNumber(image[@"height"], 0));
+    if (width == 0 || height == 0 || width > 8192 || height > 8192) return nil;
+    if (width > NSUIntegerMax / height || width * height > NSUIntegerMax / 4) return nil;
+    NSUInteger byteLength = width * height * 4;
+    NSData *pixelData = ZeroNativePacketImagePixelData(ZeroNativePacketArray(image[@"pixels"], byteLength), byteLength);
+    if (!pixelData || pixelData.length != byteLength) return nil;
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    if (!colorSpace) return nil;
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixelData);
+    if (!provider) {
+        CGColorSpaceRelease(colorSpace);
+        return nil;
+    }
+    CGImageRef cgImage = CGImageCreate(width, height, 8, 32, width * 4, colorSpace, kCGImageAlphaLast | kCGBitmapByteOrder32Big, provider, NULL, false, kCGRenderingIntentDefault);
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(colorSpace);
+    if (!cgImage) return nil;
+    NSImage *result = [[NSImage alloc] initWithCGImage:cgImage size:NSMakeSize((CGFloat)width, (CGFloat)height)];
+    CGImageRelease(cgImage);
+    return result;
+}
+
+static BOOL ZeroNativePacketApplyImageActions(NSArray *actions, NSArray *images, NSMutableDictionary<NSString *, NSImage *> *imageCache) {
+    if (!imageCache) return NO;
+    for (id actionObject in actions ?: @[]) {
+        NSDictionary *action = ZeroNativePacketDictionary(actionObject);
+        if (!action) return NO;
+        NSString *kind = [action[@"kind"] isKindOfClass:[NSString class]] ? action[@"kind"] : @"";
+        if ([kind isEqualToString:@"upload"]) {
+            NSInteger imageIndex = [action[@"imageIndex"] respondsToSelector:@selector(integerValue)] ? [action[@"imageIndex"] integerValue] : -1;
+            if (imageIndex < 0 || (NSUInteger)imageIndex >= images.count) return NO;
+            NSDictionary *image = ZeroNativePacketDictionary(images[(NSUInteger)imageIndex]);
+            NSString *cacheKey = ZeroNativePacketImageCacheKey(image[@"imageId"]);
+            NSImage *decoded = ZeroNativePacketCreateImage(image);
+            if (!cacheKey || !decoded) return NO;
+            imageCache[cacheKey] = decoded;
+        } else if ([kind isEqualToString:@"evict"]) {
+            NSDictionary *key = ZeroNativePacketDictionary(action[@"key"]);
+            NSString *cacheKey = ZeroNativePacketImageCacheKey(key[@"imageId"]);
+            if (cacheKey) [imageCache removeObjectForKey:cacheKey];
+        } else if ([kind isEqualToString:@"retain"]) {
+            continue;
+        } else {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static NSRect ZeroNativePacketImageSourceRect(NSDictionary *packetImage, NSImage *image) {
+    NSRect full = NSMakeRect(0, 0, image.size.width, image.size.height);
+    NSArray *src = ZeroNativePacketArray(packetImage[@"src"], 4);
+    if (!src) return full;
+    NSRect requested = ZeroNativePacketNormalizedRect(ZeroNativePacketRect(src));
+    NSRect clipped = NSIntersectionRect(requested, full);
+    return clipped;
+}
+
+static NSRect ZeroNativePacketImageDestinationRect(NSRect dst, NSRect src, NSString *fit) {
+    NSRect normalized = ZeroNativePacketNormalizedRect(dst);
+    if (normalized.size.width <= 0 || normalized.size.height <= 0 || src.size.width <= 0 || src.size.height <= 0) return NSZeroRect;
+    if (![fit isEqualToString:@"contain"] && ![fit isEqualToString:@"cover"]) return normalized;
+
+    CGFloat srcAspect = src.size.width / src.size.height;
+    CGFloat dstAspect = normalized.size.width / normalized.size.height;
+    CGFloat width = normalized.size.width;
+    CGFloat height = normalized.size.height;
+    if ([fit isEqualToString:@"contain"]) {
+        if (dstAspect > srcAspect) {
+            height = normalized.size.height;
+            width = height * srcAspect;
+        } else {
+            width = normalized.size.width;
+            height = width / srcAspect;
+        }
+    } else {
+        if (dstAspect > srcAspect) {
+            width = normalized.size.width;
+            height = width / srcAspect;
+        } else {
+            height = normalized.size.height;
+            width = height * srcAspect;
+        }
+    }
+
+    return NSMakeRect(normalized.origin.x + (normalized.size.width - width) * 0.5, normalized.origin.y + (normalized.size.height - height) * 0.5, width, height);
+}
+
+static BOOL ZeroNativePacketDrawImage(NSDictionary *packetImage, NSDictionary<NSString *, NSImage *> *imageCache, CGFloat opacity) {
+    if (!packetImage || !imageCache) return NO;
+    NSString *cacheKey = ZeroNativePacketImageCacheKey(packetImage[@"image"]);
+    NSImage *image = cacheKey ? imageCache[cacheKey] : nil;
+    if (!image) return NO;
+    NSRect src = ZeroNativePacketImageSourceRect(packetImage, image);
+    if (src.size.width <= 0 || src.size.height <= 0) return NO;
+    NSString *fit = [packetImage[@"fit"] isKindOfClass:[NSString class]] ? packetImage[@"fit"] : @"stretch";
+    NSRect dst = ZeroNativePacketImageDestinationRect(ZeroNativePacketRect(packetImage[@"dst"]), src, fit);
+    if (dst.size.width <= 0 || dst.size.height <= 0) return NO;
+
+    CGFloat imageOpacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(packetImage[@"opacity"], 1)));
+    NSString *sampling = [packetImage[@"sampling"] isKindOfClass:[NSString class]] ? packetImage[@"sampling"] : @"linear";
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext.currentContext setImageInterpolation:[sampling isEqualToString:@"nearest"] ? NSImageInterpolationNone : NSImageInterpolationHigh];
+    [image drawInRect:dst fromRect:src operation:NSCompositingOperationSourceOver fraction:(opacity * imageOpacity) respectFlipped:YES hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+    return YES;
+}
+
+static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef context, CGFloat scale, BOOL hasClip, NSRect clipRect, NSDictionary<NSString *, NSImage *> *imageCache) {
     if (!command) return NO;
 
     NSString *kind = [command[@"kind"] isKindOfClass:[NSString class]] ? command[@"kind"] : @"";
@@ -1057,10 +1198,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     } else if ([kind isEqualToString:@"shadow"] || [kind isEqualToString:@"blur"]) {
         ok = ZeroNativePacketDrawEffect(ZeroNativePacketDictionary(command[@"effect"]), opacity, context, scale, command[@"transform"], hasEffectiveClip, effectiveClip);
     } else if ([kind isEqualToString:@"draw_image"]) {
-        NSDictionary *image = ZeroNativePacketDictionary(command[@"image"]);
-        NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:ZeroNativePacketRect(image[@"dst"]) xRadius:8 yRadius:8];
-        [[NSColor colorWithDeviceRed:0.86 green:0.90 blue:0.95 alpha:opacity] setFill];
-        [path fill];
+        ok = ZeroNativePacketDrawImage(ZeroNativePacketDictionary(command[@"image"]), imageCache, opacity);
     } else {
         ok = NO;
     }
@@ -1091,6 +1229,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     self.accessibilityRole = NSAccessibilityGroupRole;
     _surfaceCursor = [NSCursor arrowCursor];
+    _canvasImageCache = [NSMutableDictionary dictionary];
     self.markedText = @"";
     self.markedTextRange = NSMakeRange(NSNotFound, 0);
     self.selectedTextRange = NSMakeRange(0, 0);
@@ -1250,6 +1389,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSArray *commands = ZeroNativePacketArray(packet[@"commands"], 0);
     if (!commands) return 0;
     if (commandCount != 0 && commands.count != commandCount) return 0;
+    NSArray *images = ZeroNativePacketArray(packet[@"images"], 0) ?: @[];
+    NSArray *imageActions = ZeroNativePacketArray(packet[@"imageActions"], 0) ?: @[];
+    if (!self.canvasImageCache) self.canvasImageCache = [NSMutableDictionary dictionary];
+    if (!ZeroNativePacketApplyImageActions(imageActions, images, self.canvasImageCache)) return 0;
     NSArray *scissor = ZeroNativePacketArray(packet[@"scissorBounds"], 4);
     BOOL hasScissor = scissor != nil;
     NSRect scissorRect = hasScissor ? ZeroNativePacketRect(scissor) : NSZeroRect;
@@ -1288,7 +1431,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     BOOL supported = YES;
     for (id commandObject in commands) {
         NSDictionary *command = ZeroNativePacketDictionary(commandObject);
-        if (!ZeroNativePacketDrawCommand(command, context, normalizedScale, hasScissor, scissorRect)) {
+        if (!ZeroNativePacketDrawCommand(command, context, normalizedScale, hasScissor, scissorRect, self.canvasImageCache)) {
             supported = NO;
             break;
         }

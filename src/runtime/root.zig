@@ -13631,6 +13631,35 @@ test "runtime applies text input to focused canvas text fields" {
     try std.testing.expectEqualStrings("Query", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(5), retained.nodes[1].widget.text_selection.?);
 
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "a",
+        .text = "a",
+        .modifiers = .{ .primary = true, .command = true },
+    } });
+    try std.testing.expectEqual(@as(u64, 4), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Query", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 5 }, retained.nodes[1].widget.text_selection.?);
+
+    snapshot = harness.runtime.automationSnapshot("Widgets");
+    try std.testing.expectEqualStrings("Query", snapshot.widgets[0].text_value);
+    try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 0, .end = 5 }, snapshot.widgets[0].text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "x",
+        .text = "x",
+    } });
+    try std.testing.expectEqual(@as(u64, 5), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("x", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(1), retained.nodes[1].widget.text_selection.?);
+
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
     display_list = try harness.runtime.canvasDisplayList(1, "canvas");
     var saw_deleted_text = false;
@@ -13638,7 +13667,7 @@ test "runtime applies text input to focused canvas text fields" {
         switch (command) {
             .draw_text => |text| {
                 if (text.id == testCanvasWidgetPartId(2, 4)) {
-                    try std.testing.expectEqualStrings("Query", text.text);
+                    try std.testing.expectEqualStrings("x", text.text);
                     saw_deleted_text = true;
                 }
             },
@@ -13649,9 +13678,9 @@ test "runtime applies text input to focused canvas text fields" {
 
     snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expectEqualStrings("Search", snapshot.widgets[0].name);
-    try std.testing.expectEqualStrings("Query", snapshot.widgets[0].text_value);
-    try std.testing.expectEqualDeep(canvas.TextRange.init(5, 5), harness.runtime.views[0].widgetSemantics()[0].text_selection.?);
-    try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 5, .end = 5 }, snapshot.widgets[0].text_selection.?);
+    try std.testing.expectEqualStrings("x", snapshot.widgets[0].text_value);
+    try std.testing.expectEqualDeep(canvas.TextRange.init(1, 1), harness.runtime.views[0].widgetSemantics()[0].text_selection.?);
+    try std.testing.expectEqualDeep(automation.snapshot.TextRange{ .start = 1, .end = 1 }, snapshot.widgets[0].text_selection.?);
     try std.testing.expect(snapshot.widgets[0].text_composition == null);
 }
 

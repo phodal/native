@@ -7929,6 +7929,7 @@ fn widgetKeyboardTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
 }
 
 fn widgetKeyboardKeyDownTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
+    if (widgetKeyboardSelectAllTextEditEvent(event)) |edit| return edit;
     if (event.modifiers.hasNavigationModifier()) return null;
     if (std.ascii.eqlIgnoreCase(event.key, "backspace")) return .delete_backward;
     if (std.ascii.eqlIgnoreCase(event.key, "delete")) return .delete_forward;
@@ -7937,6 +7938,12 @@ fn widgetKeyboardKeyDownTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEven
     if (std.ascii.eqlIgnoreCase(event.key, "home")) return .{ .move_caret = .{ .direction = .start, .extend = event.modifiers.shift } };
     if (std.ascii.eqlIgnoreCase(event.key, "end")) return .{ .move_caret = .{ .direction = .end, .extend = event.modifiers.shift } };
     return null;
+}
+
+fn widgetKeyboardSelectAllTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
+    if (!event.modifiers.hasCommandModifier() or event.modifiers.alt or event.modifiers.shift) return null;
+    if (!std.ascii.eqlIgnoreCase(event.key, "a")) return null;
+    return .{ .set_selection = .{ .anchor = 0, .focus = std.math.maxInt(usize) } };
 }
 
 fn routeWidgetEventPath(layout: WidgetLayoutTree, target_index: usize, output: []WidgetEventRouteEntry) Error![]const WidgetEventRouteEntry {
@@ -18919,6 +18926,15 @@ test "widget keyboard events map to text edit events" {
     state = try state.apply(home, &storage_a);
     try std.testing.expectEqual(@as(usize, 0), state.selection.focus);
 
+    const select_all = (WidgetKeyboardEvent{ .phase = .key_down, .key = "a", .modifiers = .{ .super = true } }).textEditEvent().?;
+    state = try state.apply(select_all, &storage_b);
+    try std.testing.expectEqual(@as(usize, 0), state.selection.anchor);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
+    state = try state.apply(.{ .insert_text = "!" }, &storage_a);
+    try std.testing.expectEqualStrings("!", state.text);
+    try std.testing.expectEqual(@as(usize, 1), state.selection.focus);
+
     const option_insert = (WidgetKeyboardEvent{ .phase = .text_input, .text = "@", .modifiers = .{ .alt = true } }).textEditEvent().?;
     switch (option_insert) {
         .insert_text => |text| try std.testing.expectEqualStrings("@", text),
@@ -18927,6 +18943,7 @@ test "widget keyboard events map to text edit events" {
 
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .text_input, .text = "a", .modifiers = .{ .super = true } }).textEditEvent() == null);
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .alt = true } }).textEditEvent() == null);
+    try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "a", .modifiers = .{ .super = true, .shift = true } }).textEditEvent() == null);
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_up, .key = "backspace" }).textEditEvent() == null);
 }
 

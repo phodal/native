@@ -251,7 +251,7 @@ const GpuComponentsApp = struct {
         const widget = node.widget;
         var status_buffer: [192]u8 = undefined;
         const status = switch (widget.kind) {
-            .checkbox, .radio, .toggle => try std.fmt.bufPrint(
+            .checkbox, .radio, .switch_control, .toggle => try std.fmt.bufPrint(
                 &status_buffer,
                 "{s} {s} #{d}: {s}.",
                 .{ action, @tagName(widget.kind), id, if (widget.state.selected or widget.value >= 0.5) "on" else "off" },
@@ -754,7 +754,7 @@ fn buildComponentsWidgetLayoutWithScrollAndSize(nodes: []canvas.WidgetLayoutNode
         .{ .id = 111, .kind = .text_field, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
         .{ .id = 112, .kind = .search_field, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component search" } },
         .{ .id = 113, .kind = .checkbox, .frame = rect(0, 52, 132, 30), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
-        .{ .id = 114, .kind = .toggle, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live toggle" } },
+        .{ .id = 114, .kind = .switch_control, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live switch" } },
         .{ .id = 115, .kind = .slider, .frame = rect(0, 108, 176, 28), .value = 0.62, .semantics = .{ .label = "Density slider" } },
         .{ .id = 116, .kind = .progress, .frame = rect(202, 118, 134, 8), .value = 1, .semantics = .{ .label = "Build progress" } },
         .{ .id = 167, .kind = .radio_group, .frame = rect(0, 148, 160, 28), .layout = .{ .gap = 10, .cross_alignment = .center }, .semantics = .{ .label = "Layout radio group" }, .children = &radio_controls },
@@ -1989,7 +1989,7 @@ test "gpu components pointer clicks update retained controls" {
     try std.testing.expect(!componentSnapshotWidget(snapshot, 114).?.selected);
     try std.testing.expectEqual(@as(?f32, 0), componentSnapshotWidget(snapshot, 114).?.value);
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked toggle #114: off.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked switch_control #114: off.") != null);
 
     const slider = (try harness.runtime.canvasWidgetLayout(1, canvas_label)).findById(115).?;
     const slider_point = geometry.PointF.init(slider.frame.x + slider.frame.width * 0.25, slider.frame.center().y);

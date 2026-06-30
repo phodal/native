@@ -5332,7 +5332,7 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
+        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
@@ -5344,6 +5344,7 @@ fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
     return switch (kind) {
         .checkbox,
         .radio,
+        .switch_control,
         .toggle,
         .slider,
         .list_item,
@@ -5441,7 +5442,7 @@ fn canvasWidgetLayoutNodeWithControlReconcileState(
     for (previous) |entry| {
         if (entry.id != copy.widget.id or entry.kind != copy.widget.kind) continue;
         switch (copy.widget.kind) {
-            .checkbox, .toggle => {
+            .checkbox, .switch_control, .toggle => {
                 const selected = entry.state.selected or entry.value >= 0.5;
                 copy.widget.state.selected = selected;
                 copy.widget.value = if (selected) 1 else 0;
@@ -5630,13 +5631,17 @@ fn optionalCanvasTextRangesEqual(a: ?canvas.TextRange, b: ?canvas.TextRange) boo
 
 fn canvasWidgetCommandable(kind: canvas.WidgetKind) bool {
     return switch (kind) {
-        .button, .icon_button, .select, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle => true,
+        .button, .icon_button, .select, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle => true,
         else => false,
     };
 }
 
 fn canvasWidgetBooleanSelected(widget: canvas.Widget) bool {
     return widget.state.selected or widget.value >= 0.5;
+}
+
+fn canvasWidgetSwitchControlKind(kind: canvas.WidgetKind) bool {
+    return kind == .switch_control or kind == .toggle;
 }
 
 fn canvasWidgetSelectableSelected(widget: canvas.Widget) bool {
@@ -6971,7 +6976,7 @@ const RuntimeView = struct {
     fn canvasWidgetToggleAnimation(self: *const RuntimeView, id: canvas.ObjectId) ?CanvasWidgetToggleAnimation {
         const index = self.canvasWidgetNodeIndexById(id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if (widget.kind != .toggle or widget.state.disabled) return null;
+        if (!canvasWidgetSwitchControlKind(widget.kind) or widget.state.disabled) return null;
         const travel = canvas.toggleWidgetKnobTravel(widget, self.widget_tokens);
         if (travel <= 0) return null;
         return .{
@@ -6990,7 +6995,7 @@ const RuntimeView = struct {
     ) ?CanvasWidgetToggleAnimation {
         if (pointer.phase != .up or pressed_id == 0) return null;
         const hit = target orelse return null;
-        if (hit.kind != .toggle or hit.id != pressed_id) return null;
+        if (!canvasWidgetSwitchControlKind(hit.kind) or hit.id != pressed_id) return null;
         if (!hit.bounds.normalized().containsPoint(pointer.point)) return null;
         return self.canvasWidgetToggleAnimation(pressed_id);
     }
@@ -7052,7 +7057,7 @@ const RuntimeView = struct {
     fn toggleCanvasWidgetBooleanControl(self: *RuntimeView, id: canvas.ObjectId) anyerror!?geometry.RectF {
         const index = self.canvasWidgetNodeIndexById(id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
-        if ((widget.kind != .checkbox and widget.kind != .toggle) or widget.state.disabled) return null;
+        if ((widget.kind != .checkbox and !canvasWidgetSwitchControlKind(widget.kind)) or widget.state.disabled) return null;
 
         const selected = canvasWidgetBooleanSelected(widget);
         self.widget_layout_nodes[index].widget.state.selected = !selected;

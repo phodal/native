@@ -3849,6 +3849,7 @@ pub const WidgetKind = enum {
     segmented_control,
     checkbox,
     radio,
+    switch_control,
     toggle,
     slider,
     progress,
@@ -4110,7 +4111,7 @@ pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDe
         .skeleton => builtinComponent(.skeleton, .skeleton, .none, false),
         .slider => builtinComponent(.slider, .slider, .slider, false),
         .spinner => builtinComponent(.spinner, .spinner, .progressbar, false),
-        .switch_control => builtinComponent(.switch_control, .toggle, .switch_control, false),
+        .switch_control => builtinComponent(.switch_control, .switch_control, .switch_control, false),
         .table => builtinComponent(.table, .data_grid, .grid, true),
         .tabs => builtinComponent(.tabs, .tabs, .group, true),
         .textarea => builtinComponent(.textarea, .textarea, .textbox, false),
@@ -7277,7 +7278,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .segmented_control => try emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try emitRadioWidget(builder, paint_widget, tokens),
-        .toggle => try emitToggleWidget(builder, paint_widget, tokens),
+        .switch_control, .toggle => try emitToggleWidget(builder, paint_widget, tokens),
         .slider => try emitSliderWidget(builder, paint_widget, tokens),
         .progress => try emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
@@ -7382,7 +7383,7 @@ fn emitWidgetLayoutNodeContent(
         .segmented_control => try emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try emitRadioWidget(builder, paint_widget, tokens),
-        .toggle => try emitToggleWidget(builder, paint_widget, tokens),
+        .switch_control, .toggle => try emitToggleWidget(builder, paint_widget, tokens),
         .slider => try emitSliderWidget(builder, paint_widget, tokens),
         .progress => try emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
@@ -8743,7 +8744,7 @@ pub fn toggleWidgetKnobCommandId(id: ObjectId) ObjectId {
 }
 
 pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
-    if (widget.kind != .toggle) return 0;
+    if (!widgetSwitchControlKind(widget.kind)) return 0;
     const knob_inset = densityValue(tokens, 2);
     const track_width = @min(widget.frame.width, @max(densityValue(tokens, 36), widget.frame.height * 1.75));
     const track_height = @min(widget.frame.height, densityValue(tokens, 24));
@@ -8762,6 +8763,10 @@ pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
         knob_size,
     ));
     return on_knob.x - off_knob.x;
+}
+
+fn widgetSwitchControlKind(kind: WidgetKind) bool {
+    return kind == .switch_control or kind == .toggle;
 }
 
 fn widgetPartId(id: ObjectId, slot: ObjectId) ObjectId {
@@ -9273,7 +9278,7 @@ fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVis
         .segmented_control => tokens.controls.segmented_control,
         .checkbox => tokens.controls.checkbox,
         .radio => tokens.controls.radio,
-        .toggle => tokens.controls.toggle,
+        .switch_control, .toggle => tokens.controls.toggle,
         .slider => tokens.controls.slider,
         .progress => tokens.controls.progress,
         else => .{},
@@ -9418,7 +9423,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
-        .text, .icon, .image, .avatar, .badge, .button, .icon_button, .select, .text_field, .search_field, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        .text, .icon, .image, .avatar, .badge, .button, .icon_button, .select, .text_field, .search_field, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
     }
 
     return index;
@@ -9667,7 +9672,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
         .checkbox => intrinsicCheckboxWidgetSize(widget, tokens),
         .radio => intrinsicRadioWidgetSize(widget, tokens),
-        .toggle => intrinsicToggleWidgetSize(widget, tokens),
+        .switch_control, .toggle => intrinsicToggleWidgetSize(widget, tokens),
         .slider => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), @max(widgetSizedDensityValue(widget, tokens, 28), widgetSizedDensityValue(widget, tokens, 20))),
         .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 8)),
         .separator => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline)),
@@ -9917,6 +9922,7 @@ pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor 
         .segmented_control,
         .checkbox,
         .radio,
+        .switch_control,
         .toggle,
         => .pointing_hand,
         .slider => .resize_horizontal,
@@ -9996,7 +10002,7 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
             .{ .kind = .press, .actions = .{ .press = true } }
         else
             null,
-        .checkbox, .toggle => if (isWidgetActivationKey(keyboard.key))
+        .checkbox, .switch_control, .toggle => if (isWidgetActivationKey(keyboard.key))
             .{ .kind = .toggle, .actions = .{ .toggle = true } }
         else
             null,
@@ -10576,7 +10582,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .segmented_control => .tab,
         .checkbox => .checkbox,
         .radio => .radio,
-        .toggle => .switch_control,
+        .switch_control, .toggle => .switch_control,
         .slider => .slider,
         .progress => .progressbar,
         .separator, .skeleton => .none,
@@ -10593,7 +10599,7 @@ fn semanticValue(widget: Widget) ?f32 {
     if (widget.semantics.value) |value| return value;
     return switch (widget.kind) {
         .radio, .list_item, .menu_item, .data_cell, .segmented_control => if (widget.state.selected or widget.value >= 0.5) 1 else 0,
-        .checkbox, .toggle => if (booleanControlSelected(widget)) 1 else 0,
+        .checkbox, .switch_control, .toggle => if (booleanControlSelected(widget)) 1 else 0,
         .slider, .progress => std.math.clamp(widget.value, 0, 1),
         .spinner => null,
         else => null,
@@ -10883,7 +10889,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
             actions.press = true;
             actions.select = true;
         },
-        .checkbox, .toggle => actions.toggle = true,
+        .checkbox, .switch_control, .toggle => actions.toggle = true,
         .radio => {
             actions.select = true;
             if (widget.command.len > 0) actions.press = true;
@@ -10907,7 +10913,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
 
 fn defaultFocusable(widget: Widget) bool {
     return switch (widget.kind) {
-        .scroll_view, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider => !widget.state.disabled,
+        .scroll_view, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider => !widget.state.disabled,
         else => false,
     };
 }
@@ -10935,7 +10941,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .toggle, .slider, .progress => true,
+        .scroll_view, .alert, .card, .dialog, .drawer, .sheet, .panel, .popover, .menu_surface, .text, .button, .icon_button, .select, .text_field, .search_field, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
@@ -11272,7 +11278,7 @@ fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
         .text_field, .search_field, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .segmented_control => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .data_cell => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, listItemControlVisualTokens(widget, tokens), tokens.stroke.hairline),
-        .checkbox, .radio, .toggle, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
+        .checkbox, .radio, .switch_control, .toggle, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .avatar, .badge => controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .list_item, .menu_item => if (widget.state.focused) tokens.stroke.focus else 0,
         else => 0,
@@ -11293,6 +11299,7 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
         .segmented_control,
         .checkbox,
         .radio,
+        .switch_control,
         .toggle,
         .slider,
         => tokens.stroke.focus,
@@ -15620,7 +15627,7 @@ test "built-in component catalog maps to retained widget foundations" {
     try std.testing.expectEqual(WidgetKind.separator, builtinComponentDescriptor(.separator).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.skeleton, builtinComponentDescriptor(.skeleton).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.spinner, builtinComponentDescriptor(.spinner).root_widget_kind);
-    try std.testing.expectEqual(WidgetKind.toggle, builtinComponentDescriptor(.switch_control).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.switch_control, builtinComponentDescriptor(.switch_control).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.data_grid, builtinComponentDescriptor(.table).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.select, builtinComponentDescriptor(.select).root_widget_kind);
     try std.testing.expectEqual(WidgetKind.sheet, builtinComponentDescriptor(.sheet).root_widget_kind);

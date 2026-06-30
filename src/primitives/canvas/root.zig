@@ -3451,6 +3451,7 @@ pub const ControlTokens = struct {
     button_outline: ControlVisualTokens = .{},
     button_ghost: ControlVisualTokens = .{},
     button_destructive: ControlVisualTokens = .{},
+    toggle_button: ControlVisualTokens = .{},
     accordion: ControlVisualTokens = .{},
     alert: ControlVisualTokens = .{},
     bubble: ControlVisualTokens = .{},
@@ -3675,6 +3676,7 @@ pub const ControlTokenOverrides = struct {
     button_outline: ControlVisualTokenOverrides = .{},
     button_ghost: ControlVisualTokenOverrides = .{},
     button_destructive: ControlVisualTokenOverrides = .{},
+    toggle_button: ControlVisualTokenOverrides = .{},
     accordion: ControlVisualTokenOverrides = .{},
     alert: ControlVisualTokenOverrides = .{},
     bubble: ControlVisualTokenOverrides = .{},
@@ -3715,6 +3717,7 @@ pub const ControlTokenOverrides = struct {
         next.button_outline = self.button_outline.apply(next.button_outline);
         next.button_ghost = self.button_ghost.apply(next.button_ghost);
         next.button_destructive = self.button_destructive.apply(next.button_destructive);
+        next.toggle_button = self.toggle_button.apply(next.toggle_button);
         next.accordion = self.accordion.apply(next.accordion);
         next.alert = self.alert.apply(next.alert);
         next.bubble = self.bubble.apply(next.bubble);
@@ -9249,7 +9252,7 @@ fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
 }
 
 fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.variant) {
+    const variant = switch (widget.variant) {
         .default => tokens.controls.button_default,
         .primary => tokens.controls.button_primary,
         .secondary => tokens.controls.button_secondary,
@@ -9257,6 +9260,8 @@ fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisual
         .ghost => tokens.controls.button_ghost,
         .destructive => tokens.controls.button_destructive,
     };
+    if (widget.kind == .toggle_button) return controlVisualTokensWithFallback(tokens.controls.toggle_button, variant);
+    return variant;
 }
 
 fn selectControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
@@ -16073,6 +16078,69 @@ test "built-in component widgets expose shadcn semantics and render tokens" {
     }
 }
 
+test "built-in toggle renders shadcn toggle button tokens" {
+    const toggle = builtinComponentWidget(.toggle, .{
+        .id = 14,
+        .frame = geometry.RectF.init(0, 0, 84, 32),
+        .text = "Bold",
+        .state = .{ .selected = true },
+    });
+    try std.testing.expectEqual(WidgetKind.toggle_button, toggle.kind);
+    try std.testing.expectEqual(WidgetVariant.ghost, toggle.variant);
+
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(toggle, toggle.frame, &nodes);
+    try std.testing.expectEqual(WidgetKind.toggle_button, layout.hitTest(geometry.PointF.init(12, 12)).?.kind);
+
+    var semantics_buffer: [1]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.button, semantics[0].role);
+    try std.testing.expectEqualStrings("Bold", semantics[0].label);
+    try std.testing.expectEqual(@as(?f32, 1), semantics[0].value);
+    try std.testing.expect(semantics[0].actions.toggle);
+    try std.testing.expect(!semantics[0].actions.press);
+
+    const tokens = DesignTokens{
+        .controls = .{
+            .toggle_button = .{
+                .background = Color.rgb8(18, 24, 30),
+                .active_background = Color.rgb8(44, 52, 60),
+                .foreground = Color.rgb8(242, 246, 250),
+                .border = Color.rgb8(68, 78, 88),
+                .radius = 6,
+                .stroke_width = 1.5,
+            },
+        },
+    };
+    var commands: [3]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, toggle, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| {
+            try std.testing.expectEqualDeep(Radius.all(6), fill.radius);
+            try expectFillColor(Color.rgb8(44, 52, 60), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 1.5), stroke.stroke.width);
+            try expectFillColor(Color.rgb8(68, 78, 88), stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("Bold", text.text);
+            try std.testing.expectEqualDeep(Color.rgb8(242, 246, 250), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "built-in component primitive widgets render distinct shadcn chrome" {
     const widgets = [_]Widget{
         builtinComponentWidget(.avatar, .{
@@ -16201,6 +16269,13 @@ test "design token overrides compose with built-in themes" {
             .button_secondary = .{
                 .hover_background = Color.rgb8(36, 42, 48),
                 .active_background = Color.rgb8(48, 56, 64),
+            },
+            .toggle_button = .{
+                .background = Color.rgb8(18, 24, 30),
+                .hover_background = Color.rgb8(32, 38, 44),
+                .active_background = Color.rgb8(44, 52, 60),
+                .foreground = Color.rgb8(242, 246, 250),
+                .border = Color.rgb8(68, 78, 88),
             },
             .select = .{
                 .background = Color.rgb8(17, 23, 29),
@@ -16390,6 +16465,11 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expect(tokens.controls.button_secondary.background == null);
     try std.testing.expectEqualDeep(Color.rgb8(36, 42, 48), tokens.controls.button_secondary.hover_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(48, 56, 64), tokens.controls.button_secondary.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(18, 24, 30), tokens.controls.toggle_button.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(32, 38, 44), tokens.controls.toggle_button.hover_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(44, 52, 60), tokens.controls.toggle_button.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(242, 246, 250), tokens.controls.toggle_button.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(68, 78, 88), tokens.controls.toggle_button.border.?);
     try std.testing.expectEqualDeep(Color.rgb8(17, 23, 29), tokens.controls.select.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(226, 234, 242), tokens.controls.select.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(68, 78, 88), tokens.controls.select.border.?);

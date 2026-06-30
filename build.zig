@@ -727,6 +727,7 @@ pub fn build(b: *std.Build) void {
         \\first_frame_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/canvas kind=gpu_surface.* gpu_first_frame_latency_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$first_frame_latency" in ''|*[!0-9]*) echo "gpu-surface first frame latency was missing" >&2; exit 1 ;; esac
         \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt 5000000000 ]; then echo "gpu-surface first frame latency was out of bounds: $first_frame_latency ns" >&2; exit 1; fi
+        \\case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "gpu-surface first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\"$cli" automate native-command gpu.refresh refresh >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
@@ -790,6 +791,7 @@ pub fn build(b: *std.Build) void {
         \\first_frame_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_first_frame_latency_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$first_frame_latency" in ''|*[!0-9]*) echo "dashboard GPU first frame latency was missing" >&2; exit 1 ;; esac
         \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt 5000000000 ]; then echo "dashboard GPU first frame latency was out of bounds: $first_frame_latency ns" >&2; exit 1; fi
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "dashboard GPU first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/dashboard-canvas#103 role=button'*'actions=[focus,press]'*) ;; *) echo "dashboard live render button semantics were missing" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/dashboard-canvas#131 role=textbox'*'text="$13.4M"'*) ;; *) echo "dashboard forecast textbox semantics were missing" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'widget @w1/dashboard-canvas#140 role=dialog'*'name="Revenue filter popover"'*) ;; *) echo "dashboard popover semantics were missing" >&2; exit 1 ;; esac
@@ -878,6 +880,7 @@ pub fn build(b: *std.Build) void {
         \\first_frame_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_first_frame_latency_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$first_frame_latency" in ''|*[!0-9]*) echo "components GPU first frame latency was missing" >&2; exit 1 ;; esac
         \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt 5000000000 ]; then echo "components GPU first frame latency was out of bounds: $first_frame_latency ns" >&2; exit 1; fi
+        \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "components GPU first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\gpu_frame_from_snapshot() {
         \\  printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_frame=\([0-9][0-9]*\).*/\1/p'
         \\}

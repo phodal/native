@@ -5131,6 +5131,7 @@ fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
         .toggle,
         .slider,
         .list_item,
+        .menu_item,
         .data_cell,
         .segmented_control,
         => true,
@@ -5232,7 +5233,7 @@ fn canvasWidgetLayoutNodeWithControlReconcileState(
             .slider => {
                 copy.widget.value = std.math.clamp(entry.value, 0, 1);
             },
-            .list_item, .data_cell, .segmented_control => {
+            .list_item, .menu_item, .data_cell, .segmented_control => {
                 const selected = entry.state.selected or entry.value >= 0.5;
                 copy.widget.state.selected = selected;
                 copy.widget.value = if (selected) 1 else 0;
@@ -14638,6 +14639,21 @@ test "runtime reconciles canvas control state across layout replacement" {
             .text = "Billing",
         },
     };
+    const menu_items = [_]canvas.Widget{
+        .{
+            .id = 13,
+            .kind = .menu_item,
+            .frame = geometry.RectF.init(0, 0, 0, 30),
+            .text = "Copy",
+            .state = .{ .selected = true },
+        },
+        .{
+            .id = 14,
+            .kind = .menu_item,
+            .frame = geometry.RectF.init(0, 36, 0, 30),
+            .text = "Archive",
+        },
+    };
     const controls = [_]canvas.Widget{
         .{
             .id = 2,
@@ -14674,8 +14690,14 @@ test "runtime reconciles canvas control state across layout replacement" {
             .frame = geometry.RectF.init(10, 178, 160, 30),
             .children = &data_cells,
         },
+        .{
+            .id = 15,
+            .kind = .menu_surface,
+            .frame = geometry.RectF.init(150, 96, 110, 72),
+            .children = &menu_items,
+        },
     };
-    var nodes: [13]canvas.WidgetLayoutNode = undefined;
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &controls }, geometry.RectF.init(0, 0, 280, 220), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
@@ -14685,6 +14707,7 @@ test "runtime reconciles canvas control state across layout replacement" {
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 6, .action = .select });
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 8, .action = .select });
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 12, .action = .select });
+    try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 14, .action = .select });
 
     var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expect(retained.findById(2).?.widget.state.selected);
@@ -14698,6 +14721,8 @@ test "runtime reconciles canvas control state across layout replacement" {
     try std.testing.expect(retained.findById(8).?.widget.state.selected);
     try std.testing.expect(!retained.findById(11).?.widget.state.selected);
     try std.testing.expect(retained.findById(12).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(13).?.widget.state.selected);
+    try std.testing.expect(retained.findById(14).?.widget.state.selected);
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;
@@ -14721,6 +14746,10 @@ test "runtime reconciles canvas control state across layout replacement" {
     try std.testing.expectEqual(@as(f32, 0), retained.findById(11).?.widget.value);
     try std.testing.expect(retained.findById(12).?.widget.state.selected);
     try std.testing.expectEqual(@as(f32, 1), retained.findById(12).?.widget.value);
+    try std.testing.expect(!retained.findById(13).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(13).?.widget.value);
+    try std.testing.expect(retained.findById(14).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(14).?.widget.value);
     try std.testing.expect(!harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
 
@@ -14734,6 +14763,8 @@ test "runtime reconciles canvas control state across layout replacement" {
     try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 8).?.value);
     try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 11).?.value);
     try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 12).?.value);
+    try std.testing.expectEqual(@as(?f32, 0), canvasWidgetSemanticsById(semantics, 13).?.value);
+    try std.testing.expectEqual(@as(?f32, 1), canvasWidgetSemanticsById(semantics, 14).?.value);
 }
 
 test "runtime drives retained settings and data grid workflow" {

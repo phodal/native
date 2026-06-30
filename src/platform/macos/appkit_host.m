@@ -1441,7 +1441,16 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
     if (self.canvasPacketPixels && self.canvasPacketPixels.length == byteLength) {
         void *backingBytes = self.canvasPacketPixels.mutableBytes;
-        if ((const void *)backingBytes != (const void *)rgba8) memcpy(backingBytes, rgba8, byteLength);
+        if ((const void *)backingBytes != (const void *)rgba8) {
+            if (uploadFullTexture) {
+                memcpy(backingBytes, rgba8, byteLength);
+            } else {
+                for (NSUInteger row = 0; row < uploadHeight; row++) {
+                    const NSUInteger rowOffset = ((uploadY + row) * width + uploadX) * 4;
+                    memcpy((uint8_t *)backingBytes + rowOffset, rgba8 + rowOffset, uploadWidth * 4);
+                }
+            }
+        }
     }
     self.hasCanvasTexture = YES;
     (void)scale;

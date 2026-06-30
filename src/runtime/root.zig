@@ -2353,6 +2353,8 @@ pub const Runtime = struct {
                 _ = try self.dispatchCanvasWidgetAccessibilityAction(app, action_event.window_id, action_event.label, .{
                     .id = action_event.id,
                     .action = canvasWidgetAccessibilityActionKindFromPlatform(action_event.action),
+                    .text = action_event.text,
+                    .selection = if (action_event.selection) |selection| .{ .anchor = selection.start, .focus = selection.end } else null,
                 });
             },
             .menu_command => |command| {
@@ -15910,6 +15912,24 @@ test "runtime publishes canvas widget accessibility snapshots to platform" {
     } });
     try std.testing.expectEqual(@as(canvas.ObjectId, 3), runtime.views[0].canvas_widget_focused_id);
     try std.testing.expect(!platform_state.nodes[2].selected);
+
+    try runtime.dispatchPlatformEvent(app_state.app(), .{ .widget_accessibility_action = .{
+        .window_id = 1,
+        .label = "canvas",
+        .id = 4,
+        .action = .set_text,
+        .text = "Customer search",
+    } });
+    try std.testing.expectEqualStrings("Customer search", platform_state.nodes[3].text_value);
+
+    try runtime.dispatchPlatformEvent(app_state.app(), .{ .widget_accessibility_action = .{
+        .window_id = 1,
+        .label = "canvas",
+        .id = 4,
+        .action = .set_selection,
+        .selection = .{ .start = 3, .end = 11 },
+    } });
+    try std.testing.expectEqualDeep(platform.WidgetAccessibilityTextRange{ .start = 3, .end = 11 }, platform_state.nodes[3].text_selection.?);
 }
 
 test "runtime automation snapshot exposes canvas icon roles" {

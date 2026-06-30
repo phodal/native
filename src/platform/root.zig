@@ -1225,6 +1225,8 @@ pub const WidgetAccessibilityActionEvent = struct {
     label: []const u8,
     id: u64,
     action: WidgetAccessibilityActionKind,
+    text: []const u8 = "",
+    selection: ?WidgetAccessibilityTextRange = null,
 };
 
 pub const ClipboardData = struct {

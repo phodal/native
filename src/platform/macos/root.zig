@@ -68,6 +68,11 @@ const AppKitEvent = extern struct {
     delta_y: f64,
     widget_id: u64,
     widget_action: c_int,
+    widget_text: [*]const u8,
+    widget_text_len: usize,
+    has_widget_text_selection: c_int,
+    widget_text_selection_start: usize,
+    widget_text_selection_end: usize,
     has_composition_cursor: c_int,
     composition_cursor: usize,
 };
@@ -487,6 +492,8 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
                 .label = event.view_label[0..event.view_label_len],
                 .id = event.widget_id,
                 .action = action,
+                .text = appKitEventBytes(event.widget_text, event.widget_text_len),
+                .selection = widgetAccessibilitySelectionFromAppKitEvent(event),
             } });
         },
     }
@@ -1123,6 +1130,19 @@ fn widgetAccessibilityActionFromInt(value: c_int) ?platform_mod.WidgetAccessibil
     };
 }
 
+fn appKitEventBytes(bytes: [*]const u8, len: usize) []const u8 {
+    if (len == 0 or @intFromPtr(bytes) == 0) return "";
+    return bytes[0..len];
+}
+
+fn widgetAccessibilitySelectionFromAppKitEvent(event: *const AppKitEvent) ?platform_mod.WidgetAccessibilityTextRange {
+    if (event.has_widget_text_selection == 0) return null;
+    return .{
+        .start = event.widget_text_selection_start,
+        .end = event.widget_text_selection_end,
+    };
+}
+
 fn isSupportedNativeViewKind(kind: platform_mod.ViewKind) bool {
     return switch (kind) {
         .toolbar,
@@ -1362,6 +1382,24 @@ test "mac widget accessibility maps retained action events" {
     try std.testing.expectEqual(platform_mod.WidgetAccessibilityActionKind.drag, widgetAccessibilityActionFromInt(8).?);
     try std.testing.expectEqual(platform_mod.WidgetAccessibilityActionKind.drop_files, widgetAccessibilityActionFromInt(9).?);
     try std.testing.expect(widgetAccessibilityActionFromInt(10) == null);
+}
+
+test "mac widget accessibility action preserves text payload" {
+    const text = "Search customers";
+    var event = std.mem.zeroes(AppKitEvent);
+    event.widget_text = text.ptr;
+    event.widget_text_len = text.len;
+    event.has_widget_text_selection = 1;
+    event.widget_text_selection_start = 2;
+    event.widget_text_selection_end = 8;
+
+    try std.testing.expectEqualStrings("Search customers", appKitEventBytes(event.widget_text, event.widget_text_len));
+    try std.testing.expectEqualDeep(platform_mod.WidgetAccessibilityTextRange{ .start = 2, .end = 8 }, widgetAccessibilitySelectionFromAppKitEvent(&event).?);
+
+    event.widget_text_len = 0;
+    event.has_widget_text_selection = 0;
+    try std.testing.expectEqualStrings("", appKitEventBytes(event.widget_text, event.widget_text_len));
+    try std.testing.expect(widgetAccessibilitySelectionFromAppKitEvent(&event) == null);
 }
 
 test "mac gpu surface input preserves key and text" {

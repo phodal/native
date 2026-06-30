@@ -205,6 +205,11 @@ typedef struct {
     double delta_y;
     uint64_t widget_id;
     int widget_action;
+    const char *widget_text;
+    size_t widget_text_len;
+    int has_widget_text_selection;
+    size_t widget_text_selection_start;
+    size_t widget_text_selection_end;
     int has_composition_cursor;
     size_t composition_cursor;
 } zero_native_appkit_event_t;

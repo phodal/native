@@ -181,6 +181,12 @@ static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteg
     return NSMakeRange(clampedStart, clampedEnd - clampedStart);
 }
 
+static NSUInteger ZeroNativeRangeEnd(NSRange range) {
+    if (range.location == NSNotFound) return 0;
+    if (range.length > NSUIntegerMax - range.location) return NSUIntegerMax;
+    return range.location + range.length;
+}
+
 static NSString *ZeroNativeSubstringForRange(NSString *value, NSRange range) {
     if (range.location > value.length || NSMaxRange(range) > value.length) return @"";
     return [value substringWithRange:range];
@@ -217,6 +223,8 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) ZeroNativeMetalSurfaceView *surfaceView;
 @property(nonatomic, assign) uint64_t widgetId;
 @property(nonatomic, assign) uint32_t actionFlags;
+- (BOOL)emitSetTextAccessibilityValue:(id)value;
+- (BOOL)emitSetSelectionAccessibilityValue:(id)value;
 @end
 
 @interface ZeroNativeMetalSurfaceView : NSView <NSTextInputClient>
@@ -267,6 +275,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor;
 - (NSAccessibilityElement *)focusedTextAccessibilityElement;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
+- (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action text:(NSString *)text selectedRange:(NSRange)selectedRange hasSelectedRange:(BOOL)hasSelectedRange;
 - (void)setSurfaceCursor:(NSCursor *)cursor;
 @end
 
@@ -546,6 +555,65 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)accessibilityPerformDecrement {
     if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_DECREMENT) == 0) return NO;
     return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_DECREMENT];
+}
+
+- (BOOL)accessibilityIsAttributeSettable:(NSAccessibilityAttributeName)attribute {
+    if (self.accessibilityEnabled && [attribute isEqualToString:NSAccessibilityValueAttribute]) {
+        return (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_TEXT) != 0;
+    }
+    if (self.accessibilityEnabled &&
+        ([attribute isEqualToString:NSAccessibilitySelectedTextRangeAttribute] ||
+         [attribute isEqualToString:NSAccessibilitySelectedTextRangesAttribute])) {
+        return (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_SELECTION) != 0;
+    }
+    return [super accessibilityIsAttributeSettable:attribute];
+}
+
+- (void)accessibilitySetValue:(id)value forAttribute:(NSAccessibilityAttributeName)attribute {
+    if ([attribute isEqualToString:NSAccessibilityValueAttribute]) {
+        [self emitSetTextAccessibilityValue:value];
+        return;
+    }
+    if ([attribute isEqualToString:NSAccessibilitySelectedTextRangeAttribute] ||
+        [attribute isEqualToString:NSAccessibilitySelectedTextRangesAttribute]) {
+        [self emitSetSelectionAccessibilityValue:value];
+        return;
+    }
+    [super accessibilitySetValue:value forAttribute:attribute];
+}
+
+- (BOOL)emitSetTextAccessibilityValue:(id)value {
+    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_TEXT) == 0) return NO;
+    NSString *text = @"";
+    if ([value isKindOfClass:[NSString class]]) {
+        text = (NSString *)value;
+    } else if (value) {
+        text = [value description] ?: @"";
+    }
+    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId
+                                                          action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_TEXT
+                                                            text:text
+                                                   selectedRange:NSMakeRange(0, 0)
+                                                hasSelectedRange:NO];
+}
+
+- (BOOL)emitSetSelectionAccessibilityValue:(id)value {
+    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_SELECTION) == 0) return NO;
+    NSRange selectedRange = NSMakeRange(NSNotFound, 0);
+    if ([value isKindOfClass:[NSValue class]]) {
+        selectedRange = [(NSValue *)value rangeValue];
+    } else if ([value isKindOfClass:[NSArray class]]) {
+        id firstRange = [(NSArray *)value firstObject];
+        if ([firstRange isKindOfClass:[NSValue class]]) {
+            selectedRange = [(NSValue *)firstRange rangeValue];
+        }
+    }
+    if (selectedRange.location == NSNotFound) return NO;
+    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId
+                                                          action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_SELECTION
+                                                            text:@""
+                                                   selectedRange:selectedRange
+                                                hasSelectedRange:YES];
 }
 
 @end
@@ -2044,8 +2112,18 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 }
 
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action {
+    return [self emitWidgetAccessibilityActionWithId:widgetId
+                                             action:action
+                                               text:@""
+                                      selectedRange:NSMakeRange(0, 0)
+                                   hasSelectedRange:NO];
+}
+
+- (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action text:(NSString *)text selectedRange:(NSRange)selectedRange hasSelectedRange:(BOOL)hasSelectedRange {
     if (!self.host || self.surfaceLabel.length == 0 || widgetId == 0) return NO;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
+    NSString *payloadText = text ?: @"";
+    const char *textBytes = payloadText.UTF8String ?: "";
     [self.host emitEvent:(zero_native_appkit_event_t){
         .kind = ZERO_NATIVE_APPKIT_EVENT_WIDGET_ACCESSIBILITY_ACTION,
         .window_id = self.windowId,
@@ -2054,6 +2132,11 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .widget_id = widgetId,
         .widget_action = (int)action,
+        .widget_text = textBytes,
+        .widget_text_len = [payloadText lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
+        .has_widget_text_selection = hasSelectedRange ? 1 : 0,
+        .widget_text_selection_start = hasSelectedRange ? selectedRange.location : 0,
+        .widget_text_selection_end = hasSelectedRange ? ZeroNativeRangeEnd(selectedRange) : 0,
     }];
     [self requestRetainedCanvasFrame];
     return YES;

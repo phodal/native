@@ -1385,7 +1385,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     if (scale <= 0) scale = NSScreen.mainScreen.backingScaleFactor;
     if (scale <= 0) scale = 1;
     NSSize size = self.bounds.size;
-    CGSize drawableSize = CGSizeMake(MAX(1.0, size.width * scale), MAX(1.0, size.height * scale));
+    CGSize drawableSize = CGSizeMake(MAX(1.0, ceil(size.width * scale)), MAX(1.0, ceil(size.height * scale)));
     BOOL changed = fabs(self.lastDrawableSize.width - drawableSize.width) > 0.5 ||
         fabs(self.lastDrawableSize.height - drawableSize.height) > 0.5 ||
         fabs(self.lastScale - scale) > 0.001;

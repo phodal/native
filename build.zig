@@ -305,6 +305,11 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)requestRetainedCanvasFrame" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-drawable-integral-pixels", "Verify AppKit GPU surfaces use integral drawable pixels", &.{
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.width * scale)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.height * scale)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "self.metalLayer.drawableSize = drawableSize" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-transforms", "Verify AppKit GPU packet presenter applies command transforms", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketApplyTransform(command[@\"transform\"])" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[affine setTransformStruct:transform]" },

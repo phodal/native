@@ -17,6 +17,7 @@ pub const Window = struct {
 pub const Diagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
+    runtime_uptime_ns: u64 = 0,
 };
 
 pub const WidgetActions = struct {
@@ -98,7 +99,7 @@ pub const Input = struct {
 };
 
 pub fn writeText(input: Input, writer: anytype) !void {
-    try writer.print("ready=true frame={d} commands={d}\n", .{ input.diagnostics.frame_index, input.diagnostics.command_count });
+    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d}\n", .{ input.diagnostics.frame_index, input.diagnostics.command_count, input.diagnostics.runtime_uptime_ns });
     for (input.windows) |window| {
         try writer.print(
             "window @w{d} \"{s}\" bounds=({d},{d} {d}x{d}) focused={any} frame={d} commands={d}\n",
@@ -439,9 +440,11 @@ test "snapshot emits window and source" {
     try writeText(.{
         .windows = &windows,
         .views = &views,
+        .diagnostics = .{ .runtime_uptime_ns = 42 },
         .source = platform.WebViewSource.html("<h1>Hello</h1>"),
     }, &writer);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ready=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "runtime_uptime_ns=42") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "@w1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "view @w1/main kind=webview") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "accessibility_label=\"\"") != null);

@@ -261,6 +261,11 @@ export interface ZeroNativeViewInfo {
   canvasFrameTextLayoutUploadCount: number;
   canvasFrameTextLayoutRetainCount: number;
   canvasFrameTextLayoutEvictCount: number;
+  canvasFrameGpuPacketCommandCount: number;
+  canvasFrameGpuPacketCacheActionCount: number;
+  canvasFrameGpuPacketCachedResourceCommandCount: number;
+  canvasFrameGpuPacketUnsupportedCommandCount: number;
+  canvasFrameGpuPacketRepresentable: boolean;
   canvasFrameChangeCount: number;
   canvasFrameBudgetExceededCount: number;
   canvasFrameBudgetOk: boolean;

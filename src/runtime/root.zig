@@ -268,6 +268,7 @@ pub const Runtime = struct {
     next_window_id: platform.WindowId = 2,
     next_view_id: platform.ViewId = 1,
     invalidated: bool = true,
+    started_timestamp_ns: u64 = 0,
     timestamp_ns: i128 = 0,
     frame_index: u64 = 0,
     command_count: usize = 0,
@@ -312,6 +313,7 @@ pub const Runtime = struct {
         return .{
             .options = options,
             .surface = options.platform.surface(),
+            .started_timestamp_ns = timestampToU64(nowNanoseconds()),
             .windows = undefined,
             .views = undefined,
             .shell_layouts = undefined,
@@ -2448,7 +2450,7 @@ pub const Runtime = struct {
                 .windows = self.automation_windows[0..1],
                 .views = &.{},
                 .widgets = &.{},
-                .diagnostics = .{ .frame_index = self.last_diagnostics.frame_index, .command_count = self.last_diagnostics.command_count },
+                .diagnostics = self.automationDiagnostics(),
                 .source = self.loaded_source,
             };
         }
@@ -2471,8 +2473,18 @@ pub const Runtime = struct {
             .windows = self.automation_windows[0..count],
             .views = self.automation_views[0..view_count],
             .widgets = self.automation_widgets[0..widget_count],
-            .diagnostics = .{ .frame_index = self.last_diagnostics.frame_index, .command_count = self.last_diagnostics.command_count },
+            .diagnostics = self.automationDiagnostics(),
             .source = self.loaded_source,
+        };
+    }
+
+    fn automationDiagnostics(self: *Runtime) automation.snapshot.Diagnostics {
+        const now_ns = timestampToU64(nowNanoseconds());
+        const uptime_ns = if (self.started_timestamp_ns > 0 and now_ns >= self.started_timestamp_ns) now_ns - self.started_timestamp_ns else 0;
+        return .{
+            .frame_index = self.last_diagnostics.frame_index,
+            .command_count = self.last_diagnostics.command_count,
+            .runtime_uptime_ns = uptime_ns,
         };
     }
 

@@ -710,6 +710,9 @@ pub fn build(b: *std.Build) void {
         \\trap 'kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-surface automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\ready_uptime="$(printf '%s\n' "$ready" | sed -n 's/.*runtime_uptime_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-surface automation ready uptime was missing" >&2; exit 1 ;; esac
+        \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt 500000000 ]; then echo "gpu-surface automation ready exceeded 500 ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
         \\case "$snapshot" in *'window @w1 "zero-native GPU Surface"'*) ;; *) echo "gpu-surface window was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'accessibility_label="Animated GPU surface"'*) ;; *) echo "gpu_surface view was missing from snapshot" >&2; exit 1 ;; esac
@@ -775,6 +778,9 @@ pub fn build(b: *std.Build) void {
         \\trap 'kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-dashboard automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\ready_uptime="$(printf '%s\n' "$ready" | sed -n 's/.*runtime_uptime_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-dashboard automation ready uptime was missing" >&2; exit 1 ;; esac
+        \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt 500000000 ]; then echo "gpu-dashboard automation ready exceeded 500 ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
         \\case "$snapshot" in *'window @w1 "zero-native GPU Dashboard"'*) ;; *) echo "gpu-dashboard window was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'accessibility_label="Native-rendered product dashboard canvas"'*) ;; *) echo "dashboard GPU canvas was missing from snapshot" >&2; exit 1 ;; esac
@@ -871,6 +877,9 @@ pub fn build(b: *std.Build) void {
         \\trap 'kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-components automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\ready_uptime="$(printf '%s\n' "$ready" | sed -n 's/.*runtime_uptime_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-components automation ready uptime was missing" >&2; exit 1 ;; esac
+        \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt 500000000 ]; then echo "gpu-components automation ready exceeded 500 ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
         \\case "$snapshot" in *'window @w1 "zero-native GPU Components"'*) ;; *) echo "gpu-components window was missing from snapshot" >&2; exit 1 ;; esac
         \\attempts=0

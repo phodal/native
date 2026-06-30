@@ -734,6 +734,40 @@ pub const Runtime = struct {
         return try canvas_frame.gpuPacket(output);
     }
 
+    pub fn presentNextCanvasGpuPacket(
+        self: *Runtime,
+        window_id: platform.WindowId,
+        label: []const u8,
+        options: canvas.CanvasFrameOptions,
+        storage: canvas.CanvasFrameStorage,
+        output: []canvas.CanvasGpuCommand,
+        packet_json_buffer: []u8,
+    ) anyerror!canvas.CanvasGpuPacket {
+        const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
+        const packet = try canvas_frame.gpuPacket(output);
+        var writer = std.Io.Writer.fixed(packet_json_buffer);
+        try packet.writeJson(&writer);
+        try self.options.platform.services.presentGpuSurfacePacket(.{
+            .window_id = window_id,
+            .label = label,
+            .frame_index = packet.frame_index,
+            .timestamp_ns = packet.timestamp_ns,
+            .surface_size = packet.surface_size,
+            .scale_factor = packet.scale,
+            .requires_render = packet.requiresRender(),
+            .command_count = packet.commandCount(),
+            .cache_action_count = packet.cacheActionCount(),
+            .cached_resource_command_count = packet.cachedResourceCommandCount(),
+            .unsupported_command_count = packet.unsupported_command_count,
+            .representable = packet.fullyRepresentable(),
+            .json = writer.buffered(),
+        });
+        if (self.findViewIndex(window_id, label)) |index| {
+            self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
+        }
+        return packet;
+    }
+
     pub fn presentCanvasFramePixels(
         self: *Runtime,
         window_id: platform.WindowId,
@@ -9753,6 +9787,65 @@ test "runtime next canvas GPU packet returns backend handoff commands" {
     try std.testing.expectEqual(@as(u64, 4), clean_packet.frame_index);
     try std.testing.expectEqual(canvas.CanvasRenderPassLoadAction.skip, clean_packet.load_action);
     try std.testing.expectEqual(@as(usize, 0), clean_packet.commandCount());
+}
+
+test "runtime presents next canvas GPU packet" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-packet-present", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 41,
+        .rect = geometry.RectF.init(8, 6, 32, 20),
+        .fill = .{ .color = canvas.Color.rgb8(37, 99, 235) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_json_buffer: [16 * 1024]u8 = undefined;
+    const packet = try harness.runtime.presentNextCanvasGpuPacket(1, "canvas", .{
+        .frame_index = 12,
+        .timestamp_ns = 44_000,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .scale = 2,
+    }, harness.runtime.canvasFrameScratchStorage(), &gpu_commands, &packet_json_buffer);
+
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expectEqual(@as(usize, 1), packet.commandCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqualStrings("canvas", harness.null_platform.gpu_surface_packet_present_label_storage[0..harness.null_platform.gpu_surface_packet_present_label_len]);
+    try std.testing.expectEqual(@as(u64, 12), harness.null_platform.gpu_surface_packet_present_frame_index);
+    try std.testing.expectEqual(@as(u64, 44_000), harness.null_platform.gpu_surface_packet_present_timestamp_ns);
+    try std.testing.expectEqualDeep(geometry.SizeF.init(96, 48), harness.null_platform.gpu_surface_packet_present_surface_size);
+    try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_packet_present_scale_factor);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_requires_render);
+    try std.testing.expectEqual(packet.commandCount(), harness.null_platform.gpu_surface_packet_present_command_count);
+    try std.testing.expectEqual(packet.cacheActionCount(), harness.null_platform.gpu_surface_packet_present_cache_action_count);
+    try std.testing.expectEqual(packet.cachedResourceCommandCount(), harness.null_platform.gpu_surface_packet_present_cached_resource_command_count);
+    try std.testing.expectEqual(packet.unsupported_command_count, harness.null_platform.gpu_surface_packet_present_unsupported_command_count);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_json_len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, packet_json_buffer[0..harness.null_platform.gpu_surface_packet_present_json_len], "\"commands\":[") != null);
+
+    const presented_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
+    try std.testing.expect(!presented_frame.canvas_frame_requires_render);
+    try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
+    try std.testing.expect(presented_frame.canvas_frame_dirty_bounds == null);
 }
 
 test "runtime next canvas frame retains and evicts glyph atlas cache" {

@@ -60,6 +60,7 @@ pub const Error = error{
     InvalidTrayOptions,
     TrayFieldTooLarge,
     InvalidGpuSurfacePixels,
+    InvalidGpuSurfacePacket,
 };
 
 pub const WebEngine = enum {
@@ -164,6 +165,7 @@ pub const max_shortcuts: usize = 64;
 pub const max_shortcut_id_bytes: usize = 64;
 pub const max_shortcut_key_bytes: usize = 32;
 pub const max_widget_accessibility_nodes: usize = 64;
+pub const max_gpu_surface_packet_json_bytes: usize = 128 * 1024;
 
 pub const ShortcutModifiers = struct {
     primary: bool = false,
@@ -1096,6 +1098,22 @@ pub const GpuSurfacePixels = struct {
     }
 };
 
+pub const GpuSurfacePacket = struct {
+    window_id: WindowId = 1,
+    label: []const u8,
+    frame_index: u64 = 0,
+    timestamp_ns: u64 = 0,
+    surface_size: geometry.SizeF = .{},
+    scale_factor: f32 = 1,
+    requires_render: bool = false,
+    command_count: usize = 0,
+    cache_action_count: usize = 0,
+    cached_resource_command_count: usize = 0,
+    unsupported_command_count: usize = 0,
+    representable: bool = true,
+    json: []const u8 = "",
+};
+
 pub const WidgetAccessibilityRole = enum(c_int) {
     none = 0,
     group = 1,
@@ -1304,6 +1322,7 @@ pub const PlatformServices = struct {
     configure_shortcuts_fn: ?*const fn (context: ?*anyopaque, shortcuts: []const Shortcut) anyerror!void = null,
     emit_window_event_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void = null,
     present_gpu_surface_pixels_fn: ?*const fn (context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void = null,
+    present_gpu_surface_packet_fn: ?*const fn (context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void = null,
     update_widget_accessibility_fn: ?*const fn (context: ?*anyopaque, snapshot: WidgetAccessibilitySnapshot) anyerror!void = null,
 
     pub fn readClipboard(self: PlatformServices, buffer: []u8) anyerror![]const u8 {
@@ -1547,6 +1566,13 @@ pub const PlatformServices = struct {
         return present_fn(self.context, pixels);
     }
 
+    pub fn presentGpuSurfacePacket(self: PlatformServices, packet: GpuSurfacePacket) anyerror!void {
+        if (packet.label.len == 0 or packet.label.len > max_view_label_bytes) return error.InvalidGpuSurfacePacket;
+        if (packet.json.len == 0 or packet.json.len > max_gpu_surface_packet_json_bytes) return error.InvalidGpuSurfacePacket;
+        const present_fn = self.present_gpu_surface_packet_fn orelse return error.UnsupportedService;
+        return present_fn(self.context, packet);
+    }
+
     pub fn updateWidgetAccessibility(self: PlatformServices, snapshot: WidgetAccessibilitySnapshot) anyerror!void {
         if (snapshot.view_label.len == 0 or snapshot.view_label.len > max_view_label_bytes) return error.InvalidViewOptions;
         if (snapshot.nodes.len > max_widget_accessibility_nodes) return error.InvalidViewOptions;
@@ -1688,6 +1714,21 @@ pub const NullPlatform = struct {
     gpu_surface_present_byte_len: usize = 0,
     gpu_surface_present_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
     gpu_surface_present_count: usize = 0,
+    gpu_surface_packet_present_window_id: WindowId = 0,
+    gpu_surface_packet_present_label_storage: [max_view_label_bytes]u8 = undefined,
+    gpu_surface_packet_present_label_len: usize = 0,
+    gpu_surface_packet_present_frame_index: u64 = 0,
+    gpu_surface_packet_present_timestamp_ns: u64 = 0,
+    gpu_surface_packet_present_surface_size: geometry.SizeF = .{},
+    gpu_surface_packet_present_scale_factor: f32 = 1,
+    gpu_surface_packet_present_requires_render: bool = false,
+    gpu_surface_packet_present_command_count: usize = 0,
+    gpu_surface_packet_present_cache_action_count: usize = 0,
+    gpu_surface_packet_present_cached_resource_command_count: usize = 0,
+    gpu_surface_packet_present_unsupported_command_count: usize = 0,
+    gpu_surface_packet_present_representable: bool = true,
+    gpu_surface_packet_present_json_len: usize = 0,
+    gpu_surface_packet_present_count: usize = 0,
     view_cursor_window_id: WindowId = 0,
     view_cursor_label_storage: [max_view_label_bytes]u8 = undefined,
     view_cursor_label_len: usize = 0,
@@ -1759,6 +1800,7 @@ pub const NullPlatform = struct {
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
+                .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
             },
             .app_info = self.app_info,
         };
@@ -2290,6 +2332,30 @@ pub const NullPlatform = struct {
         else
             .{ 0, 0, 0, 0 };
         self.gpu_surface_present_count += 1;
+    }
+
+    fn presentGpuSurfacePacket(context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (!self.gpu_surfaces) return error.UnsupportedService;
+        const view_index = self.findViewIndex(packet.window_id, packet.label) orelse return error.ViewNotFound;
+        if (self.views[view_index].kind != .gpu_surface) return error.InvalidGpuSurfacePacket;
+        if (packet.json.len == 0 or packet.json.len > max_gpu_surface_packet_json_bytes) return error.InvalidGpuSurfacePacket;
+
+        self.gpu_surface_packet_present_window_id = packet.window_id;
+        self.gpu_surface_packet_present_label_storage = undefined;
+        self.gpu_surface_packet_present_label_len = (try copyInto(&self.gpu_surface_packet_present_label_storage, packet.label)).len;
+        self.gpu_surface_packet_present_frame_index = packet.frame_index;
+        self.gpu_surface_packet_present_timestamp_ns = packet.timestamp_ns;
+        self.gpu_surface_packet_present_surface_size = packet.surface_size;
+        self.gpu_surface_packet_present_scale_factor = packet.scale_factor;
+        self.gpu_surface_packet_present_requires_render = packet.requires_render;
+        self.gpu_surface_packet_present_command_count = packet.command_count;
+        self.gpu_surface_packet_present_cache_action_count = packet.cache_action_count;
+        self.gpu_surface_packet_present_cached_resource_command_count = packet.cached_resource_command_count;
+        self.gpu_surface_packet_present_unsupported_command_count = packet.unsupported_command_count;
+        self.gpu_surface_packet_present_representable = packet.representable;
+        self.gpu_surface_packet_present_json_len = packet.json.len;
+        self.gpu_surface_packet_present_count += 1;
     }
 
     fn findWindowIndex(self: *const NullPlatform, window_id: WindowId) ?usize {
@@ -2934,6 +3000,54 @@ test "null platform records gpu surface pixel presentation" {
         .width = 2,
         .height = 1,
         .rgba8 = pixels[0..4],
+    }));
+}
+
+test "null platform records gpu surface packet presentation" {
+    var null_platform = NullPlatform.init(.{});
+    null_platform.gpu_surfaces = true;
+    const services = null_platform.platform().services;
+
+    try services.createView(.{
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 180),
+    });
+
+    const packet_json =
+        \\{"frame":7,"commands":[{"kind":"fill_rect_solid"}]}
+    ;
+    try services.presentGpuSurfacePacket(.{
+        .label = "canvas",
+        .frame_index = 7,
+        .timestamp_ns = 42_000,
+        .surface_size = geometry.SizeF.init(320, 180),
+        .scale_factor = 2,
+        .requires_render = true,
+        .command_count = 1,
+        .cache_action_count = 2,
+        .cached_resource_command_count = 1,
+        .unsupported_command_count = 0,
+        .representable = true,
+        .json = packet_json,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqualStrings("canvas", null_platform.gpu_surface_packet_present_label_storage[0..null_platform.gpu_surface_packet_present_label_len]);
+    try std.testing.expectEqual(@as(u64, 7), null_platform.gpu_surface_packet_present_frame_index);
+    try std.testing.expectEqual(@as(u64, 42_000), null_platform.gpu_surface_packet_present_timestamp_ns);
+    try std.testing.expectEqualDeep(geometry.SizeF.init(320, 180), null_platform.gpu_surface_packet_present_surface_size);
+    try std.testing.expectEqual(@as(f32, 2), null_platform.gpu_surface_packet_present_scale_factor);
+    try std.testing.expect(null_platform.gpu_surface_packet_present_requires_render);
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_packet_present_command_count);
+    try std.testing.expectEqual(@as(usize, 2), null_platform.gpu_surface_packet_present_cache_action_count);
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_packet_present_cached_resource_command_count);
+    try std.testing.expectEqual(@as(usize, 0), null_platform.gpu_surface_packet_present_unsupported_command_count);
+    try std.testing.expect(null_platform.gpu_surface_packet_present_representable);
+    try std.testing.expectEqual(@as(usize, packet_json.len), null_platform.gpu_surface_packet_present_json_len);
+    try std.testing.expectError(error.InvalidGpuSurfacePacket, services.presentGpuSurfacePacket(.{
+        .label = "canvas",
+        .json = "",
     }));
 }
 

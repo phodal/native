@@ -36,6 +36,10 @@ const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_view;
 const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
 const max_canvas_text_layouts_per_view: usize = 32;
 const max_canvas_surface_extent_pixels: f32 = 16_384;
+threadlocal var canvas_frame_text_layout_plans_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutPlan = undefined;
+threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layouts_per_view]canvas.TextLine = undefined;
+threadlocal var canvas_frame_text_layout_cache_entries_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined;
+threadlocal var canvas_frame_text_layout_cache_actions_scratch: [max_canvas_text_layouts_per_view * 2]canvas.TextLayoutCacheAction = undefined;
 pub const max_canvas_widget_nodes_per_view: usize = 64;
 pub const max_canvas_widget_semantics_per_view: usize = 64;
 pub const max_canvas_widget_text_bytes_per_view: usize = 2048;
@@ -1185,6 +1189,10 @@ pub const Runtime = struct {
             .glyph_atlas_entries = &self.canvas_frame_glyph_atlas_entries,
             .glyph_atlas_cache_entries = &self.canvas_frame_glyph_atlas_cache_entries,
             .glyph_atlas_cache_actions = &self.canvas_frame_glyph_atlas_cache_actions,
+            .text_layout_plans = &canvas_frame_text_layout_plans_scratch,
+            .text_layout_lines = &canvas_frame_text_layout_lines_scratch,
+            .text_layout_cache_entries = &canvas_frame_text_layout_cache_entries_scratch,
+            .text_layout_cache_actions = &canvas_frame_text_layout_cache_actions_scratch,
             .changes = &self.canvas_frame_changes,
         };
     }
@@ -11137,6 +11145,65 @@ test "runtime next canvas frame keeps recent unused text caches warm" {
     try std.testing.expectEqual(@as(usize, 0), second_frame.text_layout_cache_plan.evictCount());
     try std.testing.expectEqual(@as(u64, 2), second_frame.text_layout_cache_plan.entries[0].last_used_frame);
     try std.testing.expectEqual(@as(u64, 1), second_frame.text_layout_cache_plan.entries[1].last_used_frame);
+}
+
+test "runtime canvas frame scratch storage includes text layout caches" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-scratch-text-cache", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 80),
+    });
+
+    const first_commands = [_]canvas.CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 5,
+        .size = 14,
+        .origin = geometry.PointF.init(12, 32),
+        .color = canvas.Color.rgb8(15, 23, 42),
+        .text = "First",
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &first_commands });
+
+    const first_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 1 }, harness.runtime.canvasFrameScratchStorage());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.text_layout_plan.planCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.text_layout_plan.lineCount());
+    try std.testing.expectEqual(@as(usize, 1), first_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_upload_count);
+
+    const next_commands = [_]canvas.CanvasCommand{.{ .draw_text = .{
+        .id = 1,
+        .font_id = 5,
+        .size = 14,
+        .origin = geometry.PointF.init(12, 32),
+        .color = canvas.Color.rgb8(15, 23, 42),
+        .text = "Second",
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &next_commands });
+
+    const changed_frame = try harness.runtime.nextCanvasFrame(1, "canvas", .{ .frame_index = 2 }, harness.runtime.canvasFrameScratchStorage());
+    try std.testing.expect(changed_frame.requiresRender());
+    try std.testing.expectEqual(@as(usize, 1), changed_frame.text_layout_plan.planCount());
+    try std.testing.expectEqual(@as(usize, 1), changed_frame.text_layout_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 1), changed_frame.text_layout_cache_plan.retainCount());
+    try std.testing.expectEqual(@as(usize, 0), changed_frame.text_layout_cache_plan.evictCount());
+    try std.testing.expectEqual(@as(usize, 2), harness.runtime.views[0].canvas_frame_text_layout_cache_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_upload_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].canvas_frame_text_layout_retain_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.views[0].canvas_frame_text_layout_evict_count);
 }
 
 test "runtime next canvas frame applies render override dirty regions" {

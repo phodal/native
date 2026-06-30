@@ -2831,11 +2831,13 @@ pub const Runtime = struct {
         const point = bounds.center();
         const window_id = self.views[view_index].window_id;
         const label = self.views[view_index].label;
+        const timestamp_ns = automationInputTimestampNs();
 
         try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
             .window_id = window_id,
             .label = label,
             .kind = .pointer_down,
+            .timestamp_ns = timestamp_ns,
             .x = point.x,
             .y = point.y,
             .button = 0,
@@ -2844,6 +2846,7 @@ pub const Runtime = struct {
             .window_id = window_id,
             .label = label,
             .kind = .pointer_up,
+            .timestamp_ns = timestamp_ns,
             .x = point.x,
             .y = point.y,
             .button = 0,
@@ -2858,10 +2861,12 @@ pub const Runtime = struct {
         const bounds = node.frame.normalized();
         if (bounds.isEmpty()) return error.InvalidCommand;
         const point = bounds.center();
+        const timestamp_ns = automationInputTimestampNs();
         try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
             .window_id = self.views[view_index].window_id,
             .label = self.views[view_index].label,
             .kind = .scroll,
+            .timestamp_ns = timestamp_ns,
             .x = point.x,
             .y = point.y,
             .delta_y = wheel.delta_y,
@@ -2911,6 +2916,7 @@ pub const Runtime = struct {
             .window_id = self.views[view_index].window_id,
             .label = self.views[view_index].label,
             .kind = .key_down,
+            .timestamp_ns = automationInputTimestampNs(),
             .key = key,
         } });
     }
@@ -4601,6 +4607,10 @@ fn nowNanoseconds() i128 {
 fn timestampToU64(value: i128) u64 {
     if (value <= 0) return 0;
     return @intCast(@min(value, std.math.maxInt(u64)));
+}
+
+fn automationInputTimestampNs() u64 {
+    return timestampToU64(nowNanoseconds());
 }
 
 const RunContext = struct {
@@ -12332,6 +12342,46 @@ test "runtime wheel input scrolls retained canvas scroll views" {
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
 }
 
+test "runtime automation widget wheel timestamps retained canvas scroll input" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-wheel-automation", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 180, 64),
+    });
+
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 40, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 80, 0, 32), .text = "Three" },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .scroll_view, .children = &children }, geometry.RectF.init(0, 0, 180, 64), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchAutomationCommand(app, "widget-wheel canvas 1 18");
+    try std.testing.expect(harness.runtime.views[0].gpu_input_timestamp_ns > 0);
+    try std.testing.expectEqual(harness.runtime.views[0].gpu_input_timestamp_ns, harness.runtime.views[0].gpu_pending_input_timestamp_ns);
+    try std.testing.expect(harness.runtime.invalidated);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 18), retained.findById(1).?.widget.value);
+    try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
+}
+
 test "runtime applies stored design token scroll physics" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -14111,6 +14161,8 @@ test "runtime automation widget click dispatches pointer input" {
 
     try harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 2");
     try harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 3");
+    try std.testing.expect(harness.runtime.views[0].gpu_input_timestamp_ns > 0);
+    try std.testing.expect(harness.runtime.views[0].gpu_pending_input_timestamp_ns > 0);
     try std.testing.expect(harness.null_platform.gpu_surface_frame_request_count > 0);
     try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.gpu_surface_frame_request_window_id);
     try std.testing.expectEqualStrings("canvas", harness.null_platform.gpu_surface_frame_request_label_storage[0..harness.null_platform.gpu_surface_frame_request_label_len]);
@@ -18321,6 +18373,8 @@ test "runtime dispatches automation canvas widget actions" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
     try harness.runtime.dispatchAutomationWidgetAction(app, .{ .view_label = "canvas", .id = 2, .action = .press });
+    try std.testing.expect(harness.runtime.views[0].gpu_input_timestamp_ns > 0);
+    try std.testing.expect(harness.runtime.views[0].gpu_pending_input_timestamp_ns > 0);
     try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
     try std.testing.expectEqualStrings("widget.run", app_state.last_command);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);

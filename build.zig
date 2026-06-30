@@ -839,6 +839,13 @@ pub fn build(b: *std.Build) void {
         \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "dashboard switch click did not request a GPU frame" >&2; exit 1; fi
         \\case "$snapshot" in *'Clicked toggle #133: off.'*'widget @w1/dashboard-canvas#133 role=switch'*'value=0'*) ;; *) echo "dashboard switch click did not route through pointer input" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "dashboard switch click did not present an incremental GPU packet without pipeline uploads" >&2; exit 1 ;; esac
+        \\input_timestamp="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_input_timestamp_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$input_timestamp" in ''|*[!0-9]*) echo "dashboard GPU input timestamp was missing after widget interaction" >&2; exit 1 ;; esac
+        \\if [ "$input_timestamp" -le 0 ]; then echo "dashboard GPU input timestamp was not recorded" >&2; exit 1; fi
+        \\input_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_input_latency_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$input_latency" in ''|*[!0-9]*) echo "dashboard GPU input latency was missing after widget interaction" >&2; exit 1 ;; esac
+        \\if [ "$input_latency" -le 0 ]; then echo "dashboard GPU input latency was not recorded" >&2; exit 1; fi
+        \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_input_latency_budget_exceeded=0'*'gpu_input_latency_budget_ok=true'*) ;; *) echo "dashboard GPU input latency exceeded the frame budget" >&2; exit 1 ;; esac
         \\echo "gpu-dashboard smoke ok"
         ,
         "sh",
@@ -967,6 +974,13 @@ pub fn build(b: *std.Build) void {
         \\if [ "$gpu_frame_after" -le "$gpu_frame_before" ]; then echo "scroll automation wheel did not request a GPU frame" >&2; exit 1; fi
         \\case "$snapshot" in *'Scrolled scroll_view #130: offset 58.'*'widget @w1/components-canvas#130 role=group'*'scroll=[offset=58,viewport=28,content=172]'*) ;; *) echo "scroll automation wheel did not update retained scroll semantics" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'canvas_frame_full_repaint=false'*'canvas_frame_pipeline_uploads=0'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "scroll automation wheel did not present an incremental GPU packet without pipeline uploads" >&2; exit 1 ;; esac
+        \\input_timestamp="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_input_timestamp_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$input_timestamp" in ''|*[!0-9]*) echo "components GPU input timestamp was missing after widget interaction" >&2; exit 1 ;; esac
+        \\if [ "$input_timestamp" -le 0 ]; then echo "components GPU input timestamp was not recorded" >&2; exit 1; fi
+        \\input_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/components-canvas kind=gpu_surface.* gpu_input_latency_ns=\([0-9][0-9]*\).*/\1/p')"
+        \\case "$input_latency" in ''|*[!0-9]*) echo "components GPU input latency was missing after widget interaction" >&2; exit 1 ;; esac
+        \\if [ "$input_latency" -le 0 ]; then echo "components GPU input latency was not recorded" >&2; exit 1; fi
+        \\case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'gpu_input_latency_budget_exceeded=0'*'gpu_input_latency_budget_ok=true'*) ;; *) echo "components GPU input latency exceeded the frame budget" >&2; exit 1 ;; esac
         \\echo "gpu-components smoke ok"
         ,
         "sh",

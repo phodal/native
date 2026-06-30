@@ -19543,8 +19543,15 @@ test "display list serializes deterministic Phase 2 primitives" {
         .{ .id = 42, .x = 12, .y = 28, .advance = 9 },
         .{ .id = 43, .x = 21, .y = 28, .advance = 8 },
     };
+    const path = [_]PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(180, 120), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(212, 104), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .quad_to, .points = .{ geometry.PointF.init(228, 116), geometry.PointF.init(220, 136), geometry.PointF.zero() } },
+        .{ .verb = .cubic_to, .points = .{ geometry.PointF.init(208, 148), geometry.PointF.init(188, 148), geometry.PointF.init(180, 120) } },
+        .{ .verb = .close },
+    };
 
-    var commands: [12]CanvasCommand = undefined;
+    var commands: [15]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try builder.pushClip(.{
         .id = 9,
@@ -19583,6 +19590,26 @@ test "display list serializes deterministic Phase 2 primitives" {
         .radius = Radius.all(8),
         .stroke = .{ .fill = .{ .color = Color.rgb8(0, 0, 0) }, .width = 1.5 },
     });
+    try builder.drawLine(.{
+        .id = 17,
+        .from = geometry.PointF.init(24, 140),
+        .to = geometry.PointF.init(152, 140),
+        .stroke = .{ .fill = .{ .linear_gradient = .{
+            .start = geometry.PointF.init(0, 0),
+            .end = geometry.PointF.init(360, 180),
+            .stops = &stops,
+        } }, .width = 2 },
+    });
+    try builder.fillPath(.{
+        .id = 18,
+        .elements = &path,
+        .fill = .{ .color = Color.rgb8(15, 23, 42) },
+    });
+    try builder.strokePath(.{
+        .id = 19,
+        .elements = &path,
+        .stroke = .{ .fill = .{ .color = Color.rgb8(0, 0, 0) }, .width = 2 },
+    });
     try builder.drawImage(.{
         .id = 15,
         .image_id = 3,
@@ -19614,7 +19641,7 @@ test "display list serializes deterministic Phase 2 primitives" {
     try builder.displayList().writeJson(&writer);
 
     const expected =
-        "{\"commands\":[{\"op\":\"push_clip\",\"id\":9,\"rect\":[4,5,320,160],\"radius\":[12,12,12,12]},{\"op\":\"push_opacity\",\"opacity\":0.75},{\"op\":\"transform\",\"matrix\":[1,0,0,1,8,6]},{\"op\":\"fill_rect\",\"id\":10,\"rect\":[0,0,360,180],\"fill\":{\"kind\":\"linear_gradient\",\"start\":[0,0],\"end\":[360,180],\"stops\":[{\"offset\":0,\"color\":[1,1,1,1]},{\"offset\":1,\"color\":[0,0,0,1]}]}},{\"op\":\"shadow\",\"id\":11,\"rect\":[24,24,220,96],\"radius\":[16,16,16,16],\"offset\":[0,18],\"blur\":42,\"spread\":-8,\"color\":[0,0,0,0.25]},{\"op\":\"fill_rounded_rect\",\"id\":13,\"rect\":[24,80,128,48],\"radius\":[8,10,12,6],\"fill\":{\"kind\":\"color\",\"color\":[1,1,1,1]}},{\"op\":\"stroke_rect\",\"id\":14,\"rect\":[24,80,128,48],\"radius\":[8,8,8,8],\"stroke\":{\"width\":1.5,\"fill\":{\"kind\":\"color\",\"color\":[0,0,0,1]}}},{\"op\":\"draw_image\",\"id\":15,\"image\":3,\"dst\":[180,40,96,64],\"src\":[0,0,48,32],\"opacity\":0.6,\"fit\":\"cover\",\"sampling\":\"nearest\"},{\"op\":\"draw_text\",\"id\":12,\"font\":7,\"size\":17,\"origin\":[32,52],\"color\":[0.05882353,0.09019608,0.16470589,1],\"text\":\"Hi\",\"glyphs\":[{\"id\":42,\"x\":12,\"y\":28,\"advance\":9},{\"id\":43,\"x\":21,\"y\":28,\"advance\":8}]},{\"op\":\"blur\",\"id\":16,\"rect\":[24,24,220,96],\"radius\":18},{\"op\":\"pop_opacity\"},{\"op\":\"pop_clip\"}]}";
+        "{\"commands\":[{\"op\":\"push_clip\",\"id\":9,\"rect\":[4,5,320,160],\"radius\":[12,12,12,12]},{\"op\":\"push_opacity\",\"opacity\":0.75},{\"op\":\"transform\",\"matrix\":[1,0,0,1,8,6]},{\"op\":\"fill_rect\",\"id\":10,\"rect\":[0,0,360,180],\"fill\":{\"kind\":\"linear_gradient\",\"start\":[0,0],\"end\":[360,180],\"stops\":[{\"offset\":0,\"color\":[1,1,1,1]},{\"offset\":1,\"color\":[0,0,0,1]}]}},{\"op\":\"shadow\",\"id\":11,\"rect\":[24,24,220,96],\"radius\":[16,16,16,16],\"offset\":[0,18],\"blur\":42,\"spread\":-8,\"color\":[0,0,0,0.25]},{\"op\":\"fill_rounded_rect\",\"id\":13,\"rect\":[24,80,128,48],\"radius\":[8,10,12,6],\"fill\":{\"kind\":\"color\",\"color\":[1,1,1,1]}},{\"op\":\"stroke_rect\",\"id\":14,\"rect\":[24,80,128,48],\"radius\":[8,8,8,8],\"stroke\":{\"width\":1.5,\"fill\":{\"kind\":\"color\",\"color\":[0,0,0,1]}}},{\"op\":\"draw_line\",\"id\":17,\"from\":[24,140],\"to\":[152,140],\"stroke\":{\"width\":2,\"fill\":{\"kind\":\"linear_gradient\",\"start\":[0,0],\"end\":[360,180],\"stops\":[{\"offset\":0,\"color\":[1,1,1,1]},{\"offset\":1,\"color\":[0,0,0,1]}]}}},{\"op\":\"fill_path\",\"id\":18,\"path\":[{\"verb\":\"move_to\",\"points\":[[180,120]]},{\"verb\":\"line_to\",\"points\":[[212,104]]},{\"verb\":\"quad_to\",\"points\":[[228,116],[220,136]]},{\"verb\":\"cubic_to\",\"points\":[[208,148],[188,148],[180,120]]},{\"verb\":\"close\",\"points\":[]}],\"fill\":{\"kind\":\"color\",\"color\":[0.05882353,0.09019608,0.16470589,1]}},{\"op\":\"stroke_path\",\"id\":19,\"path\":[{\"verb\":\"move_to\",\"points\":[[180,120]]},{\"verb\":\"line_to\",\"points\":[[212,104]]},{\"verb\":\"quad_to\",\"points\":[[228,116],[220,136]]},{\"verb\":\"cubic_to\",\"points\":[[208,148],[188,148],[180,120]]},{\"verb\":\"close\",\"points\":[]}],\"stroke\":{\"width\":2,\"fill\":{\"kind\":\"color\",\"color\":[0,0,0,1]}}},{\"op\":\"draw_image\",\"id\":15,\"image\":3,\"dst\":[180,40,96,64],\"src\":[0,0,48,32],\"opacity\":0.6,\"fit\":\"cover\",\"sampling\":\"nearest\"},{\"op\":\"draw_text\",\"id\":12,\"font\":7,\"size\":17,\"origin\":[32,52],\"color\":[0.05882353,0.09019608,0.16470589,1],\"text\":\"Hi\",\"glyphs\":[{\"id\":42,\"x\":12,\"y\":28,\"advance\":9},{\"id\":43,\"x\":21,\"y\":28,\"advance\":8}]},{\"op\":\"blur\",\"id\":16,\"rect\":[24,24,220,96],\"radius\":18},{\"op\":\"pop_opacity\"},{\"op\":\"pop_clip\"}]}";
     try std.testing.expectEqualStrings(expected, writer.buffered());
 }
 

@@ -285,7 +285,8 @@ const GpuComponentsApp = struct {
     fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!void {
         const surface_size = if (frame_event.size.isEmpty()) geometry.SizeF.init(canvas_width, canvas_height) else frame_event.size;
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
-        const packet = runtime.presentNextCanvasGpuPacket(
+        const present_scale = referencePresentScale(scale_factor);
+        const packet = runtime.presentNextCanvasGpuPacketWithScale(
             frame_event.window_id,
             canvas_label,
             .{
@@ -299,6 +300,7 @@ const GpuComponentsApp = struct {
             color(247, 249, 252),
             &self.gpu_commands,
             &self.packet_json,
+            present_scale,
         ) catch |err| switch (err) {
             error.UnsupportedService => {
                 try self.presentComponentsCanvasPixels(runtime, frame_event.window_id, surface_size, scale_factor, frame_event.frame_index, frame_event.timestamp_ns, full_repaint);
@@ -1099,7 +1101,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_present_count);
     try std.testing.expectEqualDeep(geometry.SizeF.init(canvas_width, canvas_height), harness.null_platform.gpu_surface_packet_present_surface_size);
-    try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_packet_present_scale_factor);
+    try std.testing.expectEqual(@as(f32, 1), harness.null_platform.gpu_surface_packet_present_scale_factor);
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_representable);
     try std.testing.expect(app.pixels == null);
     try std.testing.expect(app.scratch == null);

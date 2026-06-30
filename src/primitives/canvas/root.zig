@@ -3735,11 +3735,19 @@ pub const WidgetLayoutTree = struct {
     }
 
     pub fn renderStateDirtyBounds(self: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState) ?geometry.RectF {
-        return widgetRenderStateDirtyBounds(self, previous, next);
+        return self.renderStateDirtyBoundsWithTokens(previous, next, .{});
+    }
+
+    pub fn renderStateDirtyBoundsWithTokens(self: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState, tokens: DesignTokens) ?geometry.RectF {
+        return widgetRenderStateDirtyBounds(self, previous, next, tokens);
     }
 
     pub fn diff(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
-        return diffWidgetLayoutTrees(previous, next, output);
+        return diffWithTokens(previous, next, .{}, output);
+    }
+
+    pub fn diffWithTokens(previous: WidgetLayoutTree, next: WidgetLayoutTree, tokens: DesignTokens, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
+        return diffWidgetLayoutTrees(previous, next, tokens, output);
     }
 };
 
@@ -6457,13 +6465,6 @@ fn widgetBackdropBlur(widget: Widget, tokens: DesignTokens) f32 {
     return 0;
 }
 
-fn widgetBackdropBlurInvalidationRadius(widget: Widget) f32 {
-    const explicit = nonNegative(widget.backdrop_blur);
-    if (explicit > 0) return explicit;
-    if (widget.backdrop_blur_token) |token| return nonNegative((BlurTokens{}).value(token));
-    return 0;
-}
-
 fn widgetClipsContent(widget: Widget) bool {
     return widget.kind == .scroll_view or widget.layout.clip_content;
 }
@@ -8718,7 +8719,7 @@ fn widgetWithRenderState(widget: Widget, state: WidgetRenderState) Widget {
     return copy;
 }
 
-fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
+fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, tokens: DesignTokens, output: []WidgetInvalidation) Error![]const WidgetInvalidation {
     try validateUniqueWidgetIds(previous);
     try validateUniqueWidgetIds(next);
 
@@ -8731,7 +8732,7 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
                 .kind = .removed,
                 .id = id,
                 .previous_index = previous_index,
-                .dirty_bounds = widgetClippedDirtyBounds(previous, previous_index, widgetFullPaintBounds(previous_node)),
+                .dirty_bounds = widgetClippedDirtyBounds(previous, previous_index, widgetFullPaintBounds(previous_node, tokens)),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -8739,16 +8740,16 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
             continue;
         };
 
-        var change = widgetChange(previous_node, next_ref.node, previous_index, next_ref.index);
+        var change = widgetChange(previous_node, next_ref.node, previous_index, next_ref.index, tokens);
         if (previous_node.widget.semantics.hidden != next_ref.node.widget.semantics.hidden) {
             change.dirty_bounds = unionOptionalBounds(
-                widgetVisibleSubtreeFullPaintBounds(previous, previous_index),
-                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index),
+                widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
+                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
             );
         } else if (previous_node.widget.opacity != next_ref.node.widget.opacity or !affinesEqual(previous_node.widget.transform, next_ref.node.widget.transform)) {
             change.dirty_bounds = unionOptionalBounds(
-                widgetVisibleSubtreeFullPaintBounds(previous, previous_index),
-                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index),
+                widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
+                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
             );
         } else {
             change.dirty_bounds = widgetChangedClippedDirtyBounds(previous, previous_index, next, next_ref.index, change.dirty_bounds);
@@ -8766,7 +8767,7 @@ fn diffWidgetLayoutTrees(previous: WidgetLayoutTree, next: WidgetLayoutTree, out
                 .kind = .added,
                 .id = id,
                 .next_index = next_index,
-                .dirty_bounds = widgetClippedDirtyBounds(next, next_index, widgetFullPaintBounds(next_node)),
+                .dirty_bounds = widgetClippedDirtyBounds(next, next_index, widgetFullPaintBounds(next_node, tokens)),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -8807,7 +8808,7 @@ fn validateUniqueWidgetIds(layout: WidgetLayoutTree) Error!void {
     }
 }
 
-fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_index: usize, next_index: usize) WidgetInvalidation {
+fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_index: usize, next_index: usize, tokens: DesignTokens) WidgetInvalidation {
     const layout_dirty =
         previous.widget.kind != next.widget.kind or
         previous.depth != next.depth or
@@ -8841,9 +8842,9 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
     const paint_dirty = layout_dirty or content_dirty or visual_dirty or state_dirty or visibility_dirty or layer_dirty;
 
     const dirty_bounds = if (layout_dirty or visibility_dirty or layer_dirty)
-        unionOptionalBounds(widgetFullPaintBounds(previous), widgetFullPaintBounds(next))
+        unionOptionalBounds(widgetFullPaintBounds(previous, tokens), widgetFullPaintBounds(next, tokens))
     else if (paint_dirty)
-        widgetPaintChangeBounds(previous.widget, next.widget)
+        widgetPaintChangeBounds(previous.widget, next.widget, tokens)
     else
         null;
 
@@ -8859,7 +8860,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
     };
 }
 
-fn widgetRenderStateDirtyBounds(layout: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState) ?geometry.RectF {
+fn widgetRenderStateDirtyBounds(layout: WidgetLayoutTree, previous: WidgetRenderState, next: WidgetRenderState, tokens: DesignTokens) ?geometry.RectF {
     var ids: [6]?ObjectId = [_]?ObjectId{null} ** 6;
     var id_len: usize = 0;
     if (previous.focused_id != next.focused_id) {
@@ -8884,7 +8885,7 @@ fn widgetRenderStateDirtyBounds(layout: WidgetLayoutTree, previous: WidgetRender
         const previous_widget = widgetWithRenderState(base, previous);
         const next_widget = widgetWithRenderState(base, next);
         if (widgetStatesEqual(previous_widget.state, next_widget.state)) continue;
-        bounds = unionOptionalBounds(bounds, widgetClippedDirtyBounds(layout, index, widgetPaintChangeBounds(previous_widget, next_widget)));
+        bounds = unionOptionalBounds(bounds, widgetClippedDirtyBounds(layout, index, widgetPaintChangeBounds(previous_widget, next_widget, tokens)));
     }
     return bounds;
 }
@@ -8900,25 +8901,25 @@ fn appendOptionalObjectId(output: []?ObjectId, len: *usize, maybe_id: ?ObjectId)
     len.* += 1;
 }
 
-fn widgetFullPaintBounds(node: WidgetLayoutNode) geometry.RectF {
-    return widgetFullPaintBoundsWithTransform(node, widgetTransform(node.widget));
+fn widgetFullPaintBounds(node: WidgetLayoutNode, tokens: DesignTokens) geometry.RectF {
+    return widgetFullPaintBoundsWithTransform(node, widgetTransform(node.widget), tokens);
 }
 
-fn widgetFullPaintBoundsWithTransform(node: WidgetLayoutNode, transform: Affine) geometry.RectF {
+fn widgetFullPaintBoundsWithTransform(node: WidgetLayoutNode, transform: Affine, tokens: DesignTokens) geometry.RectF {
     var bounds = node.frame.normalized();
-    if (widgetFrameStrokeBounds(node.widget)) |stroke_bounds| {
+    if (widgetFrameStrokeBounds(node.widget, tokens)) |stroke_bounds| {
         bounds = geometry.RectF.unionWith(bounds, stroke_bounds.normalized());
     }
-    if (widgetShadowPaintBounds(node.widget)) |shadow_bounds| {
+    if (widgetShadowPaintBounds(node.widget, tokens)) |shadow_bounds| {
         bounds = geometry.RectF.unionWith(bounds, shadow_bounds.normalized());
     }
-    if (widgetBackdropBlurPaintBounds(node.widget)) |blur_bounds| {
+    if (widgetBackdropBlurPaintBounds(node.widget, tokens)) |blur_bounds| {
         bounds = geometry.RectF.unionWith(bounds, blur_bounds.normalized());
     }
     return transform.transformRect(bounds).normalized();
 }
 
-fn widgetVisibleSubtreeFullPaintBounds(layout: WidgetLayoutTree, root_index: usize) ?geometry.RectF {
+fn widgetVisibleSubtreeFullPaintBounds(layout: WidgetLayoutTree, root_index: usize, tokens: DesignTokens) ?geometry.RectF {
     if (root_index >= layout.nodes.len) return null;
 
     const root_depth = layout.nodes[root_index].depth;
@@ -8936,7 +8937,7 @@ fn widgetVisibleSubtreeFullPaintBounds(layout: WidgetLayoutTree, root_index: usi
             hidden_depth = node.depth;
             continue;
         }
-        bounds = unionOptionalBounds(bounds, widgetClippedDirtyBounds(layout, index, widgetFullPaintBoundsWithTransform(node, widgetAccumulatedTransform(layout, index))));
+        bounds = unionOptionalBounds(bounds, widgetClippedDirtyBounds(layout, index, widgetFullPaintBoundsWithTransform(node, widgetAccumulatedTransform(layout, index), tokens)));
     }
     return bounds;
 }
@@ -8991,29 +8992,27 @@ fn widgetClippedDirtyBounds(layout: WidgetLayoutTree, node_index: usize, bounds:
     return clipped;
 }
 
-fn widgetPaintChangeBounds(previous: Widget, next: Widget) ?geometry.RectF {
+fn widgetPaintChangeBounds(previous: Widget, next: Widget, tokens: DesignTokens) ?geometry.RectF {
     var bounds = unionOptionalBounds(previous.frame, next.frame);
-    bounds = unionOptionalBounds(bounds, widgetFocusPaintBounds(previous));
-    bounds = unionOptionalBounds(bounds, widgetFocusPaintBounds(next));
-    bounds = unionOptionalBounds(bounds, widgetBackdropBlurPaintBounds(previous));
-    bounds = unionOptionalBounds(bounds, widgetBackdropBlurPaintBounds(next));
+    bounds = unionOptionalBounds(bounds, widgetFocusPaintBounds(previous, tokens));
+    bounds = unionOptionalBounds(bounds, widgetFocusPaintBounds(next, tokens));
+    bounds = unionOptionalBounds(bounds, widgetBackdropBlurPaintBounds(previous, tokens));
+    bounds = unionOptionalBounds(bounds, widgetBackdropBlurPaintBounds(next, tokens));
     return bounds;
 }
 
-fn widgetFrameStrokeBounds(widget: Widget) ?geometry.RectF {
-    const width = widgetFrameStrokeWidth(widget);
+fn widgetFrameStrokeBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    const width = widgetFrameStrokeWidth(widget, tokens);
     if (width <= 0) return null;
     return strokeBounds(widget.frame, width);
 }
 
-fn widgetFocusPaintBounds(widget: Widget) ?geometry.RectF {
-    if (!widget.state.focused or widgetFocusStrokeWidth(widget) <= 0) return null;
-    const tokens: DesignTokens = .{};
+fn widgetFocusPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    if (!widget.state.focused or widgetFocusStrokeWidth(widget, tokens) <= 0) return null;
     return strokeBounds(widget.frame, tokens.stroke.focus);
 }
 
-fn widgetFrameStrokeWidth(widget: Widget) f32 {
-    const tokens: DesignTokens = .{};
+fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
         .panel, .popover, .menu_surface => tokens.stroke.hairline,
         .button, .icon_button, .text_field, .search_field, .segmented_control => if (widget.state.focused) tokens.stroke.focus else tokens.stroke.regular,
@@ -9024,8 +9023,7 @@ fn widgetFrameStrokeWidth(widget: Widget) f32 {
     };
 }
 
-fn widgetFocusStrokeWidth(widget: Widget) f32 {
-    const tokens: DesignTokens = .{};
+fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
         .button,
         .icon_button,
@@ -9043,8 +9041,7 @@ fn widgetFocusStrokeWidth(widget: Widget) f32 {
     };
 }
 
-fn widgetShadowPaintBounds(widget: Widget) ?geometry.RectF {
-    const tokens: DesignTokens = .{};
+fn widgetShadowPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
     const token = switch (widget.kind) {
         .panel, .tooltip => tokens.shadow.sm,
         .popover, .menu_surface => tokens.shadow.md,
@@ -9061,8 +9058,8 @@ fn widgetShadowPaintBounds(widget: Widget) ?geometry.RectF {
     });
 }
 
-fn widgetBackdropBlurPaintBounds(widget: Widget) ?geometry.RectF {
-    const radius = widgetBackdropBlurInvalidationRadius(widget);
+fn widgetBackdropBlurPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    const radius = widgetBackdropBlur(widget, tokens);
     if (radius <= 0) return null;
     return widget.frame.normalized().inflate(geometry.InsetsF.all(radius));
 }
@@ -14377,6 +14374,25 @@ test "widget render state dirty bounds tracks changed runtime states" {
     try std.testing.expect(layout.renderStateDirtyBounds(.{ .focused_id = 99 }, .{ .focused_id = 100 }) == null);
 }
 
+test "widget render state dirty bounds uses custom focus stroke tokens" {
+    const children = [_]Widget{.{
+        .id = 2,
+        .kind = .button,
+        .frame = geometry.RectF.init(10, 12, 96, 32),
+        .text = "Run",
+    }};
+    const tokens = DesignTokens{
+        .stroke = .{ .focus = 6 },
+    };
+    var nodes: [2]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 160, 80), &nodes);
+
+    try expectRect(
+        geometry.RectF.init(7, 9, 102, 38),
+        layout.renderStateDirtyBoundsWithTokens(.{}, .{ .focused_id = 2 }, tokens),
+    );
+}
+
 test "widget render state dirty bounds clips to scroll ancestors" {
     const children = [_]Widget{.{
         .id = 2,
@@ -14738,6 +14754,35 @@ test "widget layout diff marks backdrop blur token changes as paint dirty" {
     try std.testing.expect(invalidations[0].paint_dirty);
     try std.testing.expect(!invalidations[0].semantics_dirty);
     try expectRect(geometry.RectF.init(2, 4, 96, 56), invalidations[0].dirty_bounds);
+}
+
+test "widget layout diff uses custom blur tokens for paint dirty bounds" {
+    const previous_stack = Widget{
+        .id = 1,
+        .kind = .stack,
+    };
+    const next_stack = Widget{
+        .id = 1,
+        .kind = .stack,
+        .backdrop_blur_token = .md,
+    };
+    const tokens = DesignTokens{
+        .blur = .{
+            .sm = 8,
+            .md = 24,
+        },
+    };
+
+    var previous_nodes: [1]WidgetLayoutNode = undefined;
+    var next_nodes: [1]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(previous_stack, geometry.RectF.init(10, 12, 80, 40), &previous_nodes);
+    const next = try layoutWidgetTree(next_stack, geometry.RectF.init(10, 12, 80, 40), &next_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diffWithTokens(previous, next, tokens, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try expectRect(geometry.RectF.init(-14, -12, 128, 88), invalidations[0].dirty_bounds);
 }
 
 test "widget layout diff clips paint dirtiness to clip content ancestors" {

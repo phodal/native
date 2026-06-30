@@ -1236,12 +1236,13 @@ pub const Runtime = struct {
             &previous_text_bytes,
         );
         var widget_invalidations: [max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined;
-        const invalidations = try canvas.WidgetLayoutTree.diff(previous_layout, reconciled_layout, &widget_invalidations);
+        const tokens = self.views[index].widget_tokens;
+        const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &widget_invalidations);
         const previous_render_state = self.views[index].canvasWidgetRenderState();
         const next_render_state = canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);
         const render_state_changed = !canvasWidgetRenderStatesEqual(previous_render_state, next_render_state);
         const render_state_dirty = if (render_state_changed)
-            previous_layout.renderStateDirtyBounds(previous_render_state, next_render_state)
+            previous_layout.renderStateDirtyBoundsWithTokens(previous_render_state, next_render_state, tokens)
         else
             null;
         const previous_cursor = self.views[index].canvas_widget_cursor;

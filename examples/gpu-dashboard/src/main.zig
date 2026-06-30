@@ -568,21 +568,21 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 131,
             .kind = .text_field,
-            .frame = rect(12, 12, 116, 30),
+            .frame = rect(14, 16, 116, 30),
             .text = "$13.4M",
             .semantics = .{ .label = "Forecast amount" },
         },
         .{
             .id = 132,
             .kind = .search_field,
-            .frame = rect(140, 12, 126, 30),
+            .frame = rect(144, 16, 128, 30),
             .text = "enterprise",
             .semantics = .{ .label = "Segment search" },
         },
         .{
             .id = 133,
             .kind = .toggle,
-            .frame = rect(278, 13, 82, 28),
+            .frame = rect(286, 17, 94, 28),
             .text = "Auto",
             .value = 1,
             .state = .{ .selected = true },
@@ -591,7 +591,7 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 134,
             .kind = .slider,
-            .frame = rect(370, 15, 40, 24),
+            .frame = rect(392, 19, 40, 24),
             .value = 0.62,
             .semantics = .{ .label = "Confidence threshold" },
         },
@@ -625,7 +625,7 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 150,
             .kind = .data_grid,
-            .frame = rect(24, 58, 246, 28),
+            .frame = rect(24, 58, 204, 28),
             .text = "Deployment latency",
             .children = &deployment_rows,
         },
@@ -646,7 +646,7 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 103,
             .kind = .button,
-            .frame = rect(522, 50, 128, 34),
+            .frame = rect(528, 50, 122, 34),
             .text = "Live render",
             .command = mode_command,
             .semantics = .{ .label = "Live render status" },
@@ -654,22 +654,22 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 104,
             .kind = .grid,
-            .frame = rect(226, 128, 422, 96),
-            .layout = .{ .columns = 3, .gap = 16 },
+            .frame = rect(226, 128, 248, 76),
+            .layout = .{ .columns = 1, .gap = 8 },
             .semantics = .{ .role = .list, .label = "Dashboard metrics" },
             .children = &metric_items,
         },
         .{
             .id = 108,
             .kind = .panel,
-            .frame = rect(226, 248, 422, 190),
+            .frame = rect(226, 238, 252, 174),
             .semantics = .{ .label = "Conversion trend" },
             .children = &trend_widgets,
         },
         .{
             .id = 109,
             .kind = .progress,
-            .frame = rect(250, 454, 256, 12),
+            .frame = rect(226, 216, 250, 10),
             .value = 0.68,
             .semantics = .{ .label = "Conversion progress" },
         },
@@ -684,7 +684,7 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 120,
             .kind = .scroll_view,
-            .frame = rect(522, 248, 126, 100),
+            .frame = rect(500, 238, 170, 100),
             .value = 18,
             .semantics = .{ .label = "Recent activity" },
             .children = &activity_items,
@@ -692,14 +692,14 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
         .{
             .id = 130,
             .kind = .panel,
-            .frame = rect(226, 448, 422, 56),
+            .frame = rect(226, 426, 444, 64),
             .semantics = .{ .label = "Forecast form" },
             .children = &form_fields,
         },
         .{
             .id = 140,
             .kind = .popover,
-            .frame = rect(470, 86, 178, 122),
+            .frame = rect(500, 92, 168, 118),
             .backdrop_blur_token = .md,
             .semantics = .{ .label = "Revenue filter popover" },
             .children = &filter_menu,
@@ -933,6 +933,24 @@ fn expectCompactDashboardDirty(runtime: *const zero_native.Runtime, max_width: f
     try std.testing.expect(dirty_area < max_width * max_height);
 }
 
+fn expectDashboardWidgetFrame(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId, expected: geometry.RectF) !void {
+    const node = layout.findById(id) orelse return error.TestUnexpectedResult;
+    try expectDashboardRect(node.frame, expected);
+}
+
+fn expectDashboardWidgetsDoNotOverlap(layout: canvas.WidgetLayoutTree, a_id: canvas.ObjectId, b_id: canvas.ObjectId) !void {
+    const a = layout.findById(a_id) orelse return error.TestUnexpectedResult;
+    const b = layout.findById(b_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(geometry.RectF.intersection(a.frame.normalized(), b.frame.normalized()).isEmpty());
+}
+
+fn expectDashboardRect(actual: geometry.RectF, expected: geometry.RectF) !void {
+    try std.testing.expectApproxEqAbs(expected.x, actual.x, 0.001);
+    try std.testing.expectApproxEqAbs(expected.y, actual.y, 0.001);
+    try std.testing.expectApproxEqAbs(expected.width, actual.width, 0.001);
+    try std.testing.expectApproxEqAbs(expected.height, actual.height, 0.001);
+}
+
 fn color(r: u8, g: u8, b: u8) canvas.Color {
     return canvas.Color.rgb8(r, g, b);
 }
@@ -1000,6 +1018,35 @@ test "gpu dashboard display list builds a complete canvas scene" {
     try std.testing.expect(bounds.height >= 520);
 }
 
+test "gpu dashboard layout keeps controls visually separated" {
+    var nodes: [max_dashboard_widgets]canvas.WidgetLayoutNode = undefined;
+    const layout = try buildDashboardWidgetLayout(&nodes);
+
+    try expectDashboardWidgetFrame(layout, 103, rect(528, 50, 122, 34));
+    try expectDashboardWidgetFrame(layout, 104, rect(226, 128, 248, 76));
+    try expectDashboardWidgetFrame(layout, 108, rect(226, 238, 252, 174));
+    try expectDashboardWidgetFrame(layout, 109, rect(226, 216, 250, 10));
+    try expectDashboardWidgetFrame(layout, 120, rect(500, 238, 170, 100));
+    try expectDashboardWidgetFrame(layout, 130, rect(226, 426, 444, 64));
+    try expectDashboardWidgetFrame(layout, 140, rect(500, 92, 168, 118));
+    try expectDashboardWidgetFrame(layout, 150, rect(250, 296, 204, 28));
+    try expectDashboardWidgetFrame(layout, 131, rect(240, 442, 116, 30));
+    try expectDashboardWidgetFrame(layout, 132, rect(370, 442, 128, 30));
+    try expectDashboardWidgetFrame(layout, 133, rect(512, 443, 94, 28));
+    try expectDashboardWidgetFrame(layout, 134, rect(618, 445, 40, 24));
+
+    try expectDashboardWidgetsDoNotOverlap(layout, 103, 140);
+    try expectDashboardWidgetsDoNotOverlap(layout, 104, 140);
+    try expectDashboardWidgetsDoNotOverlap(layout, 104, 109);
+    try expectDashboardWidgetsDoNotOverlap(layout, 109, 108);
+    try expectDashboardWidgetsDoNotOverlap(layout, 108, 120);
+    try expectDashboardWidgetsDoNotOverlap(layout, 108, 130);
+    try expectDashboardWidgetsDoNotOverlap(layout, 120, 130);
+    try expectDashboardWidgetsDoNotOverlap(layout, 131, 132);
+    try expectDashboardWidgetsDoNotOverlap(layout, 132, 133);
+    try expectDashboardWidgetsDoNotOverlap(layout, 133, 134);
+}
+
 test "gpu dashboard display list renders through the reference surface" {
     var commands: [max_dashboard_commands]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
@@ -1058,7 +1105,7 @@ test "gpu dashboard display list renders through the reference surface" {
     const surface = try canvas.ReferenceRenderSurface.initWithScratch(720, 520, pixels, scratch);
     try surface.renderPass(frame.renderPass(), color(0, 0, 0));
 
-    try std.testing.expectEqual(@as(u64, 2271999717540283277), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 7853848246633773880), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(8, 8));
     try expectVisiblePixel(surface.pixelRgba8(64, 64));
     try expectVisiblePixel(surface.pixelRgba8(240, 140));
@@ -1454,9 +1501,9 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action dashboard-canvas 120 decrement");
     try expectCompactDashboardDirty(&harness.runtime, canvas_width, window_height - toolbar_height - statusbar_height);
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
-    try std.testing.expectEqual(@as(f32, 5), scrolled_layout.findById(120).?.widget.value);
+    try std.testing.expectEqual(@as(f32, 0), scrolled_layout.findById(120).?.widget.value);
     snapshot = harness.runtime.automationSnapshot("Dashboard");
-    try std.testing.expectEqual(@as(f32, 5), dashboardSnapshotWidget(snapshot, 120).?.scroll.offset);
+    try std.testing.expectEqual(@as(f32, 0), dashboardSnapshotWidget(snapshot, 120).?.scroll.offset);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     const activity_y_after_decrement = try dashboardTextCommandOriginY(display_list, activity_first_text_command_id);
     try std.testing.expect(activity_y_after_decrement > activity_y_after_increment);

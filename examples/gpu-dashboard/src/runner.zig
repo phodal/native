@@ -12,11 +12,24 @@ pub const StdoutTraceSink = struct {
 
     fn write(context: *anyopaque, record: zero_native.trace.Record) zero_native.trace.WriteError!void {
         _ = context;
-        if (!shouldTrace(record)) return;
         var buffer: [1024]u8 = undefined;
         var writer = std.Io.Writer.fixed(&buffer);
         zero_native.trace.formatText(record, &writer) catch return error.OutOfSpace;
         std.debug.print("{s}\n", .{writer.buffered()});
+    }
+};
+
+pub const FilteredTraceSink = struct {
+    child: zero_native.trace.Sink,
+
+    pub fn sink(self: *FilteredTraceSink) zero_native.trace.Sink {
+        return .{ .context = self, .write_fn = write };
+    }
+
+    fn write(context: *anyopaque, record: zero_native.trace.Record) zero_native.trace.WriteError!void {
+        const self: *FilteredTraceSink = @ptrCast(@alignCast(context));
+        if (!shouldTrace(record)) return;
+        try self.child.write(record);
     }
 };
 
@@ -198,6 +211,8 @@ fn runNull(app: zero_native.App, options: RunOptions, init: std.process.Init) !v
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
     }
+    var filtered_trace_sink: FilteredTraceSink = .{ .child = runtime_trace_sink };
+    runtime_trace_sink = filtered_trace_sink.sink();
     var shortcut_storage: ShortcutStorage = .{};
     const shortcuts = options.resolvedShortcuts(&shortcut_storage);
     var runtime = zero_native.Runtime.init(.{
@@ -207,6 +222,7 @@ fn runNull(app: zero_native.App, options: RunOptions, init: std.process.Init) !v
         .bridge = options.bridge,
         .builtin_bridge = options.builtin_bridge,
         .js_window_api = options.js_window_api,
+        .gpu_surface_frame_diagnostics = false,
         .security = options.security,
         .menus = options.menus,
         .shortcuts = shortcuts,
@@ -237,6 +253,8 @@ fn runMacos(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
     }
+    var filtered_trace_sink: FilteredTraceSink = .{ .child = runtime_trace_sink };
+    runtime_trace_sink = filtered_trace_sink.sink();
     var shortcut_storage: ShortcutStorage = .{};
     const shortcuts = options.resolvedShortcuts(&shortcut_storage);
     var runtime = zero_native.Runtime.init(.{
@@ -246,6 +264,7 @@ fn runMacos(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         .bridge = options.bridge,
         .builtin_bridge = options.builtin_bridge,
         .js_window_api = options.js_window_api,
+        .gpu_surface_frame_diagnostics = false,
         .security = options.security,
         .menus = options.menus,
         .shortcuts = shortcuts,
@@ -276,6 +295,8 @@ fn runLinux(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
     }
+    var filtered_trace_sink: FilteredTraceSink = .{ .child = runtime_trace_sink };
+    runtime_trace_sink = filtered_trace_sink.sink();
     var shortcut_storage: ShortcutStorage = .{};
     const shortcuts = options.resolvedShortcuts(&shortcut_storage);
     var runtime = zero_native.Runtime.init(.{
@@ -285,6 +306,7 @@ fn runLinux(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         .bridge = options.bridge,
         .builtin_bridge = options.builtin_bridge,
         .js_window_api = options.js_window_api,
+        .gpu_surface_frame_diagnostics = false,
         .security = options.security,
         .menus = options.menus,
         .shortcuts = shortcuts,
@@ -315,6 +337,8 @@ fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init)
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
     }
+    var filtered_trace_sink: FilteredTraceSink = .{ .child = runtime_trace_sink };
+    runtime_trace_sink = filtered_trace_sink.sink();
     var shortcut_storage: ShortcutStorage = .{};
     const shortcuts = options.resolvedShortcuts(&shortcut_storage);
     var runtime = zero_native.Runtime.init(.{
@@ -324,6 +348,7 @@ fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init)
         .bridge = options.bridge,
         .builtin_bridge = options.builtin_bridge,
         .js_window_api = options.js_window_api,
+        .gpu_surface_frame_diagnostics = false,
         .security = options.security,
         .menus = options.menus,
         .shortcuts = shortcuts,
@@ -337,7 +362,7 @@ fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init)
 fn shouldTrace(record: zero_native.trace.Record) bool {
     if (comptime std.mem.eql(u8, build_options.trace, "off")) return false;
     if (comptime std.mem.eql(u8, build_options.trace, "all")) return true;
-    if (comptime std.mem.eql(u8, build_options.trace, "events")) return true;
+    if (comptime std.mem.eql(u8, build_options.trace, "events")) return std.mem.eql(u8, record.name, "runtime.event");
     return std.mem.indexOf(u8, record.name, build_options.trace) != null;
 }
 

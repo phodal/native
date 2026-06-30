@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
     const target = zeroNativeTarget(b);
     const optimize = b.standardOptimizeOption(.{});
     const platform_option = b.option(PlatformOption, "platform", "Desktop backend: auto, null, macos, linux, windows") orelse .auto;
-    const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .events;
+    const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .off;
     const debug_overlay = b.option(bool, "debug-overlay", "Enable debug overlay output") orelse false;
     const automation_enabled = b.option(bool, "automation", "Enable zero-native automation artifacts") orelse false;
     const js_bridge_enabled = b.option(bool, "js-bridge", "Enable optional JavaScript bridge stubs") orelse false;

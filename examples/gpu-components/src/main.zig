@@ -212,11 +212,6 @@ const GpuComponentsApp = struct {
             return;
         }
 
-        if (!frame_event.canvas_frame_requires_render) {
-            try self.reportFrameStatus(runtime, frame_event);
-            return;
-        }
-
         _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
         const current_frame = try runtime.gpuSurfaceFrame(frame_event.window_id, canvas_label);
         try self.reportFrameStatus(runtime, gpuFrameEvent(current_frame));

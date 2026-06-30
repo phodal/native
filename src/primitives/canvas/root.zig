@@ -3898,6 +3898,147 @@ pub const WidgetRole = enum {
     progressbar,
 };
 
+pub const BuiltinComponentStyle = enum {
+    shadcn,
+};
+
+pub const BuiltinComponentKind = enum {
+    accordion,
+    alert,
+    avatar,
+    badge,
+    breadcrumb,
+    bubble,
+    button,
+    button_group,
+    card,
+    checkbox,
+    combobox,
+    dialog,
+    drawer,
+    dropdown_menu,
+    input,
+    pagination,
+    progress,
+    radio_group,
+    resizable,
+    select,
+    separator,
+    sheet,
+    skeleton,
+    slider,
+    spinner,
+    switch_control,
+    table,
+    tabs,
+    textarea,
+    toggle,
+    toggle_group,
+    tooltip,
+};
+
+pub const builtin_component_kinds = [_]BuiltinComponentKind{
+    .accordion,
+    .alert,
+    .avatar,
+    .badge,
+    .breadcrumb,
+    .bubble,
+    .button,
+    .button_group,
+    .card,
+    .checkbox,
+    .combobox,
+    .dialog,
+    .drawer,
+    .dropdown_menu,
+    .input,
+    .pagination,
+    .progress,
+    .radio_group,
+    .resizable,
+    .select,
+    .separator,
+    .sheet,
+    .skeleton,
+    .slider,
+    .spinner,
+    .switch_control,
+    .table,
+    .tabs,
+    .textarea,
+    .toggle,
+    .toggle_group,
+    .tooltip,
+};
+
+pub const BuiltinComponentDescriptor = struct {
+    kind: BuiltinComponentKind,
+    name: []const u8,
+    root_widget_kind: WidgetKind,
+    role: WidgetRole,
+    style: BuiltinComponentStyle = .shadcn,
+    composite: bool = false,
+};
+
+pub fn builtinComponentCount() usize {
+    return builtin_component_kinds.len;
+}
+
+pub fn builtinComponentDescriptor(kind: BuiltinComponentKind) BuiltinComponentDescriptor {
+    return switch (kind) {
+        .accordion => builtinComponent(.accordion, "Accordion", .panel, .group, true),
+        .alert => builtinComponent(.alert, "Alert", .panel, .group, true),
+        .avatar => builtinComponent(.avatar, "Avatar", .image, .image, false),
+        .badge => builtinComponent(.badge, "Badge", .text, .text, false),
+        .breadcrumb => builtinComponent(.breadcrumb, "Breadcrumb", .row, .group, true),
+        .bubble => builtinComponent(.bubble, "Bubble", .panel, .group, true),
+        .button => builtinComponent(.button, "Button", .button, .button, false),
+        .button_group => builtinComponent(.button_group, "Button Group", .row, .group, true),
+        .card => builtinComponent(.card, "Card", .panel, .group, true),
+        .checkbox => builtinComponent(.checkbox, "Checkbox", .checkbox, .checkbox, false),
+        .combobox => builtinComponent(.combobox, "Combobox", .search_field, .textbox, true),
+        .dialog => builtinComponent(.dialog, "Dialog", .popover, .dialog, true),
+        .drawer => builtinComponent(.drawer, "Drawer", .popover, .dialog, true),
+        .dropdown_menu => builtinComponent(.dropdown_menu, "Dropdown Menu", .menu_surface, .menu, true),
+        .input => builtinComponent(.input, "Input", .text_field, .textbox, false),
+        .pagination => builtinComponent(.pagination, "Pagination", .row, .group, true),
+        .progress => builtinComponent(.progress, "Progress", .progress, .progressbar, false),
+        .radio_group => builtinComponent(.radio_group, "Radio Group", .row, .group, true),
+        .resizable => builtinComponent(.resizable, "Resizable", .panel, .group, true),
+        .select => builtinComponent(.select, "Select", .button, .button, true),
+        .separator => builtinComponent(.separator, "Separator", .panel, .none, false),
+        .sheet => builtinComponent(.sheet, "Sheet", .popover, .dialog, true),
+        .skeleton => builtinComponent(.skeleton, "Skeleton", .panel, .none, false),
+        .slider => builtinComponent(.slider, "Slider", .slider, .slider, false),
+        .spinner => builtinComponent(.spinner, "Spinner", .progress, .progressbar, false),
+        .switch_control => builtinComponent(.switch_control, "Switch", .toggle, .switch_control, false),
+        .table => builtinComponent(.table, "Table", .data_grid, .grid, true),
+        .tabs => builtinComponent(.tabs, "Tabs", .row, .group, true),
+        .textarea => builtinComponent(.textarea, "Textarea", .text_field, .textbox, false),
+        .toggle => builtinComponent(.toggle, "Toggle", .button, .button, false),
+        .toggle_group => builtinComponent(.toggle_group, "Toggle Group", .row, .group, true),
+        .tooltip => builtinComponent(.tooltip, "Tooltip", .tooltip, .tooltip, false),
+    };
+}
+
+fn builtinComponent(
+    kind: BuiltinComponentKind,
+    name: []const u8,
+    root_widget_kind: WidgetKind,
+    role: WidgetRole,
+    composite: bool,
+) BuiltinComponentDescriptor {
+    return .{
+        .kind = kind,
+        .name = name,
+        .root_widget_kind = root_widget_kind,
+        .role = role,
+        .style = .shadcn,
+        .composite = composite,
+    };
+}
+
 pub const WidgetActions = struct {
     focus: bool = false,
     press: bool = false,
@@ -14472,6 +14613,84 @@ test "design tokens provide theme and contrast palettes" {
     try std.testing.expectEqual(@as(u32, 0), reduced_motion.motion.durationMs(.normal));
     try std.testing.expectEqual(@as(u32, 0), reduced_motion.motion.durationMs(.slow));
     try std.testing.expectEqual(Easing.linear, reduced_motion.motion.easing);
+}
+
+test "built-in component catalog covers shadcn component set" {
+    const expected_names = [_][]const u8{
+        "Accordion",
+        "Alert",
+        "Avatar",
+        "Badge",
+        "Breadcrumb",
+        "Bubble",
+        "Button",
+        "Button Group",
+        "Card",
+        "Checkbox",
+        "Combobox",
+        "Dialog",
+        "Drawer",
+        "Dropdown Menu",
+        "Input",
+        "Pagination",
+        "Progress",
+        "Radio Group",
+        "Resizable",
+        "Select",
+        "Separator",
+        "Sheet",
+        "Skeleton",
+        "Slider",
+        "Spinner",
+        "Switch",
+        "Table",
+        "Tabs",
+        "Textarea",
+        "Toggle",
+        "Toggle Group",
+        "Tooltip",
+    };
+    try std.testing.expectEqual(expected_names.len, builtinComponentCount());
+
+    const enum_len = @typeInfo(BuiltinComponentKind).@"enum".fields.len;
+    var seen = [_]bool{false} ** enum_len;
+    for (builtin_component_kinds, 0..) |kind, index| {
+        const descriptor = builtinComponentDescriptor(kind);
+        try std.testing.expectEqual(kind, descriptor.kind);
+        try std.testing.expectEqualStrings(expected_names[index], descriptor.name);
+        try std.testing.expectEqual(BuiltinComponentStyle.shadcn, descriptor.style);
+        const ordinal = @intFromEnum(kind);
+        try std.testing.expect(!seen[ordinal]);
+        seen[ordinal] = true;
+    }
+    for (seen) |value| try std.testing.expect(value);
+}
+
+test "built-in component catalog maps to retained widget foundations" {
+    try std.testing.expectEqual(WidgetKind.panel, builtinComponentDescriptor(.accordion).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.panel, builtinComponentDescriptor(.alert).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.image, builtinComponentDescriptor(.avatar).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.text, builtinComponentDescriptor(.badge).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.row, builtinComponentDescriptor(.button_group).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.panel, builtinComponentDescriptor(.card).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.search_field, builtinComponentDescriptor(.combobox).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.popover, builtinComponentDescriptor(.dialog).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.popover, builtinComponentDescriptor(.drawer).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.menu_surface, builtinComponentDescriptor(.dropdown_menu).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.input).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.progress, builtinComponentDescriptor(.spinner).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.toggle, builtinComponentDescriptor(.switch_control).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.data_grid, builtinComponentDescriptor(.table).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.text_field, builtinComponentDescriptor(.textarea).root_widget_kind);
+    try std.testing.expectEqual(WidgetKind.tooltip, builtinComponentDescriptor(.tooltip).root_widget_kind);
+
+    try std.testing.expectEqual(WidgetRole.dialog, builtinComponentDescriptor(.sheet).role);
+    try std.testing.expectEqual(WidgetRole.grid, builtinComponentDescriptor(.table).role);
+    try std.testing.expectEqual(WidgetRole.switch_control, builtinComponentDescriptor(.switch_control).role);
+    try std.testing.expectEqual(WidgetRole.none, builtinComponentDescriptor(.separator).role);
+    try std.testing.expect(builtinComponentDescriptor(.accordion).composite);
+    try std.testing.expect(builtinComponentDescriptor(.toggle_group).composite);
+    try std.testing.expect(!builtinComponentDescriptor(.button).composite);
 }
 
 test "design token overrides compose with built-in themes" {

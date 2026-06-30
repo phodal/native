@@ -608,6 +608,10 @@ fn componentTokensFor(mode: ComponentThemeMode) canvas.DesignTokens {
             .sm = .{ .y = 5, .blur = 12, .spread = -8 },
             .md = .{ .y = 9, .blur = 18, .spread = -12 },
         },
+        .blur = .{
+            .sm = 5,
+            .md = 12,
+        },
         .motion = .{ .normal_ms = 180, .slow_ms = 520, .easing = .emphasized },
         .scroll = .{ .wheel_multiplier = 1.1, .wheel_velocity_scale = 72, .deceleration_per_second = 0.88, .stop_velocity = 4 },
     };
@@ -743,7 +747,7 @@ fn buildComponentsWidgetLayoutWithScroll(nodes: []canvas.WidgetLayoutNode, virtu
         .{ .id = 106, .kind = .stack, .frame = rect(64, 124, 352, 236), .semantics = .{ .label = "Input controls" }, .children = &form_controls },
         .{ .id = 120, .kind = .list, .frame = rect(456, 124, 170, 56), .value = virtual_scroll.nav, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Component navigation" }, .children = &nav_items },
         .{ .id = 130, .kind = .scroll_view, .frame = rect(652, 124, 186, 56), .value = virtual_scroll.behavior, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .semantics = .{ .label = "Scrollable behavior list" }, .children = &scroll_items },
-        .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur = 5, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
+        .{ .id = 140, .kind = .popover, .frame = rect(456, 248, 174, 88), .backdrop_blur_token = .sm, .semantics = .{ .label = "Actions popover" }, .children = &popover_children },
         .{ .id = 149, .kind = .stack, .frame = rect(64, 410, 620, 60), .semantics = .{ .label = "Data controls" }, .children = &data_panel_children },
     };
     return canvas.layoutWidgetTree(.{ .kind = .stack, .children = &top_widgets }, rect(0, 0, canvas_width, canvas_height), nodes);

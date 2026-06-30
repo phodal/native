@@ -3104,6 +3104,14 @@ pub const BlurTokens = struct {
     none: f32 = 0,
     sm: f32 = 8,
     md: f32 = 16,
+
+    pub fn value(self: BlurTokens, token: BlurTokenRef) f32 {
+        return switch (token) {
+            .none => self.none,
+            .sm => self.sm,
+            .md => self.md,
+        };
+    }
 };
 
 pub const MotionDuration = enum {
@@ -3167,6 +3175,12 @@ pub const SpringToken = struct {
     mass: f32 = 1,
     stiffness: f32 = 220,
     damping: f32 = 28,
+};
+
+pub const BlurTokenRef = enum {
+    none,
+    sm,
+    md,
 };
 
 pub const ScrollPhysics = struct {
@@ -3453,6 +3467,7 @@ pub const Widget = struct {
     opacity: f32 = 1,
     transform: Affine = .{},
     backdrop_blur: f32 = 0,
+    backdrop_blur_token: ?BlurTokenRef = null,
     text: []const u8 = "",
     text_alignment: TextAlign = .start,
     command: []const u8 = "",
@@ -6297,7 +6312,7 @@ fn emitWidgetDepth(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
 }
 
 fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
-    try emitWidgetBackdropBlur(builder, widget);
+    try emitWidgetBackdropBlur(builder, widget, tokens);
     switch (widget.kind) {
         .stack, .row, .column, .grid, .data_grid, .list, .data_row => try emitWidgetClippedChildren(builder, widget, tokens, depth),
         .scroll_view => try emitScrollViewWidget(builder, widget, tokens, depth),
@@ -6383,7 +6398,7 @@ fn emitWidgetLayoutNodeContent(
     state: WidgetRenderState,
     widget: Widget,
 ) Error!void {
-    try emitWidgetBackdropBlur(builder, widget);
+    try emitWidgetBackdropBlur(builder, widget, tokens);
     switch (widget.kind) {
         .stack, .row, .column, .grid, .data_grid, .list, .data_row => {},
         .scroll_view => {
@@ -6425,8 +6440,8 @@ fn widgetTransform(widget: Widget) Affine {
     return widget.transform;
 }
 
-fn emitWidgetBackdropBlur(builder: *Builder, widget: Widget) Error!void {
-    const radius = widgetBackdropBlur(widget);
+fn emitWidgetBackdropBlur(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const radius = widgetBackdropBlur(widget, tokens);
     if (radius <= 0 or widget.frame.normalized().isEmpty()) return;
     try builder.blur(.{
         .id = widgetPartId(widget.id, 12),
@@ -6435,8 +6450,18 @@ fn emitWidgetBackdropBlur(builder: *Builder, widget: Widget) Error!void {
     });
 }
 
-fn widgetBackdropBlur(widget: Widget) f32 {
-    return nonNegative(widget.backdrop_blur);
+fn widgetBackdropBlur(widget: Widget, tokens: DesignTokens) f32 {
+    const explicit = nonNegative(widget.backdrop_blur);
+    if (explicit > 0) return explicit;
+    if (widget.backdrop_blur_token) |token| return nonNegative(tokens.blur.value(token));
+    return 0;
+}
+
+fn widgetBackdropBlurInvalidationRadius(widget: Widget) f32 {
+    const explicit = nonNegative(widget.backdrop_blur);
+    if (explicit > 0) return explicit;
+    if (widget.backdrop_blur_token) |token| return nonNegative((BlurTokens{}).value(token));
+    return 0;
 }
 
 fn widgetClipsContent(widget: Widget) bool {
@@ -8802,6 +8827,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
     const visual_dirty = previous.widget.opacity != next.widget.opacity or
         !affinesEqual(previous.widget.transform, next.widget.transform) or
         previous.widget.backdrop_blur != next.widget.backdrop_blur or
+        previous.widget.backdrop_blur_token != next.widget.backdrop_blur_token or
         previous.widget.text_alignment != next.widget.text_alignment;
     const state_dirty = !widgetStatesEqual(previous.widget.state, next.widget.state);
     const visibility_dirty = previous.widget.semantics.hidden != next.widget.semantics.hidden;
@@ -9036,7 +9062,7 @@ fn widgetShadowPaintBounds(widget: Widget) ?geometry.RectF {
 }
 
 fn widgetBackdropBlurPaintBounds(widget: Widget) ?geometry.RectF {
-    const radius = widgetBackdropBlur(widget);
+    const radius = widgetBackdropBlurInvalidationRadius(widget);
     if (radius <= 0) return null;
     return widget.frame.normalized().inflate(geometry.InsetsF.all(radius));
 }
@@ -14688,6 +14714,32 @@ test "widget layout diff marks backdrop blur changes as paint dirty" {
     try expectRect(geometry.RectF.init(4, 6, 92, 52), invalidations[0].dirty_bounds);
 }
 
+test "widget layout diff marks backdrop blur token changes as paint dirty" {
+    const previous_stack = Widget{
+        .id = 1,
+        .kind = .stack,
+    };
+    const next_stack = Widget{
+        .id = 1,
+        .kind = .stack,
+        .backdrop_blur_token = .sm,
+    };
+
+    var previous_nodes: [1]WidgetLayoutNode = undefined;
+    var next_nodes: [1]WidgetLayoutNode = undefined;
+    const previous = try layoutWidgetTree(previous_stack, geometry.RectF.init(10, 12, 80, 40), &previous_nodes);
+    const next = try layoutWidgetTree(next_stack, geometry.RectF.init(10, 12, 80, 40), &next_nodes);
+
+    var invalidations_buffer: [1]WidgetInvalidation = undefined;
+    const invalidations = try WidgetLayoutTree.diff(previous, next, &invalidations_buffer);
+    try std.testing.expectEqual(@as(usize, 1), invalidations.len);
+    try std.testing.expectEqual(@as(ObjectId, 1), invalidations[0].id);
+    try std.testing.expect(!invalidations[0].layout_dirty);
+    try std.testing.expect(invalidations[0].paint_dirty);
+    try std.testing.expect(!invalidations[0].semantics_dirty);
+    try expectRect(geometry.RectF.init(2, 4, 96, 56), invalidations[0].dirty_bounds);
+}
+
 test "widget layout diff clips paint dirtiness to clip content ancestors" {
     const previous_children = [_]Widget{.{
         .id = 2,
@@ -14905,6 +14957,43 @@ test "widget tree emits backdrop blur before widget content" {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(2, 1)), text.id);
             try std.testing.expectEqualStrings("Glass", text.text);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "widget tree resolves backdrop blur tokens from design tokens" {
+    const children = [_]Widget{.{
+        .id = 2,
+        .kind = .text,
+        .frame = geometry.RectF.init(18, 24, 100, 18),
+        .text = "Glass",
+    }};
+    const root = Widget{
+        .id = 1,
+        .kind = .stack,
+        .frame = geometry.RectF.init(10, 12, 140, 72),
+        .backdrop_blur_token = .md,
+        .children = &children,
+    };
+    const tokens = DesignTokens{
+        .blur = .{
+            .sm = 6,
+            .md = 18,
+        },
+    };
+
+    var commands: [2]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, root, tokens);
+
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 2), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .blur => |blur| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 12)), blur.id);
+            try expectRect(geometry.RectF.init(10, 12, 140, 72), blur.rect);
+            try std.testing.expectEqual(@as(f32, 18), blur.radius);
         },
         else => return error.TestUnexpectedResult,
     }

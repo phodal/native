@@ -537,6 +537,10 @@ fn dashboardWidgetTokens() canvas.DesignTokens {
             .sm = .{ .y = 6, .blur = 14, .spread = -8 },
             .md = .{ .y = 10, .blur = 20, .spread = -12 },
         },
+        .blur = .{
+            .sm = 8,
+            .md = dashboard_glass_blur,
+        },
         .motion = .{
             .slow_ms = 900,
             .easing = .emphasized,
@@ -696,7 +700,7 @@ fn buildDashboardWidgetLayout(nodes: []canvas.WidgetLayoutNode) canvas.Error!can
             .id = 140,
             .kind = .popover,
             .frame = rect(470, 86, 178, 122),
-            .backdrop_blur = dashboard_glass_blur,
+            .backdrop_blur_token = .md,
             .semantics = .{ .label = "Revenue filter popover" },
             .children = &filter_menu,
         },

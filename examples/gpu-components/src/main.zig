@@ -116,6 +116,15 @@ fn environmentOptionIndex(id: canvas.ObjectId) ?usize {
     return @intCast(index);
 }
 
+fn environmentNextIndex(index: usize) usize {
+    return (@min(index, environment_options.len - 1) + 1) % environment_options.len;
+}
+
+fn environmentPreviousIndex(index: usize) usize {
+    const current = @min(index, environment_options.len - 1);
+    return if (current == 0) environment_options.len - 1 else current - 1;
+}
+
 fn environmentCommandIndex(command_name: []const u8) ?usize {
     for (environment_option_commands, 0..) |option_command, index| {
         if (std.mem.eql(u8, command_name, option_command)) return index;
@@ -386,9 +395,44 @@ const GpuComponentsApp = struct {
     fn handleWidgetKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
         if (!std.mem.eql(u8, keyboard_event.view_label, canvas_label)) return;
         if (keyboard_event.keyboard.phase != .key_down) return;
+        if (try self.handleEnvironmentKeyboard(runtime, keyboard_event)) return;
         const target = keyboard_event.target orelse return;
         const scrolled_id = try self.scrollVirtualWidgetFromKeyboard(runtime, keyboard_event) orelse target.id;
         try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", scrolled_id);
+    }
+
+    fn handleEnvironmentKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!bool {
+        const key = keyboard_event.keyboard.key;
+        if (std.ascii.eqlIgnoreCase(key, "tab")) {
+            if (!self.environment_select_open) return false;
+            self.environment_select_open = false;
+            try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
+            try self.updateStatus(runtime, keyboard_event.window_id, "Environment menu closed.");
+            return true;
+        }
+
+        if (std.ascii.eqlIgnoreCase(key, "escape")) {
+            if (!self.environment_select_open) return false;
+            self.environment_select_open = false;
+            try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
+            try self.updateStatus(runtime, keyboard_event.window_id, "Environment menu closed.");
+            return true;
+        }
+
+        const target = keyboard_event.target orelse return false;
+        if (target.id != environment_select_id and environmentOptionIndex(target.id) == null) return false;
+
+        if (std.ascii.eqlIgnoreCase(key, "arrowdown")) {
+            try self.moveEnvironmentSelection(runtime, keyboard_event.window_id, environmentNextIndex(self.environment_index));
+            return true;
+        }
+
+        if (std.ascii.eqlIgnoreCase(key, "arrowup")) {
+            try self.moveEnvironmentSelection(runtime, keyboard_event.window_id, environmentPreviousIndex(self.environment_index));
+            return true;
+        }
+
+        return false;
     }
 
     fn reportWidgetInteraction(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
@@ -500,10 +544,24 @@ const GpuComponentsApp = struct {
         self.environment_index = @min(index, environment_options.len - 1);
         self.environment_select_open = false;
         try self.updateComponentsCanvasModel(runtime, command.window_id);
+        try self.updateEnvironmentSelectedStatus(runtime, command.window_id);
+    }
 
+    fn moveEnvironmentSelection(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, index: usize) anyerror!void {
+        if (self.environment_select_open) {
+            self.environment_select_open = false;
+            try self.updateComponentsCanvasModel(runtime, window_id);
+        }
+        self.environment_index = @min(index, environment_options.len - 1);
+        self.environment_select_open = true;
+        try self.updateComponentsCanvasModel(runtime, window_id);
+        try self.updateEnvironmentSelectedStatus(runtime, window_id);
+    }
+
+    fn updateEnvironmentSelectedStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId) anyerror!void {
         var status_buffer: [96]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "Environment selected: {s}.", .{environmentLabel(self.environment_index)});
-        try self.updateStatus(runtime, command.window_id, status);
+        try self.updateStatus(runtime, window_id, status);
     }
 
     fn openSurfaceOverlay(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent, overlay: ComponentSurfaceOverlay) anyerror!void {
@@ -2479,6 +2537,77 @@ test "gpu components pointer opens and selects environment dropdown options" {
     try expectComponentTextCommand(display_list, environment_select_text_id, "Preview");
     status_view = componentViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Environment selected: Preview.") != null);
+}
+
+test "gpu components keyboard navigates and dismisses environment dropdown" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    const app_handle = app.app();
+    try harness.start(app_handle);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-action components-canvas 172 focus");
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-action components-canvas 172 press");
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(app.environment_select_open);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
+    try std.testing.expectEqual(@as(?bool, true), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(app.environment_select_open);
+    try std.testing.expectEqual(@as(usize, 1), app.environment_index);
+    try std.testing.expect(layout.findById(environmentOptionId(1)).?.widget.state.selected);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowup");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(app.environment_select_open);
+    try std.testing.expectEqual(@as(usize, 0), app.environment_index);
+    try std.testing.expect(layout.findById(environmentOptionId(0)).?.widget.state.selected);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas escape");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(!app.environment_select_open);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
+    try std.testing.expectEqual(@as(?bool, false), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(app.environment_select_open);
+    try std.testing.expectEqual(@as(usize, 1), app.environment_index);
+    try std.testing.expect(layout.findById(environmentOptionId(1)).?.widget.state.selected);
+
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas tab");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(!app.environment_select_open);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
+    const select = componentSnapshotWidget(snapshot, environment_select_id).?;
+    try std.testing.expectEqual(@as(?bool, false), select.expanded);
+    try std.testing.expect(!select.focused);
 }
 
 test "gpu components surface launchers open and close overlays" {

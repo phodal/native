@@ -5,7 +5,9 @@ const json = @import("json");
 const validation = @import("validation.zig");
 const bridge_payload = @import("bridge_payload.zig");
 const bridge_responses = @import("bridge_responses.zig");
+const runtime_async_bridge = @import("async_bridge.zig");
 const automation_commands = @import("automation_commands.zig");
+const runtime_clock = @import("clock.zig");
 const shell_layout = @import("shell_layout.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
@@ -22,8 +24,7 @@ const platform = @import("../platform/root.zig");
 const security = @import("../security/root.zig");
 const window_state = @import("../window_state/root.zig");
 
-const max_async_bridge_responses: usize = 64;
-const max_bridge_origin_bytes: usize = 512;
+const max_async_bridge_responses = runtime_async_bridge.max_async_bridge_responses;
 const max_command_id_bytes = validation.max_command_id_bytes;
 pub const max_canvas_commands_per_view = canvas_limits.max_canvas_commands_per_view;
 pub const max_canvas_gradient_stops_per_view = canvas_limits.max_canvas_gradient_stops_per_view;
@@ -179,6 +180,9 @@ const CanvasDisplayListScratch = runtime_view.CanvasDisplayListScratch;
 const CanvasWidgetScrollSource = runtime_view.CanvasWidgetScrollSource;
 const CanvasWidgetToggleAnimation = runtime_view.CanvasWidgetToggleAnimation;
 const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
+const nowNanoseconds = runtime_clock.nowNanoseconds;
+const timestampToU64 = runtime_clock.timestampToU64;
+const automationInputTimestampNs = runtime_clock.automationInputTimestampNs;
 const RuntimeWindow = runtime_state.RuntimeWindow;
 const RuntimeMainWebViewState = runtime_state.RuntimeMainWebViewState;
 const RuntimeSourceStorage = runtime_state.RuntimeSourceStorage;
@@ -5139,28 +5143,6 @@ pub const Runtime = struct {
     }
 };
 
-fn nowNanoseconds() i128 {
-    switch (@import("builtin").os.tag) {
-        .windows, .wasi => return 0,
-        else => {
-            var ts: std.posix.timespec = undefined;
-            switch (std.posix.errno(std.posix.system.clock_gettime(.REALTIME, &ts))) {
-                .SUCCESS => return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec,
-                else => return 0,
-            }
-        },
-    }
-}
-
-fn timestampToU64(value: i128) u64 {
-    if (value <= 0) return 0;
-    return @intCast(@min(value, std.math.maxInt(u64)));
-}
-
-fn automationInputTimestampNs() u64 {
-    return timestampToU64(nowNanoseconds());
-}
-
 const RunContext = struct {
     runtime: *Runtime,
     app: App,
@@ -5173,39 +5155,7 @@ fn appUsesDefaultEmptyWebViewSource(app: App) bool {
         app.source.asset_options == null;
 }
 
-const AsyncBridgeResponseSlot = struct {
-    in_use: bool = false,
-    runtime: ?*Runtime = null,
-    source: bridge.Source = .{},
-    origin_storage: [max_bridge_origin_bytes]u8 = undefined,
-    webview_label_storage: [platform.max_webview_label_bytes]u8 = undefined,
-
-    fn init(self: *AsyncBridgeResponseSlot, runtime: *Runtime, source: bridge.Source) !void {
-        if (source.origin.len > self.origin_storage.len) return error.BridgeOriginTooLarge;
-        if (source.webview_label.len > self.webview_label_storage.len) return error.WebViewLabelTooLarge;
-        self.runtime = runtime;
-        self.source = .{
-            .origin = try copyInto(&self.origin_storage, source.origin),
-            .window_id = source.window_id,
-            .webview_label = try copyInto(&self.webview_label_storage, source.webview_label),
-        };
-        self.in_use = true;
-    }
-
-    fn release(self: *AsyncBridgeResponseSlot) void {
-        self.in_use = false;
-        self.runtime = null;
-        self.source = .{};
-    }
-
-    fn respond(self: *AsyncBridgeResponseSlot, response: []const u8) anyerror!void {
-        if (!self.in_use) return error.AsyncBridgeResponseAlreadyCompleted;
-        const runtime = self.runtime orelse return error.AsyncBridgeResponseAlreadyCompleted;
-        const source = self.source;
-        defer self.release();
-        try runtime.respondToBridge(source, response);
-    }
-};
+const AsyncBridgeResponseSlot = runtime_async_bridge.AsyncBridgeResponseSlot(Runtime);
 
 fn copyInto(buffer: []u8, value: []const u8) ![]const u8 {
     if (value.len > buffer.len) return error.NoSpaceLeft;

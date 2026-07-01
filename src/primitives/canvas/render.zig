@@ -10,6 +10,7 @@ const ObjectId = canvas.ObjectId;
 const ImageId = canvas.ImageId;
 const FontId = canvas.FontId;
 const CanvasCommand = canvas.CanvasCommand;
+const DisplayList = canvas.DisplayList;
 const ReferenceImage = canvas.ReferenceImage;
 const Affine = drawing_model.Affine;
 const Fill = drawing_model.Fill;
@@ -170,6 +171,106 @@ pub const RenderPlan = struct {
     pub fn layerPlan(self: RenderPlan, output: []RenderLayer) Error!RenderLayerPlan {
         var planner = RenderLayerPlanner.init(output);
         return planner.build(self);
+    }
+};
+
+pub const RenderPlanner = struct {
+    commands: []RenderCommand,
+    len: usize = 0,
+    state: RenderState = .{},
+    bounds_value: ?geometry.RectF = null,
+    clip_stack: [max_render_state_stack]?geometry.RectF = undefined,
+    clip_stack_len: usize = 0,
+    opacity_stack: [max_render_state_stack]f32 = undefined,
+    opacity_stack_len: usize = 0,
+
+    pub fn init(commands: []RenderCommand) RenderPlanner {
+        return .{ .commands = commands };
+    }
+
+    pub fn reset(self: *RenderPlanner) void {
+        self.len = 0;
+        self.state = .{};
+        self.bounds_value = null;
+        self.clip_stack_len = 0;
+        self.opacity_stack_len = 0;
+    }
+
+    pub fn build(self: *RenderPlanner, display_list: DisplayList) Error!RenderPlan {
+        self.reset();
+        for (display_list.commands) |command| {
+            try self.consume(command);
+        }
+        return .{
+            .commands = self.commands[0..self.len],
+            .bounds = self.bounds_value,
+        };
+    }
+
+    fn consume(self: *RenderPlanner, command: CanvasCommand) Error!void {
+        switch (command) {
+            .push_clip => |clip| try self.pushClip(clip),
+            .pop_clip => try self.popClip(),
+            .push_opacity => |opacity| try self.pushOpacity(opacity),
+            .pop_opacity => try self.popOpacity(),
+            .transform => |transform| self.state.transform = self.state.transform.multiply(transform),
+            else => try self.appendDrawCommand(command),
+        }
+    }
+
+    fn pushClip(self: *RenderPlanner, clip: drawing_model.Clip) Error!void {
+        if (self.clip_stack_len >= self.clip_stack.len) return error.RenderStackOverflow;
+        self.clip_stack[self.clip_stack_len] = self.state.clip;
+        self.clip_stack_len += 1;
+
+        const transformed_clip = self.state.transform.transformRect(clip.rect);
+        self.state.clip = if (self.state.clip) |existing|
+            geometry.RectF.intersection(existing, transformed_clip)
+        else
+            transformed_clip;
+    }
+
+    fn popClip(self: *RenderPlanner) Error!void {
+        if (self.clip_stack_len == 0) return error.RenderStackUnderflow;
+        self.clip_stack_len -= 1;
+        self.state.clip = self.clip_stack[self.clip_stack_len];
+    }
+
+    fn pushOpacity(self: *RenderPlanner, opacity: f32) Error!void {
+        if (self.opacity_stack_len >= self.opacity_stack.len) return error.RenderStackOverflow;
+        self.opacity_stack[self.opacity_stack_len] = self.state.opacity;
+        self.opacity_stack_len += 1;
+        self.state.opacity *= std.math.clamp(opacity, 0, 1);
+    }
+
+    fn popOpacity(self: *RenderPlanner) Error!void {
+        if (self.opacity_stack_len == 0) return error.RenderStackUnderflow;
+        self.opacity_stack_len -= 1;
+        self.state.opacity = self.opacity_stack[self.opacity_stack_len];
+    }
+
+    fn appendDrawCommand(self: *RenderPlanner, command: CanvasCommand) Error!void {
+        if (self.state.opacity <= 0) return;
+        const command_bounds = command.bounds() orelse return;
+        const transformed_bounds = self.state.transform.transformRect(command_bounds);
+        const clipped_bounds = if (self.state.clip) |clip|
+            geometry.RectF.intersection(clip, transformed_bounds)
+        else
+            transformed_bounds;
+        if (clipped_bounds.isEmpty()) return;
+        if (self.len >= self.commands.len) return error.RenderListFull;
+
+        self.commands[self.len] = .{
+            .command = command,
+            .id = command.objectId(),
+            .opacity = self.state.opacity,
+            .clip = self.state.clip,
+            .transform = self.state.transform,
+            .local_bounds = command_bounds,
+            .bounds = clipped_bounds,
+        };
+        self.len += 1;
+        self.bounds_value = unionOptionalBounds(self.bounds_value, clipped_bounds);
     }
 };
 
@@ -512,6 +613,14 @@ fn renderPipelineForFill(fill: Fill) RenderPipelineKind {
         .color => .solid,
         .linear_gradient => .linear_gradient,
     };
+}
+
+fn unionOptionalBounds(a: ?geometry.RectF, b: ?geometry.RectF) ?geometry.RectF {
+    if (a) |left| {
+        if (b) |right| return left.normalized().unionWith(right.normalized());
+        return left;
+    }
+    return b;
 }
 
 pub const RenderPathGeometryKey = struct {

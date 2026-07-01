@@ -135,6 +135,7 @@ pub const RenderCommand = render_model.RenderCommand;
 pub const CanvasRenderOverride = render_model.CanvasRenderOverride;
 pub const CanvasRenderAnimation = render_model.CanvasRenderAnimation;
 pub const RenderPlan = render_model.RenderPlan;
+pub const RenderPlanner = render_model.RenderPlanner;
 pub const RenderPipelineKind = render_model.RenderPipelineKind;
 pub const RenderBatch = render_model.RenderBatch;
 pub const RenderBatchPlanner = render_model.RenderBatchPlanner;
@@ -1647,106 +1648,6 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
 fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens, state: WidgetRenderState) Error!void {
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
 }
-
-pub const RenderPlanner = struct {
-    commands: []RenderCommand,
-    len: usize = 0,
-    state: RenderState = .{},
-    bounds_value: ?geometry.RectF = null,
-    clip_stack: [max_render_state_stack]?geometry.RectF = undefined,
-    clip_stack_len: usize = 0,
-    opacity_stack: [max_render_state_stack]f32 = undefined,
-    opacity_stack_len: usize = 0,
-
-    pub fn init(commands: []RenderCommand) RenderPlanner {
-        return .{ .commands = commands };
-    }
-
-    pub fn reset(self: *RenderPlanner) void {
-        self.len = 0;
-        self.state = .{};
-        self.bounds_value = null;
-        self.clip_stack_len = 0;
-        self.opacity_stack_len = 0;
-    }
-
-    pub fn build(self: *RenderPlanner, display_list: DisplayList) Error!RenderPlan {
-        self.reset();
-        for (display_list.commands) |command| {
-            try self.consume(command);
-        }
-        return .{
-            .commands = self.commands[0..self.len],
-            .bounds = self.bounds_value,
-        };
-    }
-
-    fn consume(self: *RenderPlanner, command: CanvasCommand) Error!void {
-        switch (command) {
-            .push_clip => |clip| try self.pushClip(clip),
-            .pop_clip => try self.popClip(),
-            .push_opacity => |opacity| try self.pushOpacity(opacity),
-            .pop_opacity => try self.popOpacity(),
-            .transform => |transform| self.state.transform = self.state.transform.multiply(transform),
-            else => try self.appendDrawCommand(command),
-        }
-    }
-
-    fn pushClip(self: *RenderPlanner, clip: Clip) Error!void {
-        if (self.clip_stack_len >= self.clip_stack.len) return error.RenderStackOverflow;
-        self.clip_stack[self.clip_stack_len] = self.state.clip;
-        self.clip_stack_len += 1;
-
-        const transformed_clip = self.state.transform.transformRect(clip.rect);
-        self.state.clip = if (self.state.clip) |existing|
-            geometry.RectF.intersection(existing, transformed_clip)
-        else
-            transformed_clip;
-    }
-
-    fn popClip(self: *RenderPlanner) Error!void {
-        if (self.clip_stack_len == 0) return error.RenderStackUnderflow;
-        self.clip_stack_len -= 1;
-        self.state.clip = self.clip_stack[self.clip_stack_len];
-    }
-
-    fn pushOpacity(self: *RenderPlanner, opacity: f32) Error!void {
-        if (self.opacity_stack_len >= self.opacity_stack.len) return error.RenderStackOverflow;
-        self.opacity_stack[self.opacity_stack_len] = self.state.opacity;
-        self.opacity_stack_len += 1;
-        self.state.opacity *= std.math.clamp(opacity, 0, 1);
-    }
-
-    fn popOpacity(self: *RenderPlanner) Error!void {
-        if (self.opacity_stack_len == 0) return error.RenderStackUnderflow;
-        self.opacity_stack_len -= 1;
-        self.state.opacity = self.opacity_stack[self.opacity_stack_len];
-    }
-
-    fn appendDrawCommand(self: *RenderPlanner, command: CanvasCommand) Error!void {
-        if (self.state.opacity <= 0) return;
-        const command_bounds = command.bounds() orelse return;
-        const transformed_bounds = self.state.transform.transformRect(command_bounds);
-        const clipped_bounds = if (self.state.clip) |clip|
-            geometry.RectF.intersection(clip, transformed_bounds)
-        else
-            transformed_bounds;
-        if (clipped_bounds.isEmpty()) return;
-        if (self.len >= self.commands.len) return error.RenderListFull;
-
-        self.commands[self.len] = .{
-            .command = command,
-            .id = command.objectId(),
-            .opacity = self.state.opacity,
-            .clip = self.state.clip,
-            .transform = self.state.transform,
-            .local_bounds = command_bounds,
-            .bounds = clipped_bounds,
-        };
-        self.len += 1;
-        self.bounds_value = unionOptionalBounds(self.bounds_value, clipped_bounds);
-    }
-};
 
 pub const RenderPathGeometryPlanner = struct {
     geometries: []RenderPathGeometry,

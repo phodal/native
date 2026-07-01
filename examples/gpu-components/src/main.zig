@@ -47,6 +47,7 @@ const project_composition_id: canvas.ObjectId = 111 * 16 + 5;
 const search_text_id: canvas.ObjectId = 112 * 16 + 9;
 const search_selection_id: canvas.ObjectId = 112 * 16 + 8;
 const search_composition_id: canvas.ObjectId = 112 * 16 + 10;
+const message_text_id: canvas.ObjectId = 171 * 16 + 4;
 const scroll_track_id: canvas.ObjectId = 130 * 16 + 2;
 const scroll_thumb_id: canvas.ObjectId = 130 * 16 + 3;
 const menu_item_text_id: canvas.ObjectId = 142 * 16 + 3;
@@ -2451,6 +2452,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqualStrings("Message textarea", textarea.name);
     try std.testing.expect(textarea.actions.set_text);
     try std.testing.expect(textarea.actions.set_selection);
+
     const select = componentSnapshotWidget(snapshot, 172).?;
     try std.testing.expectEqualStrings("button", select.role);
     try std.testing.expectEqualStrings("Environment select", select.name);
@@ -2694,6 +2696,46 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(componentSnapshotWidget(snapshot, 111) == null);
     try std.testing.expect(componentSnapshotWidget(snapshot, 181) != null);
     try std.testing.expect(componentSnapshotWidget(snapshot, 189) != null);
+}
+
+test "gpu components keeps textarea text when opening inputs dropdown" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    try harness.start(app.app());
+
+    try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+
+    var inputs_section_action_buffer: [80]u8 = undefined;
+    const inputs_section_action = try std.fmt.bufPrint(&inputs_section_action_buffer, "widget-action components-canvas {d} press", .{componentSectionNavId(.inputs)});
+    try harness.runtime.dispatchAutomationCommand(app.app(), inputs_section_action);
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectEqual(ComponentSection.inputs, app.section);
+    try std.testing.expect(componentSnapshotWidget(snapshot, 171) != null);
+
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 171 set-text Typed textarea draft");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectEqualStrings("Typed textarea draft", componentSnapshotWidget(snapshot, 171).?.text_value);
+    var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentTextCommand(display_list, message_text_id, "Typed textarea draft");
+
+    try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 172 press");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expect(app.environment_select_open);
+    try std.testing.expectEqual(@as(?bool, true), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
+    try std.testing.expectEqualStrings("Typed textarea draft", componentSnapshotWidget(snapshot, 171).?.text_value);
+    display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
+    try expectComponentTextCommand(display_list, message_text_id, "Typed textarea draft");
 }
 
 test "gpu components virtual scroll rubberbands smoothly at edges" {

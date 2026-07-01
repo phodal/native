@@ -394,7 +394,7 @@ pub const Runtime = struct {
     }
 
     pub fn createWindow(self: *Runtime, options: platform.WindowCreateOptions) anyerror!platform.WindowInfo {
-        return self.createWindowWithSourceMode(options, options.source == null);
+        return self.createWindowWithSourceMode(options, options.source == null, .require_source);
     }
 
     pub fn listWindows(self: *const Runtime, output: []platform.WindowInfo) []const platform.WindowInfo {
@@ -448,7 +448,7 @@ pub const Runtime = struct {
             .restore_state = shell_window.restore_state,
             .restore_policy = shellRestorePolicy(shell_window.restore_policy),
             .source = source,
-        }, source_reloads_from_app);
+        }, source_reloads_from_app, .allow_source_less);
         errdefer self.closeWindow(info.id) catch {};
 
         try self.createShellViews(info.id, shell_window.views, self.shellBoundsForWindow(info.id));
@@ -2116,7 +2116,7 @@ pub const Runtime = struct {
         if (!self.windows[window_index].info.open) return output[0..0];
 
         var count: usize = 0;
-        if (count < output.len) {
+        if (self.windows[window_index].source != null and count < output.len) {
             output[count] = viewInfoFromWebView(self.mainWebViewInfo(window_index));
             count += 1;
         }
@@ -2848,12 +2848,15 @@ pub const Runtime = struct {
             return;
         }
 
-        const source = try self.copyLoadedSource(try app.webViewSource());
+        const source = if (sceneNeedsMainWebView(scene) or !appUsesDefaultEmptyWebViewSource(app))
+            try self.copyLoadedSource(try app.webViewSource())
+        else
+            null;
         self.loaded_source = source;
 
         try self.loadStartupSceneWindow(scene.windows[0], source);
         for (scene.windows[1..]) |window| {
-            _ = try self.createShellWindowWithSourceMode(window, source, true);
+            _ = try self.createShellWindowWithSourceMode(window, source, source != null);
         }
 
         try self.log("scene.load", "loaded app scene", &.{
@@ -2862,7 +2865,7 @@ pub const Runtime = struct {
         });
     }
 
-    fn loadStartupSceneWindow(self: *Runtime, shell_window: app_manifest.ShellWindow, source: platform.WebViewSource) anyerror!void {
+    fn loadStartupSceneWindow(self: *Runtime, shell_window: app_manifest.ShellWindow, source: ?platform.WebViewSource) anyerror!void {
         const app_info = self.options.platform.app_info;
         const startup_window = app_info.resolvedStartupWindow(0);
         const window_id = startup_window.id;
@@ -2888,15 +2891,17 @@ pub const Runtime = struct {
         self.windows[runtime_index].info.label = try copyInto(&self.windows[runtime_index].label_storage, shell_window.label);
         self.windows[runtime_index].info.title = try copyInto(&self.windows[runtime_index].title_storage, shell_window.title orelse app_info.resolvedWindowTitle());
         self.windows[runtime_index].info.frame = startup_frame;
-        self.windows[runtime_index].source = try self.copySource(runtime_index, source);
-        self.windows[runtime_index].source_reloads_from_app = true;
+        self.windows[runtime_index].source = if (source) |source_value| try self.copySource(runtime_index, source_value) else null;
+        self.windows[runtime_index].source_reloads_from_app = source != null;
         if (!self.windows[runtime_index].main_frame_set) {
             self.windows[runtime_index].main_frame = geometry.RectF.init(0, 0, startup_frame.width, startup_frame.height);
         }
         self.next_window_id = @max(self.next_window_id, window_id + 1);
 
-        try self.options.platform.services.loadWindowWebView(window_id, self.windows[runtime_index].source.?);
-        try self.applyMainWebViewState(window_id);
+        if (self.windows[runtime_index].source) |window_source| {
+            try self.options.platform.services.loadWindowWebView(window_id, window_source);
+            try self.applyMainWebViewState(window_id);
+        }
         try self.createShellViews(window_id, shell_window.views, self.shellBoundsForWindow(window_id));
     }
 
@@ -3407,8 +3412,11 @@ pub const Runtime = struct {
         _ = try self.refreshCanvasWidgetDisplayListIfOwned(view_index);
     }
 
-    fn createWindowWithSourceMode(self: *Runtime, options: platform.WindowCreateOptions, source_reloads_from_app: bool) anyerror!platform.WindowInfo {
-        const source = options.source orelse self.loaded_source orelse return error.MissingWindowSource;
+    fn createWindowWithSourceMode(self: *Runtime, options: platform.WindowCreateOptions, source_reloads_from_app: bool, source_policy: WindowSourcePolicy) anyerror!platform.WindowInfo {
+        const source = options.source orelse self.loaded_source orelse switch (source_policy) {
+            .require_source => return error.MissingWindowSource,
+            .allow_source_less => null,
+        };
         const id = if (options.id != 0) options.id else self.allocateWindowId();
         const label = if (options.label.len > 0) options.label else return error.InvalidWindowOptions;
         try validateWindowFrame(options.default_frame);
@@ -3423,7 +3431,9 @@ pub const Runtime = struct {
         const native_info = try self.options.platform.services.createWindow(window_options);
         native_created = true;
         self.applyNativeInfo(index, native_info);
-        try self.options.platform.services.loadWindowWebView(id, self.windows[index].source.?);
+        if (self.windows[index].source) |window_source| {
+            try self.options.platform.services.loadWindowWebView(id, window_source);
+        }
         self.invalidated = true;
         return self.windows[index].info;
     }
@@ -5121,6 +5131,11 @@ const RuntimeShellLayout = struct {
 const ShellApplyMode = enum {
     create,
     update,
+};
+
+const WindowSourcePolicy = enum {
+    require_source,
+    allow_source_less,
 };
 
 const FocusTraversalDirection = enum {
@@ -8156,6 +8171,22 @@ fn shellRestorePolicy(policy: app_manifest.WindowRestorePolicy) platform.WindowR
         .clamp_to_visible_screen => .clamp_to_visible_screen,
         .center_on_primary => .center_on_primary,
     };
+}
+
+fn appUsesDefaultEmptyWebViewSource(app: App) bool {
+    return app.source_fn == null and
+        app.source.kind == .html and
+        app.source.bytes.len == 0 and
+        app.source.asset_options == null;
+}
+
+fn sceneNeedsMainWebView(scene: app_manifest.ShellConfig) bool {
+    for (scene.windows) |window| {
+        for (window.views) |view| {
+            if (view.kind == .webview) return true;
+        }
+    }
+    return false;
 }
 
 fn shellViewOptions(window_id: platform.WindowId, view: app_manifest.ShellView, layout: *ShellLayout) !platform.ViewOptions {
@@ -20026,6 +20057,57 @@ test "runtime lays out startup shell windows with native configured bounds" {
     try std.testing.expectEqual(@as(f32, 710), main.frame.height);
     try std.testing.expectEqual(@as(f32, 760), statusbar.frame.y);
     try std.testing.expectEqual(@as(f32, 1200), statusbar.frame.width);
+}
+
+test "runtime loads canvas-only startup shell without implicit main webview" {
+    const TestApp = struct {
+        const scene_views = [_]app_manifest.ShellView{.{
+            .label = "canvas",
+            .kind = .gpu_surface,
+            .fill = true,
+        }};
+        const scene_windows = [_]app_manifest.ShellWindow{.{
+            .label = "main",
+            .title = "Canvas",
+            .width = 800,
+            .height = 600,
+            .views = &scene_views,
+        }};
+
+        fn scene(context: *anyopaque) anyerror!app_manifest.ShellConfig {
+            _ = context;
+            return .{ .windows = &scene_windows };
+        }
+
+        fn app(self: *@This()) App {
+            return .{
+                .context = self,
+                .name = "canvas-only-startup",
+                .scene_fn = scene,
+            };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{ .id = 1, .size = geometry.SizeF.init(800, 600) });
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    try std.testing.expect(harness.runtime.loaded_source == null);
+    try std.testing.expect(harness.null_platform.loaded_source == null);
+    var views_buffer: [2]platform.ViewInfo = undefined;
+    const views = harness.runtime.listViews(1, &views_buffer);
+    try std.testing.expectEqual(@as(usize, 1), views.len);
+    try std.testing.expect(testViewByLabel(views, "main") == null);
+    const canvas_view = testViewByLabel(views, "canvas").?;
+    try std.testing.expectEqual(platform.ViewKind.gpu_surface, canvas_view.kind);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 800, 600), canvas_view.frame);
+
+    const snapshot = harness.runtime.automationSnapshot("Canvas");
+    try std.testing.expect(snapshot.source == null);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.views.len);
+    try std.testing.expectEqualStrings("canvas", snapshot.views[0].label);
 }
 
 test "runtime relayouts shell views attached to startup window" {

@@ -26,7 +26,7 @@ const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes_per_view;
-const component_chrome_prefix_commands: usize = 1;
+const component_chrome_prefix_commands: usize = 5;
 const component_chrome_suffix_commands: usize = 0;
 const catalog_grid_columns: usize = 3;
 const catalog_card_width: f32 = 256;
@@ -70,6 +70,7 @@ const content_stack_id: canvas.ObjectId = 91;
 const canvas_sidebar_id: canvas.ObjectId = 92;
 const canvas_sidebar_title_id: canvas.ObjectId = 93;
 const section_nav_base_id: canvas.ObjectId = 94;
+const canvas_background_id: canvas.ObjectId = 79;
 const canvas_toolbar_id: canvas.ObjectId = 80;
 const canvas_toolbar_title_id: canvas.ObjectId = 81;
 const canvas_toolbar_theme_id: canvas.ObjectId = 82;
@@ -457,14 +458,6 @@ const catalog_tooltip_children = [_]canvas.Widget{canvas.builtinComponentWidget(
     .text = "Tooltip",
 })};
 
-const html =
-    \\<!doctype html>
-    \\<html>
-    \\<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-    \\<body></body>
-    \\</html>
-;
-
 const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
 const shell_views = [_]zero_native.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
@@ -531,7 +524,6 @@ const GpuComponentsApp = struct {
         return .{
             .context = self,
             .name = "gpu-components",
-            .source = zero_native.WebViewSource.html(html),
             .scene_fn = scene,
             .event_fn = event,
             .stop_fn = stop,
@@ -1353,6 +1345,7 @@ fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.Wi
     const size = componentSurfaceSize(surface_size);
     const content_y = componentContentYForSize(size);
     const content_height = componentContentHeightForSize(size);
+    try builder.fillRect(.{ .id = canvas_background_id, .rect = rect(0, 0, size.width, size.height), .fill = .{ .color = tokens.colors.background } });
     try builder.fillRect(.{ .id = canvas_toolbar_id, .rect = rect(0, 0, size.width, toolbar_height), .fill = .{ .color = tokens.colors.surface } });
     try builder.drawText(.{
         .id = canvas_toolbar_title_id,
@@ -2280,6 +2273,7 @@ test "gpu components display list covers finished live controls" {
     try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
     try expectNoContentScrollContainerChrome(display_list);
     try expectNoSurfaceChrome(display_list, content_stack_id);
+    try expectComponentFillRectFrame(display_list, canvas_background_id, rect(0, 0, canvas_width, canvas_height));
     const bounds = display_list.bounds().?;
     try std.testing.expect(bounds.x <= 28);
     try std.testing.expect(bounds.y <= 26);
@@ -2626,7 +2620,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 4451198717990493977), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 12370818433616164314), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -3909,6 +3903,14 @@ fn expectComponentRoundedRectFrame(display_list: canvas.DisplayList, id: canvas.
     const command_ref = display_list.findCommandById(id) orelse return error.TestUnexpectedResult;
     switch (command_ref.command) {
         .fill_rounded_rect => |rounded| try expectComponentRect(rounded.rect, expected),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+fn expectComponentFillRectFrame(display_list: canvas.DisplayList, id: canvas.ObjectId, expected: geometry.RectF) !void {
+    const command_ref = display_list.findCommandById(id) orelse return error.TestUnexpectedResult;
+    switch (command_ref.command) {
+        .fill_rect => |fill| try expectComponentRect(fill.rect, expected),
         else => return error.TestUnexpectedResult,
     }
 }

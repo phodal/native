@@ -840,6 +840,8 @@ pub fn build(b: *std.Build) void {
         \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt 500000000 ]; then echo "gpu-dashboard automation ready exceeded 500 ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
         \\case "$snapshot" in *'window @w1 "zero-native GPU Dashboard"'*) ;; *) echo "gpu-dashboard window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/main kind=webview'*) echo "dashboard should not create an implicit main WebView" >&2; exit 1 ;; *) ;; esac
+        \\case "$snapshot" in *'source kind=html bytes=0'*) echo "dashboard should not publish an empty default WebView source" >&2; exit 1 ;; *) ;; esac
         \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'accessibility_label="Native-rendered product dashboard canvas"'*) ;; *) echo "dashboard GPU canvas was missing from snapshot" >&2; exit 1 ;; esac
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
@@ -943,6 +945,8 @@ pub fn build(b: *std.Build) void {
         \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt 500000000 ]; then echo "gpu-components automation ready exceeded 500 ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
         \\case "$snapshot" in *'window @w1 "zero-native GPU Components"'*) ;; *) echo "gpu-components window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'view @w1/main kind=webview'*) echo "components should not create an implicit main WebView" >&2; exit 1 ;; *) ;; esac
+        \\case "$snapshot" in *'source kind=html bytes=0'*) echo "components should not publish an empty default WebView source" >&2; exit 1 ;; *) ;; esac
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"

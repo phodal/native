@@ -12,6 +12,7 @@ const widget_access = @import("widget_access.zig");
 const widget_semantics = @import("widget_semantics.zig");
 const widget_metrics = @import("widget_metrics.zig");
 const widget_text_input = @import("widget_text_input.zig");
+const widget_render_style = @import("widget_render_style.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -66,8 +67,6 @@ const densityValue = widget_metrics.densityValue;
 const WidgetKind = widget_model.WidgetKind;
 const WidgetState = widget_model.WidgetState;
 const WidgetRenderState = widget_model.WidgetRenderState;
-const WidgetStyle = widget_model.WidgetStyle;
-const WidgetVariant = widget_model.WidgetVariant;
 const WidgetSize = widget_model.WidgetSize;
 const Widget = widget_model.Widget;
 const WidgetScrollMetrics = event_model.WidgetScrollMetrics;
@@ -76,6 +75,48 @@ const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
 const layoutTextCaretRect = text_model.layoutTextCaretRect;
 const layoutTextSelectionRects = text_model.layoutTextSelectionRects;
 const affinesEqual = equality_model.affinesEqual;
+const textInputAffordanceColor = widget_render_style.textInputAffordanceColor;
+pub const textSelectionFillColor = widget_render_style.textSelectionFillColor;
+pub const colorWithAlpha = widget_render_style.colorWithAlpha;
+const colorFill = widget_render_style.colorFill;
+const widgetBackgroundFill = widget_render_style.widgetBackgroundFill;
+const widgetAccentFill = widget_render_style.widgetAccentFill;
+const widgetBorderFill = widget_render_style.widgetBorderFill;
+const widgetFocusRingFill = widget_render_style.widgetFocusRingFill;
+const widgetBackgroundColor = widget_render_style.widgetBackgroundColor;
+const widgetAccentColor = widget_render_style.widgetAccentColor;
+const widgetBorderColor = widget_render_style.widgetBorderColor;
+const widgetForegroundColor = widget_render_style.widgetForegroundColor;
+const widgetAccentForegroundColor = widget_render_style.widgetAccentForegroundColor;
+const widgetRadius = widget_render_style.widgetRadius;
+pub const controlRadius = widget_render_style.controlRadius;
+pub const controlStrokeWidth = widget_render_style.controlStrokeWidth;
+const buttonFill = widget_render_style.buttonFill;
+const buttonTextColorForWidget = widget_render_style.buttonTextColorForWidget;
+const buttonBorderFill = widget_render_style.buttonBorderFill;
+const buttonControlVisualTokens = widget_render_style.buttonControlVisualTokens;
+pub const selectControlVisualTokens = widget_render_style.selectControlVisualTokens;
+const buttonStateBackground = widget_render_style.buttonStateBackground;
+pub const textInputControlVisualTokens = widget_render_style.textInputControlVisualTokens;
+const textInputFill = widget_render_style.textInputFill;
+const textInputBorderFill = widget_render_style.textInputBorderFill;
+const alertControlVisualTokens = widget_render_style.alertControlVisualTokens;
+const cardControlVisualTokens = widget_render_style.cardControlVisualTokens;
+const dialogControlVisualTokens = widget_render_style.dialogControlVisualTokens;
+const drawerControlVisualTokens = widget_render_style.drawerControlVisualTokens;
+const sheetControlVisualTokens = widget_render_style.sheetControlVisualTokens;
+pub const listItemControlVisualTokens = widget_render_style.listItemControlVisualTokens;
+pub const selectionControlVisualTokens = widget_render_style.selectionControlVisualTokens;
+pub const surfaceControlVisualTokens = widget_render_style.surfaceControlVisualTokens;
+pub const componentControlVisualTokens = widget_render_style.componentControlVisualTokens;
+const componentPillRadius = widget_render_style.componentPillRadius;
+const badgeBackgroundColor = widget_render_style.badgeBackgroundColor;
+const badgeBorderColor = widget_render_style.badgeBorderColor;
+const badgeTextColor = widget_render_style.badgeTextColor;
+const badgeStrokeWidth = widget_render_style.badgeStrokeWidth;
+pub const buttonStrokeWidth = widget_render_style.buttonStrokeWidth;
+const listItemFillColor = widget_render_style.listItemFillColor;
+pub const transparentColor = widget_render_style.transparentColor;
 
 const max_widget_depth: usize = 32;
 const max_widget_text_range_rects: usize = 4;
@@ -1981,87 +2022,6 @@ fn widgetIconGlyphScale(widget: Widget) f32 {
     };
 }
 
-fn textInputAffordanceColor(widget: Widget, tokens: DesignTokens) Color {
-    const visual = textInputControlVisualTokens(widget, tokens);
-    return widget.style.focus_ring orelse widget.style.accent orelse visual.active_background orelse tokens.colors.focus_ring;
-}
-
-pub fn textSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
-    return colorWithAlpha(textInputAffordanceColor(widget, tokens), 0.18);
-}
-
-pub fn colorWithAlpha(color: Color, alpha: f32) Color {
-    return Color.rgba(color.r, color.g, color.b, std.math.clamp(alpha, 0, 1));
-}
-
-fn colorFill(color: Color) Fill {
-    return .{ .color = color };
-}
-
-fn widgetBackgroundFill(widget: Widget, fallback: Color) Fill {
-    return colorFill(widget.style.background orelse fallback);
-}
-
-fn widgetAccentFill(widget: Widget, fallback: Color) Fill {
-    return colorFill(widget.style.accent orelse fallback);
-}
-
-fn widgetBorderFill(widget: Widget, fallback: Color) Fill {
-    return colorFill(widget.style.border orelse fallback);
-}
-
-fn widgetFocusRingFill(widget: Widget, tokens: DesignTokens) Fill {
-    return colorFill(widget.style.focus_ring orelse tokens.colors.focus_ring);
-}
-
-fn widgetBackgroundColor(widget: Widget, fallback: Color) Color {
-    return widget.style.background orelse fallback;
-}
-
-fn widgetAccentColor(widget: Widget, fallback: Color) Color {
-    return widget.style.accent orelse fallback;
-}
-
-fn widgetBorderColor(widget: Widget, fallback: Color) Color {
-    return widget.style.border orelse fallback;
-}
-
-fn widgetForegroundColor(widget: Widget, tokens: DesignTokens, fallback: Color) Color {
-    if (widget.state.disabled) return tokens.colors.text_muted;
-    return widget.style.foreground orelse fallback;
-}
-
-fn widgetAccentForegroundColor(widget: Widget, tokens: DesignTokens, fallback: Color) Color {
-    if (widget.state.disabled) return tokens.colors.text_muted;
-    return widget.style.accent_foreground orelse fallback;
-}
-
-fn widgetRadius(widget: Widget, fallback: f32) Radius {
-    if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
-    return Radius.all(nonNegative(widgetSizedRadiusValue(widget, fallback)));
-}
-
-pub fn controlRadius(widget: Widget, visual: ControlVisualTokens, fallback: f32) Radius {
-    if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
-    return Radius.all(nonNegative(widgetSizedRadiusValue(widget, visual.radius orelse fallback)));
-}
-
-fn widgetSizedRadiusValue(widget: Widget, fallback: f32) f32 {
-    return switch (widget.size) {
-        .sm => @max(0, fallback - 2),
-        .default, .icon => fallback,
-        .lg => fallback + 2,
-    };
-}
-
-fn widgetStrokeWidth(widget: Widget, fallback: f32) f32 {
-    return nonNegative(widget.style.stroke_width orelse fallback);
-}
-
-pub fn controlStrokeWidth(widget: Widget, visual: ControlVisualTokens, fallback: f32) f32 {
-    return nonNegative(widget.style.stroke_width orelse visual.stroke_width orelse fallback);
-}
-
 fn emitWidgetTextSelectionRects(
     builder: *Builder,
     widget: Widget,
@@ -2134,255 +2094,6 @@ fn emitWidgetTextCaret(
         .to = geometry.PointF.init(snapped.x, snapped.y + snapped.height),
         .stroke = .{ .fill = .{ .color = textInputAffordanceColor(widget, tokens) }, .width = tokens.stroke.regular },
     });
-}
-
-fn buttonFill(widget: Widget, tokens: DesignTokens) Fill {
-    if (widget.state.disabled) return colorFill(tokens.colors.disabled);
-    const active = widget.state.pressed or widget.state.selected;
-    const visual = buttonControlVisualTokens(widget, tokens);
-    return switch (widget.variant) {
-        .default => if (active)
-            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
-        else if (widget.state.hovered)
-            colorFill(widgetBackgroundColor(widget, visual.hover_background orelse tokens.colors.surface_subtle))
-        else
-            colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface)),
-        .primary => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, tokens.colors.accent))),
-        .secondary => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active or widget.state.hovered) tokens.colors.surface_pressed else tokens.colors.surface_subtle))),
-        .outline => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
-        .ghost => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
-        .destructive => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, tokens.colors.destructive))),
-    };
-}
-
-fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
-    if (widget.state.disabled) return tokens.colors.text_muted;
-    const active = widget.state.pressed or widget.state.selected;
-    const visual = buttonControlVisualTokens(widget, tokens);
-    return switch (widget.variant) {
-        .default => if (active)
-            widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)
-        else
-            widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
-        .primary => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text),
-        .secondary, .outline, .ghost => widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
-        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive_text),
-    };
-}
-
-fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
-    if (widget.style.border) |border| return colorFill(border);
-    const visual = buttonControlVisualTokens(widget, tokens);
-    return switch (widget.variant) {
-        .primary => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.accent)),
-        .destructive => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.destructive)),
-        .ghost => colorFill(widgetBorderColor(widget, visual.border orelse transparentColor())),
-        else => colorFill(widgetBorderColor(widget, visual.border orelse tokens.colors.border)),
-    };
-}
-
-fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    const variant = switch (widget.variant) {
-        .default => tokens.controls.button_default,
-        .primary => tokens.controls.button_primary,
-        .secondary => tokens.controls.button_secondary,
-        .outline => tokens.controls.button_outline,
-        .ghost => tokens.controls.button_ghost,
-        .destructive => tokens.controls.button_destructive,
-    };
-    if (widget.kind == .toggle_button) return controlVisualTokensWithFallback(tokens.controls.toggle_button, variant);
-    return variant;
-}
-
-pub fn selectControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.select, tokens.controls.button_outline);
-}
-
-fn controlVisualTokensWithFallback(primary: ControlVisualTokens, fallback: ControlVisualTokens) ControlVisualTokens {
-    return .{
-        .background = primary.background orelse fallback.background,
-        .hover_background = primary.hover_background orelse fallback.hover_background,
-        .active_background = primary.active_background orelse fallback.active_background,
-        .foreground = primary.foreground orelse fallback.foreground,
-        .border = primary.border orelse fallback.border,
-        .radius = primary.radius orelse fallback.radius,
-        .stroke_width = primary.stroke_width orelse fallback.stroke_width,
-    };
-}
-
-fn buttonStateBackground(visual: ControlVisualTokens, active: bool, hovered: bool, fallback: Color) Color {
-    if (active) return visual.active_background orelse visual.hover_background orelse visual.background orelse fallback;
-    if (hovered) return visual.hover_background orelse visual.background orelse fallback;
-    return visual.background orelse fallback;
-}
-
-pub fn textInputControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.kind) {
-        .input => controlVisualTokensWithFallback(tokens.controls.input, tokens.controls.text_field),
-        .search_field => tokens.controls.search_field,
-        .combobox => controlVisualTokensWithFallback(tokens.controls.combobox, tokens.controls.search_field),
-        .textarea => tokens.controls.textarea,
-        else => tokens.controls.text_field,
-    };
-}
-
-fn textInputFill(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Fill {
-    if (widget.state.disabled) return colorFill(tokens.colors.disabled);
-    return colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface)));
-}
-
-fn textInputBorderFill(widget: Widget, visual: ControlVisualTokens, fallback: Color) Fill {
-    return colorFill(widgetBorderColor(widget, visual.border orelse fallback));
-}
-
-fn accordionControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.accordion, tokens.controls.panel);
-}
-
-fn alertControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.alert, tokens.controls.panel);
-}
-
-fn bubbleControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.bubble, tokens.controls.panel);
-}
-
-fn cardControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.card, tokens.controls.panel);
-}
-
-fn dialogControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.dialog, tokens.controls.popover);
-}
-
-fn drawerControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.drawer, tokens.controls.popover);
-}
-
-fn sheetControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.sheet, tokens.controls.popover);
-}
-
-pub fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.kind) {
-        .data_cell => controlVisualTokensWithFallback(tokens.controls.data_cell, tokens.controls.list_item),
-        .menu_item => controlVisualTokensWithFallback(tokens.controls.menu_item, tokens.controls.list_item),
-        .list_item => tokens.controls.list_item,
-        else => .{},
-    };
-}
-
-pub fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.kind) {
-        .segmented_control => tokens.controls.segmented_control,
-        .checkbox => tokens.controls.checkbox,
-        .radio => tokens.controls.radio,
-        .switch_control, .toggle => tokens.controls.toggle,
-        .slider => tokens.controls.slider,
-        .progress => tokens.controls.progress,
-        else => .{},
-    };
-}
-
-pub fn surfaceControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.kind) {
-        .accordion => accordionControlVisualTokens(tokens),
-        .alert => alertControlVisualTokens(tokens),
-        .bubble => bubbleControlVisualTokens(tokens),
-        .card => cardControlVisualTokens(tokens),
-        .dialog => dialogControlVisualTokens(tokens),
-        .drawer => drawerControlVisualTokens(tokens),
-        .sheet => sheetControlVisualTokens(tokens),
-        .panel => tokens.controls.panel,
-        .resizable => resizableControlVisualTokens(tokens),
-        .popover => tokens.controls.popover,
-        .menu_surface => tokens.controls.menu_surface,
-        .dropdown_menu => controlVisualTokensWithFallback(tokens.controls.dropdown_menu, tokens.controls.menu_surface),
-        .tooltip => tokens.controls.tooltip,
-        else => .{},
-    };
-}
-
-fn resizableControlVisualTokens(tokens: DesignTokens) ControlVisualTokens {
-    return controlVisualTokensWithFallback(tokens.controls.resizable, tokens.controls.panel);
-}
-
-pub fn componentControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
-    return switch (widget.kind) {
-        .avatar => tokens.controls.avatar,
-        .badge => tokens.controls.badge,
-        .separator => tokens.controls.separator,
-        .skeleton => tokens.controls.skeleton,
-        .spinner => tokens.controls.spinner,
-        else => .{},
-    };
-}
-
-fn componentPillRadius(widget: Widget, visual: ControlVisualTokens, fallback: f32) Radius {
-    if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
-    if (visual.radius) |radius| return Radius.all(nonNegative(radius));
-    return Radius.all(nonNegative(fallback));
-}
-
-fn badgeBackgroundColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
-    if (widget.state.disabled) return tokens.colors.disabled;
-    return switch (widget.variant) {
-        .default, .primary => widgetAccentColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.accent)),
-        .secondary => widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface_subtle)),
-        .outline, .ghost => widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, if (widget.state.hovered or widget.state.pressed) tokens.colors.surface_subtle else transparentColor())),
-        .destructive => widgetAccentColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.destructive)),
-    };
-}
-
-fn badgeBorderColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
-    return switch (widget.variant) {
-        .default, .primary => widgetAccentColor(widget, visual.border orelse tokens.colors.accent),
-        .destructive => widgetAccentColor(widget, visual.border orelse tokens.colors.destructive),
-        else => widgetBorderColor(widget, visual.border orelse tokens.colors.border),
-    };
-}
-
-fn badgeTextColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
-    if (widget.state.disabled) return tokens.colors.text_muted;
-    return switch (widget.variant) {
-        .default, .primary => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text),
-        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive_text),
-        else => widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
-    };
-}
-
-fn badgeStrokeWidth(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) f32 {
-    if (widget.style.stroke_width) |width| return nonNegative(width);
-    if (visual.stroke_width) |width| return nonNegative(width);
-    return switch (widget.variant) {
-        .ghost => 0,
-        else => tokens.stroke.hairline,
-    };
-}
-
-pub fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
-    if (widget.style.stroke_width) |width| return nonNegative(width);
-    const visual = buttonControlVisualTokens(widget, tokens);
-    if (visual.stroke_width) |width| return nonNegative(width);
-    return switch (widget.variant) {
-        .ghost => 0,
-        else => tokens.stroke.regular,
-    };
-}
-
-fn listItemFillColor(widget: Widget, tokens: DesignTokens, state: WidgetState) Color {
-    const visual = listItemControlVisualTokens(widget, tokens);
-    const fallback = if (state.selected or state.pressed)
-        tokens.colors.surface_pressed
-    else if (state.hovered)
-        tokens.colors.surface_subtle
-    else
-        transparentColor();
-    return buttonStateBackground(visual, state.selected or state.pressed, state.hovered, fallback);
-}
-
-pub fn transparentColor() Color {
-    return Color.rgba(0, 0, 0, 0);
 }
 
 fn widgetWithFrame(widget: Widget, frame: geometry.RectF) Widget {

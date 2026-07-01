@@ -10519,6 +10519,7 @@ fn widgetKeyboardTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
 
 fn widgetKeyboardKeyDownTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
     if (widgetKeyboardSelectAllTextEditEvent(event)) |edit| return edit;
+    if (widgetKeyboardCommandTextNavigationEvent(event)) |edit| return edit;
     if (event.modifiers.hasNavigationModifier()) return null;
     if (std.ascii.eqlIgnoreCase(event.key, "backspace")) return .delete_backward;
     if (std.ascii.eqlIgnoreCase(event.key, "delete")) return .delete_forward;
@@ -10526,6 +10527,13 @@ fn widgetKeyboardKeyDownTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEven
     if (std.ascii.eqlIgnoreCase(event.key, "arrowright")) return .{ .move_caret = .{ .direction = .next, .extend = event.modifiers.shift } };
     if (std.ascii.eqlIgnoreCase(event.key, "home")) return .{ .move_caret = .{ .direction = .start, .extend = event.modifiers.shift } };
     if (std.ascii.eqlIgnoreCase(event.key, "end")) return .{ .move_caret = .{ .direction = .end, .extend = event.modifiers.shift } };
+    return null;
+}
+
+fn widgetKeyboardCommandTextNavigationEvent(event: WidgetKeyboardEvent) ?TextInputEvent {
+    if (!event.modifiers.super or event.modifiers.alt) return null;
+    if (std.ascii.eqlIgnoreCase(event.key, "arrowleft")) return .{ .move_caret = .{ .direction = .start, .extend = event.modifiers.shift } };
+    if (std.ascii.eqlIgnoreCase(event.key, "arrowright")) return .{ .move_caret = .{ .direction = .end, .extend = event.modifiers.shift } };
     return null;
 }
 
@@ -24748,8 +24756,25 @@ test "widget keyboard events map to text edit events" {
         else => try std.testing.expect(false),
     }
 
+    var nav_storage: [64]u8 = undefined;
+    var nav_state = TextEditState{ .text = "hello", .selection = TextSelection.collapsed(2) };
+    const command_left = (WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .super = true } }).textEditEvent().?;
+    nav_state = try nav_state.apply(command_left, &nav_storage);
+    try std.testing.expectEqualDeep(TextSelection.collapsed(0), nav_state.selection);
+
+    nav_state = TextEditState{ .text = "hello", .selection = TextSelection.collapsed(2) };
+    const command_right = (WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowright", .modifiers = .{ .super = true } }).textEditEvent().?;
+    nav_state = try nav_state.apply(command_right, &nav_storage);
+    try std.testing.expectEqualDeep(TextSelection.collapsed(5), nav_state.selection);
+
+    nav_state = TextEditState{ .text = "hello", .selection = TextSelection.collapsed(4) };
+    const shift_command_left = (WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .super = true, .shift = true } }).textEditEvent().?;
+    nav_state = try nav_state.apply(shift_command_left, &nav_storage);
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 4, .focus = 0 }, nav_state.selection);
+
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .text_input, .text = "a", .modifiers = .{ .super = true } }).textEditEvent() == null);
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .alt = true } }).textEditEvent() == null);
+    try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "arrowleft", .modifiers = .{ .control = true } }).textEditEvent() == null);
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_down, .key = "a", .modifiers = .{ .super = true, .shift = true } }).textEditEvent() == null);
     try std.testing.expect((WidgetKeyboardEvent{ .phase = .key_up, .key = "backspace" }).textEditEvent() == null);
 }

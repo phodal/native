@@ -5425,6 +5425,10 @@ fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
     return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox or kind == .textarea;
 }
 
+fn canvasWidgetSingleLineTextKind(kind: canvas.WidgetKind) bool {
+    return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox;
+}
+
 fn canvasWidgetScrollableKind(kind: canvas.WidgetKind) bool {
     return kind == .scroll_view or kind == .textarea;
 }
@@ -7160,6 +7164,11 @@ const RuntimeView = struct {
             if (std.ascii.eqlIgnoreCase(keyboard.key, "enter") or std.ascii.eqlIgnoreCase(keyboard.key, "return")) {
                 return .{ .insert_text = "\n" };
             }
+        }
+
+        if (canvasWidgetSingleLineTextKind(widget.kind) and keyboard.phase == .key_down and keyboard.text.len == 0 and !keyboard.modifiers.hasNavigationModifier()) {
+            if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowup")) return .{ .move_caret = .{ .direction = .start, .extend = keyboard.modifiers.shift } };
+            if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown")) return .{ .move_caret = .{ .direction = .end, .extend = keyboard.modifiers.shift } };
         }
 
         return keyboard.textEditEvent();
@@ -15184,9 +15193,51 @@ test "runtime applies text input to focused canvas text fields" {
         .window_id = 1,
         .label = "canvas",
         .kind = .key_down,
+        .key = "arrowleft",
+        .modifiers = .{ .command = true },
+    } });
+    try std.testing.expectEqual(@as(u64, 6), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), retained.nodes[1].widget.text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowright",
+        .modifiers = .{ .command = true },
+    } });
+    try std.testing.expectEqual(@as(u64, 7), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(1), retained.nodes[1].widget.text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowup",
+    } });
+    try std.testing.expectEqual(@as(u64, 8), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), retained.nodes[1].widget.text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowdown",
+    } });
+    try std.testing.expectEqual(@as(u64, 9), harness.runtime.views[0].widget_revision);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(1), retained.nodes[1].widget.text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
         .key = "escape",
     } });
-    try std.testing.expectEqual(@as(u64, 5), harness.runtime.views[0].widget_revision);
+    try std.testing.expectEqual(@as(u64, 9), harness.runtime.views[0].widget_revision);
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqualStrings("x", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(1), retained.nodes[1].widget.text_selection.?);
@@ -15279,6 +15330,44 @@ test "runtime applies text input to canvas textareas" {
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(7), retained.nodes[1].widget.text_selection.?);
     const newline_geometry = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
     try std.testing.expect(newline_geometry.caret_bounds.?.y > textarea.frame.y + 24);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowleft",
+        .modifiers = .{ .command = true },
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), retained.nodes[1].widget.text_selection.?);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowright",
+        .modifiers = .{ .command = true },
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(7), retained.nodes[1].widget.text_selection.?);
+
+    const textarea_revision = harness.runtime.views[0].widget_revision;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowup",
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowdown",
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(u64, textarea_revision), harness.runtime.views[0].widget_revision);
+    try std.testing.expectEqualStrings("First!\n", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(7), retained.nodes[1].widget.text_selection.?);
 
     _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "Second" });
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");

@@ -5,6 +5,7 @@ const validation = @import("validation.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
+const view_widget_scroll = @import("view_widget_scroll.zig");
 const widget_bridge = @import("widget_bridge.zig");
 const platform = @import("../platform/root.zig");
 
@@ -50,7 +51,6 @@ const CanvasWidgetScrollReconcileEntry = canvas_widget_runtime.CanvasWidgetScrol
 const CanvasWidgetControlReconcileEntry = canvas_widget_runtime.CanvasWidgetControlReconcileEntry;
 const CanvasWidgetTextReconcileEntry = canvas_widget_runtime.CanvasWidgetTextReconcileEntry;
 const CanvasWidgetSourceTextEntry = canvas_widget_runtime.CanvasWidgetSourceTextEntry;
-const CanvasWidgetScrollKeyboardTarget = canvas_widget_runtime.CanvasWidgetScrollKeyboardTarget;
 const CanvasWidgetStepDirection = canvas_widget_runtime.CanvasWidgetStepDirection;
 const canvasWidgetInteractionTargetExists = canvas_widget_runtime.canvasWidgetInteractionTargetExists;
 const canvasWidgetLayoutNodeHidden = canvas_widget_runtime.canvasWidgetLayoutNodeHidden;
@@ -59,7 +59,6 @@ const canvasWidgetLayoutNodeClippedBounds = canvas_widget_runtime.canvasWidgetLa
 const canvasWidgetDismissibleSurfaceKind = canvas_widget_runtime.canvasWidgetDismissibleSurfaceKind;
 const canvasWidgetEditableTextKind = canvas_widget_runtime.canvasWidgetEditableTextKind;
 const canvasWidgetSingleLineTextKind = canvas_widget_runtime.canvasWidgetSingleLineTextKind;
-const canvasWidgetScrollableKind = canvas_widget_runtime.canvasWidgetScrollableKind;
 const canvasWidgetResizableMinWidth = canvas_widget_runtime.canvasWidgetResizableMinWidth;
 const collectCanvasWidgetControlReconcileEntries = canvas_widget_runtime.collectCanvasWidgetControlReconcileEntries;
 const collectCanvasWidgetScrollReconcileEntries = canvas_widget_runtime.collectCanvasWidgetScrollReconcileEntries;
@@ -89,10 +88,7 @@ fn copyInto(buffer: []u8, value: []const u8) ![]const u8 {
     return buffer[0..value.len];
 }
 
-pub const CanvasWidgetScrollSource = enum {
-    discrete,
-    wheel,
-};
+pub const CanvasWidgetScrollSource = view_widget_scroll.CanvasWidgetScrollSource;
 
 pub const CanvasWidgetToggleAnimation = struct {
     id: canvas.ObjectId,
@@ -463,6 +459,20 @@ pub const RuntimeView = struct {
     text_storage: [platform.max_view_text_bytes]u8 = undefined,
     command_storage: [platform.max_view_command_bytes]u8 = undefined,
 
+    const CanvasWidgetScrollMethods = view_widget_scroll.RuntimeViewCanvasWidgetScroll(RuntimeView);
+    pub const canvasWidgetKineticScrollActive = CanvasWidgetScrollMethods.canvasWidgetKineticScrollActive;
+    pub const applyCanvasWidgetScrollRoute = CanvasWidgetScrollMethods.applyCanvasWidgetScrollRoute;
+    pub const deepestCanvasWidgetScrollIndex = CanvasWidgetScrollMethods.deepestCanvasWidgetScrollIndex;
+    pub const canvasWidgetScrollState = CanvasWidgetScrollMethods.canvasWidgetScrollState;
+    pub const canvasWidgetScrollCanConsume = CanvasWidgetScrollMethods.canvasWidgetScrollCanConsume;
+    pub const applyCanvasWidgetScroll = CanvasWidgetScrollMethods.applyCanvasWidgetScroll;
+    pub const applyCanvasWidgetTextareaScroll = CanvasWidgetScrollMethods.applyCanvasWidgetTextareaScroll;
+    pub const applyCanvasWidgetScrollKeyboardTarget = CanvasWidgetScrollMethods.applyCanvasWidgetScrollKeyboardTarget;
+    pub const stepCanvasWidgetKineticScroll = CanvasWidgetScrollMethods.stepCanvasWidgetKineticScroll;
+    pub const canvasWidgetScrollContentExtent = CanvasWidgetScrollMethods.canvasWidgetScrollContentExtent;
+    pub const translateCanvasWidgetScrollDescendants = CanvasWidgetScrollMethods.translateCanvasWidgetScrollDescendants;
+    pub const scrollCanvasTextareaCaretIntoView = CanvasWidgetScrollMethods.scrollCanvasTextareaCaretIntoView;
+
     pub fn info(self: RuntimeView) platform.ViewInfo {
         return .{
             .id = self.id,
@@ -616,16 +626,6 @@ pub const RuntimeView = struct {
     pub fn refreshGpuSurfaceFirstFrameLatencyBudgetStatus(self: *RuntimeView) void {
         self.gpu_first_frame_latency_budget_exceeded_count = if (self.gpu_first_frame_latency_budget_ns > 0 and self.gpu_first_frame_latency_ns > self.gpu_first_frame_latency_budget_ns) 1 else 0;
         self.gpu_first_frame_latency_budget_ok = self.gpu_first_frame_latency_budget_exceeded_count == 0;
-    }
-
-    pub fn canvasWidgetKineticScrollActive(self: *const RuntimeView) bool {
-        for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
-            if (node.widget.kind != .scroll_view or node.widget.layout.virtualized) continue;
-            const viewport = node.frame.inset(node.widget.layout.padding).normalized();
-            if (viewport.isEmpty()) continue;
-            if (self.canvasWidgetScrollState(index, node, viewport).needsKineticStep(self.widget_tokens.scroll)) return true;
-        }
-        return false;
     }
 
     pub fn copyRuntimeStateFrom(self: *RuntimeView, source: *const RuntimeView) void {
@@ -1266,223 +1266,6 @@ pub const RuntimeView = struct {
         self.canvas_widget_cursor = next_cursor;
     }
 
-    pub fn applyCanvasWidgetScrollRoute(self: *RuntimeView, route: []const canvas.WidgetEventRouteEntry, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
-        var depth_limit: ?usize = null;
-        while (self.deepestCanvasWidgetScrollIndex(route, depth_limit)) |scroll_index| {
-            if (self.widget_layout_nodes[scroll_index].widget.layout.virtualized) return null;
-            const has_scroll_parent = self.deepestCanvasWidgetScrollIndex(route, self.widget_layout_nodes[scroll_index].depth) != null;
-            if (has_scroll_parent and !self.canvasWidgetScrollCanConsume(scroll_index, delta_y)) {
-                depth_limit = self.widget_layout_nodes[scroll_index].depth;
-                continue;
-            }
-            if (try self.applyCanvasWidgetScroll(scroll_index, delta_y, source, !has_scroll_parent)) |dirty| return dirty;
-            depth_limit = self.widget_layout_nodes[scroll_index].depth;
-        }
-        return null;
-    }
-
-    pub fn deepestCanvasWidgetScrollIndex(self: *const RuntimeView, route: []const canvas.WidgetEventRouteEntry, depth_limit: ?usize) ?usize {
-        var result: ?usize = null;
-        var result_depth: usize = 0;
-        for (route) |entry| {
-            if (!canvasWidgetScrollableKind(entry.kind) or entry.node_index >= self.widget_layout_node_count) continue;
-            const depth = self.widget_layout_nodes[entry.node_index].depth;
-            if (depth_limit) |limit| {
-                if (depth >= limit) continue;
-            }
-            if (result == null or depth > result_depth) {
-                result = entry.node_index;
-                result_depth = depth;
-            }
-        }
-        return result;
-    }
-
-    pub fn canvasWidgetScrollState(self: *const RuntimeView, scroll_index: usize, scroll_node: canvas.WidgetLayoutNode, viewport: geometry.RectF) canvas.ScrollState {
-        const retained = self.widget_scroll_states[scroll_index];
-        return .{
-            .offset = scroll_node.widget.value,
-            .velocity = retained.velocity,
-            .viewport_extent = viewport.height,
-            .content_extent = self.canvasWidgetScrollContentExtent(scroll_index, viewport),
-        };
-    }
-
-    pub fn canvasWidgetScrollCanConsume(self: *const RuntimeView, scroll_index: usize, delta_y: f32) bool {
-        if (scroll_index >= self.widget_layout_node_count or delta_y == 0) return false;
-        const scroll_node = self.widget_layout_nodes[scroll_index];
-        if (!canvasWidgetScrollableKind(scroll_node.widget.kind)) return false;
-        if (scroll_node.widget.kind == .scroll_view and scroll_node.widget.layout.virtualized) return false;
-
-        if (scroll_node.widget.kind == .textarea) {
-            const max_offset = canvas.textInputMaxScrollOffsetForWidget(scroll_node.widget, self.widget_tokens);
-            if (max_offset <= 0) return false;
-            const current_offset = std.math.clamp(scroll_node.widget.value, 0, max_offset);
-            return if (delta_y > 0) current_offset < max_offset else current_offset > 0;
-        }
-
-        const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
-        if (viewport.isEmpty()) return false;
-
-        const current = self.canvasWidgetScrollState(scroll_index, scroll_node, viewport);
-        const max_offset = current.maxOffset();
-        if (current.offset < 0) return delta_y > 0;
-        if (current.offset > max_offset) return delta_y < 0;
-        return if (delta_y > 0) current.offset < max_offset else current.offset > 0;
-    }
-
-    pub fn applyCanvasWidgetScroll(self: *RuntimeView, scroll_index: usize, delta_y: f32, source: CanvasWidgetScrollSource, allow_rubberband: bool) anyerror!?geometry.RectF {
-        if (scroll_index >= self.widget_layout_node_count) return null;
-        const scroll_node = self.widget_layout_nodes[scroll_index];
-        if (!canvasWidgetScrollableKind(scroll_node.widget.kind)) return null;
-        if (scroll_node.widget.kind == .textarea) return self.applyCanvasWidgetTextareaScroll(scroll_index, delta_y, source);
-        if (scroll_node.widget.layout.virtualized) return null;
-
-        const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
-        if (viewport.isEmpty()) return null;
-
-        const current = self.canvasWidgetScrollState(scroll_index, scroll_node, viewport);
-        const next = switch (source) {
-            .wheel => if (allow_rubberband)
-                current.applyWheel(delta_y, self.widget_tokens.scroll)
-            else
-                current.applyWheelClamped(delta_y, self.widget_tokens.scroll),
-            .discrete => discrete: {
-                var state = current;
-                state.offset += delta_y;
-                state.velocity = 0;
-                break :discrete state.clamped();
-            },
-        };
-        self.widget_scroll_states[scroll_index] = next;
-        if (next.offset == current.offset) return null;
-
-        const offset_delta = next.offset - current.offset;
-        self.widget_layout_nodes[scroll_index].widget.value = next.offset;
-        self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
-
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(scroll_index, scroll_node.frame);
-    }
-
-    pub fn applyCanvasWidgetTextareaScroll(self: *RuntimeView, scroll_index: usize, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
-        if (scroll_index >= self.widget_layout_node_count) return null;
-        const widget = self.widget_layout_nodes[scroll_index].widget;
-        if (widget.kind != .textarea) return null;
-
-        const viewport = canvas.textInputViewportForWidget(widget, self.widget_tokens) orelse return null;
-        const current = canvas.ScrollState{
-            .offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, widget.value),
-            .viewport_extent = viewport.height,
-            .content_extent = canvas.textInputContentExtentForWidget(widget, self.widget_tokens),
-        };
-        const next = switch (source) {
-            .wheel => current.applyWheelClamped(delta_y, self.widget_tokens.scroll),
-            .discrete => discrete: {
-                var state = current;
-                state.offset += delta_y;
-                state.velocity = 0;
-                break :discrete state.clamped();
-            },
-        };
-        if (next.offset == current.offset) return null;
-
-        self.widget_layout_nodes[scroll_index].widget.value = next.offset;
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(scroll_index, widget.frame);
-    }
-
-    pub fn applyCanvasWidgetScrollKeyboardTarget(self: *RuntimeView, scroll_index: usize, target: CanvasWidgetScrollKeyboardTarget) anyerror!?geometry.RectF {
-        if (scroll_index >= self.widget_layout_node_count) return null;
-        const scroll_node = self.widget_layout_nodes[scroll_index];
-        if (scroll_node.widget.kind != .scroll_view or scroll_node.widget.layout.virtualized) return null;
-
-        const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
-        if (viewport.isEmpty()) return null;
-
-        const current = self.canvasWidgetScrollState(scroll_index, scroll_node, viewport);
-        var next = current;
-        next.offset = switch (target) {
-            .start => 0,
-            .end => current.maxOffset(),
-        };
-        next.velocity = 0;
-        next = next.clamped();
-        self.widget_scroll_states[scroll_index] = next;
-        if (next.offset == current.offset) return null;
-
-        const offset_delta = next.offset - current.offset;
-        self.widget_layout_nodes[scroll_index].widget.value = next.offset;
-        self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
-
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(scroll_index, scroll_node.frame);
-    }
-
-    pub fn stepCanvasWidgetKineticScroll(self: *RuntimeView, dt_ms: f32) anyerror!?geometry.RectF {
-        var dirty: ?geometry.RectF = null;
-        var changed = false;
-        const physics = self.widget_tokens.scroll;
-
-        for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |scroll_node, scroll_index| {
-            if (scroll_node.widget.kind != .scroll_view or scroll_node.widget.layout.virtualized) continue;
-
-            const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
-            if (viewport.isEmpty()) {
-                self.widget_scroll_states[scroll_index].velocity = 0;
-                continue;
-            }
-
-            const current = self.canvasWidgetScrollState(scroll_index, scroll_node, viewport);
-            if (!current.needsKineticStep(physics)) {
-                self.widget_scroll_states[scroll_index].velocity = 0;
-                continue;
-            }
-
-            const next = current.stepKinetic(dt_ms, physics);
-            self.widget_scroll_states[scroll_index] = next;
-            if (next.offset == current.offset) continue;
-
-            const offset_delta = next.offset - current.offset;
-            self.widget_layout_nodes[scroll_index].widget.value = next.offset;
-            self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
-            dirty = unionRects(dirty, self.canvasWidgetDirtyBounds(scroll_index, scroll_node.frame));
-            changed = true;
-        }
-
-        if (!changed) return null;
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return dirty;
-    }
-
-    pub fn canvasWidgetScrollContentExtent(self: *const RuntimeView, scroll_index: usize, viewport: geometry.RectF) f32 {
-        if (scroll_index < self.widget_layout_node_count and self.widget_layout_nodes[scroll_index].widget.kind == .textarea) {
-            return canvas.textInputContentExtentForWidget(self.widget_layout_nodes[scroll_index].widget, self.widget_tokens);
-        }
-        const scroll_depth = self.widget_layout_nodes[scroll_index].depth;
-        const offset = self.widget_layout_nodes[scroll_index].widget.value;
-        var bottom = viewport.maxY();
-        var index = scroll_index + 1;
-        while (index < self.widget_layout_node_count and self.widget_layout_nodes[index].depth > scroll_depth) : (index += 1) {
-            bottom = @max(bottom, self.widget_layout_nodes[index].frame.maxY() + offset);
-        }
-        return @max(0, bottom - viewport.y);
-    }
-
-    pub fn translateCanvasWidgetScrollDescendants(self: *RuntimeView, scroll_index: usize, dy: f32) void {
-        const scroll_depth = self.widget_layout_nodes[scroll_index].depth;
-        var index = scroll_index + 1;
-        while (index < self.widget_layout_node_count and self.widget_layout_nodes[index].depth > scroll_depth) : (index += 1) {
-            const translated = self.widget_layout_nodes[index].frame.translate(.{ .dx = 0, .dy = dy });
-            self.widget_layout_nodes[index].frame = translated;
-            self.widget_layout_nodes[index].widget.frame = translated;
-        }
-    }
-
     pub fn applyCanvasWidgetTextEdit(self: *RuntimeView, target_id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!?geometry.RectF {
         const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
@@ -1749,28 +1532,6 @@ pub const RuntimeView = struct {
         }
         self.widget_layout_nodes[edited_index].widget.text_selection = next_state.selection;
         self.widget_layout_nodes[edited_index].widget.text_composition = next_state.composition;
-    }
-
-    pub fn scrollCanvasTextareaCaretIntoView(self: *RuntimeView, index: usize) void {
-        if (index >= self.widget_layout_node_count) return;
-        var widget = self.widget_layout_nodes[index].widget;
-        if (widget.kind != .textarea) return;
-
-        const viewport = canvas.textInputViewportForWidget(widget, self.widget_tokens) orelse return;
-        const geometry_value = canvas.textGeometryForWidget(widget, self.widget_tokens);
-        const caret = geometry_value.caret_bounds orelse return;
-
-        var next_offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, widget.value);
-        const padding: f32 = 2;
-        if (caret.y < viewport.y) {
-            next_offset -= viewport.y - caret.y + padding;
-        } else if (caret.maxY() > viewport.maxY()) {
-            next_offset += caret.maxY() - viewport.maxY() + padding;
-        }
-        next_offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, next_offset);
-        if (next_offset == widget.value) return;
-        widget.value = next_offset;
-        self.widget_layout_nodes[index].widget.value = next_offset;
     }
 
     pub fn canvasWidgetToggleAnimation(self: *const RuntimeView, id: canvas.ObjectId) ?CanvasWidgetToggleAnimation {

@@ -2,7 +2,6 @@ const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 const drawing_model = @import("drawing.zig");
-const text_model = @import("text.zig");
 const token_model = @import("tokens.zig");
 const widget_model = @import("widgets.zig");
 const event_model = @import("events.zig");
@@ -13,65 +12,22 @@ const widget_routing = @import("widget_routing.zig");
 const widget_semantics = @import("widget_semantics.zig");
 const widget_metrics = @import("widget_metrics.zig");
 const widget_text_input = @import("widget_text_input.zig");
+const widget_layout = @import("widget_layout.zig");
 const widget_render = @import("widget_render.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
 const Builder = canvas.Builder;
-const CanvasCommand = canvas.CanvasCommand;
 const Color = drawing_model.Color;
 const Affine = drawing_model.Affine;
 const Radius = drawing_model.Radius;
-const Fill = drawing_model.Fill;
-const Stroke = drawing_model.Stroke;
-const Clip = drawing_model.Clip;
-const Shadow = drawing_model.Shadow;
-const DrawText = text_model.DrawText;
-const TextWrap = text_model.TextWrap;
-const TextAlign = text_model.TextAlign;
-const TextLayoutOptions = text_model.TextLayoutOptions;
-const TextLine = text_model.TextLine;
-const TextRange = text_model.TextRange;
-const TextSelectionRect = text_model.TextSelectionRect;
 const DesignTokens = token_model.DesignTokens;
 const ControlVisualTokens = token_model.ControlVisualTokens;
 const VirtualListRange = token_model.VirtualListRange;
-const virtualListRange = token_model.virtualListRange;
-const WidgetPaintOrder = widget_tree.WidgetPaintOrder;
-const widgetPaintLayer = widget_tree.widgetPaintLayer;
-const nextWidgetPaintChild = widget_tree.nextWidgetPaintChild;
-const widgetLayoutDirectChildCount = widget_tree.widgetLayoutDirectChildCount;
-const nextWidgetLayoutPaintChild = widget_tree.nextWidgetLayoutPaintChild;
 const widgetTransform = widget_tree.widgetTransform;
 const widgetClipsContent = widget_tree.widgetClipsContent;
 const widgetIndexById = widget_tree.widgetIndexById;
 const isWidgetHiddenInAncestors = widget_tree.isWidgetHiddenInAncestors;
-const gridColumnCount = widget_tree.gridColumnCount;
-const gridRowCount = widget_tree.gridRowCount;
-const saturatingU32 = widget_tree.saturatingU32;
-const booleanControlSelected = widget_access.booleanControlSelected;
-const widgetTextSelectionRange = widget_access.widgetTextSelectionRange;
-const widgetTextCompositionRange = widget_access.widgetTextCompositionRange;
-const widgetTextInputKind = widget_access.widgetTextInputKind;
-const widgetPlaceholder = widget_text_input.widgetPlaceholder;
-const widgetTextInputSize = widget_text_input.widgetTextInputSize;
-const widgetTextInputLayoutOptions = widget_text_input.widgetTextInputLayoutOptions;
-const widgetTextInputOrigin = widget_text_input.widgetTextInputOrigin;
-const widgetTextInputClipRect = widget_text_input.widgetTextInputClipRect;
-const widgetTextInputDrawText = widget_text_input.widgetTextInputDrawText;
-const widgetTextInputInset = widget_text_input.widgetTextInputInset;
-const widgetButtonTextSize = widget_metrics.widgetButtonTextSize;
-const widgetBodyTextSize = widget_metrics.widgetBodyTextSize;
-const widgetLabelTextSize = widget_metrics.widgetLabelTextSize;
-const widgetTypographySize = widget_metrics.widgetTypographySize;
-const widgetLineHeight = widget_metrics.widgetLineHeight;
-const widgetDefaultRowHeight = widget_metrics.widgetDefaultRowHeight;
-const widgetButtonInset = widget_metrics.widgetButtonInset;
-const widgetControlInset = widget_metrics.widgetControlInset;
-const widgetSizedDensityValue = widget_metrics.widgetSizedDensityValue;
-const widgetSizedTokenValue = widget_metrics.widgetSizedTokenValue;
-const widgetSizeScale = widget_metrics.widgetSizeScale;
-const densityValue = widget_metrics.densityValue;
 const WidgetKind = widget_model.WidgetKind;
 const WidgetCursor = widget_model.WidgetCursor;
 const WidgetState = widget_model.WidgetState;
@@ -80,8 +36,6 @@ const WidgetMainAlignment = widget_model.WidgetMainAlignment;
 const WidgetCrossAlignment = widget_model.WidgetCrossAlignment;
 const WidgetLayoutStyle = widget_model.WidgetLayoutStyle;
 const WidgetStyle = widget_model.WidgetStyle;
-const WidgetVariant = widget_model.WidgetVariant;
-const WidgetSize = widget_model.WidgetSize;
 const WidgetActions = widget_model.WidgetActions;
 const WidgetSemantics = widget_model.WidgetSemantics;
 const Widget = widget_model.Widget;
@@ -100,14 +54,6 @@ const WidgetScrollMetrics = event_model.WidgetScrollMetrics;
 const WidgetSemanticsNode = event_model.WidgetSemanticsNode;
 const WidgetInvalidationKind = event_model.WidgetInvalidationKind;
 const WidgetInvalidation = event_model.WidgetInvalidation;
-const textLineBounds = text_model.textLineBounds;
-const estimateTextWidth = text_model.estimateTextWidth;
-const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
-const estimateTextAdvanceForBytes = text_model.estimateTextAdvanceForBytes;
-const estimatedGlyphAdvance = text_model.estimatedGlyphAdvance;
-const nextTextOffset = text_model.nextTextOffset;
-const layoutTextCaretRect = text_model.layoutTextCaretRect;
-const layoutTextSelectionRects = text_model.layoutTextSelectionRects;
 const strokeBounds = drawing_model.strokeBounds;
 const shadowBounds = drawing_model.shadowBounds;
 const rectsEqual = equality_model.rectsEqual;
@@ -115,15 +61,13 @@ const optionalRectsEqual = equality_model.optionalRectsEqual;
 const sizesEqual = equality_model.sizesEqual;
 const insetsEqual = equality_model.insetsEqual;
 const optionalColorsEqual = equality_model.optionalColorsEqual;
-const radiiEqual = equality_model.radiiEqual;
 const affinesEqual = equality_model.affinesEqual;
 const optionalF32Equal = equality_model.optionalF32Equal;
 const optionalTextSelectionsEqual = equality_model.optionalTextSelectionsEqual;
 const optionalTextRangesEqual = equality_model.optionalTextRangesEqual;
 
-pub const max_widget_depth: usize = 32;
+pub const max_widget_depth = widget_layout.max_widget_depth;
 pub const max_widget_text_range_rects: usize = 4;
-const max_widget_text_layout_lines: usize = 16;
 pub const widgetControlHeight = widget_metrics.widgetControlHeight;
 pub const WidgetTextGeometry = widget_text_input.WidgetTextGeometry;
 pub const textSelectionForWidgetPoint = widget_text_input.textSelectionForWidgetPoint;
@@ -133,17 +77,6 @@ pub const textInputContentExtentForWidget = widget_text_input.textInputContentEx
 pub const textInputMaxScrollOffsetForWidget = widget_text_input.textInputMaxScrollOffsetForWidget;
 pub const clampedTextInputScrollOffsetForWidget = widget_text_input.clampedTextInputScrollOffsetForWidget;
 pub const textGeometryForWidget = widget_text_input.textGeometryForWidget;
-const SpinnerSegment = struct { x: f32, y: f32 };
-const spinner_segments = [_]SpinnerSegment{
-    .{ .x = 0, .y = -1 },
-    .{ .x = 0.707, .y = -0.707 },
-    .{ .x = 1, .y = 0 },
-    .{ .x = 0.707, .y = 0.707 },
-    .{ .x = 0, .y = 1 },
-    .{ .x = -0.707, .y = 0.707 },
-    .{ .x = -1, .y = 0 },
-    .{ .x = -0.707, .y = -0.707 },
-};
 
 pub const WidgetLayoutTree = struct {
     nodes: []const WidgetLayoutNode = &.{},
@@ -258,8 +191,20 @@ pub fn layoutWidgetTree(widget: Widget, bounds: geometry.RectF, output: []Widget
 
 pub fn layoutWidgetTreeWithTokens(widget: Widget, bounds: geometry.RectF, tokens: DesignTokens, output: []WidgetLayoutNode) Error!WidgetLayoutTree {
     var len: usize = 0;
-    _ = try layoutWidgetDepth(widget, bounds.normalized(), null, 0, output, &len, tokens);
+    _ = try widget_layout.layoutWidgetDepth(widget, bounds.normalized(), null, 0, output, &len, tokens);
     return .{ .nodes = output[0..len] };
+}
+
+pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    return widget_layout.intrinsicWidgetSize(widget, tokens);
+}
+
+pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {
+    return widget_layout.virtualWidgetScrollContentExtent(widget, viewport_extent);
+}
+
+pub fn virtualWidgetScrollContentExtentWithTokens(widget: Widget, viewport_extent: f32, tokens: DesignTokens) f32 {
+    return widget_layout.virtualWidgetScrollContentExtentWithTokens(widget, viewport_extent, tokens);
 }
 
 pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens) Error!void {
@@ -353,583 +298,6 @@ fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVis
 fn listItemControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
     return widget_render.listItemControlVisualTokens(widget, tokens);
 }
-
-fn layoutWidgetDepth(
-    widget: Widget,
-    frame: geometry.RectF,
-    parent_index: ?usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    tokens: DesignTokens,
-) Error!usize {
-    if (depth >= max_widget_depth) return error.WidgetDepthExceeded;
-    if (len.* >= output.len) return error.WidgetLayoutListFull;
-
-    const index = len.*;
-    output[index] = .{
-        .widget = widgetWithFrame(widget, frame),
-        .frame = frame,
-        .depth = depth,
-        .parent_index = parent_index,
-    };
-    len.* += 1;
-
-    const content = frame.inset(widget.layout.padding);
-    switch (widget.kind) {
-        .row, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
-        .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .grid => if (widget.layout.virtualized)
-            try layoutVirtualGridChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
-        else
-            try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns, tokens),
-        .data_grid, .table => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
-        else
-            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .data_row => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
-        .scroll_view => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
-        else
-            try layoutScrollChildren(widget.children, content, index, depth, output, len, widget.value, tokens),
-        .list => if (widget.layout.virtualized)
-            try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
-        else
-            try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .menu_surface, .dropdown_menu => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .accordion => {
-            if (accordionChildrenVisible(widget)) {
-                const child_content = accordionContentFrame(widget, content, tokens);
-                for (widget.children) |child| {
-                    _ = try layoutWidgetDepth(child, stackChildFrame(child_content, child), index, depth + 1, output, len, tokens);
-                }
-            }
-        },
-        .stack, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover => {
-            for (widget.children) |child| {
-                _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
-            }
-        },
-        .text, .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
-    }
-
-    return index;
-}
-
-const LayoutAxis = enum {
-    horizontal,
-    vertical,
-};
-
-fn layoutAxisChildren(
-    children: []const Widget,
-    content: geometry.RectF,
-    axis: LayoutAxis,
-    parent_index: usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    style: WidgetLayoutStyle,
-    tokens: DesignTokens,
-) Error!void {
-    if (children.len == 0) return;
-
-    const available_extent = switch (axis) {
-        .horizontal => content.width,
-        .vertical => content.height,
-    };
-    const cross_extent = switch (axis) {
-        .horizontal => content.height,
-        .vertical => content.width,
-    };
-    const clamped_gap = nonNegative(style.gap);
-    const total_gap = clamped_gap * @as(f32, @floatFromInt(children.len - 1));
-    var fixed_extent: f32 = 0;
-    var grow_total: f32 = 0;
-    for (children) |child| {
-        const grow = nonNegative(child.layout.grow);
-        if (grow > 0) {
-            grow_total += grow;
-        } else {
-            fixed_extent += preferredMainExtent(child, axis, tokens);
-        }
-    }
-
-    const remaining = @max(0, available_extent - fixed_extent - total_gap);
-    const assigned_extent = assignedAxisChildrenExtent(children, axis, fixed_extent, grow_total, remaining);
-    const used_extent = assigned_extent + total_gap;
-    const free_extent = @max(0, available_extent - used_extent);
-    var child_gap = clamped_gap;
-    if (style.main_alignment == .space_between and children.len > 1) {
-        child_gap += free_extent / @as(f32, @floatFromInt(children.len - 1));
-    }
-    var cursor: f32 = switch (axis) {
-        .horizontal => content.x,
-        .vertical => content.y,
-    } + mainAxisAlignmentOffset(style.main_alignment, free_extent);
-
-    for (children) |child| {
-        const grow = nonNegative(child.layout.grow);
-        const main_extent = if (grow > 0 and grow_total > 0)
-            @max(minMainExtent(child, axis), remaining * grow / grow_total)
-        else
-            preferredMainExtent(child, axis, tokens);
-        const cross = preferredCrossExtent(child, axis, cross_extent, style.cross_alignment, tokens);
-        const cross_origin = alignedCrossAxisOrigin(content, axis, cross_extent, cross, child, style.cross_alignment);
-        const child_frame = switch (axis) {
-            .horizontal => geometry.RectF.init(cursor, cross_origin, main_extent, cross),
-            .vertical => geometry.RectF.init(cross_origin, cursor, cross, main_extent),
-        };
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
-        cursor += main_extent + child_gap;
-    }
-}
-
-fn assignedAxisChildrenExtent(children: []const Widget, axis: LayoutAxis, fixed_extent: f32, grow_total: f32, remaining: f32) f32 {
-    if (grow_total <= 0) return fixed_extent;
-    var assigned = fixed_extent;
-    for (children) |child| {
-        const grow = nonNegative(child.layout.grow);
-        if (grow <= 0) continue;
-        assigned += @max(minMainExtent(child, axis), remaining * grow / grow_total);
-    }
-    return assigned;
-}
-
-fn mainAxisAlignmentOffset(alignment: WidgetMainAlignment, free_extent: f32) f32 {
-    return switch (alignment) {
-        .start, .space_between => 0,
-        .center => free_extent * 0.5,
-        .end => free_extent,
-    };
-}
-
-fn alignedCrossAxisOrigin(
-    content: geometry.RectF,
-    axis: LayoutAxis,
-    available_extent: f32,
-    child_extent: f32,
-    child: Widget,
-    alignment: WidgetCrossAlignment,
-) f32 {
-    const start = switch (axis) {
-        .horizontal => content.y,
-        .vertical => content.x,
-    };
-    const offset = switch (axis) {
-        .horizontal => child.frame.y,
-        .vertical => child.frame.x,
-    };
-    const free_extent = @max(0, available_extent - child_extent);
-    return start + offset + switch (alignment) {
-        .stretch, .start => 0,
-        .center => free_extent * 0.5,
-        .end => free_extent,
-    };
-}
-
-fn layoutGridChildren(
-    children: []const Widget,
-    content: geometry.RectF,
-    parent_index: usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    gap: f32,
-    requested_columns: usize,
-    tokens: DesignTokens,
-) Error!void {
-    if (children.len == 0) return;
-
-    const columns = gridColumnCount(children.len, requested_columns);
-    const rows = gridRowCount(children.len, columns);
-    const clamped_gap = nonNegative(gap);
-    const total_column_gap = clamped_gap * @as(f32, @floatFromInt(columns - 1));
-    const total_row_gap = clamped_gap * @as(f32, @floatFromInt(rows - 1));
-    const cell_width = if (columns > 0) @max(0, content.width - total_column_gap) / @as(f32, @floatFromInt(columns)) else 0;
-    const fallback_cell_height = if (rows > 0) @max(0, content.height - total_row_gap) / @as(f32, @floatFromInt(rows)) else 0;
-
-    for (children, 0..) |child, child_index| {
-        const column = child_index % columns;
-        const row = child_index / columns;
-        const x = content.x + @as(f32, @floatFromInt(column)) * (cell_width + clamped_gap);
-        const y = content.y + @as(f32, @floatFromInt(row)) * (fallback_cell_height + clamped_gap);
-        const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else cell_width);
-        const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else fallback_cell_height);
-        const child_frame = geometry.RectF.init(
-            x + child.frame.x,
-            y + child.frame.y,
-            width,
-            height,
-        );
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
-    }
-}
-
-fn layoutVirtualGridChildren(
-    children: []const Widget,
-    content: geometry.RectF,
-    parent_index: usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    scroll_y: f32,
-    style: WidgetLayoutStyle,
-    tokens: DesignTokens,
-) Error!void {
-    if (children.len == 0) return;
-
-    const columns = gridColumnCount(children.len, style.columns);
-    const rows = gridRowCount(children.len, columns);
-    if (columns == 0 or rows == 0) return;
-
-    const clamped_gap = nonNegative(style.gap);
-    const total_column_gap = clamped_gap * @as(f32, @floatFromInt(columns - 1));
-    const cell_width = @max(0, content.width - total_column_gap) / @as(f32, @floatFromInt(columns));
-    const item_extent = if (style.virtual_item_extent > 0)
-        style.virtual_item_extent
-    else
-        preferredGridRowExtent(children, columns, tokens);
-    const range = virtualListRange(.{
-        .item_count = rows,
-        .item_extent = item_extent,
-        .item_gap = clamped_gap,
-        .viewport_extent = content.height,
-        .scroll_offset = scroll_y,
-        .overscan = style.virtual_overscan,
-    });
-    output[parent_index].widget.layout.virtual_item_extent = range.item_extent;
-    output[parent_index].widget.semantics.list_item_count = saturatingU32(rows);
-    if (range.isEmpty()) return;
-
-    const stride = range.item_extent + range.item_gap;
-    var row = range.start_index;
-    while (row < range.end_index) : (row += 1) {
-        var column: usize = 0;
-        while (column < columns) : (column += 1) {
-            const child_index = row * columns + column;
-            if (child_index >= children.len) break;
-
-            var child = children[child_index];
-            child.semantics.list_item_index = saturatingU32(child_index);
-            child.semantics.list_item_count = saturatingU32(children.len);
-            const x = content.x + @as(f32, @floatFromInt(column)) * (cell_width + clamped_gap);
-            const y = content.y + @as(f32, @floatFromInt(row)) * stride - range.layout_offset + child.frame.y;
-            const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else cell_width);
-            const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
-            const child_frame = geometry.RectF.init(
-                x + child.frame.x,
-                y,
-                width,
-                height,
-            );
-            _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
-        }
-    }
-}
-
-fn preferredGridRowExtent(children: []const Widget, columns: usize, tokens: DesignTokens) f32 {
-    if (children.len == 0 or columns == 0) return 0;
-    var max_height: f32 = 0;
-    var index: usize = 0;
-    while (index < children.len and index < columns) : (index += 1) {
-        max_height = @max(max_height, preferredMainExtent(children[index], .vertical, tokens));
-    }
-    return max_height;
-}
-
-fn layoutScrollChildren(
-    children: []const Widget,
-    content: geometry.RectF,
-    parent_index: usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    scroll_y: f32,
-    tokens: DesignTokens,
-) Error!void {
-    const scrolled_content = content.translate(geometry.OffsetF.init(0, -scroll_y));
-    for (children) |child| {
-        _ = try layoutWidgetDepth(child, stackChildFrame(scrolled_content, child), parent_index, depth + 1, output, len, tokens);
-    }
-}
-
-fn layoutVirtualVerticalChildren(
-    children: []const Widget,
-    content: geometry.RectF,
-    parent_index: usize,
-    depth: usize,
-    output: []WidgetLayoutNode,
-    len: *usize,
-    scroll_y: f32,
-    style: WidgetLayoutStyle,
-    tokens: DesignTokens,
-) Error!void {
-    if (children.len == 0) return;
-
-    const item_extent = if (style.virtual_item_extent > 0)
-        style.virtual_item_extent
-    else
-        preferredMainExtent(children[0], .vertical, tokens);
-    const range = virtualListRange(.{
-        .item_count = children.len,
-        .item_extent = item_extent,
-        .item_gap = style.gap,
-        .viewport_extent = content.height,
-        .scroll_offset = scroll_y,
-        .overscan = style.virtual_overscan,
-    });
-    output[parent_index].widget.layout.virtual_item_extent = range.item_extent;
-    output[parent_index].widget.semantics.list_item_count = saturatingU32(children.len);
-    if (range.isEmpty()) return;
-
-    const stride = range.item_extent + range.item_gap;
-    var index = range.start_index;
-    while (index < range.end_index) : (index += 1) {
-        var child = children[index];
-        child.semantics.list_item_index = saturatingU32(index);
-        child.semantics.list_item_count = saturatingU32(children.len);
-        const y = content.y + @as(f32, @floatFromInt(index)) * stride - range.layout_offset + child.frame.y;
-        const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else content.width);
-        const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
-        const child_frame = geometry.RectF.init(
-            content.x + child.frame.x,
-            y,
-            width,
-            height,
-        );
-        _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
-    }
-}
-
-fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
-    const width = if (child.frame.width > 0) child.frame.width else content.width;
-    const height = if (child.frame.height > 0) child.frame.height else content.height;
-    return geometry.RectF.init(
-        content.x + child.frame.x,
-        content.y + child.frame.y,
-        @max(child.layout.min_size.width, width),
-        @max(child.layout.min_size.height, height),
-    );
-}
-
-fn accordionChildrenVisible(widget: Widget) bool {
-    return widget.kind != .accordion or booleanControlSelected(widget);
-}
-
-fn accordionContentFrame(widget: Widget, content: geometry.RectF, tokens: DesignTokens) geometry.RectF {
-    if (widget.kind != .accordion) return content;
-    const header_height = accordionHeaderHeight(widget, tokens);
-    const gap = nonNegative(widget.layout.gap);
-    const y = @min(content.maxY(), content.y + header_height + gap);
-    return geometry.RectF.init(content.x, y, content.width, @max(0, content.maxY() - y));
-}
-
-fn accordionHeaderHeight(widget: Widget, tokens: DesignTokens) f32 {
-    const text_size = widgetBodyTextSize(widget, tokens);
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-    return @max(widgetControlHeight(widget, tokens), text_size + inset * 2);
-}
-
-pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    return switch (widget.kind) {
-        .text => intrinsicTextWidgetSize(widget, tokens, widgetBodyTextSize(widget, tokens)),
-        .icon => geometry.SizeF.init(intrinsicIconExtent(widget, tokens), intrinsicIconExtent(widget, tokens)),
-        .avatar => intrinsicAvatarWidgetSize(widget, tokens),
-        .badge => intrinsicBadgeWidgetSize(widget, tokens),
-        .button, .toggle_button => intrinsicButtonWidgetSize(widget, tokens),
-        .icon_button => intrinsicSquareControlSize(widget, tokens),
-        .select => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
-        .input, .text_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetControlHeight(widget, tokens)),
-        .search_field, .combobox => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
-        .textarea => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetSizedDensityValue(widget, tokens, 80)),
-        .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
-        .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
-        .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
-        .status_bar => intrinsicStatusBarWidgetSize(widget, tokens),
-        .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
-        .checkbox => intrinsicCheckboxWidgetSize(widget, tokens),
-        .radio => intrinsicRadioWidgetSize(widget, tokens),
-        .switch_control, .toggle => intrinsicToggleWidgetSize(widget, tokens),
-        .slider => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), @max(widgetSizedDensityValue(widget, tokens, 28), widgetSizedDensityValue(widget, tokens, 20))),
-        .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 8)),
-        .separator => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline)),
-        .skeleton => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 120), widgetSizedDensityValue(widget, tokens, 20)),
-        .spinner => intrinsicSquareControlSize(widget, tokens),
-        .alert => intrinsicAlertWidgetSize(widget, tokens),
-        .card => intrinsicCardWidgetSize(widget, tokens),
-        .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens),
-        .stack, .row, .column, .grid, .data_grid, .table, .scroll_view, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .accordion, .bubble, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .image => geometry.SizeF.zero(),
-    };
-}
-
-fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32) geometry.SizeF {
-    return geometry.SizeF.init(
-        estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size),
-        widgetLineHeight(text_size),
-    );
-}
-
-fn intrinsicPaddedTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32) geometry.SizeF {
-    const text = intrinsicTextWidgetSize(widget, tokens, text_size);
-    return geometry.SizeF.init(text.width + inset * 2, @max(widgetControlHeight(widget, tokens), text.height + widgetSizedDensityValue(widget, tokens, 8)));
-}
-
-fn intrinsicStatusBarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_size = widgetBodyTextSize(widget, tokens);
-    const text = intrinsicTextWidgetSize(widget, tokens, text_size);
-    const padding = widgetStatusBarPadding(widget);
-    return geometry.SizeF.init(text.width + padding.horizontal(), @max(widgetSizedDensityValue(widget, tokens, 32), text.height + padding.vertical()));
-}
-
-fn intrinsicAlertWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_size = widgetBodyTextSize(widget, tokens);
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.lg);
-    const icon_size = @max(widgetSizedDensityValue(widget, tokens, 12), text_size - 1);
-    const text_gap = widgetControlInset(widget, tokens, tokens.spacing.md);
-    const text = intrinsicTextWidgetSize(widget, tokens, text_size);
-    return geometry.SizeF.init(
-        @max(widgetSizedDensityValue(widget, tokens, 240), text.width + inset * 2 + icon_size + text_gap),
-        @max(widgetSizedDensityValue(widget, tokens, 52), widgetLineHeight(text_size) + inset * 2),
-    );
-}
-
-fn intrinsicCardWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const title_size = widgetTypographySize(widget, tokens.typography.body_size + 1);
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.lg);
-    const text = intrinsicTextWidgetSize(widget, tokens, title_size);
-    return geometry.SizeF.init(
-        @max(widgetSizedDensityValue(widget, tokens, 240), text.width + inset * 2),
-        @max(widgetSizedDensityValue(widget, tokens, 120), if (widget.text.len > 0) widgetLineHeight(title_size) + inset * 2 else 0),
-    );
-}
-
-fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const title_size = widgetTypographySize(widget, tokens.typography.title_size);
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.xl);
-    const text = intrinsicTextWidgetSize(widget, tokens, title_size);
-    const default_size = switch (widget.kind) {
-        .drawer => geometry.SizeF.init(360, 280),
-        .sheet => geometry.SizeF.init(320, 420),
-        else => geometry.SizeF.init(420, 220),
-    };
-    return geometry.SizeF.init(
-        @max(widgetSizedDensityValue(widget, tokens, default_size.width), text.width + inset * 2),
-        @max(widgetSizedDensityValue(widget, tokens, default_size.height), if (widget.text.len > 0) widgetLineHeight(title_size) + inset * 2 else 0),
-    );
-}
-
-fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const height = widgetControlHeight(widget, tokens);
-    if (widget.size == .icon) return geometry.SizeF.init(height, height);
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetButtonTextSize(widget, tokens));
-    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetButtonInset(widget, tokens) * 2);
-    return geometry.SizeF.init(width, height);
-}
-
-fn intrinsicAvatarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const size = widgetSizedDensityValue(widget, tokens, 40);
-    return geometry.SizeF.init(size, size);
-}
-
-fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetLabelTextSize(widget, tokens));
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
-    return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 22));
-}
-
-fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const height = widgetControlHeight(widget, tokens);
-    return geometry.SizeF.init(height, height);
-}
-
-fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetLabelTextSize(widget, tokens));
-    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetControlInset(widget, tokens, tokens.spacing.md) * 2);
-    return geometry.SizeF.init(width, widgetControlHeight(widget, tokens));
-}
-
-fn intrinsicRowTextWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_size = widgetBodyTextSize(widget, tokens);
-    const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size);
-    return geometry.SizeF.init(text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
-}
-
-fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const box_size = widgetSizedDensityValue(widget, tokens, 18);
-    const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
-    const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(box_size + gap + label_width, @max(box_size, widgetLineHeight(label_size)));
-}
-
-fn intrinsicRadioWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const circle_size = widgetSizedDensityValue(widget, tokens, 18);
-    const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
-    const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(circle_size + gap + label_width, @max(circle_size, widgetLineHeight(label_size)));
-}
-
-fn intrinsicToggleWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const track_width = widgetSizedDensityValue(widget, tokens, 42);
-    const track_height = widgetSizedDensityValue(widget, tokens, 24);
-    const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
-    const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(track_width + gap + label_width, @max(track_height, widgetLineHeight(label_size)));
-}
-
-fn intrinsicIconExtent(widget: Widget, tokens: DesignTokens) f32 {
-    return widgetSizedDensityValue(widget, tokens, 18);
-}
-
-fn preferredMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
-    const value = switch (axis) {
-        .horizontal => widget.frame.width,
-        .vertical => widget.frame.height,
-    };
-    return @max(minMainExtent(widget, axis), if (value > 0) value else intrinsicMainExtent(widget, axis, tokens));
-}
-
-fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32, alignment: WidgetCrossAlignment, tokens: DesignTokens) f32 {
-    const value = switch (axis) {
-        .horizontal => widget.frame.height,
-        .vertical => widget.frame.width,
-    };
-    const min_value = switch (axis) {
-        .horizontal => widget.layout.min_size.height,
-        .vertical => widget.layout.min_size.width,
-    };
-    if (value > 0) return @max(min_value, value);
-    if (alignment == .stretch) return @max(min_value, available);
-    return @max(min_value, @min(available, intrinsicCrossExtent(widget, axis, tokens)));
-}
-
-fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
-    return switch (axis) {
-        .horizontal => nonNegative(widget.layout.min_size.width),
-        .vertical => nonNegative(widget.layout.min_size.height),
-    };
-}
-
-fn intrinsicMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
-    const size = intrinsicWidgetSize(widget, tokens);
-    return switch (axis) {
-        .horizontal => size.width,
-        .vertical => size.height,
-    };
-}
-
-fn intrinsicCrossExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
-    const size = intrinsicWidgetSize(widget, tokens);
-    return switch (axis) {
-        .horizontal => size.height,
-        .vertical => size.width,
-    };
-}
-
 pub fn cursorForWidgetHit(hit: ?WidgetHit) WidgetCursor {
     return widget_access.cursorForWidgetHit(hit);
 }
@@ -943,43 +311,8 @@ fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNod
 }
 
 fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) widget_semantics.WidgetScrollSemantics {
-    return widget_semantics.widgetScrollSemantics(layout, node_index, virtualWidgetScrollContentExtent);
+    return widget_semantics.widgetScrollSemantics(layout, node_index, widget_layout.virtualWidgetScrollContentExtent);
 }
-
-pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {
-    return virtualWidgetScrollContentExtentWithTokens(widget, viewport_extent, .{});
-}
-
-pub fn virtualWidgetScrollContentExtentWithTokens(widget: Widget, viewport_extent: f32, tokens: DesignTokens) f32 {
-    const item_count = virtualWidgetScrollItemCount(widget);
-    if (item_count == 0) return 0;
-    const item_extent = if (widget.layout.virtual_item_extent > 0)
-        widget.layout.virtual_item_extent
-    else if (widget.kind == .grid and widget.children.len > 0)
-        preferredGridRowExtent(widget.children, gridColumnCount(widget.children.len, widget.layout.columns), tokens)
-    else if (widget.children.len > 0)
-        preferredMainExtent(widget.children[0], .vertical, tokens)
-    else
-        return 0;
-    return virtualListRange(.{
-        .item_count = item_count,
-        .item_extent = item_extent,
-        .item_gap = widget.layout.gap,
-        .viewport_extent = viewport_extent,
-        .scroll_offset = widget.value,
-    }).content_extent;
-}
-
-fn virtualWidgetScrollItemCount(widget: Widget) usize {
-    if (widget.kind == .grid and widget.children.len > 0) {
-        const columns = gridColumnCount(widget.children.len, widget.layout.columns);
-        return gridRowCount(widget.children.len, columns);
-    }
-    if (widget.children.len > 0) return widget.children.len;
-    if (widget.semantics.list_item_count) |count| return @intCast(count);
-    return 0;
-}
-
 fn widgetWithFrame(widget: Widget, frame: geometry.RectF) Widget {
     var copy = widget;
     copy.frame = frame;
@@ -1505,18 +838,4 @@ fn unionOptionalBounds(a: ?geometry.RectF, b: ?geometry.RectF) ?geometry.RectF {
 
 fn nonNegative(value: f32) f32 {
     return @max(0, value);
-}
-
-fn floorVirtualIndex(value: f32) usize {
-    if (!std.math.isFinite(value) or value <= 0) return 0;
-    return @intFromFloat(@floor(value));
-}
-
-fn ceilVirtualIndex(value: f32) usize {
-    if (!std.math.isFinite(value) or value <= 0) return 0;
-    return @intFromFloat(@ceil(value));
-}
-
-fn nonZeroObjectId(id: ObjectId) ?ObjectId {
-    return if (id == 0) null else id;
 }

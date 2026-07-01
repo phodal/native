@@ -28,10 +28,12 @@ const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes
 const component_chrome_prefix_commands: usize = 1;
 const component_chrome_suffix_commands: usize = 0;
 const catalog_grid_columns: usize = 3;
-const catalog_card_width: f32 = 238;
-const catalog_card_height: f32 = 52;
+const catalog_card_width: f32 = 256;
+const catalog_card_height: f32 = 132;
 const catalog_card_gap_x: f32 = 22;
 const catalog_card_gap_y: f32 = 18;
+const catalog_preview_y: f32 = 40;
+const catalog_preview_width: f32 = catalog_card_width - 32;
 const refresh_command = "components.refresh";
 const theme_command = "components.theme";
 const environment_toggle_command = "components.environment.toggle";
@@ -238,35 +240,170 @@ const preview_images = [_]canvas.ReferenceImage{.{
     .pixels = &preview_image_pixels,
 }};
 
-const catalog_accordion_children = [_]canvas.Widget{
-    .{ .id = 18101, .kind = .text, .frame = rect(10, 5, 96, 18), .text = "Accordion", .size = .sm },
+const catalog_accordion_content = [_]canvas.Widget{
+    .{ .id = 18102, .kind = .text, .frame = rect(0, 0, 132, 18), .text = "Open details", .size = .sm },
 };
-const catalog_breadcrumb_children = [_]canvas.Widget{
+const catalog_accordion_children = [_]canvas.Widget{canvas.builtinComponentWidget(.accordion, .{
+    .id = 18101,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 48),
+    .children = &catalog_accordion_content,
+})};
+const catalog_alert_children = [_]canvas.Widget{canvas.builtinComponentWidget(.alert, .{
+    .id = 18201,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 42),
+    .text = "Update available",
+})};
+const catalog_avatar_children = [_]canvas.Widget{canvas.builtinComponentWidget(.avatar, .{
+    .id = 18301,
+    .frame = rect(0, catalog_preview_y, 36, 36),
+    .text = "ZN",
+})};
+const catalog_badge_children = [_]canvas.Widget{canvas.builtinComponentWidget(.badge, .{
+    .id = 18401,
+    .frame = rect(0, catalog_preview_y + 4, 72, 24),
+    .text = "Active",
+    .variant = .secondary,
+})};
+const catalog_breadcrumb_items = [_]canvas.Widget{
     .{ .id = 18501, .kind = .text, .text = "Home", .size = .sm },
     .{ .id = 18502, .kind = .text, .text = "Components", .size = .sm },
 };
-const catalog_bubble_children = [_]canvas.Widget{
-    .{ .id = 18601, .kind = .text, .frame = rect(10, 5, 76, 18), .text = "Bubble", .size = .sm },
+const catalog_breadcrumb_children = [_]canvas.Widget{canvas.builtinComponentWidget(.breadcrumb, .{
+    .id = 18500,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 28),
+    .children = &catalog_breadcrumb_items,
+})};
+const catalog_bubble_content = [_]canvas.Widget{
+    .{ .id = 18602, .kind = .text, .frame = rect(0, 0, 128, 18), .text = "Message bubble", .size = .sm },
 };
-const catalog_button_group_children = [_]canvas.Widget{
+const catalog_bubble_children = [_]canvas.Widget{canvas.builtinComponentWidget(.bubble, .{
+    .id = 18601,
+    .frame = rect(0, catalog_preview_y, 164, 48),
+    .children = &catalog_bubble_content,
+})};
+const catalog_button_children = [_]canvas.Widget{canvas.builtinComponentWidget(.button, .{
+    .id = 18701,
+    .frame = rect(0, catalog_preview_y, 88, 34),
+    .text = "Button",
+})};
+const catalog_button_group_items = [_]canvas.Widget{
     .{ .id = 18801, .kind = .button, .text = "One", .size = .sm, .layout = .{ .grow = 1 } },
     .{ .id = 18802, .kind = .button, .text = "Two", .size = .sm, .variant = .secondary, .layout = .{ .grow = 1 } },
 };
-const catalog_dropdown_children = [_]canvas.Widget{
+const catalog_button_group_children = [_]canvas.Widget{canvas.builtinComponentWidget(.button_group, .{
+    .id = 18800,
+    .frame = rect(0, catalog_preview_y, 160, 30),
+    .children = &catalog_button_group_items,
+})};
+const catalog_card_preview_children = [_]canvas.Widget{
+    .{ .id = 18902, .kind = .badge, .frame = rect(0, 28, 66, 24), .text = "Pro", .variant = .secondary },
+};
+const catalog_card_children = [_]canvas.Widget{canvas.builtinComponentWidget(.card, .{
+    .id = 18901,
+    .frame = rect(0, catalog_preview_y, 178, 64),
+    .text = "Card",
+    .children = &catalog_card_preview_children,
+})};
+const catalog_checkbox_children = [_]canvas.Widget{canvas.builtinComponentWidget(.checkbox, .{
+    .id = 19001,
+    .frame = rect(0, catalog_preview_y + 4, 118, 28),
+    .text = "Selected",
+    .state = .{ .selected = true },
+})};
+const catalog_combobox_children = [_]canvas.Widget{canvas.builtinComponentWidget(.combobox, .{
+    .id = 19101,
+    .frame = rect(0, catalog_preview_y, 172, 34),
+    .text = "components",
+})};
+const catalog_dialog_children = [_]canvas.Widget{canvas.builtinComponentWidget(.dialog, .{
+    .id = 19201,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
+    .text = "Confirm",
+})};
+const catalog_drawer_children = [_]canvas.Widget{canvas.builtinComponentWidget(.drawer, .{
+    .id = 19301,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
+    .text = "Drawer",
+})};
+const catalog_dropdown_items = [_]canvas.Widget{
     .{ .id = 19401, .kind = .menu_item, .text = "Copy" },
 };
-const catalog_pagination_children = [_]canvas.Widget{
+const catalog_dropdown_children = [_]canvas.Widget{canvas.builtinComponentWidget(.dropdown_menu, .{
+    .id = 19400,
+    .frame = rect(0, catalog_preview_y, 164, 40),
+    .children = &catalog_dropdown_items,
+})};
+const catalog_input_children = [_]canvas.Widget{canvas.builtinComponentWidget(.input, .{
+    .id = 19501,
+    .frame = rect(0, catalog_preview_y, 172, 34),
+    .text = "zero-native",
+})};
+const catalog_pagination_items = [_]canvas.Widget{
     .{ .id = 19601, .kind = .button, .text = "1", .size = .sm, .state = .{ .selected = true } },
     .{ .id = 19602, .kind = .button, .text = "2", .size = .sm, .variant = .outline },
     .{ .id = 19603, .kind = .button, .text = "Next", .size = .sm, .variant = .ghost },
 };
-const catalog_radio_group_children = [_]canvas.Widget{
+const catalog_pagination_children = [_]canvas.Widget{canvas.builtinComponentWidget(.pagination, .{
+    .id = 19600,
+    .frame = rect(0, catalog_preview_y, 168, 30),
+    .children = &catalog_pagination_items,
+})};
+const catalog_progress_children = [_]canvas.Widget{canvas.builtinComponentWidget(.progress, .{
+    .id = 19701,
+    .frame = rect(0, catalog_preview_y + 13, 172, 8),
+    .value = 0.62,
+})};
+const catalog_radio_group_items = [_]canvas.Widget{
     .{ .id = 19801, .kind = .radio, .text = "A", .state = .{ .selected = true } },
     .{ .id = 19802, .kind = .radio, .text = "B" },
 };
-const catalog_resizable_children = [_]canvas.Widget{
-    .{ .id = 19901, .kind = .text, .frame = rect(10, 5, 86, 18), .text = "Resizable", .size = .sm },
+const catalog_radio_group_children = [_]canvas.Widget{canvas.builtinComponentWidget(.radio_group, .{
+    .id = 19800,
+    .frame = rect(0, catalog_preview_y, 124, 28),
+    .children = &catalog_radio_group_items,
+})};
+const catalog_resizable_content = [_]canvas.Widget{
+    .{ .id = 19902, .kind = .text, .frame = rect(0, 0, 106, 18), .text = "Drag edge", .size = .sm },
 };
+const catalog_resizable_children = [_]canvas.Widget{canvas.builtinComponentWidget(.resizable, .{
+    .id = 19901,
+    .frame = rect(0, catalog_preview_y, 150, 48),
+    .children = &catalog_resizable_content,
+})};
+const catalog_select_children = [_]canvas.Widget{canvas.builtinComponentWidget(.select, .{
+    .id = 20001,
+    .frame = rect(0, catalog_preview_y, 172, 34),
+    .text = "Production",
+})};
+const catalog_separator_children = [_]canvas.Widget{canvas.builtinComponentWidget(.separator, .{
+    .id = 20101,
+    .frame = rect(0, catalog_preview_y + 17, 172, 1),
+})};
+const catalog_sheet_children = [_]canvas.Widget{canvas.builtinComponentWidget(.sheet, .{
+    .id = 20201,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
+    .text = "Sheet",
+})};
+const catalog_skeleton_children = [_]canvas.Widget{canvas.builtinComponentWidget(.skeleton, .{
+    .id = 20301,
+    .frame = rect(0, catalog_preview_y + 6, 172, 22),
+})};
+const catalog_slider_children = [_]canvas.Widget{canvas.builtinComponentWidget(.slider, .{
+    .id = 20401,
+    .frame = rect(0, catalog_preview_y + 3, 172, 28),
+    .value = 0.58,
+})};
+const catalog_spinner_children = [_]canvas.Widget{canvas.builtinComponentWidget(.spinner, .{
+    .id = 20501,
+    .frame = rect(0, catalog_preview_y, 32, 32),
+})};
+const catalog_switch_children = [_]canvas.Widget{canvas.builtinComponentWidget(.switch_control, .{
+    .id = 20601,
+    .frame = rect(0, catalog_preview_y + 4, 106, 28),
+    .text = "Live",
+    .value = 1,
+    .state = .{ .selected = true },
+})};
 const catalog_table_row_cells = [_]canvas.Widget{
     .{ .id = 20702, .kind = .data_cell, .text = "Name", .layout = .{ .grow = 1 } },
     .{ .id = 20703, .kind = .data_cell, .text = "Status", .layout = .{ .grow = 1 } },
@@ -274,14 +411,45 @@ const catalog_table_row_cells = [_]canvas.Widget{
 const catalog_table_rows = [_]canvas.Widget{
     .{ .id = 20701, .kind = .data_row, .children = &catalog_table_row_cells },
 };
-const catalog_tabs_children = [_]canvas.Widget{
+const catalog_table_children = [_]canvas.Widget{canvas.builtinComponentWidget(.table, .{
+    .id = 20700,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 30),
+    .children = &catalog_table_rows,
+})};
+const catalog_tabs_items = [_]canvas.Widget{
     .{ .id = 20801, .kind = .segmented_control, .text = "One", .size = .sm, .state = .{ .selected = true } },
     .{ .id = 20802, .kind = .segmented_control, .text = "Two", .size = .sm },
 };
-const catalog_toggle_group_children = [_]canvas.Widget{
+const catalog_tabs_children = [_]canvas.Widget{canvas.builtinComponentWidget(.tabs, .{
+    .id = 20800,
+    .frame = rect(0, catalog_preview_y, 148, 30),
+    .children = &catalog_tabs_items,
+})};
+const catalog_textarea_children = [_]canvas.Widget{canvas.builtinComponentWidget(.textarea, .{
+    .id = 20901,
+    .frame = rect(0, catalog_preview_y, catalog_preview_width, 48),
+    .text = "Write a note",
+})};
+const catalog_toggle_children = [_]canvas.Widget{canvas.builtinComponentWidget(.toggle, .{
+    .id = 21001,
+    .frame = rect(0, catalog_preview_y + 2, 76, 30),
+    .text = "Bold",
+    .state = .{ .selected = true },
+})};
+const catalog_toggle_group_items = [_]canvas.Widget{
     .{ .id = 21101, .kind = .toggle_button, .text = "B", .size = .sm, .state = .{ .selected = true } },
     .{ .id = 21102, .kind = .toggle_button, .text = "I", .size = .sm },
 };
+const catalog_toggle_group_children = [_]canvas.Widget{canvas.builtinComponentWidget(.toggle_group, .{
+    .id = 21100,
+    .frame = rect(0, catalog_preview_y, 96, 30),
+    .children = &catalog_toggle_group_items,
+})};
+const catalog_tooltip_children = [_]canvas.Widget{canvas.builtinComponentWidget(.tooltip, .{
+    .id = 21201,
+    .frame = rect(0, catalog_preview_y + 2, 162, 30),
+    .text = "Tooltip",
+})};
 
 const html =
     \\<!doctype html>
@@ -1239,21 +1407,32 @@ fn componentCatalogItems() [canvas.builtin_component_names.len]canvas.Widget {
 }
 
 fn componentCatalogItem(kind: canvas.BuiltinComponentKind, index: usize) canvas.Widget {
-    const column = index % catalog_grid_columns;
-    const row = index / catalog_grid_columns;
-    return .{
+    return canvas.builtinComponentWidget(.card, .{
         .id = @as(canvas.ObjectId, @intCast(181 + index)),
-        .kind = .card,
-        .frame = rect(
-            64 + @as(f32, @floatFromInt(column)) * (catalog_card_width + catalog_card_gap_x),
-            124 + @as(f32, @floatFromInt(row)) * (catalog_card_height + catalog_card_gap_y),
-            catalog_card_width,
-            catalog_card_height,
-        ),
+        .frame = componentCatalogItemFrame(index),
         .text = canvas.builtinComponentName(kind),
         .state = .{ .selected = index == 0 },
         .semantics = .{ .label = canvas.builtinComponentName(kind) },
-    };
+        .children = componentCatalogPreviewChildren(kind),
+    });
+}
+
+fn componentCatalogItemFrame(index: usize) geometry.RectF {
+    const column = index % catalog_grid_columns;
+    const row = index / catalog_grid_columns;
+    return rect(
+        64 + @as(f32, @floatFromInt(column)) * (catalog_card_width + catalog_card_gap_x),
+        124 + @as(f32, @floatFromInt(row)) * (catalog_card_height + catalog_card_gap_y),
+        catalog_card_width,
+        catalog_card_height,
+    );
+}
+
+fn componentCatalogItemVisible(frame: geometry.RectF, scroll_y: f32, viewport_height: f32) bool {
+    const overscan = catalog_card_gap_y;
+    const top = @max(0, scroll_y - overscan);
+    const bottom = scroll_y + viewport_height + overscan;
+    return frame.maxY() >= top and frame.y <= bottom;
 }
 
 fn componentCatalogPreviewLayout(kind: canvas.BuiltinComponentKind) canvas.WidgetLayoutStyle {
@@ -1266,17 +1445,37 @@ fn componentCatalogPreviewLayout(kind: canvas.BuiltinComponentKind) canvas.Widge
 fn componentCatalogPreviewChildren(kind: canvas.BuiltinComponentKind) []const canvas.Widget {
     return switch (kind) {
         .accordion => &catalog_accordion_children,
+        .alert => &catalog_alert_children,
+        .avatar => &catalog_avatar_children,
+        .badge => &catalog_badge_children,
         .breadcrumb => &catalog_breadcrumb_children,
         .bubble => &catalog_bubble_children,
+        .button => &catalog_button_children,
         .button_group => &catalog_button_group_children,
+        .card => &catalog_card_children,
+        .checkbox => &catalog_checkbox_children,
+        .combobox => &catalog_combobox_children,
+        .dialog => &catalog_dialog_children,
+        .drawer => &catalog_drawer_children,
         .dropdown_menu => &catalog_dropdown_children,
+        .input => &catalog_input_children,
         .pagination => &catalog_pagination_children,
+        .progress => &catalog_progress_children,
         .radio_group => &catalog_radio_group_children,
         .resizable => &catalog_resizable_children,
-        .table => &catalog_table_rows,
+        .select => &catalog_select_children,
+        .separator => &catalog_separator_children,
+        .sheet => &catalog_sheet_children,
+        .skeleton => &catalog_skeleton_children,
+        .slider => &catalog_slider_children,
+        .spinner => &catalog_spinner_children,
+        .switch_control => &catalog_switch_children,
+        .table => &catalog_table_children,
         .tabs => &catalog_tabs_children,
+        .textarea => &catalog_textarea_children,
+        .toggle => &catalog_toggle_children,
         .toggle_group => &catalog_toggle_group_children,
-        else => &.{},
+        .tooltip => &catalog_tooltip_children,
     };
 }
 
@@ -1415,7 +1614,6 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .{ .id = 134, .kind = .list_item, .text = "Logical ranges" },
         .{ .id = 135, .kind = .list_item, .text = "Dirty bounds" },
     };
-    const component_catalog_items = componentCatalogItems();
     const segment_controls = [_]canvas.Widget{
         .{ .id = 117, .kind = .segmented_control, .text = "Small", .size = .sm, .state = .{ .selected = true }, .semantics = .{ .label = "Small density" } },
         .{ .id = 119, .kind = .segmented_control, .text = "Large", .size = .lg, .semantics = .{ .label = "Large density" } },
@@ -1536,8 +1734,11 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         },
         .components => {
             try appendComponentWidget(&content_widgets, &content_widget_count, .{ .id = 101, .kind = .text, .frame = rect(64, 56, 280, 26), .text = "Built-in Components", .size = .lg });
-            for (component_catalog_items) |item| {
-                try appendComponentWidget(&content_widgets, &content_widget_count, item);
+            for (canvas.builtin_component_kinds, 0..) |kind, index| {
+                const item = componentCatalogItem(kind, index);
+                if (componentCatalogItemVisible(item.frame, virtual_scroll.page, content_height_available)) {
+                    try appendComponentWidget(&content_widgets, &content_widget_count, item);
+                }
             }
         },
         .surfaces => {
@@ -2100,9 +2301,11 @@ test "gpu components layout keeps finished controls visually separated" {
     try std.testing.expect(!catalog_layout.findById(componentSectionNavId(.controls)).?.widget.state.selected);
     try std.testing.expect(catalog_layout.findById(componentSectionNavId(.components)).?.widget.state.selected);
     try expectComponentWidgetFrame(catalog_layout, 181, contentRect(64, 124, catalog_card_width, catalog_card_height));
-    try expectComponentWidgetFrame(catalog_layout, 182, contentRect(324, 124, catalog_card_width, catalog_card_height));
-    try expectComponentWidgetFrame(catalog_layout, 184, contentRect(64, 194, catalog_card_width, catalog_card_height));
+    try expectComponentWidgetFrame(catalog_layout, 182, contentRect(342, 124, catalog_card_width, catalog_card_height));
+    try expectComponentWidgetFrame(catalog_layout, 184, contentRect(64, 274, catalog_card_width, catalog_card_height));
     try std.testing.expect(catalog_layout.findById(180) == null);
+    try std.testing.expect(catalog_layout.findById(212) == null);
+    try std.testing.expect(catalog_layout.findById(18101) != null);
 
     var open_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const open_layout = try buildComponentsWidgetLayoutWithStateAndSize(&open_nodes, .{}, .{
@@ -2364,9 +2567,15 @@ test "gpu components catalog previews use canonical built-in foundations" {
         try std.testing.expectEqualStrings(descriptor.name, item.semantics.label);
     }
 
-    try std.testing.expectEqual(@as(usize, 2), componentCatalogPreviewChildren(.button_group).len);
-    try std.testing.expectEqual(@as(usize, 3), componentCatalogPreviewChildren(.pagination).len);
+    for (canvas.builtin_component_kinds) |kind| {
+        try std.testing.expect(componentCatalogPreviewChildren(kind).len > 0);
+    }
+    try std.testing.expectEqual(@as(usize, 1), componentCatalogPreviewChildren(.button_group).len);
+    try std.testing.expectEqual(canvas.WidgetKind.button_group, componentCatalogPreviewChildren(.button_group)[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), componentCatalogPreviewChildren(.pagination).len);
+    try std.testing.expectEqual(canvas.WidgetKind.pagination, componentCatalogPreviewChildren(.pagination)[0].kind);
     try std.testing.expectEqual(@as(usize, 1), componentCatalogPreviewChildren(.table).len);
+    try std.testing.expectEqual(canvas.WidgetKind.table, componentCatalogPreviewChildren(.table)[0].kind);
     try std.testing.expectEqual(@as(f32, 28), componentCatalogPreviewLayout(.textarea).min_size.height);
 }
 

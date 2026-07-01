@@ -7418,7 +7418,11 @@ fn emitWidgetLayoutNodeContent(
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .grid, .data_grid, .table, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row => {},
+        .stack, .row, .column, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row => {},
+        .grid, .data_grid, .table, .list => if (paint_widget.layout.virtualized) {
+            try emitWidgetLayoutScrollableChildren(builder, layout, node_index, tokens, state, paint_widget);
+            return;
+        },
         .scroll_view => {
             try builder.pushClip(.{ .id = widgetPartId(paint_widget.id, 1), .rect = paint_widget.frame });
             try emitWidgetLayoutChildren(builder, layout, node_index, tokens, state);
@@ -7460,6 +7464,24 @@ fn emitWidgetLayoutNodeContent(
     }
 
     try emitWidgetLayoutClippedChildren(builder, layout, node_index, tokens, state, paint_widget);
+}
+
+fn emitWidgetLayoutScrollableChildren(
+    builder: *Builder,
+    layout: WidgetLayoutTree,
+    parent_index: usize,
+    tokens: DesignTokens,
+    state: WidgetRenderState,
+    widget: Widget,
+) Error!void {
+    const clip = if (widget.layout.clip_content) widgetContentClip(widget, tokens) else Clip{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+    };
+    try builder.pushClip(clip);
+    try emitWidgetLayoutChildren(builder, layout, parent_index, tokens, state);
+    try builder.popClip();
+    try emitScrollViewScrollbar(builder, widget.frame, widgetScrollSemantics(layout, parent_index).metrics, tokens, widget.id);
 }
 
 fn widgetOpacity(widget: Widget) f32 {
@@ -15209,6 +15231,26 @@ test "widget virtualized grid lays out visible cells by row" {
     const semantic_intent = widgetSemanticControlIntentWithActions(laid_out_grid, .increment, .{ .increment = true }).?;
     try std.testing.expectEqual(WidgetControlIntentKind.scroll_by, semantic_intent.kind);
     try std.testing.expect(semantic_intent.actions.increment);
+
+    var commands: [32]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    switch (display_list.findCommandById(widgetPartId(1, 1)).?.command) {
+        .push_clip => |clip| try expectRect(geometry.RectF.init(0, 0, 105, 45), clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(1, 2)).?.command) {
+        .fill_rounded_rect => |track| try expectRect(geometry.RectF.init(99, 3, 3, 39), track.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(1, 3)).?.command) {
+        .fill_rounded_rect => |thumb| {
+            try std.testing.expectApproxEqAbs(@as(f32, 13.263), thumb.rect.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 18.474), thumb.rect.height, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget data grid exposes rows cells semantics and display list" {
@@ -15347,6 +15389,26 @@ test "widget virtualized data grid lays out visible rows" {
     try std.testing.expectEqual(@as(ObjectId, 4), semantics[2].id);
     try std.testing.expectEqual(@as(?usize, 2), semantics[2].grid_row_index);
     try std.testing.expectEqual(@as(?usize, 4), semantics[2].grid_row_count);
+
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    switch (display_list.findCommandById(widgetPartId(1, 1)).?.command) {
+        .push_clip => |clip| try expectRect(geometry.RectF.init(0, 0, 160, 45), clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(1, 2)).?.command) {
+        .fill_rounded_rect => |track| try expectRect(geometry.RectF.init(154, 3, 3, 39), track.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(1, 3)).?.command) {
+        .fill_rounded_rect => |thumb| {
+            try std.testing.expectApproxEqAbs(@as(f32, 13.263), thumb.rect.y, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 18.474), thumb.rect.height, 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "widget scroll view offsets children and clips display list" {

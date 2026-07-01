@@ -2850,7 +2850,7 @@ test "gpu components keeps textarea text when opening inputs dropdown" {
     try expectComponentTextCommand(display_list, message_text_id, "Typed textarea draft");
 }
 
-test "gpu components virtual scroll rubberbands smoothly at edges" {
+test "gpu components virtual scroll clamps at edges" {
     var harness: zero_native.TestHarness() = undefined;
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
@@ -2874,14 +2874,13 @@ test "gpu components virtual scroll rubberbands smoothly at edges" {
     app.virtual_scroll.behavior_velocity = 0;
     try app.updateComponentsCanvasModel(&harness.runtime, 1);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, -40);
-    const top_overscroll = app.virtual_scroll.behavior;
-    try std.testing.expect(top_overscroll < 0);
-    try std.testing.expect(app.virtual_scroll.behavior_velocity < 0);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior_velocity);
 
     var snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectEqual(@as(f32, 0), componentSnapshotWidget(snapshot, 130).?.scroll.offset);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expect(layout.findById(131).?.frame.y > contentRect(652, 124, 186, 28).y);
+    try expectComponentWidgetFrame(layout, 131, contentRect(652, 124, 186, 28));
 
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
         .label = canvas_label,
@@ -2892,42 +2891,26 @@ test "gpu components virtual scroll rubberbands smoothly at edges" {
         .frame_interval_ns = 16_000_000,
         .nonblank = true,
     } });
-    try std.testing.expect(app.virtual_scroll.behavior > top_overscroll);
-    try std.testing.expect(app.virtual_scroll.behavior < 0);
-    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expect(layout.findById(131).?.frame.y > contentRect(652, 124, 186, 28).y);
-
-    var frame_index: u64 = 3;
-    while (frame_index < 40 and @abs(app.virtual_scroll.behavior) > 0.01) : (frame_index += 1) {
-        try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
-            .label = canvas_label,
-            .size = geometry.SizeF.init(canvas_width, canvas_height),
-            .scale_factor = 2,
-            .frame_index = frame_index,
-            .timestamp_ns = 1_000_000_000 + frame_index * 16_000_000,
-            .frame_interval_ns = 16_000_000,
-            .nonblank = true,
-        } });
-    }
-    try std.testing.expectApproxEqAbs(@as(f32, 0), app.virtual_scroll.behavior, 0.01);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior);
     try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior_velocity);
+    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try expectComponentWidgetFrame(layout, 131, contentRect(652, 124, 186, 28));
 
     const max_behavior_offset: f32 = 84;
     app.virtual_scroll.behavior = max_behavior_offset;
     app.virtual_scroll.behavior_velocity = 0;
     try app.updateComponentsCanvasModel(&harness.runtime, 1);
     try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, 40);
-    const bottom_overscroll = app.virtual_scroll.behavior;
-    try std.testing.expect(bottom_overscroll > max_behavior_offset);
-    try std.testing.expect(app.virtual_scroll.behavior_velocity > 0);
+    try std.testing.expectEqual(max_behavior_offset, app.virtual_scroll.behavior);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior_velocity);
 
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectEqual(max_behavior_offset, componentSnapshotWidget(snapshot, 130).?.scroll.offset);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     const bottom_range = layout.virtualRangeById(130).?;
     try std.testing.expectEqual(max_behavior_offset, bottom_range.scroll_offset);
-    try std.testing.expect(bottom_range.layout_offset > max_behavior_offset);
-    try std.testing.expect(layout.findById(134).?.frame.y < contentRect(652, 124, 186, 28).y);
+    try std.testing.expectEqual(max_behavior_offset, bottom_range.layout_offset);
+    try expectComponentWidgetFrame(layout, 134, contentRect(652, 124, 186, 28));
 
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
         .label = canvas_label,
@@ -2938,8 +2921,8 @@ test "gpu components virtual scroll rubberbands smoothly at edges" {
         .frame_interval_ns = 16_000_000,
         .nonblank = true,
     } });
-    try std.testing.expect(app.virtual_scroll.behavior < bottom_overscroll);
-    try std.testing.expect(app.virtual_scroll.behavior > max_behavior_offset);
+    try std.testing.expectEqual(max_behavior_offset, app.virtual_scroll.behavior);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior_velocity);
 }
 
 test "gpu components native theme command updates retained design tokens" {

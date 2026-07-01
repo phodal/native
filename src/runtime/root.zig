@@ -7001,6 +7001,7 @@ const RuntimeView = struct {
     fn applyCanvasWidgetScrollRoute(self: *RuntimeView, route: []const canvas.WidgetEventRouteEntry, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
         var depth_limit: ?usize = null;
         while (self.deepestCanvasWidgetScrollIndex(route, depth_limit)) |scroll_index| {
+            if (self.widget_layout_nodes[scroll_index].widget.layout.virtualized) return null;
             const has_scroll_parent = self.deepestCanvasWidgetScrollIndex(route, self.widget_layout_nodes[scroll_index].depth) != null;
             if (has_scroll_parent and !self.canvasWidgetScrollCanConsume(scroll_index, delta_y)) {
                 depth_limit = self.widget_layout_nodes[scroll_index].depth;
@@ -14211,18 +14212,18 @@ test "runtime wheel input scrolls retained canvas scroll views" {
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;
-    const overscrolled = try harness.runtime.stepCanvasWidgetKineticScroll(1, "canvas", 16);
-    try std.testing.expectEqual(@as(u64, 4), overscrolled.widget_revision);
+    const clamped = try harness.runtime.stepCanvasWidgetKineticScroll(1, "canvas", 16);
+    try std.testing.expectEqual(@as(u64, 4), clamped.widget_revision);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expect(harness.runtime.pendingDirtyRegions().len >= 1);
     try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 180, 72), harness.runtime.pendingDirtyRegions()[0]);
 
     kinetic_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
-    try std.testing.expect(kinetic_layout.nodes[0].widget.value > 48);
-    try std.testing.expect(kinetic_layout.nodes[0].widget.value <= 78.24);
-    try std.testing.expectApproxEqAbs(-kinetic_layout.nodes[0].widget.value, kinetic_layout.nodes[1].frame.y, 0.01);
-    try std.testing.expectApproxEqAbs(44 - kinetic_layout.nodes[0].widget.value, kinetic_layout.nodes[2].frame.y, 0.01);
-    try std.testing.expectApproxEqAbs(88 - kinetic_layout.nodes[0].widget.value, kinetic_layout.nodes[3].frame.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 48), kinetic_layout.nodes[0].widget.value, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -48), kinetic_layout.nodes[1].frame.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, -4), kinetic_layout.nodes[2].frame.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), kinetic_layout.nodes[3].frame.y, 0.01);
+    try std.testing.expectEqual(@as(f32, 0), harness.runtime.views[0].widget_scroll_states[0].velocity);
 
     var settle_frame: usize = 0;
     while (settle_frame < 48) : (settle_frame += 1) {
@@ -14245,6 +14246,88 @@ test "runtime wheel input scrolls retained canvas scroll views" {
     harness.runtime.dirty_region_count = 0;
     const idle = try harness.runtime.stepCanvasWidgetKineticScroll(1, "canvas", 16);
     try std.testing.expectEqual(settled_revision, idle.widget_revision);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+}
+
+test "runtime wheel over virtualized scroll does not bubble to parent scroll view" {
+    const TestApp = struct {
+        widget_pointer_count: u32 = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-virtual-scroll-bubble", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_pointer => |pointer_event| if (pointer_event.pointer.phase == .wheel) {
+                    self.widget_pointer_count += 1;
+                },
+                else => {},
+            }
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 180, 72),
+    });
+
+    const virtual_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .list_item, .text = "One" },
+        .{ .id = 4, .kind = .list_item, .text = "Two" },
+        .{ .id = 5, .kind = .list_item, .text = "Three" },
+        .{ .id = 6, .kind = .list_item, .text = "Four" },
+    };
+    const parent_children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .scroll_view,
+            .frame = geometry.RectF.init(0, 0, 180, 40),
+            .layout = .{ .virtualized = true, .virtual_item_extent = 20 },
+            .children = &virtual_children,
+        },
+        .{ .id = 20, .kind = .button, .frame = geometry.RectF.init(0, 120, 0, 32), .text = "Below" },
+    };
+    const parent_scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .children = &parent_children,
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(parent_scroll, geometry.RectF.init(0, 0, 180, 72), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const initial_revision = harness.runtime.views[0].widget_revision;
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .timestamp_ns = 1_000_000_000,
+        .kind = .scroll,
+        .x = 20,
+        .y = 20,
+        .delta_y = 24,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.widget_pointer_count);
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(1).?.widget.value);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(2).?.widget.value);
+    try std.testing.expectEqual(initial_revision, harness.runtime.views[0].widget_revision);
     try std.testing.expect(!harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
 }

@@ -3248,8 +3248,8 @@ pub const ScrollPhysics = struct {
     wheel_velocity_scale: f32 = 60,
     deceleration_per_second: f32 = 0.86,
     stop_velocity: f32 = 5,
-    rubberband_extent_ratio: f32 = 0.42,
-    rubberband_max_extent: f32 = 96,
+    rubberband_extent_ratio: f32 = 0,
+    rubberband_max_extent: f32 = 0,
     rubberband_resistance: f32 = 0.38,
     rubberband_return_per_second: f32 = 18,
     rubberband_velocity_decay_per_second: f32 = 0,
@@ -15249,13 +15249,9 @@ test "scroll state applies wheel deltas kinetic decay and bounds" {
     try std.testing.expect(stepped.velocity > 0);
     try std.testing.expect(stepped.velocity < wheeled.velocity);
 
-    const rubberbanded = wheeled.applyWheel(1000, physics);
-    try std.testing.expectEqual(@as(f32, 302), rubberbanded.offset);
-    try std.testing.expect(rubberbanded.velocity > 0);
-
-    const rebounding = rubberbanded.stepKinetic(16, physics);
-    try std.testing.expect(rebounding.offset < rubberbanded.offset);
-    try std.testing.expect(rebounding.offset >= rubberbanded.visualOffset());
+    const clamped_by_default = wheeled.applyWheel(1000, physics);
+    try std.testing.expectEqual(@as(f32, 260), clamped_by_default.offset);
+    try std.testing.expectEqual(@as(f32, 0), clamped_by_default.velocity);
 
     const clamped = wheeled.applyWheelClamped(1000, physics);
     try std.testing.expectEqual(@as(f32, 260), clamped.offset);

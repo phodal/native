@@ -21,6 +21,7 @@ const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
 const runtime_state = @import("state.zig");
 const runtime_system_services = @import("system_services.zig");
 const runtime_view = @import("view.zig");
+const runtime_window_views = @import("window_views.zig");
 const widget_bridge = @import("widget_bridge.zig");
 const canvas = @import("canvas");
 const automation = @import("../automation/root.zig");
@@ -321,33 +322,121 @@ pub const Runtime = struct {
         self.next_window_id = @max(self.next_window_id, window.id + 1);
     }
 
-    pub fn createWindow(self: *Runtime, options: platform.WindowCreateOptions) anyerror!platform.WindowInfo {
-        return self.createWindowWithSourceMode(options, options.source == null, .require_source);
-    }
+    const WindowViewMethods = runtime_window_views.RuntimeWindowViews(Runtime);
+    pub const createWindow = WindowViewMethods.createWindow;
+    pub const listWindows = WindowViewMethods.listWindows;
+    pub const focusWindow = WindowViewMethods.focusWindow;
+    pub const closeWindow = WindowViewMethods.closeWindow;
+    pub const createShellWindow = WindowViewMethods.createShellWindow;
+    pub const createShellViews = WindowViewMethods.createShellViews;
+    pub const relayoutShellViews = WindowViewMethods.relayoutShellViews;
+    pub const createView = WindowViewMethods.createView;
+    pub const updateView = WindowViewMethods.updateView;
+    pub const closeView = WindowViewMethods.closeView;
+    pub const listViews = WindowViewMethods.listViews;
+    pub const focusView = WindowViewMethods.focusView;
+    pub const focusNextView = WindowViewMethods.focusNextView;
+    pub const focusPreviousView = WindowViewMethods.focusPreviousView;
+    const createShellWindowWithSourceMode = WindowViewMethods.createShellWindowWithSourceMode;
+    const validateShellViewCreatePlan = WindowViewMethods.validateShellViewCreatePlan;
+    const applyShellViews = WindowViewMethods.applyShellViews;
+    const applyShellView = WindowViewMethods.applyShellView;
+    const rollbackCreatedShellViews = WindowViewMethods.rollbackCreatedShellViews;
+    const captureMainWebViewState = WindowViewMethods.captureMainWebViewState;
+    const restoreMainWebViewState = WindowViewMethods.restoreMainWebViewState;
+    const createWindowWithSourceMode = WindowViewMethods.createWindowWithSourceMode;
+    const reserveWindow = WindowViewMethods.reserveWindow;
+    const removeWindowAt = WindowViewMethods.removeWindowAt;
+    const copySource = WindowViewMethods.copySource;
+    const copyLoadedSource = WindowViewMethods.copyLoadedSource;
+    const applyNativeInfo = WindowViewMethods.applyNativeInfo;
+    const updateWindowState = WindowViewMethods.updateWindowState;
+    const runtimeWindowStateForPersistence = WindowViewMethods.runtimeWindowStateForPersistence;
+    const removeWindowRuntimeViews = WindowViewMethods.removeWindowRuntimeViews;
+    const shellBoundsForWindow = WindowViewMethods.shellBoundsForWindow;
+    const startupWindowFrame = WindowViewMethods.startupWindowFrame;
+    const rectsEqual = WindowViewMethods.rectsEqual;
+    const canvasDirtyRegionForView = WindowViewMethods.canvasDirtyRegionForView;
+    const bindShellViews = WindowViewMethods.bindShellViews;
+    const shellLayoutForWindow = WindowViewMethods.shellLayoutForWindow;
+    const findShellLayoutIndex = WindowViewMethods.findShellLayoutIndex;
+    const removeShellLayoutForWindow = WindowViewMethods.removeShellLayoutForWindow;
+    const setFocusedIndex = WindowViewMethods.setFocusedIndex;
+    const findWindowIndexById = WindowViewMethods.findWindowIndexById;
+    const findWindowIndexByLabel = WindowViewMethods.findWindowIndexByLabel;
+    const allocateWindowId = WindowViewMethods.allocateWindowId;
+    const allocateViewId = WindowViewMethods.allocateViewId;
+    const validateWebViewParent = WindowViewMethods.validateWebViewParent;
+    const validateWebViewUrl = WindowViewMethods.validateWebViewUrl;
+    const writeWebViewListJson = WindowViewMethods.writeWebViewListJson;
+    const reserveWebView = WindowViewMethods.reserveWebView;
+    const findWebViewIndex = WindowViewMethods.findWebViewIndex;
+    const removeWebViewAt = WindowViewMethods.removeWebViewAt;
+    const removeWebViewsForWindow = WindowViewMethods.removeWebViewsForWindow;
+    const mainWebViewInfo = WindowViewMethods.mainWebViewInfo;
+    const createWebViewView = WindowViewMethods.createWebViewView;
+    const setMainWebViewParent = WindowViewMethods.setMainWebViewParent;
+    const updateWebViewView = WindowViewMethods.updateWebViewView;
+    const validateViewParent = WindowViewMethods.validateViewParent;
+    const validateViewParentLink = WindowViewMethods.validateViewParentLink;
+    const platformFrameForView = WindowViewMethods.platformFrameForView;
+    const localFrameForView = WindowViewMethods.localFrameForView;
+    const absoluteViewFrame = WindowViewMethods.absoluteViewFrame;
+    const relayoutDescendantWebViewBackends = WindowViewMethods.relayoutDescendantWebViewBackends;
+    const relayoutDescendantWebViewBackendsDepth = WindowViewMethods.relayoutDescendantWebViewBackendsDepth;
+    const reserveView = WindowViewMethods.reserveView;
+    const findViewIndex = WindowViewMethods.findViewIndex;
+    const commandSourceForNativeView = WindowViewMethods.commandSourceForNativeView;
+    const setFocusedView = WindowViewMethods.setFocusedView;
+    const clearFocusedView = WindowViewMethods.clearFocusedView;
+    const ensureFocusableViewFocused = WindowViewMethods.ensureFocusableViewFocused;
+    const focusAdjacentView = WindowViewMethods.focusAdjacentView;
+    const viewLabelExists = WindowViewMethods.viewLabelExists;
+    const removeViewAt = WindowViewMethods.removeViewAt;
+    const removeViewsForWindow = WindowViewMethods.removeViewsForWindow;
+    const removeDescendantViewsForParent = WindowViewMethods.removeDescendantViewsForParent;
+    const removeDescendantWebViewsForParent = WindowViewMethods.removeDescendantWebViewsForParent;
+    const closeDescendantWebViewBackends = WindowViewMethods.closeDescendantWebViewBackends;
+    const closeDescendantWebViewBackendsDepth = WindowViewMethods.closeDescendantWebViewBackendsDepth;
+    const viewTreeHasFocused = WindowViewMethods.viewTreeHasFocused;
+    const viewTreeHasFocusedDepth = WindowViewMethods.viewTreeHasFocusedDepth;
 
-    pub fn listWindows(self: *const Runtime, output: []platform.WindowInfo) []const platform.WindowInfo {
-        const count = @min(output.len, self.window_count);
-        for (self.windows[0..count], 0..) |window, index| {
-            output[index] = window.info;
-        }
-        return output[0..count];
-    }
-
-    pub fn focusWindow(self: *Runtime, window_id: platform.WindowId) anyerror!void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        try self.options.platform.services.focusWindow(window_id);
-        self.setFocusedIndex(index);
-        self.invalidated = true;
-    }
-
-    pub fn closeWindow(self: *Runtime, window_id: platform.WindowId) anyerror!void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        try self.options.platform.services.closeWindow(window_id);
-        self.windows[index].info.open = false;
-        self.windows[index].info.focused = false;
-        self.removeWindowRuntimeViews(window_id);
-        self.invalidated = true;
-    }
+    const SystemServiceMethods = runtime_system_services.RuntimeSystemServices(Runtime);
+    pub const readClipboard = SystemServiceMethods.readClipboard;
+    pub const writeClipboard = SystemServiceMethods.writeClipboard;
+    pub const readClipboardData = SystemServiceMethods.readClipboardData;
+    pub const writeClipboardData = SystemServiceMethods.writeClipboardData;
+    pub const openExternalUrl = SystemServiceMethods.openExternalUrl;
+    pub const revealPath = SystemServiceMethods.revealPath;
+    pub const addRecentDocument = SystemServiceMethods.addRecentDocument;
+    pub const clearRecentDocuments = SystemServiceMethods.clearRecentDocuments;
+    pub const showOpenDialog = SystemServiceMethods.showOpenDialog;
+    pub const showSaveDialog = SystemServiceMethods.showSaveDialog;
+    pub const showMessageDialog = SystemServiceMethods.showMessageDialog;
+    pub const showNotification = SystemServiceMethods.showNotification;
+    pub const setCredential = SystemServiceMethods.setCredential;
+    pub const getCredential = SystemServiceMethods.getCredential;
+    pub const deleteCredential = SystemServiceMethods.deleteCredential;
+    pub const createTray = SystemServiceMethods.createTray;
+    pub const updateTrayMenu = SystemServiceMethods.updateTrayMenu;
+    pub const removeTray = SystemServiceMethods.removeTray;
+    const trayCommandNameForItem = SystemServiceMethods.trayCommandNameForItem;
+    const supportsFeatureFromJson = SystemServiceMethods.supportsFeatureFromJson;
+    const readClipboardTextFromJson = SystemServiceMethods.readClipboardTextFromJson;
+    const writeClipboardTextFromJson = SystemServiceMethods.writeClipboardTextFromJson;
+    const readClipboardDataFromJson = SystemServiceMethods.readClipboardDataFromJson;
+    const writeClipboardDataFromJson = SystemServiceMethods.writeClipboardDataFromJson;
+    const setCredentialFromJson = SystemServiceMethods.setCredentialFromJson;
+    const getCredentialFromJson = SystemServiceMethods.getCredentialFromJson;
+    const deleteCredentialFromJson = SystemServiceMethods.deleteCredentialFromJson;
+    const showNotificationFromJson = SystemServiceMethods.showNotificationFromJson;
+    const openExternalUrlFromJson = SystemServiceMethods.openExternalUrlFromJson;
+    const revealPathFromJson = SystemServiceMethods.revealPathFromJson;
+    const addRecentDocumentFromJson = SystemServiceMethods.addRecentDocumentFromJson;
+    const clearRecentDocumentsFromJson = SystemServiceMethods.clearRecentDocumentsFromJson;
+    const openFileDialogFromJson = SystemServiceMethods.openFileDialogFromJson;
+    const saveFileDialogFromJson = SystemServiceMethods.saveFileDialogFromJson;
+    const showMessageDialogFromJson = SystemServiceMethods.showMessageDialogFromJson;
 
     pub fn listCommands(self: *const Runtime, output: []Command) []const Command {
         const count = @min(output.len, self.options.commands.len);
@@ -355,268 +444,6 @@ pub const Runtime = struct {
             output[index] = command;
         }
         return output[0..count];
-    }
-
-    pub fn createShellWindow(self: *Runtime, shell_window: app_manifest.ShellWindow, source: ?platform.WebViewSource) anyerror!platform.WindowInfo {
-        return self.createShellWindowWithSourceMode(shell_window, source, source == null);
-    }
-
-    fn createShellWindowWithSourceMode(self: *Runtime, shell_window: app_manifest.ShellWindow, source: ?platform.WebViewSource, source_reloads_from_app: bool) anyerror!platform.WindowInfo {
-        const window_frame = geometry.RectF.init(
-            shell_window.x orelse 0,
-            shell_window.y orelse 0,
-            shell_window.width,
-            shell_window.height,
-        );
-        const info = try self.createWindowWithSourceMode(.{
-            .label = shell_window.label,
-            .title = shell_window.title orelse "",
-            .default_frame = window_frame,
-            .resizable = shell_window.resizable,
-            .restore_state = shell_window.restore_state,
-            .restore_policy = shellRestorePolicy(shell_window.restore_policy),
-            .source = source,
-        }, source_reloads_from_app, .allow_source_less);
-        errdefer self.closeWindow(info.id) catch {};
-
-        try self.createShellViews(info.id, shell_window.views, self.shellBoundsForWindow(info.id));
-        return info;
-    }
-
-    pub fn createShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF) anyerror!void {
-        if (views.len > app_manifest.max_shell_views_per_window) return error.ViewLimitReached;
-        try self.validateShellViewCreatePlan(window_id, views);
-
-        var main_state: RuntimeMainWebViewState = undefined;
-        try self.captureMainWebViewState(window_id, &main_state);
-        errdefer self.restoreMainWebViewState(window_id, &main_state) catch {};
-
-        var created_labels: [app_manifest.max_shell_views_per_window][]const u8 = undefined;
-        var created_count: usize = 0;
-        errdefer self.rollbackCreatedShellViews(window_id, created_labels[0..created_count]);
-
-        try self.applyShellViews(window_id, views, bounds, .create, &created_labels, &created_count);
-        try self.bindShellViews(window_id, views);
-    }
-
-    pub fn relayoutShellViews(self: *Runtime, window_id: platform.WindowId) anyerror!void {
-        const binding = self.shellLayoutForWindow(window_id) orelse return;
-        try self.applyShellViews(window_id, binding.viewSlice(), self.shellBoundsForWindow(window_id), .update, null, null);
-    }
-
-    fn validateShellViewCreatePlan(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) anyerror!void {
-        try self.validateViewParent(window_id);
-
-        var native_view_count: usize = 0;
-        var child_webview_count: usize = 0;
-        for (views, 0..) |view, index| {
-            for (views[0..index]) |previous| {
-                if (std.mem.eql(u8, previous.label, view.label)) return error.DuplicateViewLabel;
-            }
-
-            if (view.kind == .webview and isMainWebViewLabel(view.label)) continue;
-            if (self.viewLabelExists(window_id, view.label)) return error.DuplicateViewLabel;
-
-            if (view.kind == .webview) {
-                child_webview_count += 1;
-            } else {
-                native_view_count += 1;
-            }
-        }
-
-        if (native_view_count > platform.max_views - self.view_count) return error.ViewLimitReached;
-        if (child_webview_count > platform.max_webviews - self.webview_count) return error.WebViewLimitReached;
-    }
-
-    fn applyShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView, bounds: geometry.RectF, mode: ShellApplyMode, tracked_labels: ?*[app_manifest.max_shell_views_per_window][]const u8, tracked_count: ?*usize) anyerror!void {
-        var layout = ShellLayout.init(bounds, views);
-        var created: [app_manifest.max_shell_views_per_window]bool = [_]bool{false} ** app_manifest.max_shell_views_per_window;
-        var created_count: usize = 0;
-        while (created_count < views.len) {
-            var progressed = false;
-            for (views, 0..) |view, index| {
-                if (created[index]) continue;
-                if (view.parent) |parent| {
-                    if (!layout.containsView(parent)) continue;
-                }
-                const did_create = try self.applyShellView(try shellViewOptions(window_id, view, &layout), mode);
-                if (did_create) {
-                    if (tracked_labels) |labels| {
-                        const count = tracked_count.?;
-                        labels[count.*] = view.label;
-                        count.* += 1;
-                    }
-                }
-                created[index] = true;
-                created_count += 1;
-                progressed = true;
-            }
-            if (!progressed) return error.InvalidViewOptions;
-        }
-    }
-
-    fn applyShellView(self: *Runtime, options: platform.ViewOptions, mode: ShellApplyMode) anyerror!bool {
-        switch (mode) {
-            .create => {
-                if (options.kind == .webview and isMainWebViewLabel(options.label)) {
-                    try self.setMainWebViewParent(options.window_id, options.parent);
-                    _ = try self.updateView(options.window_id, options.label, .{
-                        .frame = options.frame,
-                        .layer = options.layer,
-                    });
-                    return false;
-                }
-                _ = try self.createView(options);
-                return true;
-            },
-            .update => {
-                if (options.kind == .webview and isMainWebViewLabel(options.label)) {
-                    try self.setMainWebViewParent(options.window_id, options.parent);
-                }
-                _ = self.updateView(options.window_id, options.label, .{
-                    .frame = options.frame,
-                    .layer = options.layer,
-                }) catch |err| switch (err) {
-                    error.ViewNotFound,
-                    error.WebViewNotFound,
-                    => return false,
-                    else => return err,
-                };
-                return false;
-            },
-        }
-    }
-
-    fn rollbackCreatedShellViews(self: *Runtime, window_id: platform.WindowId, labels: []const []const u8) void {
-        var index = labels.len;
-        while (index > 0) {
-            index -= 1;
-            self.closeView(window_id, labels[index]) catch {};
-        }
-    }
-
-    fn captureMainWebViewState(self: *Runtime, window_id: platform.WindowId, state: *RuntimeMainWebViewState) !void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        const window = self.windows[index];
-        state.* = .{
-            .frame = window.main_frame,
-            .frame_set = window.main_frame_set,
-            .layer = window.main_layer,
-        };
-        state.parent = if (window.main_parent) |parent| try copyInto(&state.parent_storage, parent) else null;
-    }
-
-    fn restoreMainWebViewState(self: *Runtime, window_id: platform.WindowId, state: *const RuntimeMainWebViewState) !void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        const window = self.windows[index];
-        var restore_error: ?anyerror = null;
-
-        if (window.source != null) {
-            if (window.main_frame_set != state.frame_set or !rectsEqual(window.main_frame, state.frame)) {
-                self.options.platform.services.setWebViewFrame(window_id, "main", state.frame) catch |err| {
-                    restore_error = err;
-                };
-            }
-            if (window.main_layer != state.layer) {
-                self.options.platform.services.setWebViewLayer(window_id, "main", state.layer) catch |err| {
-                    if (restore_error == null) restore_error = err;
-                };
-            }
-        }
-
-        self.windows[index].main_frame = state.frame;
-        self.windows[index].main_frame_set = state.frame_set;
-        self.windows[index].main_layer = state.layer;
-        self.windows[index].main_parent = if (state.parent) |parent| try copyInto(&self.windows[index].main_parent_storage, parent) else null;
-
-        if (restore_error) |err| return err;
-    }
-
-    pub fn createView(self: *Runtime, options: platform.ViewOptions) anyerror!platform.ViewInfo {
-        try self.validateViewParent(options.window_id);
-        try validateViewOptions(options);
-        if (self.viewLabelExists(options.window_id, options.label)) return error.DuplicateViewLabel;
-        try self.validateViewParentLink(options.window_id, options.label, options.parent);
-        if (options.kind == .webview) return self.createWebViewView(options);
-        if (self.view_count >= platform.max_views) return error.ViewLimitReached;
-
-        try self.options.platform.services.createView(options);
-        var reserved = false;
-        errdefer {
-            if (reserved) {
-                if (self.findViewIndex(options.window_id, options.label)) |index| self.removeViewAt(index);
-            }
-            self.options.platform.services.closeView(options.window_id, options.label) catch {};
-        }
-        try self.reserveView(options);
-        reserved = true;
-        self.invalidateFor(.command, options.frame);
-        return self.views[self.view_count - 1].info();
-    }
-
-    pub fn updateView(self: *Runtime, window_id: platform.WindowId, label: []const u8, patch: platform.ViewPatch) anyerror!platform.ViewInfo {
-        try self.validateViewParent(window_id);
-        try validateViewLabel(label);
-        if (patch.frame) |view_frame| try validateViewFrame(view_frame);
-        if (patch.role) |role| {
-            if (role.len > platform.max_view_role_bytes) return error.ViewRoleTooLarge;
-        }
-        if (patch.accessibility_label) |accessibility_label| {
-            if (accessibility_label.len > platform.max_view_accessibility_label_bytes) return error.ViewAccessibilityLabelTooLarge;
-        }
-        if (patch.text) |text| {
-            if (text.len > platform.max_view_text_bytes) return error.ViewTextTooLarge;
-        }
-        if (patch.command) |command| {
-            if (command.len > 0) try validateCommandName(command);
-        }
-        if (patch.url != null and !isMainWebViewLabel(label) and self.findWebViewIndex(window_id, label) == null) return error.InvalidViewOptions;
-
-        if (isMainWebViewLabel(label) or self.findWebViewIndex(window_id, label) != null) {
-            return self.updateWebViewView(window_id, label, patch);
-        }
-
-        const index = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
-        try self.options.platform.services.updateView(window_id, label, patch);
-        if (patch.frame) |view_frame| self.views[index].frame = view_frame;
-        if (patch.layer) |layer| self.views[index].layer = layer;
-        if (patch.visible) |visible| self.views[index].visible = visible;
-        if (patch.enabled) |enabled| self.views[index].enabled = enabled;
-        if (patch.role) |role| self.views[index].role = try copyInto(&self.views[index].role_storage, role);
-        if (patch.accessibility_label) |accessibility_label| self.views[index].accessibility_label = try copyInto(&self.views[index].accessibility_label_storage, accessibility_label);
-        if (patch.text) |text| self.views[index].text = try copyInto(&self.views[index].text_storage, text);
-        if (patch.command) |command| self.views[index].command = try copyInto(&self.views[index].command_storage, command);
-        if (patch.frame != null) try self.relayoutDescendantWebViewBackends(window_id, label);
-        self.invalidateFor(.command, patch.frame);
-        if (self.views[index].focused and !isFocusableViewInfo(self.views[index].info())) {
-            self.ensureFocusableViewFocused(window_id);
-        }
-        return self.views[index].info();
-    }
-
-    pub fn closeView(self: *Runtime, window_id: platform.WindowId, label: []const u8) anyerror!void {
-        try self.validateViewParent(window_id);
-        try validateViewLabel(label);
-        if (isMainWebViewLabel(label)) return error.InvalidViewOptions;
-
-        if (self.findWebViewIndex(window_id, label)) |webview_index| {
-            const was_focused = self.webviews[webview_index].focused;
-            try self.options.platform.services.closeWebView(window_id, label);
-            self.removeWebViewAt(webview_index);
-            if (was_focused) self.ensureFocusableViewFocused(window_id);
-            self.invalidateFor(.command, null);
-            return;
-        }
-
-        _ = self.findViewIndex(window_id, label) orelse return error.ViewNotFound;
-        const was_focused = self.viewTreeHasFocused(window_id, label);
-        try self.closeDescendantWebViewBackends(window_id, label);
-        try self.options.platform.services.closeView(window_id, label);
-        self.removeDescendantViewsForParent(window_id, label);
-        self.removeDescendantWebViewsForParent(window_id, label);
-        if (self.findViewIndex(window_id, label)) |current_index| self.removeViewAt(current_index);
-        if (was_focused) self.ensureFocusableViewFocused(window_id);
-        self.invalidateFor(.command, null);
     }
 
     const CanvasFrameMethods = canvas_frame_helpers.RuntimeCanvasFrames(Runtime);
@@ -720,84 +547,6 @@ pub const Runtime = struct {
     const editAutomationCanvasWidgetText = AutomationWidgetMethods.editAutomationCanvasWidgetText;
     const dispatchAutomationCanvasWidgetDrag = AutomationWidgetMethods.dispatchAutomationCanvasWidgetDrag;
     const dispatchAutomationCanvasWidgetFileDrop = AutomationWidgetMethods.dispatchAutomationCanvasWidgetFileDrop;
-
-    pub fn listViews(self: *const Runtime, window_id: platform.WindowId, output: []platform.ViewInfo) []const platform.ViewInfo {
-        const window_index = self.findWindowIndexById(window_id) orelse return output[0..0];
-        if (!self.windows[window_index].info.open) return output[0..0];
-
-        var count: usize = 0;
-        if (self.windows[window_index].source != null and count < output.len) {
-            output[count] = viewInfoFromWebView(self.mainWebViewInfo(window_index));
-            count += 1;
-        }
-        for (self.views[0..self.view_count]) |view| {
-            if (!view.open or view.window_id != window_id) continue;
-            if (count >= output.len) return output[0..count];
-            output[count] = view.info();
-            count += 1;
-        }
-        for (self.webviews[0..self.webview_count]) |webview| {
-            if (!webview.open or webview.window_id != window_id) continue;
-            if (count >= output.len) return output[0..count];
-            output[count] = viewInfoFromWebView(webview);
-            count += 1;
-        }
-        return output[0..count];
-    }
-
-    pub fn focusView(self: *Runtime, window_id: platform.WindowId, label: []const u8) anyerror!void {
-        try self.validateViewParent(window_id);
-        try validateViewLabel(label);
-        if (!self.viewLabelExists(window_id, label)) return error.ViewNotFound;
-        try self.options.platform.services.focusView(window_id, label);
-        try self.setFocusedView(window_id, label);
-        self.invalidateFor(.command, null);
-    }
-
-    pub fn focusNextView(self: *Runtime, window_id: platform.WindowId) anyerror!platform.ViewInfo {
-        return self.focusAdjacentView(window_id, .next);
-    }
-
-    pub fn focusPreviousView(self: *Runtime, window_id: platform.WindowId) anyerror!platform.ViewInfo {
-        return self.focusAdjacentView(window_id, .previous);
-    }
-
-    const SystemServiceMethods = runtime_system_services.RuntimeSystemServices(Runtime);
-    pub const readClipboard = SystemServiceMethods.readClipboard;
-    pub const writeClipboard = SystemServiceMethods.writeClipboard;
-    pub const readClipboardData = SystemServiceMethods.readClipboardData;
-    pub const writeClipboardData = SystemServiceMethods.writeClipboardData;
-    pub const openExternalUrl = SystemServiceMethods.openExternalUrl;
-    pub const revealPath = SystemServiceMethods.revealPath;
-    pub const addRecentDocument = SystemServiceMethods.addRecentDocument;
-    pub const clearRecentDocuments = SystemServiceMethods.clearRecentDocuments;
-    pub const showOpenDialog = SystemServiceMethods.showOpenDialog;
-    pub const showSaveDialog = SystemServiceMethods.showSaveDialog;
-    pub const showMessageDialog = SystemServiceMethods.showMessageDialog;
-    pub const showNotification = SystemServiceMethods.showNotification;
-    pub const setCredential = SystemServiceMethods.setCredential;
-    pub const getCredential = SystemServiceMethods.getCredential;
-    pub const deleteCredential = SystemServiceMethods.deleteCredential;
-    pub const createTray = SystemServiceMethods.createTray;
-    pub const updateTrayMenu = SystemServiceMethods.updateTrayMenu;
-    pub const removeTray = SystemServiceMethods.removeTray;
-    const trayCommandNameForItem = SystemServiceMethods.trayCommandNameForItem;
-    const supportsFeatureFromJson = SystemServiceMethods.supportsFeatureFromJson;
-    const readClipboardTextFromJson = SystemServiceMethods.readClipboardTextFromJson;
-    const writeClipboardTextFromJson = SystemServiceMethods.writeClipboardTextFromJson;
-    const readClipboardDataFromJson = SystemServiceMethods.readClipboardDataFromJson;
-    const writeClipboardDataFromJson = SystemServiceMethods.writeClipboardDataFromJson;
-    const setCredentialFromJson = SystemServiceMethods.setCredentialFromJson;
-    const getCredentialFromJson = SystemServiceMethods.getCredentialFromJson;
-    const deleteCredentialFromJson = SystemServiceMethods.deleteCredentialFromJson;
-    const showNotificationFromJson = SystemServiceMethods.showNotificationFromJson;
-    const openExternalUrlFromJson = SystemServiceMethods.openExternalUrlFromJson;
-    const revealPathFromJson = SystemServiceMethods.revealPathFromJson;
-    const addRecentDocumentFromJson = SystemServiceMethods.addRecentDocumentFromJson;
-    const clearRecentDocumentsFromJson = SystemServiceMethods.clearRecentDocumentsFromJson;
-    const openFileDialogFromJson = SystemServiceMethods.openFileDialogFromJson;
-    const saveFileDialogFromJson = SystemServiceMethods.saveFileDialogFromJson;
-    const showMessageDialogFromJson = SystemServiceMethods.showMessageDialogFromJson;
 
     pub fn emitWindowEvent(self: *Runtime, window_id: platform.WindowId, name: []const u8, detail_json: []const u8) anyerror!void {
         if (!json.isValidValue(detail_json)) return error.InvalidJsonEventDetail;
@@ -1325,211 +1074,6 @@ pub const Runtime = struct {
             },
             .wait => {},
         }
-    }
-
-    fn createWindowWithSourceMode(self: *Runtime, options: platform.WindowCreateOptions, source_reloads_from_app: bool, source_policy: WindowSourcePolicy) anyerror!platform.WindowInfo {
-        const source = options.source orelse self.loaded_source orelse switch (source_policy) {
-            .require_source => return error.MissingWindowSource,
-            .allow_source_less => null,
-        };
-        const id = if (options.id != 0) options.id else self.allocateWindowId();
-        const label = if (options.label.len > 0) options.label else return error.InvalidWindowOptions;
-        try validateWindowFrame(options.default_frame);
-        if (self.findWindowIndexById(id) != null) return error.DuplicateWindowId;
-        if (self.findWindowIndexByLabel(label) != null) return error.DuplicateWindowLabel;
-        const index = try self.reserveWindow(id, label, options.title, source, source_reloads_from_app);
-        var native_created = false;
-        errdefer self.removeWindowAt(index);
-        errdefer if (native_created) self.options.platform.services.closeWindow(id) catch {};
-
-        const window_options = options.windowOptions(id, self.windows[index].info.label);
-        const native_info = try self.options.platform.services.createWindow(window_options);
-        native_created = true;
-        self.applyNativeInfo(index, native_info);
-        if (self.windows[index].source) |window_source| {
-            try self.options.platform.services.loadWindowWebView(id, window_source);
-        }
-        self.invalidated = true;
-        return self.windows[index].info;
-    }
-
-    fn reserveWindow(self: *Runtime, id: platform.WindowId, label: []const u8, title: []const u8, source: ?platform.WebViewSource, source_reloads_from_app: bool) !usize {
-        if (self.window_count >= platform.max_windows) return error.WindowLimitReached;
-        if (label.len == 0) return error.InvalidWindowOptions;
-        const index = self.window_count;
-        self.windows[index] = .{};
-        const copied_label = try copyInto(&self.windows[index].label_storage, label);
-        const copied_title = try copyInto(&self.windows[index].title_storage, title);
-        self.windows[index].info = .{
-            .id = id,
-            .label = copied_label,
-            .title = copied_title,
-            .open = true,
-            .focused = self.window_count == 0,
-        };
-        self.windows[index].main_view_id = self.allocateViewId();
-        self.windows[index].source = if (source) |source_value| try self.copySource(index, source_value) else null;
-        self.windows[index].source_reloads_from_app = source_reloads_from_app;
-        self.windows[index].main_frame = geometry.RectF.init(0, 0, self.windows[index].info.frame.width, self.windows[index].info.frame.height);
-        self.windows[index].main_frame_set = false;
-        self.windows[index].main_layer = 0;
-        self.windows[index].main_zoom = 1.0;
-        self.windows[index].main_focused = self.windows[index].info.focused;
-        self.window_count += 1;
-        self.next_window_id = @max(self.next_window_id, id + 1);
-        return index;
-    }
-
-    fn removeWindowAt(self: *Runtime, index: usize) void {
-        if (index >= self.window_count) return;
-        self.removeShellLayoutForWindow(self.windows[index].info.id);
-        var cursor = index;
-        while (cursor + 1 < self.window_count) : (cursor += 1) {
-            self.windows[cursor] = self.windows[cursor + 1];
-        }
-        self.window_count -= 1;
-    }
-
-    fn copySource(self: *Runtime, index: usize, source: platform.WebViewSource) !platform.WebViewSource {
-        return copySourceInto(&self.windows[index].source_storage, source);
-    }
-
-    fn copyLoadedSource(self: *Runtime, source: platform.WebViewSource) !platform.WebViewSource {
-        return copySourceInto(&self.loaded_source_storage, source);
-    }
-
-    fn applyNativeInfo(self: *Runtime, index: usize, native_info: platform.WindowInfo) void {
-        self.windows[index].info.frame = native_info.frame;
-        self.windows[index].info.scale_factor = native_info.scale_factor;
-        self.windows[index].info.open = native_info.open;
-        self.windows[index].info.focused = native_info.focused;
-        if (!self.windows[index].main_frame_set) {
-            self.windows[index].main_frame = geometry.RectF.init(0, 0, native_info.frame.width, native_info.frame.height);
-        }
-        if (native_info.focused) self.setFocusedIndex(index);
-    }
-
-    fn updateWindowState(self: *Runtime, state: platform.WindowState) !void {
-        const existing_index = self.findWindowIndexById(state.id);
-        const index = existing_index orelse try self.reserveWindow(state.id, state.label, state.title, null, true);
-        var info = self.windows[index].info;
-        info.frame = state.frame;
-        info.scale_factor = state.scale_factor;
-        info.open = state.open;
-        info.focused = state.focused;
-        self.windows[index].info = info;
-        if (!self.windows[index].main_frame_set) {
-            self.windows[index].main_frame = geometry.RectF.init(0, 0, state.frame.width, state.frame.height);
-        }
-        if (!state.open) self.removeWindowRuntimeViews(state.id);
-        if (state.focused) self.setFocusedIndex(index);
-    }
-
-    fn runtimeWindowStateForPersistence(self: *const Runtime, state: platform.WindowState) platform.WindowState {
-        var persisted = state;
-        if (self.findWindowIndexById(state.id)) |index| {
-            persisted.label = self.windows[index].info.label;
-            persisted.title = self.windows[index].info.title;
-        }
-        return persisted;
-    }
-
-    fn removeWindowRuntimeViews(self: *Runtime, window_id: platform.WindowId) void {
-        if (self.findWindowIndexById(window_id)) |index| self.windows[index].main_parent = null;
-        self.removeShellLayoutForWindow(window_id);
-        self.removeViewsForWindow(window_id);
-        self.removeWebViewsForWindow(window_id);
-    }
-
-    fn shellBoundsForWindow(self: *const Runtime, window_id: platform.WindowId) geometry.RectF {
-        const index = self.findWindowIndexById(window_id) orelse return geometry.RectF.init(0, 0, 0, 0);
-        const frame_value = self.windows[index].info.frame;
-        const bounds = geometry.RectF.init(0, 0, frame_value.width, frame_value.height);
-        if (self.surface.id != window_id) return bounds;
-        return bounds.deflate(combinedViewportInsets(self.surface));
-    }
-
-    fn startupWindowFrame(native_frame: geometry.RectF, manifest_frame: geometry.RectF) geometry.RectF {
-        const default_frame = (platform.WindowOptions{}).default_frame;
-        if (!rectsEqual(native_frame, default_frame)) return native_frame;
-        return manifest_frame;
-    }
-
-    fn rectsEqual(a: geometry.RectF, b: geometry.RectF) bool {
-        return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
-    }
-
-    fn canvasDirtyRegionForView(view_frame: geometry.RectF, local_dirty: geometry.RectF) ?geometry.RectF {
-        const normalized_view = view_frame.normalized();
-        const surface_bounds = geometry.RectF.init(0, 0, normalized_view.width, normalized_view.height);
-        const clipped = geometry.RectF.intersection(surface_bounds, local_dirty.normalized());
-        if (clipped.isEmpty()) return null;
-        return clipped.translate(.{ .dx = normalized_view.x, .dy = normalized_view.y });
-    }
-
-    fn bindShellViews(self: *Runtime, window_id: platform.WindowId, views: []const app_manifest.ShellView) !void {
-        if (self.findShellLayoutIndex(window_id)) |index| {
-            try self.shell_layouts[index].copyViews(views);
-            return;
-        }
-        if (self.shell_layout_count >= self.shell_layouts.len) return error.WindowLimitReached;
-        self.shell_layouts[self.shell_layout_count].window_id = window_id;
-        try self.shell_layouts[self.shell_layout_count].copyViews(views);
-        self.shell_layout_count += 1;
-    }
-
-    fn shellLayoutForWindow(self: *const Runtime, window_id: platform.WindowId) ?*const RuntimeShellLayout {
-        const index = self.findShellLayoutIndex(window_id) orelse return null;
-        return &self.shell_layouts[index];
-    }
-
-    fn findShellLayoutIndex(self: *const Runtime, window_id: platform.WindowId) ?usize {
-        for (self.shell_layouts[0..self.shell_layout_count], 0..) |layout, index| {
-            if (layout.window_id == window_id) return index;
-        }
-        return null;
-    }
-
-    fn removeShellLayoutForWindow(self: *Runtime, window_id: platform.WindowId) void {
-        const index = self.findShellLayoutIndex(window_id) orelse return;
-        var cursor = index;
-        while (cursor + 1 < self.shell_layout_count) : (cursor += 1) {
-            self.shell_layouts[cursor] = self.shell_layouts[cursor + 1];
-        }
-        self.shell_layout_count -= 1;
-    }
-
-    fn setFocusedIndex(self: *Runtime, focused_index: usize) void {
-        for (self.windows[0..self.window_count], 0..) |*window, index| {
-            window.info.focused = index == focused_index;
-        }
-    }
-
-    fn findWindowIndexById(self: *const Runtime, id: platform.WindowId) ?usize {
-        for (self.windows[0..self.window_count], 0..) |window, index| {
-            if (window.info.id == id) return index;
-        }
-        return null;
-    }
-
-    fn findWindowIndexByLabel(self: *const Runtime, label: []const u8) ?usize {
-        for (self.windows[0..self.window_count], 0..) |window, index| {
-            if (std.mem.eql(u8, window.info.label, label)) return index;
-        }
-        return null;
-    }
-
-    fn allocateWindowId(self: *Runtime) platform.WindowId {
-        while (self.findWindowIndexById(self.next_window_id) != null) self.next_window_id += 1;
-        const id = self.next_window_id;
-        self.next_window_id += 1;
-        return id;
-    }
-
-    fn allocateViewId(self: *Runtime) platform.ViewId {
-        const id = self.next_view_id;
-        self.next_view_id += 1;
-        return id;
     }
 
     fn handleBuiltinBridgeMessage(self: *Runtime, app: App, message: platform.BridgeMessage) anyerror!bool {
@@ -2111,515 +1655,6 @@ pub const Runtime = struct {
         self.removeWebViewAt(webview_index);
         if (was_focused) self.ensureFocusableViewFocused(window_id);
         return result;
-    }
-
-    fn validateWebViewParent(self: *Runtime, window_id: platform.WindowId) !void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        if (!self.windows[index].info.open) return error.WindowNotFound;
-    }
-
-    fn validateWebViewUrl(self: *Runtime, url: []const u8) !void {
-        if (url.len == 0) return error.MissingWebViewUrl;
-        if (url.len > platform.max_webview_url_bytes) return error.WebViewUrlTooLarge;
-        var origin_buffer: [512]u8 = undefined;
-        const origin = try webViewUrlOrigin(url, &origin_buffer);
-        if (!security.allowsOrigin(self.options.security.navigation.allowed_origins, origin)) return error.NavigationDenied;
-    }
-
-    fn writeWebViewListJson(self: *Runtime, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        try self.validateWebViewParent(source_window_id);
-        var writer = std.Io.Writer.fixed(output);
-        try writer.writeByte('[');
-        const window_index = self.findWindowIndexById(source_window_id) orelse return error.WindowNotFound;
-        try writeWebViewJsonToWriter(self.mainWebViewInfo(window_index), &writer);
-        var written: usize = 1;
-        for (self.webviews[0..self.webview_count]) |webview| {
-            if (webview.window_id != source_window_id or !webview.open) continue;
-            if (written > 0) try writer.writeByte(',');
-            try writeWebViewJsonToWriter(webview, &writer);
-            written += 1;
-        }
-        try writer.writeByte(']');
-        return writer.buffered();
-    }
-
-    fn reserveWebView(self: *Runtime, id: platform.ViewId, window_id: platform.WindowId, label: []const u8, parent: ?[]const u8, url: []const u8, local_frame: geometry.RectF, platform_frame: geometry.RectF, layer: i32, transparent: bool, bridge_enabled: bool) !void {
-        const index = self.webview_count;
-        self.webviews[index] = .{
-            .id = id,
-            .window_id = window_id,
-            .frame = platform_frame,
-            .local_frame = local_frame,
-            .layer = layer,
-            .transparent = transparent,
-            .bridge_enabled = bridge_enabled,
-            .open = true,
-        };
-        self.webviews[index].label = try copyInto(&self.webviews[index].label_storage, label);
-        self.webviews[index].parent = if (parent) |value| try copyInto(&self.webviews[index].parent_storage, value) else null;
-        self.webviews[index].url = try copyInto(&self.webviews[index].url_storage, url);
-        self.webview_count += 1;
-    }
-
-    fn findWebViewIndex(self: *const Runtime, window_id: platform.WindowId, label: []const u8) ?usize {
-        for (self.webviews[0..self.webview_count], 0..) |webview, index| {
-            if (webview.open and webview.window_id == window_id and std.mem.eql(u8, webview.label, label)) return index;
-        }
-        return null;
-    }
-
-    fn removeWebViewAt(self: *Runtime, index: usize) void {
-        if (index >= self.webview_count) return;
-        var cursor = index;
-        while (cursor + 1 < self.webview_count) : (cursor += 1) {
-            const next = self.webviews[cursor + 1];
-            self.webviews[cursor] = .{
-                .id = next.id,
-                .window_id = next.window_id,
-                .frame = next.frame,
-                .local_frame = next.local_frame,
-                .layer = next.layer,
-                .zoom = next.zoom,
-                .transparent = next.transparent,
-                .bridge_enabled = next.bridge_enabled,
-                .focused = next.focused,
-                .open = next.open,
-            };
-            self.webviews[cursor].label = copyInto(&self.webviews[cursor].label_storage, next.label) catch unreachable;
-            self.webviews[cursor].parent = if (next.parent) |parent| copyInto(&self.webviews[cursor].parent_storage, parent) catch unreachable else null;
-            self.webviews[cursor].url = copyInto(&self.webviews[cursor].url_storage, next.url) catch unreachable;
-        }
-        self.webview_count -= 1;
-    }
-
-    fn removeWebViewsForWindow(self: *Runtime, window_id: platform.WindowId) void {
-        var index: usize = 0;
-        while (index < self.webview_count) {
-            if (self.webviews[index].window_id == window_id) {
-                self.removeWebViewAt(index);
-            } else {
-                index += 1;
-            }
-        }
-    }
-
-    fn mainWebViewInfo(self: *const Runtime, window_index: usize) RuntimeWebView {
-        const window = self.windows[window_index];
-        const fallback_frame = geometry.RectF.init(0, 0, window.info.frame.width, window.info.frame.height);
-        return .{
-            .id = window.main_view_id,
-            .window_id = window.info.id,
-            .label = "main",
-            .parent = window.main_parent,
-            .url = sourceWebViewUrl(window.source),
-            .frame = if (window.main_frame_set) window.main_frame else fallback_frame,
-            .layer = window.main_layer,
-            .zoom = window.main_zoom,
-            .transparent = false,
-            .bridge_enabled = true,
-            .focused = window.main_focused,
-            .open = window.info.open,
-        };
-    }
-
-    fn createWebViewView(self: *Runtime, options: platform.ViewOptions) !platform.ViewInfo {
-        try validateChildWebViewLabel(options.label);
-        try self.validateWebViewUrl(options.url);
-        if (!isValidWebViewFrame(options.frame)) return error.InvalidWebViewOptions;
-        if (self.webview_count >= platform.max_webviews) return error.WebViewLimitReached;
-        var platform_options = options;
-        platform_options.frame = try self.platformFrameForView(options.window_id, options.parent, options.frame);
-        try self.options.platform.services.createView(platform_options);
-        var reserved = false;
-        errdefer {
-            if (reserved) {
-                if (self.findWebViewIndex(options.window_id, options.label)) |index| self.removeWebViewAt(index);
-            }
-            self.options.platform.services.closeView(options.window_id, options.label) catch {};
-        }
-        try self.reserveWebView(self.allocateViewId(), options.window_id, options.label, options.parent, options.url, options.frame, platform_options.frame, options.layer, options.transparent, options.bridge_enabled);
-        reserved = true;
-        self.invalidateFor(.command, platform_options.frame);
-        return viewInfoFromWebView(self.webviews[self.webview_count - 1]);
-    }
-
-    fn setMainWebViewParent(self: *Runtime, window_id: platform.WindowId, parent: ?[]const u8) !void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        self.windows[index].main_parent = if (parent) |value| try copyInto(&self.windows[index].main_parent_storage, value) else null;
-    }
-
-    fn updateWebViewView(self: *Runtime, window_id: platform.WindowId, label: []const u8, patch: platform.ViewPatch) !platform.ViewInfo {
-        if (patch.visible != null or patch.enabled != null or patch.role != null or patch.accessibility_label != null or patch.text != null or patch.command != null) return error.InvalidViewOptions;
-        if (isMainWebViewLabel(label)) {
-            const window_index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-            if (patch.url != null) return error.InvalidViewOptions;
-            if (patch.frame) |view_frame| {
-                if (!isValidWebViewFrame(view_frame)) return error.InvalidWebViewOptions;
-                if (self.windows[window_index].source != null) {
-                    try self.options.platform.services.setWebViewFrame(window_id, label, view_frame);
-                }
-                self.windows[window_index].main_frame = view_frame;
-                self.windows[window_index].main_frame_set = true;
-                try self.relayoutDescendantWebViewBackends(window_id, label);
-            }
-            if (patch.layer) |layer| {
-                if (self.windows[window_index].source != null) {
-                    try self.options.platform.services.setWebViewLayer(window_id, label, layer);
-                }
-                self.windows[window_index].main_layer = layer;
-            }
-            self.invalidateFor(.command, patch.frame);
-            return viewInfoFromWebView(self.mainWebViewInfo(window_index));
-        }
-
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        if (patch.frame) |view_frame| {
-            if (!isValidWebViewFrame(view_frame)) return error.InvalidWebViewOptions;
-            const platform_frame = try self.platformFrameForView(window_id, self.webviews[webview_index].parent, view_frame);
-            try self.options.platform.services.setWebViewFrame(window_id, label, platform_frame);
-            self.webviews[webview_index].local_frame = view_frame;
-            self.webviews[webview_index].frame = platform_frame;
-            try self.relayoutDescendantWebViewBackends(window_id, label);
-        }
-        if (patch.layer) |layer| {
-            try self.options.platform.services.setWebViewLayer(window_id, label, layer);
-            self.webviews[webview_index].layer = layer;
-        }
-        if (patch.url) |url| {
-            try self.validateWebViewUrl(url);
-            try self.options.platform.services.navigateWebView(window_id, label, url);
-            self.webviews[webview_index].url = try copyInto(&self.webviews[webview_index].url_storage, url);
-        }
-        self.invalidateFor(.command, patch.frame);
-        return viewInfoFromWebView(self.webviews[webview_index]);
-    }
-
-    fn validateViewParent(self: *const Runtime, window_id: platform.WindowId) !void {
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        if (!self.windows[index].info.open) return error.WindowNotFound;
-    }
-
-    fn validateViewParentLink(self: *const Runtime, window_id: platform.WindowId, label: []const u8, parent: ?[]const u8) !void {
-        const parent_label = parent orelse return;
-        if (std.mem.eql(u8, parent_label, label)) return error.InvalidViewOptions;
-        if (!self.viewLabelExists(window_id, parent_label)) return error.ViewNotFound;
-    }
-
-    fn platformFrameForView(self: *const Runtime, window_id: platform.WindowId, parent: ?[]const u8, base_frame: geometry.RectF) !geometry.RectF {
-        var platform_frame = base_frame;
-        if (parent) |parent_label| {
-            const parent_frame = try self.absoluteViewFrame(window_id, parent_label, 0);
-            platform_frame.x += parent_frame.x;
-            platform_frame.y += parent_frame.y;
-        }
-        return platform_frame;
-    }
-
-    fn localFrameForView(self: *const Runtime, window_id: platform.WindowId, parent: ?[]const u8, base_frame: geometry.RectF) !geometry.RectF {
-        var local_frame = base_frame;
-        if (parent) |parent_label| {
-            const parent_frame = try self.absoluteViewFrame(window_id, parent_label, 0);
-            local_frame.x -= parent_frame.x;
-            local_frame.y -= parent_frame.y;
-        }
-        return local_frame;
-    }
-
-    fn absoluteViewFrame(self: *const Runtime, window_id: platform.WindowId, label: []const u8, depth: usize) !geometry.RectF {
-        if (depth >= platform.max_views + platform.max_webviews + 1) return error.InvalidViewOptions;
-        if (isMainWebViewLabel(label)) {
-            const window_index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-            return self.mainWebViewInfo(window_index).frame;
-        }
-        if (self.findViewIndex(window_id, label)) |index| {
-            var absolute_frame = self.views[index].frame;
-            if (self.views[index].parent) |parent| {
-                const parent_frame = try self.absoluteViewFrame(window_id, parent, depth + 1);
-                absolute_frame.x += parent_frame.x;
-                absolute_frame.y += parent_frame.y;
-            }
-            return absolute_frame;
-        }
-        if (self.findWebViewIndex(window_id, label)) |index| {
-            return self.webviews[index].frame;
-        }
-        return error.ViewNotFound;
-    }
-
-    fn relayoutDescendantWebViewBackends(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8) !void {
-        try self.relayoutDescendantWebViewBackendsDepth(window_id, parent_label, 0);
-    }
-
-    fn relayoutDescendantWebViewBackendsDepth(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8, depth: usize) !void {
-        if (depth >= platform.max_views + platform.max_webviews) return;
-        for (self.views[0..self.view_count]) |view| {
-            if (view.window_id != window_id) continue;
-            const parent = view.parent orelse continue;
-            if (std.mem.eql(u8, parent, parent_label)) {
-                try self.relayoutDescendantWebViewBackendsDepth(window_id, view.label, depth + 1);
-            }
-        }
-        for (self.webviews[0..self.webview_count], 0..) |webview, index| {
-            if (webview.window_id != window_id) continue;
-            const parent = webview.parent orelse continue;
-            if (std.mem.eql(u8, parent, parent_label)) {
-                const platform_frame = try self.platformFrameForView(window_id, webview.parent, webview.local_frame);
-                try self.options.platform.services.setWebViewFrame(window_id, webview.label, platform_frame);
-                self.webviews[index].frame = platform_frame;
-                try self.relayoutDescendantWebViewBackendsDepth(window_id, webview.label, depth + 1);
-            }
-        }
-    }
-
-    fn reserveView(self: *Runtime, options: platform.ViewOptions) !void {
-        const index = self.view_count;
-        self.views[index] = .{
-            .id = self.allocateViewId(),
-            .window_id = options.window_id,
-            .kind = options.kind,
-            .frame = options.frame,
-            .layer = options.layer,
-            .visible = options.visible,
-            .enabled = options.enabled,
-            .transparent = options.transparent,
-            .bridge_enabled = options.bridge_enabled,
-            .gpu_size = if (options.kind == .gpu_surface) options.frame.size() else geometry.SizeF.init(0, 0),
-            .gpu_backend = if (options.kind == .gpu_surface) options.gpu_surface.backend else .none,
-            .gpu_pixel_format = if (options.kind == .gpu_surface) options.gpu_surface.pixel_format else .none,
-            .gpu_present_mode = if (options.kind == .gpu_surface) options.gpu_surface.present_mode else .none,
-            .gpu_alpha_mode = if (options.kind == .gpu_surface) options.gpu_surface.alpha_mode else .none,
-            .gpu_color_space = if (options.kind == .gpu_surface) options.gpu_surface.color_space else .none,
-            .gpu_vsync = options.kind == .gpu_surface and options.gpu_surface.vsync,
-            .gpu_status = if (options.kind == .gpu_surface) .ready else .unavailable,
-            .gpu_surface_created_timestamp_ns = if (options.kind == .gpu_surface) timestampToU64(nowNanoseconds()) else 0,
-            .focused = false,
-            .open = true,
-        };
-        self.views[index].label = try copyInto(&self.views[index].label_storage, options.label);
-        self.views[index].parent = if (options.parent) |parent| try copyInto(&self.views[index].parent_storage, parent) else null;
-        self.views[index].role = try copyInto(&self.views[index].role_storage, options.role);
-        self.views[index].accessibility_label = try copyInto(&self.views[index].accessibility_label_storage, options.accessibility_label);
-        self.views[index].text = try copyInto(&self.views[index].text_storage, options.text);
-        self.views[index].command = try copyInto(&self.views[index].command_storage, options.command);
-        self.view_count += 1;
-    }
-
-    fn findViewIndex(self: *const Runtime, window_id: platform.WindowId, label: []const u8) ?usize {
-        for (self.views[0..self.view_count], 0..) |view, index| {
-            if (view.open and view.window_id == window_id and std.mem.eql(u8, view.label, label)) return index;
-        }
-        return null;
-    }
-
-    fn commandSourceForNativeView(self: *const Runtime, window_id: platform.WindowId, label: []const u8) CommandSource {
-        const index = self.findViewIndex(window_id, label) orelse return .native_view;
-        var view = self.views[index];
-        var depth: usize = 0;
-        while (depth < platform.max_views) : (depth += 1) {
-            if (view.kind == .toolbar) return .toolbar;
-            const parent_label = view.parent orelse return .native_view;
-            const parent_index = self.findViewIndex(window_id, parent_label) orelse return .native_view;
-            view = self.views[parent_index];
-        }
-        return .native_view;
-    }
-
-    fn setFocusedView(self: *Runtime, window_id: platform.WindowId, label: []const u8) anyerror!void {
-        if (self.findWindowIndexById(window_id)) |window_index| {
-            self.windows[window_index].main_focused = std.mem.eql(u8, label, "main");
-        }
-        for (self.views[0..self.view_count], 0..) |*view, view_index| {
-            if (view.window_id != window_id) continue;
-            const previous_state = view.canvasWidgetRenderState();
-            view.focused = std.mem.eql(u8, view.label, label);
-            const next_state = view.canvasWidgetRenderState();
-            if (!canvasWidgetRenderStatesEqual(previous_state, next_state)) {
-                try self.invalidateForCanvasWidgetRenderStateChange(view_index, previous_state, next_state);
-            }
-        }
-        for (self.webviews[0..self.webview_count]) |*webview| {
-            if (webview.window_id == window_id) webview.focused = std.mem.eql(u8, webview.label, label);
-        }
-    }
-
-    fn clearFocusedView(self: *Runtime, window_id: platform.WindowId) anyerror!void {
-        if (self.findWindowIndexById(window_id)) |window_index| {
-            self.windows[window_index].main_focused = false;
-        }
-        for (self.views[0..self.view_count], 0..) |*view, view_index| {
-            if (view.window_id != window_id) continue;
-            const previous_state = view.canvasWidgetRenderState();
-            view.focused = false;
-            const next_state = view.canvasWidgetRenderState();
-            if (!canvasWidgetRenderStatesEqual(previous_state, next_state)) {
-                try self.invalidateForCanvasWidgetRenderStateChange(view_index, previous_state, next_state);
-            }
-        }
-        for (self.webviews[0..self.webview_count]) |*webview| {
-            if (webview.window_id == window_id) webview.focused = false;
-        }
-    }
-
-    fn ensureFocusableViewFocused(self: *Runtime, window_id: platform.WindowId) void {
-        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        const views = self.listViews(window_id, &views_buffer);
-        var first_focusable: ?[]const u8 = null;
-        for (views) |view| {
-            if (!isFocusableViewInfo(view)) continue;
-            if (first_focusable == null) first_focusable = view.label;
-            if (view.focused) return;
-        }
-        if (first_focusable) |label| {
-            self.focusView(window_id, label) catch {
-                self.clearFocusedView(window_id) catch {};
-            };
-        } else {
-            self.clearFocusedView(window_id) catch {};
-        }
-    }
-
-    fn focusAdjacentView(self: *Runtime, window_id: platform.WindowId, direction: FocusTraversalDirection) anyerror!platform.ViewInfo {
-        try self.validateViewParent(window_id);
-
-        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        const views = self.listViews(window_id, &views_buffer);
-        var focusable: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        var focusable_count: usize = 0;
-        var focused_index: ?usize = null;
-        for (views) |view| {
-            if (!isFocusableViewInfo(view)) continue;
-            if (view.focused) focused_index = focusable_count;
-            focusable[focusable_count] = view;
-            focusable_count += 1;
-        }
-        if (focusable_count == 0) return error.UnsupportedViewFocus;
-
-        const target_index = switch (direction) {
-            .next => if (focused_index) |index| (index + 1) % focusable_count else 0,
-            .previous => if (focused_index) |index| if (index == 0) focusable_count - 1 else index - 1 else focusable_count - 1,
-        };
-        const target = focusable[target_index];
-        try self.focusView(window_id, target.label);
-
-        var focused = target;
-        focused.focused = true;
-        return focused;
-    }
-
-    fn viewLabelExists(self: *const Runtime, window_id: platform.WindowId, label: []const u8) bool {
-        if (isMainWebViewLabel(label) and self.findWindowIndexById(window_id) != null) return true;
-        return self.findViewIndex(window_id, label) != null or self.findWebViewIndex(window_id, label) != null;
-    }
-
-    fn removeViewAt(self: *Runtime, index: usize) void {
-        if (index >= self.view_count) return;
-        var cursor = index;
-        while (cursor + 1 < self.view_count) : (cursor += 1) {
-            const next = &self.views[cursor + 1];
-            self.views[cursor].copyRuntimeStateFrom(next);
-        }
-        self.view_count -= 1;
-    }
-
-    fn removeViewsForWindow(self: *Runtime, window_id: platform.WindowId) void {
-        var index: usize = 0;
-        while (index < self.view_count) {
-            if (self.views[index].window_id == window_id) {
-                self.removeViewAt(index);
-            } else {
-                index += 1;
-            }
-        }
-    }
-
-    fn removeDescendantViewsForParent(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8) void {
-        var index: usize = 0;
-        while (index < self.view_count) {
-            const parent = self.views[index].parent orelse {
-                index += 1;
-                continue;
-            };
-            if (self.views[index].window_id != window_id or !std.mem.eql(u8, parent, parent_label)) {
-                index += 1;
-                continue;
-            }
-
-            var child_label_storage: [platform.max_view_label_bytes]u8 = undefined;
-            const child_label = copyInto(&child_label_storage, self.views[index].label) catch unreachable;
-            self.removeDescendantViewsForParent(window_id, child_label);
-            self.removeDescendantWebViewsForParent(window_id, child_label);
-            if (self.findViewIndex(window_id, child_label)) |child_index| self.removeViewAt(child_index);
-            index = 0;
-        }
-    }
-
-    fn removeDescendantWebViewsForParent(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8) void {
-        var index: usize = 0;
-        while (index < self.webview_count) {
-            const parent = self.webviews[index].parent orelse {
-                index += 1;
-                continue;
-            };
-            if (self.webviews[index].window_id != window_id or !std.mem.eql(u8, parent, parent_label)) {
-                index += 1;
-                continue;
-            }
-
-            var child_label_storage: [@max(platform.max_view_label_bytes, platform.max_webview_label_bytes)]u8 = undefined;
-            const child_label = copyInto(&child_label_storage, self.webviews[index].label) catch unreachable;
-            self.removeDescendantViewsForParent(window_id, child_label);
-            self.removeDescendantWebViewsForParent(window_id, child_label);
-            if (self.findWebViewIndex(window_id, child_label)) |child_index| self.removeWebViewAt(child_index);
-            index = 0;
-        }
-    }
-
-    fn closeDescendantWebViewBackends(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8) !void {
-        try self.closeDescendantWebViewBackendsDepth(window_id, parent_label, 0);
-    }
-
-    fn closeDescendantWebViewBackendsDepth(self: *Runtime, window_id: platform.WindowId, parent_label: []const u8, depth: usize) !void {
-        if (depth >= platform.max_views + platform.max_webviews) return;
-        for (self.views[0..self.view_count]) |view| {
-            if (view.window_id != window_id) continue;
-            const parent = view.parent orelse continue;
-            if (std.mem.eql(u8, parent, parent_label)) {
-                try self.closeDescendantWebViewBackendsDepth(window_id, view.label, depth + 1);
-            }
-        }
-        for (self.webviews[0..self.webview_count]) |webview| {
-            if (webview.window_id != window_id) continue;
-            const parent = webview.parent orelse continue;
-            if (std.mem.eql(u8, parent, parent_label)) {
-                try self.closeDescendantWebViewBackendsDepth(window_id, webview.label, depth + 1);
-                try self.options.platform.services.closeWebView(window_id, webview.label);
-            }
-        }
-    }
-
-    fn viewTreeHasFocused(self: *const Runtime, window_id: platform.WindowId, label: []const u8) bool {
-        return self.viewTreeHasFocusedDepth(window_id, label, 0);
-    }
-
-    fn viewTreeHasFocusedDepth(self: *const Runtime, window_id: platform.WindowId, label: []const u8, depth: usize) bool {
-        if (depth >= platform.max_views + platform.max_webviews) return false;
-        if (self.findViewIndex(window_id, label)) |index| {
-            if (self.views[index].focused) return true;
-        }
-        if (self.findWebViewIndex(window_id, label)) |index| {
-            if (self.webviews[index].focused) return true;
-        }
-        for (self.views[0..self.view_count]) |view| {
-            if (view.window_id != window_id) continue;
-            const parent = view.parent orelse continue;
-            if (std.mem.eql(u8, parent, label) and self.viewTreeHasFocusedDepth(window_id, view.label, depth + 1)) return true;
-        }
-        for (self.webviews[0..self.webview_count]) |webview| {
-            if (webview.window_id != window_id) continue;
-            const parent = webview.parent orelse continue;
-            if (std.mem.eql(u8, parent, label) and self.viewTreeHasFocusedDepth(window_id, webview.label, depth + 1)) return true;
-        }
-        return false;
     }
 
     fn focusWindowFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {

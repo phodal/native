@@ -9743,7 +9743,10 @@ fn layoutWidgetDepth(
     switch (widget.kind) {
         .row, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
         .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
-        .grid => try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns, tokens),
+        .grid => if (widget.layout.virtualized)
+            try layoutVirtualGridChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
+        else
+            try layoutGridChildren(widget.children, content, index, depth, output, len, widget.layout.gap, widget.layout.columns, tokens),
         .data_grid, .table => if (widget.layout.virtualized)
             try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
         else
@@ -9894,8 +9897,8 @@ fn layoutGridChildren(
 ) Error!void {
     if (children.len == 0) return;
 
-    const columns = if (requested_columns > 0) @min(requested_columns, children.len) else children.len;
-    const rows = (children.len + columns - 1) / columns;
+    const columns = gridColumnCount(children.len, requested_columns);
+    const rows = gridRowCount(children.len, columns);
     const clamped_gap = nonNegative(gap);
     const total_column_gap = clamped_gap * @as(f32, @floatFromInt(columns - 1));
     const total_row_gap = clamped_gap * @as(f32, @floatFromInt(rows - 1));
@@ -9917,6 +9920,88 @@ fn layoutGridChildren(
         );
         _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
     }
+}
+
+fn layoutVirtualGridChildren(
+    children: []const Widget,
+    content: geometry.RectF,
+    parent_index: usize,
+    depth: usize,
+    output: []WidgetLayoutNode,
+    len: *usize,
+    scroll_y: f32,
+    style: WidgetLayoutStyle,
+    tokens: DesignTokens,
+) Error!void {
+    if (children.len == 0) return;
+
+    const columns = gridColumnCount(children.len, style.columns);
+    const rows = gridRowCount(children.len, columns);
+    if (columns == 0 or rows == 0) return;
+
+    const clamped_gap = nonNegative(style.gap);
+    const total_column_gap = clamped_gap * @as(f32, @floatFromInt(columns - 1));
+    const cell_width = @max(0, content.width - total_column_gap) / @as(f32, @floatFromInt(columns));
+    const item_extent = if (style.virtual_item_extent > 0)
+        style.virtual_item_extent
+    else
+        preferredGridRowExtent(children, columns, tokens);
+    const range = virtualListRange(.{
+        .item_count = rows,
+        .item_extent = item_extent,
+        .item_gap = clamped_gap,
+        .viewport_extent = content.height,
+        .scroll_offset = scroll_y,
+        .overscan = style.virtual_overscan,
+    });
+    output[parent_index].widget.layout.virtual_item_extent = range.item_extent;
+    output[parent_index].widget.semantics.list_item_count = saturatingU32(rows);
+    if (range.isEmpty()) return;
+
+    const stride = range.item_extent + range.item_gap;
+    var row = range.start_index;
+    while (row < range.end_index) : (row += 1) {
+        var column: usize = 0;
+        while (column < columns) : (column += 1) {
+            const child_index = row * columns + column;
+            if (child_index >= children.len) break;
+
+            var child = children[child_index];
+            child.semantics.list_item_index = saturatingU32(child_index);
+            child.semantics.list_item_count = saturatingU32(children.len);
+            const x = content.x + @as(f32, @floatFromInt(column)) * (cell_width + clamped_gap);
+            const y = content.y + @as(f32, @floatFromInt(row)) * stride - range.layout_offset + child.frame.y;
+            const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else cell_width);
+            const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
+            const child_frame = geometry.RectF.init(
+                x + child.frame.x,
+                y,
+                width,
+                height,
+            );
+            _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
+        }
+    }
+}
+
+fn gridColumnCount(child_count: usize, requested_columns: usize) usize {
+    if (child_count == 0) return 0;
+    return if (requested_columns > 0) @min(requested_columns, child_count) else child_count;
+}
+
+fn gridRowCount(child_count: usize, columns: usize) usize {
+    if (child_count == 0 or columns == 0) return 0;
+    return (child_count + columns - 1) / columns;
+}
+
+fn preferredGridRowExtent(children: []const Widget, columns: usize, tokens: DesignTokens) f32 {
+    if (children.len == 0 or columns == 0) return 0;
+    var max_height: f32 = 0;
+    var index: usize = 0;
+    while (index < children.len and index < columns) : (index += 1) {
+        max_height = @max(max_height, preferredMainExtent(children[index], .vertical, tokens));
+    }
+    return max_height;
 }
 
 fn layoutScrollChildren(
@@ -10369,6 +10454,7 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
             }
         else
             null,
+        .grid => if (widget.layout.virtualized) widgetScrollKeyboardIntent(widget, keyboard) else null,
         .scroll_view, .list, .data_grid, .table => widgetScrollKeyboardIntent(widget, keyboard),
         else => null,
     };
@@ -10490,7 +10576,7 @@ fn widgetSemanticStepControlIntent(widget: Widget, direction: WidgetSemanticStep
             .actions = intent_actions,
             .value = std.math.clamp(widget.value + if (increment) @as(f32, 0.05) else @as(f32, -0.05), 0, 1),
         },
-        .scroll_view, .list, .data_grid, .table => .{
+        .grid, .scroll_view, .list, .data_grid, .table => .{
             .kind = .scroll_by,
             .actions = intent_actions,
             .delta = widgetSemanticScrollDelta(widget, direction),
@@ -11167,7 +11253,7 @@ fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetScro
 fn widgetExposesScrollSemantics(widget: Widget) bool {
     return switch (widget.kind) {
         .scroll_view => true,
-        .list, .data_grid, .table => widget.layout.virtualized,
+        .grid, .list, .data_grid, .table => widget.layout.virtualized,
         else => false,
     };
 }
@@ -11193,15 +11279,12 @@ pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f3
 }
 
 pub fn virtualWidgetScrollContentExtentWithTokens(widget: Widget, viewport_extent: f32, tokens: DesignTokens) f32 {
-    const item_count = if (widget.children.len > 0)
-        widget.children.len
-    else if (widget.semantics.list_item_count) |count|
-        @as(usize, @intCast(count))
-    else
-        0;
+    const item_count = virtualWidgetScrollItemCount(widget);
     if (item_count == 0) return 0;
     const item_extent = if (widget.layout.virtual_item_extent > 0)
         widget.layout.virtual_item_extent
+    else if (widget.kind == .grid and widget.children.len > 0)
+        preferredGridRowExtent(widget.children, gridColumnCount(widget.children.len, widget.layout.columns), tokens)
     else if (widget.children.len > 0)
         preferredMainExtent(widget.children[0], .vertical, tokens)
     else
@@ -11213,6 +11296,16 @@ pub fn virtualWidgetScrollContentExtentWithTokens(widget: Widget, viewport_exten
         .viewport_extent = viewport_extent,
         .scroll_offset = widget.value,
     }).content_extent;
+}
+
+fn virtualWidgetScrollItemCount(widget: Widget) usize {
+    if (widget.kind == .grid and widget.children.len > 0) {
+        const columns = gridColumnCount(widget.children.len, widget.layout.columns);
+        return gridRowCount(widget.children.len, columns);
+    }
+    if (widget.children.len > 0) return widget.children.len;
+    if (widget.semantics.list_item_count) |count| return @intCast(count);
+    return 0;
 }
 
 fn semanticActions(widget: Widget) WidgetActions {
@@ -14972,6 +15065,77 @@ test "widget grid layout places children in deterministic cells" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     try std.testing.expectEqual(@as(usize, 8), builder.displayList().commandCount());
+}
+
+test "widget virtualized grid lays out visible cells by row" {
+    const children = [_]Widget{
+        .{ .id = 2, .kind = .button, .text = "Zero" },
+        .{ .id = 3, .kind = .button, .text = "One" },
+        .{ .id = 4, .kind = .button, .text = "Two" },
+        .{ .id = 5, .kind = .button, .text = "Three" },
+        .{ .id = 6, .kind = .button, .text = "Four" },
+        .{ .id = 7, .kind = .button, .text = "Five" },
+        .{ .id = 8, .kind = .button, .text = "Six" },
+        .{ .id = 9, .kind = .button, .text = "Seven" },
+    };
+    const grid = Widget{
+        .id = 1,
+        .kind = .grid,
+        .value = 25,
+        .layout = .{
+            .gap = 5,
+            .columns = 2,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+        },
+        .children = &children,
+    };
+
+    var nodes: [6]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(grid, geometry.RectF.init(0, 0, 105, 45), &nodes);
+    try std.testing.expectEqual(@as(usize, 5), layout.nodeCount());
+    try std.testing.expectEqual(@as(?u32, 4), layout.nodes[0].widget.semantics.list_item_count);
+    try std.testing.expectEqual(@as(f32, 20), layout.nodes[0].widget.layout.virtual_item_extent);
+    const grid_range = layout.virtualRangeById(1).?;
+    try std.testing.expectEqual(@as(usize, 1), grid_range.start_index);
+    try std.testing.expectEqual(@as(usize, 3), grid_range.end_index);
+    try std.testing.expectEqual(@as(usize, 1), grid_range.first_visible_index);
+    try std.testing.expectEqual(@as(usize, 2), grid_range.last_visible_index);
+    try expectLayoutFrame(layout, 1, geometry.RectF.init(0, 0, 105, 45));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(0, 0, 50, 20));
+    try expectLayoutFrame(layout, 5, geometry.RectF.init(55, 0, 50, 20));
+    try expectLayoutFrame(layout, 6, geometry.RectF.init(0, 25, 50, 20));
+    try expectLayoutFrame(layout, 7, geometry.RectF.init(55, 25, 50, 20));
+    try std.testing.expect(layout.findById(2) == null);
+    try std.testing.expect(layout.findById(3) == null);
+    try std.testing.expect(layout.findById(8) == null);
+    try std.testing.expect(layout.findById(9) == null);
+    try std.testing.expectEqual(@as(?u32, 2), layout.findById(4).?.widget.semantics.list_item_index);
+    try std.testing.expectEqual(@as(?u32, 8), layout.findById(4).?.widget.semantics.list_item_count);
+    try std.testing.expectEqual(@as(?u32, 5), layout.findById(7).?.widget.semantics.list_item_index);
+
+    var semantics_buffer: [6]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 5), semantics.len);
+    try std.testing.expectEqual(WidgetRole.group, semantics[0].role);
+    try std.testing.expect(semantics[0].scroll.present);
+    try std.testing.expectEqual(@as(f32, 25), semantics[0].scroll.offset);
+    try std.testing.expectEqual(@as(f32, 45), semantics[0].scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 95), semantics[0].scroll.content_extent);
+    try std.testing.expect(semantics[0].focusable);
+    try std.testing.expect(semantics[0].actions.focus);
+    try std.testing.expect(semantics[0].actions.increment);
+    try std.testing.expect(semantics[0].actions.decrement);
+    try std.testing.expectEqual(@as(f32, 95), virtualWidgetScrollContentExtent(grid, 45));
+
+    const laid_out_grid = layout.findById(1).?.widget;
+    const page_down = WidgetKeyboardEvent{ .phase = .key_down, .key = "pagedown" };
+    const keyboard_intent = widgetKeyboardControlIntent(laid_out_grid, page_down).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.scroll_by, keyboard_intent.kind);
+    try std.testing.expect(keyboard_intent.actions.increment);
+    const semantic_intent = widgetSemanticControlIntentWithActions(laid_out_grid, .increment, .{ .increment = true }).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.scroll_by, semantic_intent.kind);
+    try std.testing.expect(semantic_intent.actions.increment);
 }
 
 test "widget data grid exposes rows cells semantics and display list" {

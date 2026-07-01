@@ -1077,6 +1077,10 @@ const GpuComponentsApp = struct {
         var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
         const layout = try buildComponentsWidgetLayoutWithStateAndSize(&nodes, self.virtual_scroll, self.componentUiState(), self.canvas_size);
         _ = try runtime.setCanvasWidgetLayout(window_id, canvas_label, layout);
+        _ = try runtime.emitCanvasWidgetDisplayListWithStoredTokensAndChrome(window_id, canvas_label, .{
+            .prefix_command_count = component_chrome_prefix_commands,
+            .suffix_command_count = component_chrome_suffix_commands,
+        });
     }
 
     fn componentUiState(self: *const @This()) ComponentUiState {

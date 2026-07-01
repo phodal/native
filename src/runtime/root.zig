@@ -7484,7 +7484,7 @@ const RuntimeView = struct {
             .decrement => "arrowleft",
         };
         return switch (self.widget_layout_nodes[index].widget.kind) {
-            .scroll_view, .list, .data_grid, .table => switch (direction) {
+            .grid, .scroll_view, .list, .data_grid, .table => switch (direction) {
                 .increment => "pagedown",
                 .decrement => "pageup",
             },

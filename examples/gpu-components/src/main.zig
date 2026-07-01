@@ -1817,14 +1817,11 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
             .{ .id = surface_overlay_body_id, .kind = .text, .frame = rect(0, 48, overlay_content_width, 44), .text = surfaceOverlayBody(ui_state.surface_overlay), .size = .sm },
             .{ .id = surface_overlay_close_id, .kind = .button, .frame = rect(@max(0, overlay_content_width - 96), @max(104, overlay_content_height - 34), 96, 34), .text = "Close", .variant = .outline, .command = surface_close_command, .semantics = .{ .label = "Close surface" } },
         };
-        try appendComponentWidget(&root_widgets, &root_widget_count, .{
+        try appendComponentWidget(&root_widgets, &root_widget_count, canvas.builtinSurfaceBackdropWidget(.{
             .id = surface_overlay_backdrop_id,
-            .kind = .panel,
             .frame = rect(0, content_y, size.width, content_height_available),
             .layer = surface_backdrop_layer,
-            .style = .{ .background = rgba(0, 0, 0, 154), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
-            .semantics = .{ .label = "Surface backdrop" },
-        });
+        }));
         try appendComponentWidget(&root_widgets, &root_widget_count, canvas.builtinComponentWidget(surfaceOverlayKind(ui_state.surface_overlay), .{
             .id = surface_overlay_id,
             .frame = overlay_frame,
@@ -3611,6 +3608,7 @@ test "gpu components surface launchers open and close overlays" {
     try std.testing.expectEqualStrings("Confirm deployment", layout.findById(surface_overlay_title_id).?.widget.text);
     var snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectEqualStrings("dialog", componentSnapshotWidget(snapshot, surface_overlay_id).?.role);
+    try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_backdrop_id).?.actions.dismiss);
     try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_close_id).?.actions.press);
     try expectComponentStatusContains(&harness.runtime, "Confirm deployment surface opened.");
     var animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);

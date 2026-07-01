@@ -4298,6 +4298,15 @@ pub const BuiltinSurfacePlacementOptions = struct {
     margin: f32 = 24,
 };
 
+pub const BuiltinSurfaceBackdropOptions = struct {
+    id: ObjectId = 0,
+    frame: geometry.RectF,
+    layer: ?i32 = null,
+    label: []const u8 = "Surface backdrop",
+    background: Color = Color.rgba8(0, 0, 0, 154),
+    dismissible: bool = true,
+};
+
 pub const BuiltinSurfaceEnterAnimationOptions = struct {
     surface_id: ObjectId,
     frame: geometry.RectF,
@@ -4342,6 +4351,25 @@ pub fn builtinComponentWidget(kind: BuiltinComponentKind, options: BuiltinCompon
 
 pub fn widgetCommandPartId(part: WidgetCommandPart) ObjectId {
     return widgetPartId(part.widget_id, part.slot);
+}
+
+pub fn builtinSurfaceBackdropWidget(options: BuiltinSurfaceBackdropOptions) Widget {
+    return .{
+        .id = options.id,
+        .kind = .panel,
+        .frame = options.frame,
+        .layer = options.layer,
+        .style = .{
+            .background = options.background,
+            .border = Color.rgba8(0, 0, 0, 0),
+            .radius = 0,
+            .stroke_width = 0,
+        },
+        .semantics = .{
+            .label = options.label,
+            .actions = .{ .dismiss = options.dismissible },
+        },
+    };
 }
 
 pub fn builtinSurfaceFrame(kind: BuiltinComponentKind, options: BuiltinSurfacePlacementOptions) ?geometry.RectF {
@@ -17186,6 +17214,19 @@ test "built-in card renders shadcn surface chrome and title" {
 
 test "built-in modal surfaces render shadcn chrome and semantics" {
     const viewport = geometry.RectF.init(0, 52, 1024, 640);
+    const backdrop = builtinSurfaceBackdropWidget(.{
+        .id = 49,
+        .frame = viewport,
+        .layer = 20,
+    });
+    try std.testing.expectEqual(WidgetKind.panel, backdrop.kind);
+    try std.testing.expectEqual(@as(?i32, 20), backdrop.layer);
+    try std.testing.expectEqualDeep(Color.rgba8(0, 0, 0, 154), backdrop.style.background.?);
+    try std.testing.expectEqualDeep(Color.rgba8(0, 0, 0, 0), backdrop.style.border.?);
+    try std.testing.expectEqual(@as(?f32, 0), backdrop.style.radius);
+    try std.testing.expectEqual(@as(?f32, 0), backdrop.style.stroke_width);
+    try std.testing.expect(backdrop.semantics.actions.dismiss);
+
     const dialog_frame = builtinSurfaceFrame(.dialog, .{
         .bounds = viewport,
         .preferred_size = geometry.SizeF.init(460, 220),
@@ -17283,28 +17324,33 @@ test "built-in modal surfaces render shadcn chrome and semantics" {
     try std.testing.expect(drawer.layout.clip_content);
     try std.testing.expect(sheet.layout.clip_content);
 
-    const root = Widget{ .kind = .stack, .children = &.{ dialog, drawer, sheet } };
-    var nodes: [4]WidgetLayoutNode = undefined;
+    const root = Widget{ .kind = .stack, .children = &.{ backdrop, dialog, drawer, sheet } };
+    var nodes: [5]WidgetLayoutNode = undefined;
     const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 920, 240), &nodes);
+    try std.testing.expectEqual(WidgetKind.panel, layout.hitTest(geometry.PointF.init(300, 220)).?.kind);
     try std.testing.expectEqual(WidgetKind.dialog, layout.hitTest(geometry.PointF.init(12, 12)).?.kind);
     try std.testing.expectEqual(WidgetKind.drawer, layout.hitTest(geometry.PointF.init(352, 12)).?.kind);
     try std.testing.expectEqual(WidgetKind.sheet, layout.hitTest(geometry.PointF.init(652, 12)).?.kind);
 
-    var semantics_buffer: [4]WidgetSemanticsNode = undefined;
+    var semantics_buffer: [5]WidgetSemanticsNode = undefined;
     const semantics = try layout.collectSemantics(&semantics_buffer);
-    try std.testing.expectEqual(@as(usize, 3), semantics.len);
-    try std.testing.expectEqual(WidgetRole.dialog, semantics[0].role);
-    try std.testing.expectEqualStrings("Edit profile", semantics[0].label);
+    try std.testing.expectEqual(@as(usize, 4), semantics.len);
+    try std.testing.expectEqual(WidgetRole.group, semantics[0].role);
+    try std.testing.expectEqualStrings("Surface backdrop", semantics[0].label);
     try std.testing.expect(semantics[0].actions.dismiss);
     try std.testing.expect(semantics[0].state.expanded == null);
     try std.testing.expectEqual(WidgetRole.dialog, semantics[1].role);
-    try std.testing.expectEqualStrings("Command drawer", semantics[1].label);
+    try std.testing.expectEqualStrings("Edit profile", semantics[1].label);
     try std.testing.expect(semantics[1].actions.dismiss);
     try std.testing.expect(semantics[1].state.expanded == null);
     try std.testing.expectEqual(WidgetRole.dialog, semantics[2].role);
-    try std.testing.expectEqualStrings("Inspector", semantics[2].label);
+    try std.testing.expectEqualStrings("Command drawer", semantics[2].label);
     try std.testing.expect(semantics[2].actions.dismiss);
     try std.testing.expect(semantics[2].state.expanded == null);
+    try std.testing.expectEqual(WidgetRole.dialog, semantics[3].role);
+    try std.testing.expectEqualStrings("Inspector", semantics[3].label);
+    try std.testing.expect(semantics[3].actions.dismiss);
+    try std.testing.expect(semantics[3].state.expanded == null);
 
     const tokens = DesignTokens{
         .shadow = .{ .md = .{ .y = 0, .blur = 0, .spread = 0 } },
@@ -17336,7 +17382,21 @@ test "built-in modal surfaces render shadcn chrome and semantics" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, tokens);
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 15), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 18), display_list.commandCount());
+    switch (display_list.findCommandById(widgetPartId(49, 2)).?.command) {
+        .fill_rounded_rect => |fill| {
+            try std.testing.expectEqualDeep(Radius.all(0), fill.radius);
+            try expectFillColor(Color.rgba8(0, 0, 0, 154), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(49, 3)).?.command) {
+        .stroke_rect => |stroke| {
+            try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width);
+            try expectFillColor(Color.rgba8(0, 0, 0, 0), stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
     switch (display_list.findCommandById(widgetPartId(50, 2)).?.command) {
         .fill_rounded_rect => |fill| {
             try std.testing.expectEqualDeep(Radius.all(14), fill.radius);

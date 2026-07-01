@@ -1,3 +1,4 @@
+const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 const drawing_model = @import("drawing.zig");
@@ -60,6 +61,79 @@ pub const CanvasRenderAnimation = struct {
     from_transform: ?Affine = null,
     to_transform: ?Affine = null,
 };
+
+pub fn sampleCanvasRenderAnimations(animations: []const CanvasRenderAnimation, timestamp_ns: u64, output: []CanvasRenderOverride) Error![]const CanvasRenderOverride {
+    var len: usize = 0;
+    for (animations) |animation| {
+        if (animation.id == 0) continue;
+        const progress = motionProgress(animation, timestamp_ns);
+        const opacity = sampleAnimatedF32(animation.from_opacity, animation.to_opacity, progress);
+        const transform = sampleAnimatedAffine(animation.from_transform, animation.to_transform, progress);
+        if (opacity == null and transform == null) continue;
+        if (len >= output.len) return error.RenderOverrideListFull;
+        output[len] = .{
+            .id = animation.id,
+            .opacity = opacity,
+            .transform = transform,
+        };
+        len += 1;
+    }
+    return output[0..len];
+}
+
+pub fn motionProgress(animation: CanvasRenderAnimation, timestamp_ns: u64) f32 {
+    const raw = rawMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns);
+    return easedMotionProgress(animation.easing, animation.spring, raw);
+}
+
+fn rawMotionProgress(start_ns: u64, duration_ms: u32, timestamp_ns: u64) f32 {
+    if (duration_ms == 0) return 1;
+    if (timestamp_ns <= start_ns) return 0;
+    const duration_ns = @as(u64, duration_ms) * 1_000_000;
+    const elapsed_ns = timestamp_ns - start_ns;
+    if (elapsed_ns >= duration_ns) return 1;
+    return @as(f32, @floatFromInt(elapsed_ns)) / @as(f32, @floatFromInt(duration_ns));
+}
+
+fn easedMotionProgress(easing: Easing, spring: SpringToken, progress: f32) f32 {
+    const t = std.math.clamp(progress, 0, 1);
+    return switch (easing) {
+        .linear => t,
+        .standard => t * t * (3 - 2 * t),
+        .emphasized => 1 - std.math.pow(f32, 1 - t, 3),
+        .spring => springMotionProgress(t, spring),
+    };
+}
+
+fn springMotionProgress(progress: f32, spring: SpringToken) f32 {
+    if (progress <= 0) return 0;
+    if (progress >= 1) return 1;
+    const mass = @max(0.001, spring.mass);
+    const stiffness = @max(1, spring.stiffness);
+    const damping = @max(0.001, spring.damping);
+    const omega = @sqrt(stiffness / mass);
+    const decay = @exp(-damping * progress / (mass * 24));
+    return std.math.clamp(1 - decay * @cos(omega * progress), 0, 1);
+}
+
+fn sampleAnimatedF32(from: ?f32, to: ?f32, progress: f32) ?f32 {
+    const start = from orelse return null;
+    const end = to orelse return null;
+    return start + (end - start) * progress;
+}
+
+fn sampleAnimatedAffine(from: ?Affine, to: ?Affine, progress: f32) ?Affine {
+    const start = from orelse return null;
+    const end = to orelse return null;
+    return .{
+        .a = start.a + (end.a - start.a) * progress,
+        .b = start.b + (end.b - start.b) * progress,
+        .c = start.c + (end.c - start.c) * progress,
+        .d = start.d + (end.d - start.d) * progress,
+        .tx = start.tx + (end.tx - start.tx) * progress,
+        .ty = start.ty + (end.ty - start.ty) * progress,
+    };
+}
 
 pub const RenderPlan = struct {
     commands: []const RenderCommand = &.{},

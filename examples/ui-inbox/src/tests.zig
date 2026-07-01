@@ -1,0 +1,98 @@
+const std = @import("std");
+const zero_native = @import("zero-native");
+const main = @import("main.zig");
+
+const canvas = zero_native.canvas;
+const testing = std.testing;
+
+const InboxUi = main.InboxUi;
+const Model = main.Model;
+const Msg = main.Msg;
+
+fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) ?canvas.Widget {
+    if (widget.kind == kind and std.mem.eql(u8, widget.text, text)) return widget;
+    for (widget.children) |child| {
+        if (findByText(child, kind, text)) |found| return found;
+    }
+    return null;
+}
+
+fn countKind(widget: canvas.Widget, kind: canvas.WidgetKind) usize {
+    var total: usize = 0;
+    if (widget.kind == kind) total += 1;
+    for (widget.children) |child| total += countKind(child, kind);
+    return total;
+}
+
+fn buildTree(arena: std.mem.Allocator, model: *const Model) !InboxUi.Tree {
+    var ui = InboxUi.init(arena);
+    return ui.finalize(main.view(&ui, model));
+}
+
+test "a full user session drives the model through typed dispatch" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    model.addTask("First");
+    model.addTask("Second");
+
+    // Click "Add task".
+    var tree = try buildTree(arena, &model);
+    const add_button = findByText(tree.root, .button, "Add task").?;
+    main.update(&model, tree.msgForPointer(add_button.id, .up).?);
+    try testing.expectEqual(@as(usize, 3), model.task_count);
+
+    // Toggle the first task's checkbox; its id must survive the rebuild.
+    tree = try buildTree(arena, &model);
+    const first_checkbox = firstCheckbox(tree.root).?;
+    main.update(&model, tree.msgForPointer(first_checkbox.id, .up).?);
+    try testing.expectEqual(@as(usize, 2), model.openCount());
+
+    const rebuilt = try buildTree(arena, &model);
+    const rebuilt_checkbox = firstCheckbox(rebuilt.root).?;
+    try testing.expectEqual(first_checkbox.id, rebuilt_checkbox.id);
+    try testing.expect(rebuilt_checkbox.state.selected);
+
+    // Switch to the done filter; only completed rows remain visible.
+    const done_button = findByText(rebuilt.root, .button, "done").?;
+    main.update(&model, rebuilt.msgForPointer(done_button.id, .up).?);
+    const filtered = try buildTree(arena, &model);
+    try testing.expectEqual(@as(usize, 1), countKind(filtered.root, .checkbox));
+
+    // Clear done removes the completed task.
+    const clear_button = findByText(filtered.root, .button, "Clear done").?;
+    main.update(&model, filtered.msgForPointer(clear_button.id, .up).?);
+    try testing.expectEqual(@as(usize, 2), model.task_count);
+    try testing.expectEqual(@as(usize, 2), model.openCount());
+}
+
+test "the inbox view lays out through the canvas engine" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    model.addTask("First");
+    model.addTask("Second");
+    const tree = try buildTree(arena_state.allocator(), &model);
+
+    var nodes: [256]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, zero_native.geometry.RectF.init(0, 0, 720, 520), &nodes);
+    try testing.expect(layout.nodes.len > 0);
+
+    const add_button = findByText(tree.root, .button, "Add task").?;
+    var saw_button = false;
+    for (layout.nodes) |node| {
+        if (node.widget.id == add_button.id) saw_button = true;
+    }
+    try testing.expect(saw_button);
+}
+
+fn firstCheckbox(widget: canvas.Widget) ?canvas.Widget {
+    if (widget.kind == .checkbox) return widget;
+    for (widget.children) |child| {
+        if (firstCheckbox(child)) |found| return found;
+    }
+    return null;
+}

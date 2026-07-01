@@ -180,8 +180,12 @@ pub fn Ui(comptime Msg: type) type {
             return self.el(.list, options, children);
         }
 
-        pub fn statusBar(self: *Self, options: ElementOptions, children: anytype) Node {
-            return self.el(.status_bar, options, children);
+        /// The engine renders a status bar's own `text`; it does not lay out
+        /// status bar children, so the builder models it as a text leaf.
+        pub fn statusBar(self: *Self, options: ElementOptions, status_text: []const u8) Node {
+            var node = self.el(.status_bar, options, .{});
+            node.widget.text = status_text;
+            return node;
         }
 
         pub fn text(self: *Self, options: ElementOptions, content: []const u8) Node {
@@ -229,6 +233,21 @@ pub fn Ui(comptime Msg: type) type {
             return nodes;
         }
 
+        /// Keyed list projection with caller context, for item views that
+        /// need surrounding state (Zig has no closures to capture it).
+        pub fn eachCtx(self: *Self, context: anytype, items: anytype, comptime key_fn: anytype, comptime view_fn: anytype) []const Node {
+            const nodes = self.arena.alloc(Node, items.len) catch {
+                self.failed = true;
+                return &.{};
+            };
+            for (items, 0..) |*item, index| {
+                var node = view_fn(self, context, item);
+                if (node.key == null) node.key = key_fn(item);
+                nodes[index] = node;
+            }
+            return nodes;
+        }
+
         /// Arena-allocated formatted text for widget content.
         pub fn fmt(self: *Self, comptime format: []const u8, args: anytype) []const u8 {
             return std.fmt.allocPrint(self.arena, format, args) catch {
@@ -237,15 +256,19 @@ pub fn Ui(comptime Msg: type) type {
             };
         }
 
-        /// Assign structural ids, materialize widget children, and collect
-        /// the typed handler table.
+        /// Assign structural ids, materialize widget children, measure
+        /// container minimum sizes, and collect the typed handler table.
         pub fn finalize(self: *Self, node: Node) error{OutOfMemory}!Tree {
+            return self.finalizeWithTokens(node, .{});
+        }
+
+        pub fn finalizeWithTokens(self: *Self, node: Node, tokens: canvas.DesignTokens) error{OutOfMemory}!Tree {
             if (self.failed) return error.OutOfMemory;
             const handler_capacity = countHandlers(node);
             const handlers = try self.arena.alloc(Handler, handler_capacity);
             var handler_len: usize = 0;
             const root_key = node.key orelse UiKey{ .index = 0 };
-            const root = try self.finalizeNode(node, root_id_seed, root_key, handlers, &handler_len);
+            const root = try self.finalizeNode(node, root_id_seed, root_key, tokens, handlers, &handler_len);
             return .{ .root = root, .handlers = handlers[0..handler_len] };
         }
 
@@ -254,6 +277,7 @@ pub fn Ui(comptime Msg: type) type {
             node: Node,
             parent_id: ObjectId,
             key: UiKey,
+            tokens: canvas.DesignTokens,
             handlers: []Handler,
             handler_len: *usize,
         ) error{OutOfMemory}!Widget {
@@ -263,10 +287,11 @@ pub fn Ui(comptime Msg: type) type {
                 const child_widgets = try self.arena.alloc(Widget, node.nodes.len);
                 for (node.nodes, 0..) |child, index| {
                     const child_key = child.key orelse UiKey{ .index = index };
-                    child_widgets[index] = try self.finalizeNode(child, widget.id, child_key, handlers, handler_len);
+                    child_widgets[index] = try self.finalizeNode(child, widget.id, child_key, tokens, handlers, handler_len);
                 }
                 widget.children = child_widgets;
             }
+            stampContainerMinSize(&widget, tokens);
             appendHandler(handlers, handler_len, widget.id, .press, node.on_press);
             appendHandler(handlers, handler_len, widget.id, .toggle, node.on_toggle);
             appendHandler(handlers, handler_len, widget.id, .change, node.on_change);
@@ -368,6 +393,61 @@ pub fn uiKey(value: anytype) UiKey {
         .int, .comptime_int => .{ .int = @intCast(value) },
         .pointer => .{ .str = value },
         else => @compileError("uiKey supports integers and byte slices"),
+    };
+}
+
+/// The engine gives plain containers zero intrinsic size, so a flex-first
+/// tree with no explicit frames would collapse. Measure children bottom-up
+/// (finalize recursion is post-order) and record the result as the
+/// container's minimum size. Scroll viewports are exempt: their content is
+/// allowed to overflow.
+fn stampContainerMinSize(widget: *Widget, tokens: canvas.DesignTokens) void {
+    const axis: enum { horizontal, vertical, overlay } = switch (widget.kind) {
+        .row => .horizontal,
+        .column => .vertical,
+        .stack, .panel => .overlay,
+        else => return,
+    };
+    if (widget.children.len == 0) return;
+
+    const gap = @max(0, widget.layout.gap) * @as(f32, @floatFromInt(widget.children.len - 1));
+    var main_sum: f32 = 0;
+    var cross_max: f32 = 0;
+    var width_max: f32 = 0;
+    var height_max: f32 = 0;
+    for (widget.children) |child| {
+        const size = measuredChildSize(child, tokens);
+        width_max = @max(width_max, size.width);
+        height_max = @max(height_max, size.height);
+        switch (axis) {
+            .horizontal => {
+                main_sum += size.width;
+                cross_max = @max(cross_max, size.height);
+            },
+            .vertical => {
+                main_sum += size.height;
+                cross_max = @max(cross_max, size.width);
+            },
+            .overlay => {},
+        }
+    }
+    const padding = widget.layout.padding;
+    const measured: geometry.SizeF = switch (axis) {
+        .horizontal => .{ .width = main_sum + gap, .height = cross_max },
+        .vertical => .{ .width = cross_max, .height = main_sum + gap },
+        .overlay => .{ .width = width_max, .height = height_max },
+    };
+    widget.layout.min_size = .{
+        .width = @max(widget.layout.min_size.width, measured.width + padding.left + padding.right),
+        .height = @max(widget.layout.min_size.height, measured.height + padding.top + padding.bottom),
+    };
+}
+
+fn measuredChildSize(child: Widget, tokens: canvas.DesignTokens) geometry.SizeF {
+    const intrinsic = canvas.intrinsicWidgetSize(child, tokens);
+    return .{
+        .width = @max(intrinsic.width, @max(child.layout.min_size.width, child.frame.width)),
+        .height = @max(intrinsic.height, @max(child.layout.min_size.height, child.frame.height)),
     };
 }
 

@@ -45,9 +45,7 @@ fn inboxView(ui: *InboxUi, model: *const Model) InboxUi.Node {
             ui.button(.{ .variant = .primary, .on_press = .add }, "Add"),
         }),
         ui.scroll(.{ .grow = 1 }, ui.each(model.tasks, Task.key, taskRow)),
-        ui.statusBar(.{}, .{
-            ui.text(.{}, ui.fmt("{d} open", .{model.open_count})),
-        }),
+        ui.statusBar(.{}, ui.fmt("{d} open", .{model.open_count})),
     });
 }
 
@@ -93,7 +91,7 @@ test "ui builder emits an engine-compatible widget tree" {
     try testing.expectEqual(@as(usize, 3), tree.root.children.len);
     try testing.expect(findByKind(tree.root, .text_field) != null);
     try testing.expectEqual(@as(usize, 2), findByKind(tree.root, .scroll_view).?.children.len);
-    try testing.expectEqualStrings("1 open", findByKind(tree.root, .status_bar).?.children[0].text);
+    try testing.expectEqualStrings("1 open", findByKind(tree.root, .status_bar).?.text);
 
     var ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
     defer ids.deinit(testing.allocator);
@@ -201,7 +199,7 @@ test "typed handlers dispatch through the elm-style loop" {
     const next_checkbox = findRowByCheckboxToggle(next, next.root, 2).?;
     try testing.expectEqual(checkbox.id, next_checkbox.id);
     try testing.expect(next_checkbox.state.selected);
-    try testing.expectEqualStrings("1 open", findByKind(next.root, .status_bar).?.children[0].text);
+    try testing.expectEqualStrings("1 open", findByKind(next.root, .status_bar).?.text);
 }
 
 test "pointer events resolve to typed messages through semantic intents" {

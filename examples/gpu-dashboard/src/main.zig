@@ -20,11 +20,11 @@ const max_dashboard_pipelines: usize = 8;
 const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_dashboard_widgets: usize = 40;
-const dashboard_chrome_prefix_commands: usize = 4;
+const dashboard_chrome_prefix_commands: usize = 2;
 const dashboard_chrome_suffix_commands: usize = 0;
-const expected_dashboard_command_count: usize = 63;
-const expected_dashboard_interaction_command_count: usize = 64;
-const expected_dashboard_reference_signature: u64 = 15937490962138444901;
+const expected_dashboard_command_count: usize = 61;
+const expected_dashboard_interaction_command_count: usize = 62;
+const expected_dashboard_reference_signature: u64 = 11325694797203975265;
 const refresh_command = "dashboard.refresh";
 const mode_command = "dashboard.mode";
 const live_button_fill_command_id: canvas.ObjectId = 103 * 16 + 1;
@@ -565,11 +565,6 @@ fn dashboardBackdropRect(surface_size: geometry.SizeF) geometry.RectF {
     return rect(0, 0, size.width, size.height);
 }
 
-fn dashboardPanelRect(surface_size: geometry.SizeF) geometry.RectF {
-    const size = dashboardSurfaceSize(surface_size);
-    return rect(24, 24, @max(812, size.width - 48), @max(472, size.height - 48));
-}
-
 fn dashboardHeroRect(surface_size: geometry.SizeF) geometry.RectF {
     const size = dashboardSurfaceSize(surface_size);
     return rect(38, 38, 168, @max(444, size.height - 76));
@@ -585,11 +580,8 @@ fn buildDashboardDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLayo
 
 fn buildDashboardDisplayListForSize(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
     const backdrop_rect = dashboardBackdropRect(surface_size);
-    const panel_rect = dashboardPanelRect(surface_size);
     const hero_rect = dashboardHeroRect(surface_size);
     try builder.fillRect(.{ .id = 1, .rect = backdrop_rect, .fill = .{ .color = tokens.colors.background } });
-    try builder.shadow(.{ .id = 2, .rect = panel_rect, .radius = canvas.Radius.all(22), .offset = .{ .dx = 0, .dy = 16 }, .blur = 22, .spread = -10, .color = tokens.colors.shadow });
-    try builder.fillRoundedRect(.{ .id = 3, .rect = panel_rect, .radius = canvas.Radius.all(22), .fill = .{ .color = tokens.colors.surface } });
     try builder.fillRoundedRect(.{ .id = 4, .rect = hero_rect, .radius = canvas.Radius.all(16), .fill = .{ .linear_gradient = .{ .start = hero_rect.topLeft(), .end = hero_rect.bottomRight(), .stops = &hero_stops } } });
 
     try layout.emitDisplayList(builder, tokens);
@@ -1135,6 +1127,8 @@ test "gpu dashboard display list builds a complete canvas scene" {
 
     try std.testing.expectEqual(@as(usize, expected_dashboard_command_count), display_list.commandCount());
     try std.testing.expect(display_list.findCommandById(1) != null);
+    try std.testing.expect(display_list.findCommandById(2) == null);
+    try std.testing.expect(display_list.findCommandById(3) == null);
     try std.testing.expect(display_list.findCommandById(deployment_region_text_command_id) != null);
     try std.testing.expect(display_list.findCommandById(live_button_fill_command_id) != null);
     try std.testing.expect(display_list.findCommandById(activity_scroll_track_command_id) != null);
@@ -1215,10 +1209,10 @@ test "gpu dashboard display list renders through the reference surface" {
     try std.testing.expectEqual(@as(usize, 1), frame.layer_plan.layerCount());
     try std.testing.expectEqual(@as(usize, 1), frame.layer_cache_plan.uploadCount());
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
-    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 5);
-    try std.testing.expect(frame.visual_effect_plan.shadowCount() >= 4);
+    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
+    try std.testing.expect(frame.visual_effect_plan.shadowCount() >= 3);
     try std.testing.expect(frame.visual_effect_plan.blurCount() >= 1);
-    try std.testing.expect(frame.visual_effect_cache_plan.uploadCount() >= 5);
+    try std.testing.expect(frame.visual_effect_cache_plan.uploadCount() >= 4);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 10);
     var encoder_commands: [max_dashboard_glyphs + max_dashboard_commands * 3]canvas.RenderEncoderCommand = undefined;
     const encoder_plan = try frame.renderPass().encoderPlan(&encoder_commands);
@@ -1296,7 +1290,7 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     try std.testing.expectEqual(@as(usize, 2), frame.layer_plan.layerCount());
     try std.testing.expectEqual(@as(usize, 2), frame.layer_cache_plan.uploadCount());
     try std.testing.expectEqual(@as(usize, 2), frame.renderPass().layerActionCount());
-    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 5);
+    try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expect(frame.dirty_bounds != null);
 
@@ -1690,7 +1684,7 @@ test "gpu dashboard follows system appearance tokens" {
     try std.testing.expectEqualDeep(dashboardWidgetTokensForSchemeAndScale(.light, 2), try harness.runtime.canvasWidgetDesignTokens(1, "dashboard-canvas"));
     var display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardFillRectColor(display_list, 1, dashboardWidgetTokensForSchemeAndScale(.light, 2).colors.background);
-    try expectDashboardRoundedRectColor(display_list, 3, dashboardWidgetTokensForSchemeAndScale(.light, 2).colors.surface);
+    try std.testing.expect(display_list.findCommandById(3) == null);
 
     const packet_count_before_dark = harness.null_platform.gpu_surface_packet_present_count;
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .appearance_changed = .{ .color_scheme = .dark, .reduce_motion = true, .high_contrast = true } });
@@ -1701,7 +1695,7 @@ test "gpu dashboard follows system appearance tokens" {
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_dark);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardFillRectColor(display_list, 1, dashboardWidgetTokensForSchemeScaleMotionAndContrast(.dark, 2, true, true).colors.background);
-    try expectDashboardRoundedRectColor(display_list, 3, dashboardWidgetTokensForSchemeScaleMotionAndContrast(.dark, 2, true, true).colors.surface);
+    try std.testing.expect(display_list.findCommandById(3) == null);
     const status_view = dashboardViewByLabel(&harness.runtime, "status-label").?;
     try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Dashboard theme: dark from system appearance.") != null);
 }
@@ -1753,7 +1747,7 @@ test "gpu dashboard app rebuilds retained scene for resized gpu surfaces" {
 
     const display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardFillRectFrame(display_list, 1, dashboardBackdropRect(resized_size));
-    try expectDashboardRoundedRectFrame(display_list, 3, dashboardPanelRect(resized_size));
+    try std.testing.expect(display_list.findCommandById(3) == null);
     try expectDashboardRoundedRectFrame(display_list, 4, dashboardHeroRect(resized_size));
 
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");

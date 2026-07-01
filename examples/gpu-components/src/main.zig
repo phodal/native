@@ -67,6 +67,7 @@ const surface_overlay_body_id: canvas.ObjectId = 225;
 const surface_overlay_close_id: canvas.ObjectId = 226;
 const surface_backdrop_layer: i32 = 300;
 const surface_overlay_layer: i32 = 301;
+const max_surface_overlay_animations: usize = 12;
 const popover_blur_id: canvas.ObjectId = 140 * 16 + 12;
 const preview_image_id: canvas.ImageId = 42;
 const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
@@ -425,6 +426,7 @@ const GpuComponentsApp = struct {
             .up => {
                 if (target.id == surface_overlay_backdrop_id and self.surface_overlay != .none) {
                     self.surface_overlay = .none;
+                    _ = runtime.clearCanvasRenderAnimations(pointer_event.window_id, canvas_label) catch {};
                     try self.updateComponentsCanvasModel(runtime, pointer_event.window_id);
                     try self.updateStatus(runtime, pointer_event.window_id, "Surface closed.");
                     return;
@@ -583,6 +585,7 @@ const GpuComponentsApp = struct {
         self.environment_select_open = false;
         self.surface_overlay = .none;
         self.section = .controls;
+        _ = runtime.clearCanvasRenderAnimations(command.window_id, canvas_label) catch {};
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, canvas_label);
         _ = self.updateCanvasSize(componentSurfaceSize(gpu_frame.size));
         try installComponentsCanvasModel(runtime, command.window_id, self.virtual_scroll, self.componentUiState(), self.componentTokens(), self.canvas_size);
@@ -598,6 +601,7 @@ const GpuComponentsApp = struct {
         self.environment_select_open = false;
         self.surface_overlay = .none;
         self.virtual_scroll.page = 0;
+        _ = runtime.clearCanvasRenderAnimations(command.window_id, canvas_label) catch {};
         try self.updateComponentsCanvasModel(runtime, command.window_id);
 
         var status_buffer: [96]u8 = undefined;
@@ -639,6 +643,7 @@ const GpuComponentsApp = struct {
         self.environment_select_open = false;
         self.surface_overlay = overlay;
         try self.updateComponentsCanvasModel(runtime, command.window_id);
+        try self.scheduleSurfaceOverlayAnimation(runtime, command.window_id, overlay);
 
         var status_buffer: [96]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "{s} surface opened.", .{surfaceOverlayLabel(overlay)});
@@ -648,8 +653,25 @@ const GpuComponentsApp = struct {
     fn closeSurfaceOverlay(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
         if (self.surface_overlay == .none) return;
         self.surface_overlay = .none;
+        _ = runtime.clearCanvasRenderAnimations(command.window_id, canvas_label) catch {};
         try self.updateComponentsCanvasModel(runtime, command.window_id);
         try self.updateStatus(runtime, command.window_id, "Surface closed.");
+    }
+
+    fn scheduleSurfaceOverlayAnimation(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, overlay: ComponentSurfaceOverlay) anyerror!void {
+        const offset = surfaceOverlayEnterOffset(self.canvas_size, overlay) orelse return;
+        const motion = self.componentTokens().motion;
+        if (motion.durationMs(.normal) == 0) return;
+
+        const gpu_frame = runtime.gpuSurfaceFrame(window_id, canvas_label) catch |err| switch (err) {
+            error.WindowNotFound, error.ViewNotFound, error.InvalidViewOptions => return,
+            else => return err,
+        };
+        var animations: [max_surface_overlay_animations]canvas.CanvasRenderAnimation = undefined;
+        var count: usize = 0;
+        try appendSurfaceBackdropAnimation(&animations, &count, motion, gpu_frame.timestamp_ns);
+        try appendSurfaceSlideAnimations(&animations, &count, motion, gpu_frame.timestamp_ns, canvas.Affine.translate(offset.dx, offset.dy));
+        _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
     fn changeTheme(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
@@ -1116,9 +1138,18 @@ fn surfaceOverlayFrame(surface_size: geometry.SizeF, overlay: ComponentSurfaceOv
     const size = componentSurfaceSize(surface_size);
     return switch (overlay) {
         .dialog => centeredContentOverlayFrame(size, 460, 220),
-        .drawer => rightDockedOverlayFrame(size, 360, 24),
-        .sheet => bottomCenteredContentOverlayFrame(size, 520, 188, 24),
+        .drawer => bottomDrawerOverlayFrame(size, 260),
+        .sheet => rightSheetOverlayFrame(size, 380),
         .none => unreachable,
+    };
+}
+
+fn surfaceOverlayEnterOffset(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay) ?geometry.OffsetF {
+    const frame = surfaceOverlayFrame(surface_size, overlay);
+    return switch (overlay) {
+        .drawer => geometry.OffsetF.init(0, frame.height),
+        .sheet => geometry.OffsetF.init(frame.width, 0),
+        .dialog, .none => null,
     };
 }
 
@@ -1134,22 +1165,58 @@ fn centeredContentOverlayFrame(size: geometry.SizeF, preferred_width: f32, prefe
     );
 }
 
-fn bottomCenteredContentOverlayFrame(size: geometry.SizeF, preferred_width: f32, preferred_height: f32, margin: f32) geometry.RectF {
+fn bottomDrawerOverlayFrame(size: geometry.SizeF, preferred_height: f32) geometry.RectF {
     const content_width = @max(1, size.width - canvas_sidebar_width);
-    const width = @min(preferred_width, @max(1, content_width - margin * 2));
-    const height = @min(preferred_height, @max(1, size.height - margin * 2));
-    return rect(
-        canvas_sidebar_width + @max(margin, (content_width - width) * 0.5),
-        @max(margin, size.height - margin - height),
-        width,
-        height,
-    );
+    const height = @min(preferred_height, @max(1, size.height));
+    return rect(canvas_sidebar_width, @max(0, size.height - height), content_width, height);
 }
 
-fn rightDockedOverlayFrame(size: geometry.SizeF, preferred_width: f32, margin: f32) geometry.RectF {
-    const width = @min(preferred_width, @max(1, size.width - margin * 2));
-    const height = @max(1, size.height - margin * 2);
-    return rect(@max(margin, size.width - margin - width), margin, width, height);
+fn rightSheetOverlayFrame(size: geometry.SizeF, preferred_width: f32) geometry.RectF {
+    const width = @min(preferred_width, @max(1, size.width));
+    return rect(@max(0, size.width - width), 0, width, @max(1, size.height));
+}
+
+fn appendSurfaceBackdropAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64) canvas.Error!void {
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 1));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 2));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 3));
+}
+
+fn appendSurfaceSlideAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, from_transform: canvas.Affine) canvas.Error!void {
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 1), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 2), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 3), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_title_id, 1), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_body_id, 1), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 1), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 2), from_transform);
+    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 4), from_transform);
+}
+
+fn appendSurfaceOpacityAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, id: canvas.ObjectId) canvas.Error!void {
+    try appendSurfaceAnimation(output, count, motion.animation(.{
+        .id = id,
+        .start_ns = start_ns,
+        .duration = .normal,
+        .from_opacity = 0,
+        .to_opacity = 1,
+    }));
+}
+
+fn appendSurfaceTransformAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, id: canvas.ObjectId, from_transform: canvas.Affine) canvas.Error!void {
+    try appendSurfaceAnimation(output, count, motion.animation(.{
+        .id = id,
+        .start_ns = start_ns,
+        .duration = .normal,
+        .from_transform = from_transform,
+        .to_transform = canvas.Affine.identity(),
+    }));
+}
+
+fn appendSurfaceAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, animation: canvas.CanvasRenderAnimation) canvas.Error!void {
+    if (count.* >= output.len) return error.RenderOverrideListFull;
+    output[count.*] = animation;
+    count.* += 1;
 }
 
 fn appendComponentWidget(output: []canvas.Widget, count: *usize, widget: canvas.Widget) canvas.Error!void {
@@ -1641,6 +1708,10 @@ fn contentRect(x: f32, y: f32, width: f32, height: f32) geometry.RectF {
     return rect(canvas_sidebar_width + x, y, width, height);
 }
 
+fn componentCommandPartId(id: canvas.ObjectId, slot: canvas.ObjectId) canvas.ObjectId {
+    return id * 16 + slot;
+}
+
 fn pt(x: f32, y: f32) geometry.PointF {
     return geometry.PointF.init(x, y);
 }
@@ -1814,6 +1885,26 @@ test "gpu components layout keeps finished controls visually separated" {
     const dialog_fill = dialog_display_list.findCommandById(surface_overlay_id * 16 + 2).?;
     try std.testing.expect(backdrop_fill.index > popover_fill.index);
     try std.testing.expect(dialog_fill.index > backdrop_fill.index);
+
+    var drawer_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    const drawer_layout = try buildComponentsWidgetLayoutWithStateAndSize(&drawer_nodes, .{}, .{
+        .surface_overlay = .drawer,
+    }, default_canvas_size);
+    const drawer_frame = surfaceOverlayFrame(default_canvas_size, .drawer);
+    try expectComponentWidgetFrame(drawer_layout, surface_overlay_id, drawer_frame);
+    try std.testing.expectEqual(canvas_sidebar_width, drawer_frame.x);
+    try std.testing.expectEqual(canvas_width - canvas_sidebar_width, drawer_frame.width);
+    try std.testing.expectEqual(canvas_height, drawer_frame.y + drawer_frame.height);
+
+    var sheet_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
+    const sheet_layout = try buildComponentsWidgetLayoutWithStateAndSize(&sheet_nodes, .{}, .{
+        .surface_overlay = .sheet,
+    }, default_canvas_size);
+    const sheet_frame = surfaceOverlayFrame(default_canvas_size, .sheet);
+    try expectComponentWidgetFrame(sheet_layout, surface_overlay_id, sheet_frame);
+    try std.testing.expectEqual(canvas_width, sheet_frame.x + sheet_frame.width);
+    try std.testing.expectEqual(@as(f32, 0), sheet_frame.y);
+    try std.testing.expectEqual(canvas_height, sheet_frame.height);
 
     var scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const scrolled_layout = try buildComponentsWidgetLayoutWithScroll(&scrolled_nodes, .{
@@ -2899,8 +2990,12 @@ test "gpu components surface launchers open and close overlays" {
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 176);
     try std.testing.expectEqual(ComponentSurfaceOverlay.drawer, app.surface_overlay);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, surface_overlay_id, surfaceOverlayFrame(default_canvas_size, .drawer));
+    const drawer_frame = surfaceOverlayFrame(default_canvas_size, .drawer);
+    try expectComponentWidgetFrame(layout, surface_overlay_id, drawer_frame);
     try std.testing.expectEqualStrings("Project settings", layout.findById(surface_overlay_title_id).?.widget.text);
+    var animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), 0, drawer_frame.height);
+    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_title_id, 1), 0, drawer_frame.height);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, surface_overlay_backdrop_id);
@@ -2912,8 +3007,12 @@ test "gpu components surface launchers open and close overlays" {
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 177);
     try std.testing.expectEqual(ComponentSurfaceOverlay.sheet, app.surface_overlay);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, surface_overlay_id, surfaceOverlayFrame(default_canvas_size, .sheet));
+    const sheet_frame = surfaceOverlayFrame(default_canvas_size, .sheet);
+    try expectComponentWidgetFrame(layout, surface_overlay_id, sheet_frame);
     try std.testing.expectEqualStrings("Command palette", layout.findById(surface_overlay_title_id).?.widget.text);
+    animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), sheet_frame.width, 0);
+    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_close_id, 4), sheet_frame.width, 0);
 }
 
 test "gpu components slider drag presents incremental cached frame" {
@@ -2979,6 +3078,17 @@ test "gpu components slider drag presents incremental cached frame" {
 
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectApproxEqAbs(@as(f32, 0.82), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
+}
+
+fn expectSurfaceTransformAnimation(animations: []const canvas.CanvasRenderAnimation, id: canvas.ObjectId, tx: f32, ty: f32) !void {
+    for (animations) |animation| {
+        if (animation.id != id) continue;
+        try std.testing.expectEqualDeep(canvas.Affine.identity(), animation.to_transform.?);
+        try std.testing.expectApproxEqAbs(tx, animation.from_transform.?.tx, 0.001);
+        try std.testing.expectApproxEqAbs(ty, animation.from_transform.?.ty, 0.001);
+        return;
+    }
+    return error.TestUnexpectedResult;
 }
 
 fn expectComponentTextCommand(display_list: canvas.DisplayList, id: canvas.ObjectId, text: []const u8) !void {

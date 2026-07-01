@@ -8,6 +8,7 @@ const gpu_model = @import("gpu.zig");
 const token_model = @import("tokens.zig");
 const widget_model = @import("widgets.zig");
 const event_model = @import("events.zig");
+const equality_model = @import("equality.zig");
 const serialization = @import("serialization.zig");
 
 pub const Error = error{
@@ -1554,6 +1555,17 @@ const textLineCaretX = text_model.textLineCaretX;
 pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimations;
 const motionProgress = render_model.motionProgress;
 const analyzePathGeometry = render_model.analyzePathGeometry;
+const commandsEqual = equality_model.commandsEqual;
+const rectsEqual = equality_model.rectsEqual;
+const optionalRectsEqual = equality_model.optionalRectsEqual;
+const sizesEqual = equality_model.sizesEqual;
+const insetsEqual = equality_model.insetsEqual;
+const optionalColorsEqual = equality_model.optionalColorsEqual;
+const radiiEqual = equality_model.radiiEqual;
+const affinesEqual = equality_model.affinesEqual;
+const optionalF32Equal = equality_model.optionalF32Equal;
+const optionalTextSelectionsEqual = equality_model.optionalTextSelectionsEqual;
+const optionalTextRangesEqual = equality_model.optionalTextRangesEqual;
 
 pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
     var render_plan = try next.renderPlan(storage.render_commands);
@@ -9334,280 +9346,6 @@ fn subpixelBucket(value: f32) u8 {
     const fraction = value - @floor(value);
     const scaled = @floor(fraction * 4.0);
     return @intFromFloat(std.math.clamp(scaled, 0, 3));
-}
-
-fn commandsEqual(a: CanvasCommand, b: CanvasCommand) bool {
-    return switch (a) {
-        .push_clip => |value| switch (b) {
-            .push_clip => |other| clipsEqual(value, other),
-            else => false,
-        },
-        .pop_clip => switch (b) {
-            .pop_clip => true,
-            else => false,
-        },
-        .push_opacity => |value| switch (b) {
-            .push_opacity => |other| value == other,
-            else => false,
-        },
-        .pop_opacity => switch (b) {
-            .pop_opacity => true,
-            else => false,
-        },
-        .transform => |value| switch (b) {
-            .transform => |other| affinesEqual(value, other),
-            else => false,
-        },
-        .fill_rect => |value| switch (b) {
-            .fill_rect => |other| fillRectsEqual(value, other),
-            else => false,
-        },
-        .stroke_rect => |value| switch (b) {
-            .stroke_rect => |other| strokeRectsEqual(value, other),
-            else => false,
-        },
-        .fill_rounded_rect => |value| switch (b) {
-            .fill_rounded_rect => |other| fillRoundedRectsEqual(value, other),
-            else => false,
-        },
-        .draw_line => |value| switch (b) {
-            .draw_line => |other| linesEqual(value, other),
-            else => false,
-        },
-        .fill_path => |value| switch (b) {
-            .fill_path => |other| fillPathsEqual(value, other),
-            else => false,
-        },
-        .stroke_path => |value| switch (b) {
-            .stroke_path => |other| strokePathsEqual(value, other),
-            else => false,
-        },
-        .draw_image => |value| switch (b) {
-            .draw_image => |other| drawImagesEqual(value, other),
-            else => false,
-        },
-        .draw_text => |value| switch (b) {
-            .draw_text => |other| drawTextsEqual(value, other),
-            else => false,
-        },
-        .shadow => |value| switch (b) {
-            .shadow => |other| shadowsEqual(value, other),
-            else => false,
-        },
-        .blur => |value| switch (b) {
-            .blur => |other| blursEqual(value, other),
-            else => false,
-        },
-    };
-}
-
-fn clipsEqual(a: Clip, b: Clip) bool {
-    return a.id == b.id and rectsEqual(a.rect, b.rect) and radiiEqual(a.radius, b.radius);
-}
-
-fn fillRectsEqual(a: FillRect, b: FillRect) bool {
-    return a.id == b.id and rectsEqual(a.rect, b.rect) and fillsEqual(a.fill, b.fill);
-}
-
-fn strokeRectsEqual(a: StrokeRect, b: StrokeRect) bool {
-    return a.id == b.id and rectsEqual(a.rect, b.rect) and radiiEqual(a.radius, b.radius) and strokesEqual(a.stroke, b.stroke);
-}
-
-fn fillRoundedRectsEqual(a: FillRoundedRect, b: FillRoundedRect) bool {
-    return a.id == b.id and rectsEqual(a.rect, b.rect) and radiiEqual(a.radius, b.radius) and fillsEqual(a.fill, b.fill);
-}
-
-fn linesEqual(a: Line, b: Line) bool {
-    return a.id == b.id and pointsEqual(a.from, b.from) and pointsEqual(a.to, b.to) and strokesEqual(a.stroke, b.stroke);
-}
-
-fn fillPathsEqual(a: FillPath, b: FillPath) bool {
-    return a.id == b.id and pathElementsEqual(a.elements, b.elements) and fillsEqual(a.fill, b.fill);
-}
-
-fn strokePathsEqual(a: StrokePath, b: StrokePath) bool {
-    return a.id == b.id and pathElementsEqual(a.elements, b.elements) and strokesEqual(a.stroke, b.stroke);
-}
-
-fn drawImagesEqual(a: DrawImage, b: DrawImage) bool {
-    return a.id == b.id and
-        a.image_id == b.image_id and
-        optionalRectsEqual(a.src, b.src) and
-        rectsEqual(a.dst, b.dst) and
-        a.opacity == b.opacity and
-        a.fit == b.fit and
-        a.sampling == b.sampling;
-}
-
-fn drawTextsEqual(a: DrawText, b: DrawText) bool {
-    return a.id == b.id and
-        a.font_id == b.font_id and
-        a.size == b.size and
-        pointsEqual(a.origin, b.origin) and
-        colorsEqual(a.color, b.color) and
-        std.mem.eql(u8, a.text, b.text) and
-        glyphsEqual(a.glyphs, b.glyphs) and
-        optionalTextLayoutOptionsEqual(a.text_layout, b.text_layout);
-}
-
-fn optionalTextLayoutOptionsEqual(a: ?TextLayoutOptions, b: ?TextLayoutOptions) bool {
-    if (a) |left| {
-        if (b) |right| return textLayoutOptionsEqual(left, right);
-        return false;
-    }
-    return b == null;
-}
-
-fn textLayoutOptionsEqual(a: TextLayoutOptions, b: TextLayoutOptions) bool {
-    return nonNegative(a.max_width) == nonNegative(b.max_width) and
-        nonNegative(a.line_height) == nonNegative(b.line_height) and
-        a.wrap == b.wrap and
-        a.alignment == b.alignment;
-}
-
-fn shadowsEqual(a: Shadow, b: Shadow) bool {
-    return a.id == b.id and
-        rectsEqual(a.rect, b.rect) and
-        radiiEqual(a.radius, b.radius) and
-        offsetsEqual(a.offset, b.offset) and
-        a.blur == b.blur and
-        a.spread == b.spread and
-        colorsEqual(a.color, b.color);
-}
-
-fn blursEqual(a: Blur, b: Blur) bool {
-    return a.id == b.id and rectsEqual(a.rect, b.rect) and a.radius == b.radius;
-}
-
-fn fillsEqual(a: Fill, b: Fill) bool {
-    return switch (a) {
-        .color => |value| switch (b) {
-            .color => |other| colorsEqual(value, other),
-            else => false,
-        },
-        .linear_gradient => |value| switch (b) {
-            .linear_gradient => |other| linearGradientsEqual(value, other),
-            else => false,
-        },
-    };
-}
-
-fn strokesEqual(a: Stroke, b: Stroke) bool {
-    return a.width == b.width and fillsEqual(a.fill, b.fill);
-}
-
-fn linearGradientsEqual(a: LinearGradient, b: LinearGradient) bool {
-    return pointsEqual(a.start, b.start) and pointsEqual(a.end, b.end) and gradientStopsEqual(a.stops, b.stops);
-}
-
-fn gradientStopsEqual(a: []const GradientStop, b: []const GradientStop) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
-        if (left.offset != right.offset or !colorsEqual(left.color, right.color)) return false;
-    }
-    return true;
-}
-
-fn pathElementsEqual(a: []const PathElement, b: []const PathElement) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
-        if (left.verb != right.verb) return false;
-        if (!pointsEqual(left.points[0], right.points[0])) return false;
-        if (!pointsEqual(left.points[1], right.points[1])) return false;
-        if (!pointsEqual(left.points[2], right.points[2])) return false;
-    }
-    return true;
-}
-
-fn glyphsEqual(a: []const Glyph, b: []const Glyph) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
-        if (left.id != right.id or left.font_id != right.font_id or left.x != right.x or left.y != right.y or left.advance != right.advance) return false;
-    }
-    return true;
-}
-
-fn rectsEqual(a: geometry.RectF, b: geometry.RectF) bool {
-    return a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height;
-}
-
-fn optionalRectsEqual(a: ?geometry.RectF, b: ?geometry.RectF) bool {
-    if (a) |left| {
-        if (b) |right| return rectsEqual(left, right);
-        return false;
-    }
-    return b == null;
-}
-
-fn sizesEqual(a: geometry.SizeF, b: geometry.SizeF) bool {
-    return a.width == b.width and a.height == b.height;
-}
-
-fn insetsEqual(a: geometry.InsetsF, b: geometry.InsetsF) bool {
-    return a.top == b.top and
-        a.right == b.right and
-        a.bottom == b.bottom and
-        a.left == b.left;
-}
-
-fn pointsEqual(a: geometry.PointF, b: geometry.PointF) bool {
-    return a.x == b.x and a.y == b.y;
-}
-
-fn offsetsEqual(a: geometry.OffsetF, b: geometry.OffsetF) bool {
-    return a.dx == b.dx and a.dy == b.dy;
-}
-
-fn colorsEqual(a: Color, b: Color) bool {
-    return a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a;
-}
-
-fn optionalColorsEqual(a: ?Color, b: ?Color) bool {
-    if (a) |left| {
-        if (b) |right| return colorsEqual(left, right);
-        return false;
-    }
-    return b == null;
-}
-
-fn radiiEqual(a: Radius, b: Radius) bool {
-    return a.top_left == b.top_left and
-        a.top_right == b.top_right and
-        a.bottom_right == b.bottom_right and
-        a.bottom_left == b.bottom_left;
-}
-
-fn affinesEqual(a: Affine, b: Affine) bool {
-    return a.a == b.a and
-        a.b == b.b and
-        a.c == b.c and
-        a.d == b.d and
-        a.tx == b.tx and
-        a.ty == b.ty;
-}
-
-fn optionalF32Equal(a: ?f32, b: ?f32) bool {
-    if (a) |left| {
-        if (b) |right| return left == right;
-        return false;
-    }
-    return b == null;
-}
-
-fn optionalTextSelectionsEqual(a: ?TextSelection, b: ?TextSelection) bool {
-    if (a) |left| {
-        if (b) |right| return left.anchor == right.anchor and left.focus == right.focus;
-        return false;
-    }
-    return b == null;
-}
-
-fn optionalTextRangesEqual(a: ?TextRange, b: ?TextRange) bool {
-    if (a) |left| {
-        if (b) |right| return left.start == right.start and left.end == right.end;
-        return false;
-    }
-    return b == null;
 }
 
 pub const writeCanvasGpuPacketJson = serialization.writeCanvasGpuPacketJson;

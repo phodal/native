@@ -6,6 +6,7 @@ const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const view_widget_scroll = @import("view_widget_scroll.zig");
+const view_widget_text = @import("view_widget_text.zig");
 const widget_bridge = @import("widget_bridge.zig");
 const platform = @import("../platform/root.zig");
 
@@ -46,7 +47,6 @@ const canvasRenderAnimationFinalOverrideNoop = canvas_frame_helpers.canvasRender
 const canvasRenderAnimationActive = canvas_frame_helpers.canvasRenderAnimationActive;
 const platformCanvasFrameProfileRisk = canvas_frame_helpers.platformCanvasFrameProfileRisk;
 
-const WidgetTextStorageRange = canvas_widget_runtime.WidgetTextStorageRange;
 const CanvasWidgetScrollReconcileEntry = canvas_widget_runtime.CanvasWidgetScrollReconcileEntry;
 const CanvasWidgetControlReconcileEntry = canvas_widget_runtime.CanvasWidgetControlReconcileEntry;
 const CanvasWidgetTextReconcileEntry = canvas_widget_runtime.CanvasWidgetTextReconcileEntry;
@@ -71,10 +71,6 @@ const canvasWidgetLayoutNodeWithSourceSemantics = canvas_widget_runtime.canvasWi
 const applyCanvasWidgetSourceScrollSemantics = canvas_widget_runtime.applyCanvasWidgetSourceScrollSemantics;
 const clampCanvasWidgetLayoutScrollOffsets = canvas_widget_runtime.clampCanvasWidgetLayoutScrollOffsets;
 const clampCanvasWidgetLayoutTextOffsets = canvas_widget_runtime.clampCanvasWidgetLayoutTextOffsets;
-const appendWidgetTextStorageRange = canvas_widget_runtime.appendWidgetTextStorageRange;
-const canvasWidgetTextEditUnchanged = canvas_widget_runtime.canvasWidgetTextEditUnchanged;
-const canvasTextSelectionsEqual = canvas_widget_runtime.canvasTextSelectionsEqual;
-const textSelectionCollapsedAt = canvas_widget_runtime.textSelectionCollapsedAt;
 const canvasWidgetBooleanSelected = canvas_widget_runtime.canvasWidgetBooleanSelected;
 const canvasWidgetSwitchControlKind = canvas_widget_runtime.canvasWidgetSwitchControlKind;
 const canvasWidgetSelectableSelected = canvas_widget_runtime.canvasWidgetSelectableSelected;
@@ -458,6 +454,14 @@ pub const RuntimeView = struct {
     accessibility_label_storage: [platform.max_view_accessibility_label_bytes]u8 = undefined,
     text_storage: [platform.max_view_text_bytes]u8 = undefined,
     command_storage: [platform.max_view_command_bytes]u8 = undefined,
+
+    const CanvasWidgetTextMethods = view_widget_text.RuntimeViewCanvasWidgetText(RuntimeView);
+    pub const applyCanvasWidgetTextEdit = CanvasWidgetTextMethods.applyCanvasWidgetTextEdit;
+    pub const canvasWidgetKeyboardTextEdit = CanvasWidgetTextMethods.canvasWidgetKeyboardTextEdit;
+    pub const canEditCanvasWidgetText = CanvasWidgetTextMethods.canEditCanvasWidgetText;
+    pub const applyCanvasWidgetTextPointer = CanvasWidgetTextMethods.applyCanvasWidgetTextPointer;
+    pub const rewriteCanvasWidgetTextStorage = CanvasWidgetTextMethods.rewriteCanvasWidgetTextStorage;
+    pub const setCanvasWidgetTextValue = CanvasWidgetTextMethods.setCanvasWidgetTextValue;
 
     const CanvasWidgetScrollMethods = view_widget_scroll.RuntimeViewCanvasWidgetScroll(RuntimeView);
     pub const canvasWidgetKineticScrollActive = CanvasWidgetScrollMethods.canvasWidgetKineticScrollActive;
@@ -1266,80 +1270,6 @@ pub const RuntimeView = struct {
         self.canvas_widget_cursor = next_cursor;
     }
 
-    pub fn applyCanvasWidgetTextEdit(self: *RuntimeView, target_id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!?geometry.RectF {
-        const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
-        const widget = self.widget_layout_nodes[index].widget;
-        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
-
-        const previous_bounds = widget.frame;
-        var edit_buffer: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
-        const current_state = canvas.TextEditState{
-            .text = widget.text,
-            .selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len),
-            .composition = widget.text_composition,
-        };
-        const next_state = try current_state.apply(edit, &edit_buffer);
-        if (canvasWidgetTextEditUnchanged(current_state, next_state)) return null;
-
-        try self.rewriteCanvasWidgetTextStorage(index, next_state);
-        self.scrollCanvasTextareaCaretIntoView(index);
-        const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
-        self.widget_semantics_node_count = semantics.len;
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(index, unionRects(previous_bounds, self.widget_layout_nodes[index].frame) orelse self.widget_layout_nodes[index].frame);
-    }
-
-    pub fn canvasWidgetKeyboardTextEdit(self: *const RuntimeView, target: canvas.WidgetFocusTarget, keyboard: canvas.WidgetKeyboardEvent) ?canvas.TextInputEvent {
-        const index = self.canvasWidgetNodeIndexById(target.id) orelse return null;
-        const widget = self.widget_layout_nodes[index].widget;
-        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
-
-        if (keyboard.phase == .key_down and !keyboard.modifiers.shift and !keyboard.modifiers.hasNavigationModifier() and canvasWidgetEscapeKey(keyboard.key)) {
-            if (widget.text_composition != null) return .cancel_composition;
-            if (widget.kind == .search_field or widget.kind == .combobox) return .clear;
-            return null;
-        }
-
-        if (widget.kind == .textarea and keyboard.phase == .key_down and keyboard.text.len == 0 and keyboard.modifiers.shift and !keyboard.modifiers.control and !keyboard.modifiers.alt and !keyboard.modifiers.super) {
-            if (std.ascii.eqlIgnoreCase(keyboard.key, "enter") or std.ascii.eqlIgnoreCase(keyboard.key, "return")) {
-                return .{ .insert_text = "\n" };
-            }
-        }
-
-        if (canvasWidgetSingleLineTextKind(widget.kind) and keyboard.phase == .key_down and keyboard.text.len == 0 and !keyboard.modifiers.hasNavigationModifier()) {
-            if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowup")) return .{ .move_caret = .{ .direction = .start, .extend = keyboard.modifiers.shift } };
-            if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown")) return .{ .move_caret = .{ .direction = .end, .extend = keyboard.modifiers.shift } };
-        }
-
-        return keyboard.textEditEvent();
-    }
-
-    pub fn canEditCanvasWidgetText(self: *const RuntimeView, id: canvas.ObjectId) bool {
-        const index = self.canvasWidgetNodeIndexById(id) orelse return false;
-        const layout = self.widgetLayoutTree();
-        if (canvasWidgetLayoutNodeHidden(layout, index)) return false;
-        if (!canvasWidgetLayoutNodeFrameVisible(layout, index)) return false;
-        const widget = self.widget_layout_nodes[index].widget;
-        return canvasWidgetEditableTextKind(widget.kind) and !widget.state.disabled;
-    }
-
-    pub fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
-        const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
-        const widget = self.widget_layout_nodes[index].widget;
-        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
-
-        const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len);
-        const anchor: ?usize = if (extend) current_selection.anchor else null;
-        const next_selection = canvas.textSelectionForWidgetPoint(widget, point, anchor, self.widget_tokens) orelse return null;
-        if (canvasTextSelectionsEqual(current_selection, next_selection) and widget.text_composition == null) return null;
-
-        self.widget_layout_nodes[index].widget.text_selection = next_selection;
-        self.widget_layout_nodes[index].widget.text_composition = null;
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(index, widget.frame);
-    }
-
     pub fn dismissCanvasWidgetSurfaceForFocusedTarget(self: *RuntimeView, focused_id: canvas.ObjectId) anyerror!?geometry.RectF {
         const focused_index = self.canvasWidgetNodeIndexById(focused_id) orelse return null;
         const focused_widget = self.widget_layout_nodes[focused_index].widget;
@@ -1506,34 +1436,6 @@ pub const RuntimeView = struct {
         };
     }
 
-    pub fn rewriteCanvasWidgetTextStorage(self: *RuntimeView, edited_index: usize, next_state: canvas.TextEditState) anyerror!void {
-        var temp: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
-        var text_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
-        var label_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
-        var command_ranges: [max_canvas_widget_nodes_per_view]WidgetTextStorageRange = undefined;
-        var temp_len: usize = 0;
-
-        for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
-            const text = if (index == edited_index) next_state.text else node.widget.text;
-            text_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, text);
-            label_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, node.widget.semantics.label);
-            command_ranges[index] = try appendWidgetTextStorageRange(&temp, &temp_len, node.widget.command);
-        }
-
-        @memcpy(self.widget_text_bytes[0..temp_len], temp[0..temp_len]);
-        self.widget_text_len = temp_len;
-        for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |*node, index| {
-            const text_range = text_ranges[index];
-            const label_range = label_ranges[index];
-            const command_range = command_ranges[index];
-            node.widget.text = self.widget_text_bytes[text_range.start..text_range.end];
-            node.widget.semantics.label = self.widget_text_bytes[label_range.start..label_range.end];
-            node.widget.command = self.widget_text_bytes[command_range.start..command_range.end];
-        }
-        self.widget_layout_nodes[edited_index].widget.text_selection = next_state.selection;
-        self.widget_layout_nodes[edited_index].widget.text_composition = next_state.composition;
-    }
-
     pub fn canvasWidgetToggleAnimation(self: *const RuntimeView, id: canvas.ObjectId) ?CanvasWidgetToggleAnimation {
         const index = self.canvasWidgetNodeIndexById(id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
@@ -1686,23 +1588,6 @@ pub const RuntimeView = struct {
         try self.refreshCanvasWidgetSemantics();
         self.widget_revision += 1;
         return dirty orelse self.widget_layout_nodes[index].frame;
-    }
-
-    pub fn setCanvasWidgetTextValue(self: *RuntimeView, id: canvas.ObjectId, text: []const u8) anyerror!?geometry.RectF {
-        const index = self.canvasWidgetNodeIndexById(id) orelse return null;
-        const widget = self.widget_layout_nodes[index].widget;
-        if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
-        if (std.mem.eql(u8, widget.text, text) and widget.text_composition == null and textSelectionCollapsedAt(widget.text_selection, text.len)) return null;
-
-        try self.rewriteCanvasWidgetTextStorage(index, .{
-            .text = text,
-            .selection = canvas.TextSelection.collapsed(text.len),
-            .composition = null,
-        });
-        self.scrollCanvasTextareaCaretIntoView(index);
-        try self.refreshCanvasWidgetSemantics();
-        self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(index, self.widget_layout_nodes[index].frame);
     }
 
     pub fn setCanvasWidgetValue(self: *RuntimeView, index: usize, value: f32) anyerror!?geometry.RectF {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const geometry = @import("geometry");
+const command_model = @import("commands.zig");
 const drawing_model = @import("drawing.zig");
 const text_model = @import("text.zig");
 const render_model = @import("render.zig");
@@ -90,7 +91,6 @@ pub const Shadow = drawing_model.Shadow;
 pub const Blur = drawing_model.Blur;
 const strokeBounds = drawing_model.strokeBounds;
 const shadowBounds = drawing_model.shadowBounds;
-const pathBounds = drawing_model.pathBounds;
 
 // Canvas text data lives in `text.zig`; root keeps the public API stable.
 pub const Glyph = text_model.Glyph;
@@ -123,78 +123,10 @@ pub const TextCompositionUpdate = text_model.TextCompositionUpdate;
 pub const TextInputEvent = text_model.TextInputEvent;
 pub const TextEditState = text_model.TextEditState;
 
-pub const CanvasCommand = union(enum) {
-    push_clip: Clip,
-    pop_clip,
-    push_opacity: f32,
-    pop_opacity,
-    transform: Affine,
-    fill_rect: FillRect,
-    stroke_rect: StrokeRect,
-    fill_rounded_rect: FillRoundedRect,
-    draw_line: Line,
-    fill_path: FillPath,
-    stroke_path: StrokePath,
-    draw_image: DrawImage,
-    draw_text: DrawText,
-    shadow: Shadow,
-    blur: Blur,
-
-    pub fn objectId(self: CanvasCommand) ?ObjectId {
-        const id = switch (self) {
-            .push_clip => |value| value.id,
-            .fill_rect => |value| value.id,
-            .stroke_rect => |value| value.id,
-            .fill_rounded_rect => |value| value.id,
-            .draw_line => |value| value.id,
-            .fill_path => |value| value.id,
-            .stroke_path => |value| value.id,
-            .draw_image => |value| value.id,
-            .draw_text => |value| value.id,
-            .shadow => |value| value.id,
-            .blur => |value| value.id,
-            .pop_clip, .push_opacity, .pop_opacity, .transform => 0,
-        };
-        return if (id == 0) null else id;
-    }
-
-    pub fn bounds(self: CanvasCommand) ?geometry.RectF {
-        return switch (self) {
-            .push_clip => |value| value.rect.normalized(),
-            .pop_clip, .push_opacity, .pop_opacity, .transform => null,
-            .fill_rect => |value| value.rect.normalized(),
-            .stroke_rect => |value| strokeBounds(value.rect, value.stroke.width),
-            .fill_rounded_rect => |value| value.rect.normalized(),
-            .draw_line => |value| strokeBounds(geometry.RectF.fromPoints(value.from, value.to), value.stroke.width),
-            .fill_path => |value| pathBounds(value.elements),
-            .stroke_path => |value| if (pathBounds(value.elements)) |rect| strokeBounds(rect, value.stroke.width) else null,
-            .draw_image => |value| value.dst.normalized(),
-            .draw_text => |value| textBounds(value),
-            .shadow => |value| shadowBounds(value),
-            .blur => |value| value.rect.normalized().inflate(geometry.InsetsF.all(nonNegative(value.radius))),
-        };
-    }
-};
-
-pub const CommandRef = struct {
-    index: usize,
-    command: CanvasCommand,
-};
-
-pub const DiffKind = enum {
-    added,
-    removed,
-    changed,
-    scene_changed,
-};
-
-pub const DiffChange = struct {
-    kind: DiffKind,
-    id: ?ObjectId = null,
-    previous_index: ?usize = null,
-    next_index: ?usize = null,
-    dirty_bounds: ?geometry.RectF = null,
-};
+pub const CanvasCommand = command_model.CanvasCommand;
+pub const CommandRef = command_model.CommandRef;
+pub const DiffKind = command_model.DiffKind;
+pub const DiffChange = command_model.DiffChange;
 
 // Canvas render data and cache plans live in `render.zig`; root keeps the public API stable.
 pub const max_render_state_stack = render_model.max_render_state_stack;

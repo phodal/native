@@ -1,10 +1,10 @@
 const std = @import("std");
 const geometry = @import("geometry");
-const canvas = @import("root.zig");
+const command_model = @import("commands.zig");
 const drawing_model = @import("drawing.zig");
 const text_model = @import("text.zig");
 
-const CanvasCommand = canvas.CanvasCommand;
+const CanvasCommand = command_model.CanvasCommand;
 const Color = drawing_model.Color;
 const Affine = drawing_model.Affine;
 const Radius = drawing_model.Radius;

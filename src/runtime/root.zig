@@ -5828,14 +5828,14 @@ fn optionalCanvasTextRangesEqual(a: ?canvas.TextRange, b: ?canvas.TextRange) boo
 
 fn canvasWidgetCommandable(kind: canvas.WidgetKind) bool {
     return switch (kind) {
-        .accordion, .button, .toggle_button, .icon_button, .select, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle => true,
+        .accordion, .button, .toggle_button, .icon_button, .select, .combobox, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle => true,
         else => false,
     };
 }
 
 fn canvasWidgetCommandFiresOnPointerDown(kind: canvas.WidgetKind) bool {
     return switch (kind) {
-        .select => true,
+        .select, .combobox => true,
         else => false,
     };
 }
@@ -17912,7 +17912,7 @@ test "runtime dispatches canvas widget commands from pointer and keyboard activa
         .window_id = 1,
         .label = "canvas",
         .kind = .gpu_surface,
-        .frame = geometry.RectF.init(0, 0, 240, 160),
+        .frame = geometry.RectF.init(0, 0, 240, 200),
     });
 
     const widgets = [_]canvas.Widget{
@@ -17943,10 +17943,24 @@ test "runtime dispatches canvas widget commands from pointer and keyboard activa
             .text = "Environment",
             .command = "widget.select",
         },
+        .{
+            .id = 6,
+            .kind = .combobox,
+            .frame = geometry.RectF.init(12, 136, 140, 32),
+            .text = "Production",
+            .command = "widget.combo",
+        },
     };
-    var nodes: [5]canvas.WidgetLayoutNode = undefined;
-    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 240, 160), &nodes);
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 240, 200), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const combobox_semantics = canvasWidgetSemanticsById(harness.runtime.views[0].widgetSemantics(), 6).?;
+    try std.testing.expectEqual(canvas.WidgetRole.textbox, combobox_semantics.role);
+    try std.testing.expectEqualStrings("Production", combobox_semantics.text_value);
+    try std.testing.expect(combobox_semantics.actions.press);
+    try std.testing.expect(combobox_semantics.actions.set_text);
+    try std.testing.expect(combobox_semantics.actions.set_selection);
 
     harness.runtime.views[0].canvas_widget_focused_id = 3;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
@@ -18047,6 +18061,34 @@ test "runtime dispatches canvas widget commands from pointer and keyboard activa
         .y = 108,
     } });
     try std.testing.expectEqual(@as(u32, 5), app_state.command_count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 144,
+    } });
+    try std.testing.expectEqual(@as(u32, 6), app_state.command_count);
+    try std.testing.expectEqualStrings("widget.combo", app_state.last_name);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 20,
+        .y = 144,
+    } });
+    try std.testing.expectEqual(@as(u32, 6), app_state.command_count);
+
+    harness.runtime.views[0].canvas_widget_focused_id = 6;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    } });
+    try std.testing.expectEqual(@as(u32, 7), app_state.command_count);
+    try std.testing.expectEqualStrings("widget.combo", app_state.last_name);
 }
 
 test "runtime automation snapshot exposes canvas list roles" {

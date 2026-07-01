@@ -10480,7 +10480,7 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
     if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return null;
     if (widget.state.disabled) return null;
     return switch (widget.kind) {
-        .button, .icon_button, .select => if (isWidgetActivationKey(keyboard.key))
+        .button, .icon_button, .select, .combobox => if (isWidgetActivationKey(keyboard.key))
             .{ .kind = .press, .actions = .{ .press = true } }
         else
             null,
@@ -11479,6 +11479,7 @@ fn defaultSemanticActions(widget: Widget) WidgetActions {
             if (widget.command.len > 0) actions.press = true;
         },
         .input, .text_field, .search_field, .combobox, .textarea => {
+            if (widget.kind == .combobox) actions.press = true;
             actions.set_text = true;
             actions.set_selection = true;
         },
@@ -18643,6 +18644,7 @@ test "widget comboboxes expose textbox semantics and render trigger chrome" {
         .kind = .combobox,
         .frame = geometry.RectF.init(10, 12, 220, 36),
         .text = "components",
+        .command = "components.open",
         .semantics = .{ .label = "Component combobox" },
     };
 
@@ -18657,6 +18659,8 @@ test "widget comboboxes expose textbox semantics and render trigger chrome" {
     try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
     try std.testing.expectEqualStrings("Component combobox", semantics[0].label);
     try std.testing.expectEqualStrings("components", semantics[0].text_value);
+    try std.testing.expectEqual(@as(?bool, false), semantics[0].state.expanded);
+    try std.testing.expect(semantics[0].actions.press);
     try std.testing.expect(semantics[0].actions.set_text);
     try std.testing.expect(semantics[0].actions.set_selection);
 
@@ -25381,6 +25385,10 @@ test "widget keyboard control intents map activation keys" {
     try std.testing.expectEqual(WidgetControlIntentKind.press, select.kind);
     try std.testing.expect(select.actions.press);
 
+    const combobox = widgetKeyboardControlIntent(.{ .kind = .combobox, .text = "Search", .command = "search.open" }, .{ .phase = .key_down, .key = "enter" }).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.press, combobox.kind);
+    try std.testing.expect(combobox.actions.press);
+
     const toggle = widgetKeyboardControlIntent(.{ .kind = .toggle, .text = "Live" }, .{ .phase = .key_down, .key = "space" }).?;
     try std.testing.expectEqual(WidgetControlIntentKind.toggle, toggle.kind);
     try std.testing.expect(toggle.actions.toggle);
@@ -25445,6 +25453,10 @@ test "widget semantic control intents map built-in actions" {
     const select = widgetSemanticControlIntent(.{ .kind = .select, .text = "Environment" }, .press).?;
     try std.testing.expectEqual(WidgetControlIntentKind.press, select.kind);
     try std.testing.expect(select.actions.press);
+
+    const combobox = widgetSemanticControlIntent(.{ .kind = .combobox, .text = "Search", .command = "search.open" }, .press).?;
+    try std.testing.expectEqual(WidgetControlIntentKind.press, combobox.kind);
+    try std.testing.expect(combobox.actions.press);
 
     const toggle = widgetSemanticControlIntent(.{ .kind = .checkbox, .text = "Selected" }, .toggle).?;
     try std.testing.expectEqual(WidgetControlIntentKind.toggle, toggle.kind);

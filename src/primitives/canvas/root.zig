@@ -1,6 +1,7 @@
 const std = @import("std");
 const geometry = @import("geometry");
 const json = @import("json");
+const drawing_model = @import("drawing.zig");
 const token_model = @import("tokens.zig");
 const widget_model = @import("widgets.zig");
 const event_model = @import("events.zig");
@@ -60,208 +61,28 @@ pub const default_text_layout_cache_retention_frames: u64 = 120;
 const max_reference_text_layout_lines: usize = 64;
 const max_reference_blur_kernel_samples: usize = 4096;
 
-pub const Color = struct {
-    r: f32 = 0,
-    g: f32 = 0,
-    b: f32 = 0,
-    a: f32 = 1,
-
-    pub fn rgba(r: f32, g: f32, b: f32, a: f32) Color {
-        return .{ .r = r, .g = g, .b = b, .a = a };
-    }
-
-    pub fn rgb8(r: u8, g: u8, b: u8) Color {
-        return rgba8(r, g, b, 255);
-    }
-
-    pub fn rgba8(r: u8, g: u8, b: u8, a: u8) Color {
-        return .{
-            .r = @as(f32, @floatFromInt(r)) / 255.0,
-            .g = @as(f32, @floatFromInt(g)) / 255.0,
-            .b = @as(f32, @floatFromInt(b)) / 255.0,
-            .a = @as(f32, @floatFromInt(a)) / 255.0,
-        };
-    }
-};
-
-pub const Affine = struct {
-    a: f32 = 1,
-    b: f32 = 0,
-    c: f32 = 0,
-    d: f32 = 1,
-    tx: f32 = 0,
-    ty: f32 = 0,
-
-    pub fn identity() Affine {
-        return .{};
-    }
-
-    pub fn translate(x: f32, y: f32) Affine {
-        return .{ .tx = x, .ty = y };
-    }
-
-    pub fn scale(x: f32, y: f32) Affine {
-        return .{ .a = x, .d = y };
-    }
-
-    pub fn multiply(self: Affine, other: Affine) Affine {
-        return .{
-            .a = self.a * other.a + self.c * other.b,
-            .b = self.b * other.a + self.d * other.b,
-            .c = self.a * other.c + self.c * other.d,
-            .d = self.b * other.c + self.d * other.d,
-            .tx = self.a * other.tx + self.c * other.ty + self.tx,
-            .ty = self.b * other.tx + self.d * other.ty + self.ty,
-        };
-    }
-
-    pub fn transformPoint(self: Affine, point: geometry.PointF) geometry.PointF {
-        return .{
-            .x = self.a * point.x + self.c * point.y + self.tx,
-            .y = self.b * point.x + self.d * point.y + self.ty,
-        };
-    }
-
-    pub fn transformRect(self: Affine, rect: geometry.RectF) geometry.RectF {
-        const normalized = rect.normalized();
-        return boundsFromPoints(&.{
-            self.transformPoint(normalized.topLeft()),
-            self.transformPoint(normalized.topRight()),
-            self.transformPoint(normalized.bottomLeft()),
-            self.transformPoint(normalized.bottomRight()),
-        }) orelse geometry.RectF.zero();
-    }
-
-    pub fn inverse(self: Affine) ?Affine {
-        const determinant = self.a * self.d - self.b * self.c;
-        if (@abs(determinant) <= 0.000001) return null;
-        const inv = 1 / determinant;
-        return .{
-            .a = self.d * inv,
-            .b = -self.b * inv,
-            .c = -self.c * inv,
-            .d = self.a * inv,
-            .tx = (self.c * self.ty - self.d * self.tx) * inv,
-            .ty = (self.b * self.tx - self.a * self.ty) * inv,
-        };
-    }
-};
-
-pub const Radius = struct {
-    top_left: f32 = 0,
-    top_right: f32 = 0,
-    bottom_right: f32 = 0,
-    bottom_left: f32 = 0,
-
-    pub fn all(value: f32) Radius {
-        return .{
-            .top_left = value,
-            .top_right = value,
-            .bottom_right = value,
-            .bottom_left = value,
-        };
-    }
-};
-
-pub const GradientStop = struct {
-    offset: f32,
-    color: Color,
-};
-
-pub const LinearGradient = struct {
-    start: geometry.PointF,
-    end: geometry.PointF,
-    stops: []const GradientStop = &.{},
-};
-
-pub const Fill = union(enum) {
-    color: Color,
-    linear_gradient: LinearGradient,
-};
-
-pub const Stroke = struct {
-    fill: Fill,
-    width: f32 = 1,
-};
-
-pub const Clip = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    radius: Radius = .{},
-};
-
-pub const FillRect = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    fill: Fill,
-};
-
-pub const StrokeRect = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    radius: Radius = .{},
-    stroke: Stroke,
-};
-
-pub const FillRoundedRect = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    radius: Radius,
-    fill: Fill,
-};
-
-pub const Line = struct {
-    id: ObjectId = 0,
-    from: geometry.PointF,
-    to: geometry.PointF,
-    stroke: Stroke,
-};
-
-pub const PathVerb = enum {
-    move_to,
-    line_to,
-    quad_to,
-    cubic_to,
-    close,
-};
-
-pub const PathElement = struct {
-    verb: PathVerb,
-    points: [3]geometry.PointF = [_]geometry.PointF{geometry.PointF.zero()} ** 3,
-};
-
-pub const FillPath = struct {
-    id: ObjectId = 0,
-    elements: []const PathElement = &.{},
-    fill: Fill,
-};
-
-pub const StrokePath = struct {
-    id: ObjectId = 0,
-    elements: []const PathElement = &.{},
-    stroke: Stroke,
-};
-
-pub const ImageFit = enum {
-    stretch,
-    contain,
-    cover,
-};
-
-pub const ImageSampling = enum {
-    nearest,
-    linear,
-};
-
-pub const DrawImage = struct {
-    id: ObjectId = 0,
-    image_id: ImageId,
-    src: ?geometry.RectF = null,
-    dst: geometry.RectF,
-    opacity: f32 = 1,
-    fit: ImageFit = .stretch,
-    sampling: ImageSampling = .linear,
-};
+// Canvas drawing primitives live in `drawing.zig`; root keeps the public API stable.
+pub const Color = drawing_model.Color;
+pub const Affine = drawing_model.Affine;
+pub const Radius = drawing_model.Radius;
+pub const GradientStop = drawing_model.GradientStop;
+pub const LinearGradient = drawing_model.LinearGradient;
+pub const Fill = drawing_model.Fill;
+pub const Stroke = drawing_model.Stroke;
+pub const Clip = drawing_model.Clip;
+pub const FillRect = drawing_model.FillRect;
+pub const StrokeRect = drawing_model.StrokeRect;
+pub const FillRoundedRect = drawing_model.FillRoundedRect;
+pub const Line = drawing_model.Line;
+pub const PathVerb = drawing_model.PathVerb;
+pub const PathElement = drawing_model.PathElement;
+pub const FillPath = drawing_model.FillPath;
+pub const StrokePath = drawing_model.StrokePath;
+pub const ImageFit = drawing_model.ImageFit;
+pub const ImageSampling = drawing_model.ImageSampling;
+pub const DrawImage = drawing_model.DrawImage;
+pub const Shadow = drawing_model.Shadow;
+pub const Blur = drawing_model.Blur;
 
 pub const Glyph = struct {
     id: u32,
@@ -606,22 +427,6 @@ pub const TextEditState = struct {
     pub fn apply(self: TextEditState, event: TextInputEvent, output: []u8) Error!TextEditState {
         return applyTextInputEvent(self, event, output);
     }
-};
-
-pub const Shadow = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    radius: Radius = .{},
-    offset: geometry.OffsetF = .{},
-    blur: f32 = 0,
-    spread: f32 = 0,
-    color: Color,
-};
-
-pub const Blur = struct {
-    id: ObjectId = 0,
-    rect: geometry.RectF,
-    radius: f32 = 0,
 };
 
 pub const CanvasCommand = union(enum) {

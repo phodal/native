@@ -6,6 +6,7 @@ const text_model = @import("text.zig");
 const render_model = @import("render.zig");
 const frame_model = @import("frame.zig");
 const gpu_model = @import("gpu.zig");
+const hash_model = @import("hash.zig");
 const token_model = @import("tokens.zig");
 const widget_model = @import("widgets.zig");
 const event_model = @import("events.zig");
@@ -1506,6 +1507,22 @@ const affinesEqual = equality_model.affinesEqual;
 const optionalF32Equal = equality_model.optionalF32Equal;
 const optionalTextSelectionsEqual = equality_model.optionalTextSelectionsEqual;
 const optionalTextRangesEqual = equality_model.optionalTextRangesEqual;
+const resourceHashTag = hash_model.resourceHashTag;
+const resourceHashBytes = hash_model.resourceHashBytes;
+const resourceHashU8 = hash_model.resourceHashU8;
+const resourceHashU32 = hash_model.resourceHashU32;
+const resourceHashU64 = hash_model.resourceHashU64;
+const resourceHashUsize = hash_model.resourceHashUsize;
+const resourceHashEnum = hash_model.resourceHashEnum;
+const resourceHashF32 = hash_model.resourceHashF32;
+const resourceHashPoint = hash_model.resourceHashPoint;
+const resourceHashRect = hash_model.resourceHashRect;
+const resourceHashOptionalRect = hash_model.resourceHashOptionalRect;
+const resourceHashOptionalObjectId = hash_model.resourceHashOptionalObjectId;
+const resourceHashAffine = hash_model.resourceHashAffine;
+const resourceHashRadius = hash_model.resourceHashRadius;
+const resourceHashColor = hash_model.resourceHashColor;
+const resourceHashPath = hash_model.resourceHashPath;
 
 pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
     var render_plan = try next.renderPlan(storage.render_commands);
@@ -2345,9 +2362,6 @@ fn optionalAffineEqual(a: ?Affine, b: ?Affine) bool {
     return affinesEqual(a.?, b.?);
 }
 
-const resource_hash_offset: u64 = 14695981039346656037;
-const resource_hash_prime: u64 = 1099511628211;
-
 fn linearGradientFingerprint(gradient: LinearGradient) u64 {
     var hash = resourceHashTag("linear_gradient");
     hash = resourceHashPoint(hash, gradient.start);
@@ -2475,71 +2489,6 @@ fn blurFingerprint(blur: Blur) u64 {
     return hash;
 }
 
-fn resourceHashTag(tag: []const u8) u64 {
-    return resourceHashBytes(resource_hash_offset, tag);
-}
-
-fn resourceHashBytes(initial: u64, bytes: []const u8) u64 {
-    var hash = initial;
-    for (bytes) |byte| hash = resourceHashU8(hash, byte);
-    return hash;
-}
-
-fn resourceHashU8(hash: u64, value: u8) u64 {
-    return (hash ^ value) *% resource_hash_prime;
-}
-
-fn resourceHashU32(hash: u64, value: u32) u64 {
-    var next = hash;
-    next = resourceHashU8(next, @intCast(value & 0xff));
-    next = resourceHashU8(next, @intCast((value >> 8) & 0xff));
-    next = resourceHashU8(next, @intCast((value >> 16) & 0xff));
-    next = resourceHashU8(next, @intCast((value >> 24) & 0xff));
-    return next;
-}
-
-fn resourceHashU64(hash: u64, value: u64) u64 {
-    var next = hash;
-    next = resourceHashU32(next, @intCast(value & 0xffff_ffff));
-    next = resourceHashU32(next, @intCast((value >> 32) & 0xffff_ffff));
-    return next;
-}
-
-fn resourceHashUsize(hash: u64, value: usize) u64 {
-    return resourceHashU64(hash, @intCast(value));
-}
-
-fn resourceHashEnum(hash: u64, value: anytype) u64 {
-    return resourceHashU64(hash, @intCast(value));
-}
-
-fn resourceHashF32(hash: u64, value: f32) u64 {
-    const bits: u32 = @bitCast(value);
-    return resourceHashU32(hash, bits);
-}
-
-fn resourceHashPoint(hash: u64, point: geometry.PointF) u64 {
-    return resourceHashF32(resourceHashF32(hash, point.x), point.y);
-}
-
-fn resourceHashRect(hash: u64, rect: geometry.RectF) u64 {
-    var next = resourceHashF32(hash, rect.x);
-    next = resourceHashF32(next, rect.y);
-    next = resourceHashF32(next, rect.width);
-    next = resourceHashF32(next, rect.height);
-    return next;
-}
-
-fn resourceHashOptionalRect(hash: u64, rect: ?geometry.RectF) u64 {
-    if (rect) |value| return resourceHashRect(resourceHashU8(hash, 1), value);
-    return resourceHashU8(hash, 0);
-}
-
-fn resourceHashOptionalObjectId(hash: u64, id: ?ObjectId) u64 {
-    if (id) |value| return resourceHashU64(resourceHashU8(hash, 1), value);
-    return resourceHashU8(hash, 0);
-}
-
 fn resourceHashOptionalTextLayoutOptions(hash: u64, options: ?TextLayoutOptions) u64 {
     if (options) |value| {
         var next = resourceHashU8(hash, 1);
@@ -2550,32 +2499,6 @@ fn resourceHashOptionalTextLayoutOptions(hash: u64, options: ?TextLayoutOptions)
         return next;
     }
     return resourceHashU8(hash, 0);
-}
-
-fn resourceHashAffine(hash: u64, matrix: Affine) u64 {
-    var next = resourceHashF32(hash, matrix.a);
-    next = resourceHashF32(next, matrix.b);
-    next = resourceHashF32(next, matrix.c);
-    next = resourceHashF32(next, matrix.d);
-    next = resourceHashF32(next, matrix.tx);
-    next = resourceHashF32(next, matrix.ty);
-    return next;
-}
-
-fn resourceHashRadius(hash: u64, radius: Radius) u64 {
-    var next = resourceHashF32(hash, radius.top_left);
-    next = resourceHashF32(next, radius.top_right);
-    next = resourceHashF32(next, radius.bottom_right);
-    next = resourceHashF32(next, radius.bottom_left);
-    return next;
-}
-
-fn resourceHashColor(hash: u64, color: Color) u64 {
-    var next = resourceHashF32(hash, color.r);
-    next = resourceHashF32(next, color.g);
-    next = resourceHashF32(next, color.b);
-    next = resourceHashF32(next, color.a);
-    return next;
 }
 
 fn resourceHashCanvasCommand(hash: u64, command: CanvasCommand) u64 {
@@ -2653,17 +2576,6 @@ fn resourceHashFill(hash: u64, fill: Fill) u64 {
 fn resourceHashStroke(hash: u64, stroke: Stroke) u64 {
     var next = resourceHashF32(resourceHashBytes(hash, "stroke"), stroke.width);
     next = resourceHashFill(next, stroke.fill);
-    return next;
-}
-
-fn resourceHashPath(hash: u64, elements: []const PathElement) u64 {
-    var next = resourceHashUsize(resourceHashBytes(hash, "path"), elements.len);
-    for (elements) |element| {
-        next = resourceHashEnum(next, @intFromEnum(element.verb));
-        next = resourceHashPoint(next, element.points[0]);
-        next = resourceHashPoint(next, element.points[1]);
-        next = resourceHashPoint(next, element.points[2]);
-    }
     return next;
 }
 

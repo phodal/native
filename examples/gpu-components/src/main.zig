@@ -731,8 +731,8 @@ const GpuComponentsApp = struct {
         };
         var animations: [max_surface_overlay_animations]canvas.CanvasRenderAnimation = undefined;
         var count: usize = 0;
-        try appendSurfaceBackdropAnimation(&animations, &count, motion, gpu_frame.timestamp_ns);
-        try appendSurfaceSlideAnimations(&animations, &count, motion, gpu_frame.timestamp_ns, canvas.Affine.translate(offset.dx, offset.dy));
+        try appendSurfaceChromeSlideAnimations(&animations, &count, motion, gpu_frame.timestamp_ns, canvas.Affine.translate(offset.dx, offset.dy));
+        try appendSurfaceContentFadeAnimations(&animations, &count, motion, gpu_frame.timestamp_ns);
         _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
@@ -1334,21 +1334,18 @@ fn rightSheetOverlayFrame(size: geometry.SizeF, preferred_width: f32) geometry.R
     return rect(@max(0, size.width - width), 0, width, @max(1, size.height));
 }
 
-fn appendSurfaceBackdropAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64) canvas.Error!void {
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 1));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 2));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_backdrop_id, 3));
-}
-
-fn appendSurfaceSlideAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, from_transform: canvas.Affine) canvas.Error!void {
+fn appendSurfaceChromeSlideAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, from_transform: canvas.Affine) canvas.Error!void {
     try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 1), from_transform);
     try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 2), from_transform);
     try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 3), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_title_id, 1), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_body_id, 1), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 1), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 2), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 4), from_transform);
+}
+
+fn appendSurfaceContentFadeAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64) canvas.Error!void {
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_title_id, 1));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_body_id, 1));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 1));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 2));
+    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 4));
 }
 
 fn appendSurfaceOpacityAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, id: canvas.ObjectId) canvas.Error!void {
@@ -3342,8 +3339,10 @@ test "gpu components surface launchers open and close overlays" {
     try expectComponentWidgetFrame(layout, surface_overlay_id, drawer_frame);
     try std.testing.expectEqualStrings("Project settings", layout.findById(surface_overlay_title_id).?.widget.text);
     var animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    try std.testing.expectEqual(@as(usize, 8), animations.len);
+    try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
     try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), 0, drawer_frame.height);
-    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_title_id, 1), 0, drawer_frame.height);
+    try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_title_id, 1));
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, surface_overlay_backdrop_id);
@@ -3359,8 +3358,10 @@ test "gpu components surface launchers open and close overlays" {
     try expectComponentWidgetFrame(layout, surface_overlay_id, sheet_frame);
     try std.testing.expectEqualStrings("Command palette", layout.findById(surface_overlay_title_id).?.widget.text);
     animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    try std.testing.expectEqual(@as(usize, 8), animations.len);
+    try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
     try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), sheet_frame.width, 0);
-    try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_close_id, 4), sheet_frame.width, 0);
+    try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_close_id, 4));
 }
 
 test "gpu components slider drag presents incremental cached frame" {
@@ -3493,6 +3494,24 @@ fn expectSurfaceTransformAnimation(animations: []const canvas.CanvasRenderAnimat
         return;
     }
     return error.TestUnexpectedResult;
+}
+
+fn expectSurfaceOpacityAnimation(animations: []const canvas.CanvasRenderAnimation, id: canvas.ObjectId) !void {
+    for (animations) |animation| {
+        if (animation.id != id) continue;
+        try std.testing.expectEqual(@as(f32, 0), animation.from_opacity.?);
+        try std.testing.expectEqual(@as(f32, 1), animation.to_opacity.?);
+        try std.testing.expect(animation.from_transform == null);
+        try std.testing.expect(animation.to_transform == null);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn expectNoSurfaceAnimation(animations: []const canvas.CanvasRenderAnimation, id: canvas.ObjectId) !void {
+    for (animations) |animation| {
+        if (animation.id == id) return error.TestUnexpectedResult;
+    }
 }
 
 fn expectComponentTextCommand(display_list: canvas.DisplayList, id: canvas.ObjectId, text: []const u8) !void {

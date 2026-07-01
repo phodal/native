@@ -2520,12 +2520,19 @@ test "gpu components image widget exposes image semantics and display command" {
     try std.testing.expectEqual(canvas.WidgetRole.image, semantics[0].role);
     try std.testing.expectEqualStrings("Preview image", semantics[0].label);
 
-    var commands: [1]canvas.CanvasCommand = undefined;
+    var commands: [3]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
     try layout.emitDisplayList(&builder, componentTokens());
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 1), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
     switch (display_list.commands[0]) {
+        .push_clip => |clip| {
+            try std.testing.expectEqual(@as(canvas.ObjectId, 190 * 16 + 2), clip.id);
+            try std.testing.expectEqualDeep(rect(12, 14, 86, 54), clip.rect);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
         .draw_image => |draw| {
             try std.testing.expectEqual(@as(canvas.ObjectId, 190 * 16 + 1), draw.id);
             try std.testing.expectEqual(@as(canvas.ImageId, preview_image_id), draw.image_id);
@@ -2535,6 +2542,7 @@ test "gpu components image widget exposes image semantics and display command" {
         },
         else => return error.TestUnexpectedResult,
     }
+    try std.testing.expect(display_list.commands[2] == .pop_clip);
 }
 
 test "gpu components app registers component lab on first gpu frame" {

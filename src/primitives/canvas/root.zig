@@ -8102,6 +8102,8 @@ fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
 
 fn emitImageWidget(builder: *Builder, widget: Widget) Error!void {
     if (widget.image_id == 0 or widget.frame.normalized().isEmpty()) return;
+    const clips_image = widget.image_fit == .cover;
+    if (clips_image) try builder.pushClip(.{ .id = widgetPartId(widget.id, 2), .rect = widget.frame });
     try builder.drawImage(.{
         .id = widgetPartId(widget.id, 1),
         .image_id = widget.image_id,
@@ -8111,6 +8113,7 @@ fn emitImageWidget(builder: *Builder, widget: Widget) Error!void {
         .fit = widget.image_fit,
         .sampling = widget.image_sampling,
     });
+    if (clips_image) try builder.popClip();
 }
 
 fn emitAvatarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -17799,12 +17802,19 @@ test "widget image emits draw image and exposes image semantics" {
     try std.testing.expectEqualStrings("Deployment preview", semantics[0].label);
     try std.testing.expect(!semantics[0].focusable);
 
-    var commands: [1]CanvasCommand = undefined;
+    var commands: [3]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 1), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
     switch (display_list.commands[0]) {
+        .push_clip => |clip| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(8, 2)), clip.id);
+            try expectRect(geometry.RectF.init(12, 14, 80, 48), clip.rect);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
         .draw_image => |draw| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(8, 1)), draw.id);
             try std.testing.expectEqual(@as(ImageId, 42), draw.image_id);
@@ -17816,6 +17826,7 @@ test "widget image emits draw image and exposes image semantics" {
         },
         else => return error.TestUnexpectedResult,
     }
+    try std.testing.expect(display_list.commands[2] == .pop_clip);
 }
 
 test "widget text fields expose textbox semantics and render focused chrome" {

@@ -82,9 +82,13 @@ const section_nav_commands = [_][]const u8{
 
 const ComponentVirtualScroll = struct {
     page: f32 = 0,
+    page_velocity: f32 = 0,
     nav: f32 = 0,
+    nav_velocity: f32 = 0,
     behavior: f32 = 28,
+    behavior_velocity: f32 = 0,
     data: f32 = 28,
+    data_velocity: f32 = 0,
 };
 
 const ComponentUiState = struct {
@@ -414,7 +418,8 @@ const GpuComponentsApp = struct {
             return;
         }
 
-        _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint);
+        const scrolled = try self.stepComponentVirtualScrollForFrame(runtime, frame_event);
+        _ = try self.presentComponentsCanvas(runtime, frame_event, frame_event.canvas_frame_full_repaint or scrolled);
         const current_frame = try runtime.gpuSurfaceFrame(frame_event.window_id, canvas_label);
         try self.reportFrameStatus(runtime, gpuFrameEvent(current_frame));
     }
@@ -540,12 +545,11 @@ const GpuComponentsApp = struct {
         if (viewport.isEmpty()) return null;
 
         const max_offset = @max(0, canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height) - viewport.height);
-        const current = self.componentVirtualScrollValue(id) orelse return null;
-        const delta = pointer_event.pointer.delta.dy * self.componentTokens().scroll.wheel_multiplier;
-        const next = clampComponentVirtualScrollOffset(current + delta, max_offset, current);
-        if (next == current) return id;
+        const current = self.componentVirtualScrollState(id, viewport.height, viewport.height + max_offset) orelse return null;
+        const next = current.applyWheel(pointer_event.pointer.delta.dy, self.componentTokens().scroll);
+        if (componentScrollStatesEqual(current, next)) return id;
 
-        try self.setComponentVirtualScrollValue(id, next);
+        try self.setComponentVirtualScrollState(id, next);
         try self.updateComponentsCanvasModel(runtime, pointer_event.window_id);
         return id;
     }
@@ -574,9 +578,45 @@ const GpuComponentsApp = struct {
         const next = snapComponentVirtualScrollOffset(node.widget, current, raw_next, max_offset);
         if (next == current) return id;
 
-        try self.setComponentVirtualScrollValue(id, next);
+        try self.setComponentVirtualScrollState(id, .{
+            .offset = next,
+            .velocity = 0,
+            .viewport_extent = viewport.height,
+            .content_extent = viewport.height + max_offset,
+        });
         try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
         return id;
+    }
+
+    fn stepComponentVirtualScrollForFrame(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!bool {
+        const layout = try runtime.canvasWidgetLayout(frame_event.window_id, canvas_label);
+        var changed = false;
+        const ids = [_]canvas.ObjectId{ 120, 130, 150 };
+        for (ids) |id| {
+            const node = layout.findById(id) orelse continue;
+            if (!node.widget.layout.virtualized) continue;
+            const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+            if (viewport.isEmpty()) continue;
+
+            const content_extent = canvas.virtualWidgetScrollContentExtent(node.widget, viewport.height);
+            const current = self.componentVirtualScrollState(id, viewport.height, content_extent) orelse continue;
+            if (!current.needsKineticStep(self.componentTokens().scroll)) {
+                if (current.velocity != 0) {
+                    var settled = current;
+                    settled.velocity = 0;
+                    try self.setComponentVirtualScrollState(id, settled);
+                }
+                continue;
+            }
+
+            const next = current.stepKinetic(componentFrameIntervalMs(frame_event.frame_interval_ns), self.componentTokens().scroll);
+            if (componentScrollStatesEqual(current, next)) continue;
+            try self.setComponentVirtualScrollState(id, next);
+            changed = true;
+        }
+
+        if (changed) try self.updateComponentsCanvasModel(runtime, frame_event.window_id);
+        return changed;
     }
 
     fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
@@ -868,12 +908,67 @@ const GpuComponentsApp = struct {
         };
     }
 
+    fn componentVirtualScrollVelocity(self: *@This(), id: canvas.ObjectId) ?f32 {
+        return switch (id) {
+            120 => self.virtual_scroll.nav_velocity,
+            130 => self.virtual_scroll.behavior_velocity,
+            150 => self.virtual_scroll.data_velocity,
+            content_scroll_id => self.virtual_scroll.page_velocity,
+            else => null,
+        };
+    }
+
+    fn componentVirtualScrollState(self: *@This(), id: canvas.ObjectId, viewport_extent: f32, content_extent: f32) ?canvas.ScrollState {
+        const offset = self.componentVirtualScrollValue(id) orelse return null;
+        const velocity = self.componentVirtualScrollVelocity(id) orelse return null;
+        return .{
+            .offset = offset,
+            .velocity = velocity,
+            .viewport_extent = viewport_extent,
+            .content_extent = @max(viewport_extent, content_extent),
+        };
+    }
+
     fn setComponentVirtualScrollValue(self: *@This(), id: canvas.ObjectId, value: f32) anyerror!void {
         switch (id) {
-            120 => self.virtual_scroll.nav = value,
-            130 => self.virtual_scroll.behavior = value,
-            150 => self.virtual_scroll.data = value,
-            content_scroll_id => self.virtual_scroll.page = value,
+            120 => {
+                self.virtual_scroll.nav = value;
+                self.virtual_scroll.nav_velocity = 0;
+            },
+            130 => {
+                self.virtual_scroll.behavior = value;
+                self.virtual_scroll.behavior_velocity = 0;
+            },
+            150 => {
+                self.virtual_scroll.data = value;
+                self.virtual_scroll.data_velocity = 0;
+            },
+            content_scroll_id => {
+                self.virtual_scroll.page = value;
+                self.virtual_scroll.page_velocity = 0;
+            },
+            else => return error.InvalidCommand,
+        }
+    }
+
+    fn setComponentVirtualScrollState(self: *@This(), id: canvas.ObjectId, state: canvas.ScrollState) anyerror!void {
+        switch (id) {
+            120 => {
+                self.virtual_scroll.nav = state.offset;
+                self.virtual_scroll.nav_velocity = state.velocity;
+            },
+            130 => {
+                self.virtual_scroll.behavior = state.offset;
+                self.virtual_scroll.behavior_velocity = state.velocity;
+            },
+            150 => {
+                self.virtual_scroll.data = state.offset;
+                self.virtual_scroll.data_velocity = state.velocity;
+            },
+            content_scroll_id => {
+                self.virtual_scroll.page = state.offset;
+                self.virtual_scroll.page_velocity = state.velocity;
+            },
             else => return error.InvalidCommand,
         }
     }
@@ -973,6 +1068,19 @@ fn snapComponentVirtualScrollOffset(widget: canvas.Widget, current: f32, raw_nex
 fn clampComponentVirtualScrollOffset(raw_next: f32, max_offset: f32, fallback: f32) f32 {
     if (!std.math.isFinite(raw_next)) return fallback;
     return std.math.clamp(@max(0, raw_next), 0, @max(0, max_offset));
+}
+
+fn componentScrollStatesEqual(a: canvas.ScrollState, b: canvas.ScrollState) bool {
+    return a.offset == b.offset and
+        a.velocity == b.velocity and
+        a.viewport_extent == b.viewport_extent and
+        a.content_extent == b.content_extent;
+}
+
+fn componentFrameIntervalMs(frame_interval_ns: u64) f32 {
+    if (frame_interval_ns == 0) return 16;
+    const raw = @as(f32, @floatFromInt(frame_interval_ns)) / 1_000_000.0;
+    return std.math.clamp(raw, 1, 64);
 }
 
 fn componentVirtualScrollStep(widget: canvas.Widget) ?f32 {
@@ -2586,6 +2694,98 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expect(componentSnapshotWidget(snapshot, 111) == null);
     try std.testing.expect(componentSnapshotWidget(snapshot, 181) != null);
     try std.testing.expect(componentSnapshotWidget(snapshot, 189) != null);
+}
+
+test "gpu components virtual scroll rubberbands smoothly at edges" {
+    var harness: zero_native.TestHarness() = undefined;
+    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    harness.null_platform.gpu_surfaces = true;
+
+    var app = GpuComponentsApp{};
+    defer app.deinit();
+    const app_handle = app.app();
+    try harness.start(app_handle);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .frame_interval_ns = 16_000_000,
+        .nonblank = true,
+    } });
+
+    app.virtual_scroll.behavior = 0;
+    app.virtual_scroll.behavior_velocity = 0;
+    try app.updateComponentsCanvasModel(&harness.runtime, 1);
+    try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, -40);
+    const top_overscroll = app.virtual_scroll.behavior;
+    try std.testing.expect(top_overscroll < 0);
+    try std.testing.expect(app.virtual_scroll.behavior_velocity < 0);
+
+    var snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectEqual(@as(f32, 0), componentSnapshotWidget(snapshot, 130).?.scroll.offset);
+    var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(layout.findById(131).?.frame.y > contentRect(652, 124, 186, 28).y);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 2,
+        .timestamp_ns = 1_016_000_000,
+        .frame_interval_ns = 16_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app.virtual_scroll.behavior > top_overscroll);
+    try std.testing.expect(app.virtual_scroll.behavior < 0);
+    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expect(layout.findById(131).?.frame.y > contentRect(652, 124, 186, 28).y);
+
+    var frame_index: u64 = 3;
+    while (frame_index < 40 and @abs(app.virtual_scroll.behavior) > 0.01) : (frame_index += 1) {
+        try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+            .label = canvas_label,
+            .size = geometry.SizeF.init(canvas_width, canvas_height),
+            .scale_factor = 2,
+            .frame_index = frame_index,
+            .timestamp_ns = 1_000_000_000 + frame_index * 16_000_000,
+            .frame_interval_ns = 16_000_000,
+            .nonblank = true,
+        } });
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), app.virtual_scroll.behavior, 0.01);
+    try std.testing.expectEqual(@as(f32, 0), app.virtual_scroll.behavior_velocity);
+
+    const max_behavior_offset: f32 = 84;
+    app.virtual_scroll.behavior = max_behavior_offset;
+    app.virtual_scroll.behavior_velocity = 0;
+    try app.updateComponentsCanvasModel(&harness.runtime, 1);
+    try dispatchComponentPointerWheel(&harness.runtime, app_handle, 130, 40);
+    const bottom_overscroll = app.virtual_scroll.behavior;
+    try std.testing.expect(bottom_overscroll > max_behavior_offset);
+    try std.testing.expect(app.virtual_scroll.behavior_velocity > 0);
+
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectEqual(max_behavior_offset, componentSnapshotWidget(snapshot, 130).?.scroll.offset);
+    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    const bottom_range = layout.virtualRangeById(130).?;
+    try std.testing.expectEqual(max_behavior_offset, bottom_range.scroll_offset);
+    try std.testing.expect(bottom_range.layout_offset > max_behavior_offset);
+    try std.testing.expect(layout.findById(134).?.frame.y < contentRect(652, 124, 186, 28).y);
+
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(canvas_width, canvas_height),
+        .scale_factor = 2,
+        .frame_index = 40,
+        .timestamp_ns = 1_640_000_000,
+        .frame_interval_ns = 16_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app.virtual_scroll.behavior < bottom_overscroll);
+    try std.testing.expect(app.virtual_scroll.behavior > max_behavior_offset);
 }
 
 test "gpu components native theme command updates retained design tokens" {

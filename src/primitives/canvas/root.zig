@@ -3378,6 +3378,7 @@ pub const VirtualListRange = struct {
     item_extent: f32 = 0,
     item_gap: f32 = 0,
     scroll_offset: f32 = 0,
+    layout_offset: f32 = 0,
     content_extent: f32 = 0,
     before_extent: f32 = 0,
     after_extent: f32 = 0,
@@ -3399,11 +3400,14 @@ pub fn virtualListRange(options: VirtualListOptions) VirtualListRange {
     const stride = item_extent + item_gap;
     const item_count_f = @as(f32, @floatFromInt(options.item_count));
     const content_extent = item_count_f * item_extent + @max(0, item_count_f - 1) * item_gap;
-    const max_offset = @max(0, content_extent - nonNegative(options.viewport_extent));
-    const offset = std.math.clamp(nonNegative(options.scroll_offset), 0, max_offset);
+    const viewport_extent = nonNegative(options.viewport_extent);
+    const max_offset = @max(0, content_extent - viewport_extent);
+    const raw_offset = if (std.math.isFinite(options.scroll_offset)) options.scroll_offset else 0;
+    const offset = std.math.clamp(nonNegative(raw_offset), 0, max_offset);
+    const layout_offset = std.math.clamp(raw_offset, -viewport_extent, max_offset + viewport_extent);
 
     const first_visible = @min(options.item_count - 1, floorVirtualIndex(offset / stride));
-    const visible_end = @min(options.item_count, ceilVirtualIndex((offset + nonNegative(options.viewport_extent) + item_gap) / stride));
+    const visible_end = @min(options.item_count, ceilVirtualIndex((offset + viewport_extent + item_gap) / stride));
     const start_index = if (first_visible > options.overscan) first_visible - options.overscan else 0;
     const end_index = @min(options.item_count, visible_end + options.overscan);
 
@@ -3415,6 +3419,7 @@ pub fn virtualListRange(options: VirtualListOptions) VirtualListRange {
         .item_extent = item_extent,
         .item_gap = item_gap,
         .scroll_offset = offset,
+        .layout_offset = layout_offset,
         .content_extent = content_extent,
         .before_extent = @as(f32, @floatFromInt(start_index)) * stride,
         .after_extent = @as(f32, @floatFromInt(options.item_count - end_index)) * stride,
@@ -9961,7 +9966,7 @@ fn layoutVirtualVerticalChildren(
         var child = children[index];
         child.semantics.list_item_index = saturatingU32(index);
         child.semantics.list_item_count = saturatingU32(children.len);
-        const y = content.y + @as(f32, @floatFromInt(index)) * stride - range.scroll_offset + child.frame.y;
+        const y = content.y + @as(f32, @floatFromInt(index)) * stride - range.layout_offset + child.frame.y;
         const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else content.width);
         const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
         const child_frame = geometry.RectF.init(
@@ -15275,6 +15280,41 @@ test "virtual list range computes visible and overscan windows" {
     try std.testing.expectEqual(@as(f32, 2796), range.content_extent);
     try std.testing.expectEqual(@as(f32, 2632), range.after_extent);
 
+    const top_rubberband = virtualListRange(.{
+        .item_count = 10,
+        .item_extent = 20,
+        .item_gap = 5,
+        .viewport_extent = 50,
+        .scroll_offset = -14,
+        .overscan = 1,
+    });
+    try std.testing.expectEqual(@as(f32, 0), top_rubberband.scroll_offset);
+    try std.testing.expectEqual(@as(f32, -14), top_rubberband.layout_offset);
+    try std.testing.expectEqual(@as(usize, 0), top_rubberband.first_visible_index);
+
+    const bottom_rubberband = virtualListRange(.{
+        .item_count = 10,
+        .item_extent = 20,
+        .item_gap = 5,
+        .viewport_extent = 50,
+        .scroll_offset = 216,
+        .overscan = 1,
+    });
+    try std.testing.expectEqual(@as(f32, 195), bottom_rubberband.scroll_offset);
+    try std.testing.expectEqual(@as(f32, 216), bottom_rubberband.layout_offset);
+    try std.testing.expectEqual(@as(usize, 7), bottom_rubberband.first_visible_index);
+
+    const bounded_rubberband = virtualListRange(.{
+        .item_count = 10,
+        .item_extent = 20,
+        .item_gap = 5,
+        .viewport_extent = 50,
+        .scroll_offset = 1000,
+        .overscan = 1,
+    });
+    try std.testing.expectEqual(@as(f32, 195), bounded_rubberband.scroll_offset);
+    try std.testing.expectEqual(@as(f32, 245), bounded_rubberband.layout_offset);
+
     const empty = virtualListRange(.{
         .item_count = 10,
         .item_extent = 0,
@@ -15329,6 +15369,25 @@ test "widget virtualized scroll view lays out only visible overscan children" {
 
     try std.testing.expectEqual(@as(ObjectId, 4), layout.hitTest(geometry.PointF.init(10, 8)).?.id);
     try std.testing.expect(layout.hitTest(geometry.PointF.init(10, 56)) == null);
+
+    const top_overscroll = Widget{
+        .id = 20,
+        .kind = .scroll_view,
+        .value = -12,
+        .layout = .{
+            .gap = 5,
+            .virtualized = true,
+            .virtual_item_extent = 20,
+            .virtual_overscan = 1,
+        },
+        .children = &children,
+    };
+    var top_nodes: [5]WidgetLayoutNode = undefined;
+    const top_layout = try layoutWidgetTree(top_overscroll, geometry.RectF.init(0, 0, 120, 50), &top_nodes);
+    try expectLayoutFrame(top_layout, 2, geometry.RectF.init(0, 12, 120, 20));
+    try expectLayoutFrame(top_layout, 3, geometry.RectF.init(0, 37, 120, 20));
+    try std.testing.expectEqual(@as(f32, 0), top_layout.virtualRangeById(20).?.scroll_offset);
+    try std.testing.expectEqual(@as(f32, -12), top_layout.virtualRangeById(20).?.layout_offset);
 }
 
 test "widget virtualized list exposes logical item semantics" {

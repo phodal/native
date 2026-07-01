@@ -158,11 +158,13 @@ pub const RenderPathGeometryCachePlan = render_model.RenderPathGeometryCachePlan
 pub const RenderPathGeometryCachePlanner = render_model.RenderPathGeometryCachePlanner;
 pub const RenderImage = render_model.RenderImage;
 pub const RenderImagePlan = render_model.RenderImagePlan;
+pub const RenderImagePlanner = render_model.RenderImagePlanner;
 pub const RenderImageKey = render_model.RenderImageKey;
 pub const RenderImageCacheEntry = render_model.RenderImageCacheEntry;
 pub const RenderImageCacheActionKind = render_model.RenderImageCacheActionKind;
 pub const RenderImageCacheAction = render_model.RenderImageCacheAction;
 pub const RenderImageCachePlan = render_model.RenderImageCachePlan;
+pub const RenderImageCachePlanner = render_model.RenderImageCachePlanner;
 pub const RenderResourceKind = render_model.RenderResourceKind;
 pub const RenderResource = render_model.RenderResource;
 pub const RenderResourcePlan = render_model.RenderResourcePlan;
@@ -1496,6 +1498,9 @@ const textLineCaretX = text_model.textLineCaretX;
 
 pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimations;
 const motionProgress = render_model.motionProgress;
+const drawImageFingerprint = render_model.drawImageFingerprint;
+const renderImageFingerprint = render_model.renderImageFingerprint;
+const renderImageFingerprintForResource = render_model.renderImageFingerprintForResource;
 const commandsEqual = equality_model.commandsEqual;
 const rectsEqual = equality_model.rectsEqual;
 const optionalRectsEqual = equality_model.optionalRectsEqual;
@@ -1677,123 +1682,6 @@ fn renderLayerCanExtend(layer: RenderLayer, command: RenderCommand, index: usize
         optionalRectsEqual(layer.clip, command.clip) and
         affinesEqual(layer.transform, command.transform);
 }
-
-pub const RenderImagePlanner = struct {
-    images: []RenderImage,
-    image_resources: []const ReferenceImage = &.{},
-    len: usize = 0,
-
-    pub fn init(images: []RenderImage) RenderImagePlanner {
-        return .{ .images = images };
-    }
-
-    pub fn reset(self: *RenderImagePlanner) void {
-        self.len = 0;
-    }
-
-    pub fn build(self: *RenderImagePlanner, render_plan: RenderPlan) Error!RenderImagePlan {
-        self.reset();
-        for (render_plan.commands, 0..) |command, index| {
-            try self.consume(command, index);
-        }
-        return .{ .images = self.images[0..self.len] };
-    }
-
-    fn consume(self: *RenderImagePlanner, command: RenderCommand, index: usize) Error!void {
-        switch (command.command) {
-            .draw_image => |value| try self.appendOrExtend(value, command, index),
-            else => {},
-        }
-    }
-
-    fn appendOrExtend(self: *RenderImagePlanner, image: DrawImage, command: RenderCommand, index: usize) Error!void {
-        const resource = findReferenceImage(self.image_resources, image.image_id);
-        const fingerprint = renderImageFingerprintForResource(image.image_id, resource);
-        if (findRenderImage(self.images[0..self.len], image.image_id, fingerprint)) |existing_index| {
-            const existing = &self.images[existing_index];
-            existing.draw_count += 1;
-            existing.id = if (existing.id == command.id) existing.id else null;
-            existing.bounds = geometry.RectF.unionWith(existing.bounds.normalized(), command.bounds.normalized());
-            return;
-        }
-
-        if (self.len >= self.images.len) return error.ImageListFull;
-        self.images[self.len] = .{
-            .image_id = image.image_id,
-            .command_index = index,
-            .id = command.id,
-            .draw_count = 1,
-            .bounds = command.bounds,
-            .width = if (resource) |value| value.width else 0,
-            .height = if (resource) |value| value.height else 0,
-            .pixels = if (resource) |value| value.pixels else &.{},
-            .fingerprint = fingerprint,
-        };
-        self.len += 1;
-    }
-};
-
-pub const RenderImageCachePlanner = struct {
-    entries: []RenderImageCacheEntry,
-    actions: []RenderImageCacheAction,
-    entry_len: usize = 0,
-    action_len: usize = 0,
-
-    pub fn init(entries: []RenderImageCacheEntry, actions: []RenderImageCacheAction) RenderImageCachePlanner {
-        return .{ .entries = entries, .actions = actions };
-    }
-
-    pub fn reset(self: *RenderImageCachePlanner) void {
-        self.entry_len = 0;
-        self.action_len = 0;
-    }
-
-    pub fn build(self: *RenderImageCachePlanner, image_plan: RenderImagePlan, previous: []const RenderImageCacheEntry, frame_index: u64) Error!RenderImageCachePlan {
-        self.reset();
-        for (image_plan.images, 0..) |image, image_index| {
-            const key = renderImageKey(image);
-            if (findRenderImageCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
-
-            const previous_index = findRenderImageCacheEntry(previous, key);
-            try self.appendAction(.{
-                .kind = if (previous_index == null) .upload else .retain,
-                .key = key,
-                .image_index = image_index,
-                .cache_index = previous_index,
-            });
-            try self.appendEntry(.{
-                .key = key,
-                .last_used_frame = frame_index,
-            });
-        }
-
-        for (previous, 0..) |entry, cache_index| {
-            if (findRenderImageCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
-            try self.appendAction(.{
-                .kind = .evict,
-                .key = entry.key,
-                .cache_index = cache_index,
-            });
-        }
-
-        return .{
-            .entries = self.entries[0..self.entry_len],
-            .actions = self.actions[0..self.action_len],
-        };
-    }
-
-    fn appendEntry(self: *RenderImageCachePlanner, entry: RenderImageCacheEntry) Error!void {
-        if (self.entry_len >= self.entries.len) return error.ImageCacheListFull;
-        self.entries[self.entry_len] = entry;
-        self.entry_len += 1;
-    }
-
-    fn appendAction(self: *RenderImageCachePlanner, action: RenderImageCacheAction) Error!void {
-        if (self.action_len >= self.actions.len) return error.ImageCacheListFull;
-        self.actions[self.action_len] = action;
-        self.action_len += 1;
-    }
-};
 
 pub const RenderLayerPlanner = struct {
     layers: []RenderLayer,
@@ -2196,32 +2084,6 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.fingerprint == b.fingerprint;
 }
 
-fn renderImageKey(image: RenderImage) RenderImageKey {
-    return .{
-        .image_id = image.image_id,
-        .fingerprint = image.fingerprint,
-    };
-}
-
-fn findRenderImage(images: []const RenderImage, image_id: ImageId, fingerprint: u64) ?usize {
-    for (images, 0..) |image, index| {
-        if (image.image_id == image_id and image.fingerprint == fingerprint) return index;
-    }
-    return null;
-}
-
-fn findRenderImageCacheEntry(entries: []const RenderImageCacheEntry, key: RenderImageKey) ?usize {
-    for (entries, 0..) |entry, index| {
-        if (renderImageKeysEqual(entry.key, key)) return index;
-    }
-    return null;
-}
-
-fn renderImageKeysEqual(a: RenderImageKey, b: RenderImageKey) bool {
-    return a.image_id == b.image_id and
-        a.fingerprint == b.fingerprint;
-}
-
 fn renderLayerKey(layer: RenderLayer) RenderLayerKey {
     return .{
         .id = layer.id,
@@ -2371,28 +2233,6 @@ fn linearGradientFingerprint(gradient: LinearGradient) u64 {
         hash = resourceHashF32(hash, stop.offset);
         hash = resourceHashColor(hash, stop.color);
     }
-    return hash;
-}
-
-fn drawImageFingerprint(image: DrawImage) u64 {
-    var hash = resourceHashTag("image");
-    hash = resourceHashU64(hash, image.image_id);
-    hash = resourceHashOptionalRect(hash, image.src);
-    hash = resourceHashEnum(hash, @intFromEnum(image.fit));
-    hash = resourceHashEnum(hash, @intFromEnum(image.sampling));
-    return hash;
-}
-
-fn renderImageFingerprint(image_id: ImageId) u64 {
-    return resourceHashU64(resourceHashTag("image_texture"), image_id);
-}
-
-fn renderImageFingerprintForResource(image_id: ImageId, image: ?ReferenceImage) u64 {
-    const value = image orelse return renderImageFingerprint(image_id);
-    var hash = renderImageFingerprint(image_id);
-    hash = resourceHashUsize(hash, value.width);
-    hash = resourceHashUsize(hash, value.height);
-    hash = resourceHashBytes(hash, value.pixels);
     return hash;
 }
 

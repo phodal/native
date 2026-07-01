@@ -14,7 +14,8 @@ const canvas_sidebar_width: f32 = 208;
 const canvas_sidebar_min_width: f32 = 168;
 const canvas_sidebar_max_width: f32 = 360;
 const canvas_sidebar_min_content_width: f32 = 420;
-const canvas_sidebar_resize_handle_width: f32 = 48;
+const canvas_sidebar_resize_handle_width: f32 = 14;
+const canvas_sidebar_resize_line_width: f32 = 1;
 const statusbar_height: f32 = 32;
 const canvas_width: f32 = window_width;
 const canvas_height: f32 = window_height - toolbar_height - statusbar_height;
@@ -65,6 +66,7 @@ const content_stack_id: canvas.ObjectId = 91;
 const canvas_sidebar_id: canvas.ObjectId = 92;
 const canvas_sidebar_title_id: canvas.ObjectId = 93;
 const section_nav_base_id: canvas.ObjectId = 94;
+const canvas_sidebar_resize_line_id: canvas.ObjectId = 88;
 const canvas_sidebar_resize_handle_id: canvas.ObjectId = 99;
 const surface_overlay_backdrop_id: canvas.ObjectId = 222;
 const surface_overlay_id: canvas.ObjectId = 223;
@@ -729,10 +731,11 @@ const GpuComponentsApp = struct {
             error.WindowNotFound, error.ViewNotFound, error.InvalidViewOptions => return,
             else => return err,
         };
+        const start_ns = surfaceOverlayAnimationStartNs(gpu_frame);
         var animations: [max_surface_overlay_animations]canvas.CanvasRenderAnimation = undefined;
         var count: usize = 0;
-        try appendSurfaceChromeSlideAnimations(&animations, &count, motion, gpu_frame.timestamp_ns, canvas.Affine.translate(offset.dx, offset.dy));
-        try appendSurfaceContentFadeAnimations(&animations, &count, motion, gpu_frame.timestamp_ns);
+        try appendSurfaceChromeSlideAnimations(&animations, &count, motion, start_ns, canvas.Affine.translate(offset.dx, offset.dy));
+        try appendSurfaceContentFadeAnimations(&animations, &count, motion, start_ns);
         _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
@@ -1285,6 +1288,10 @@ fn surfaceOverlayKind(overlay: ComponentSurfaceOverlay) canvas.BuiltinComponentK
     };
 }
 
+fn surfaceOverlayAnimationStartNs(frame: zero_native.GpuFrame) u64 {
+    return @max(frame.input_timestamp_ns, frame.timestamp_ns);
+}
+
 fn surfaceOverlayFrame(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay) geometry.RectF {
     return surfaceOverlayFrameForSidebar(surface_size, overlay, canvas_sidebar_width);
 }
@@ -1549,7 +1556,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .frame = rect(0, 0, content_width, content_height),
         .children = content_widgets[0..content_widget_count],
     }};
-    var root_widgets: [5]canvas.Widget = undefined;
+    var root_widgets: [6]canvas.Widget = undefined;
     var root_widget_count: usize = 0;
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_id,
@@ -1567,6 +1574,12 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .layout = .{ .clip_content = true },
         .semantics = .{ .label = "Component section content" },
         .children = &content_children,
+    });
+    try appendComponentWidget(&root_widgets, &root_widget_count, .{
+        .id = canvas_sidebar_resize_line_id,
+        .kind = .separator,
+        .frame = sidebarResizeLineFrame(sidebar_width, size.height),
+        .style = .{ .stroke_width = canvas_sidebar_resize_line_width },
     });
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_resize_handle_id,
@@ -1803,11 +1816,16 @@ fn componentWidgetCenter(runtime: *const zero_native.Runtime, id: canvas.ObjectI
 }
 
 fn dispatchComponentPointerClick(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId) !void {
+    try dispatchComponentPointerClickAtTimestamp(runtime, app, id, 0);
+}
+
+fn dispatchComponentPointerClickAtTimestamp(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, timestamp_ns: u64) !void {
     const point = try componentWidgetCenter(runtime, id);
     try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
         .kind = .pointer_down,
+        .timestamp_ns = timestamp_ns,
         .x = point.x,
         .y = point.y,
         .button = 0,
@@ -1816,6 +1834,7 @@ fn dispatchComponentPointerClick(runtime: *zero_native.Runtime, app: zero_native
         .window_id = 1,
         .label = canvas_label,
         .kind = .pointer_up,
+        .timestamp_ns = timestamp_ns,
         .x = point.x,
         .y = point.y,
         .button = 0,
@@ -1839,6 +1858,15 @@ fn dispatchComponentPointerDrag(runtime: *zero_native.Runtime, app: zero_native.
     const node = layout.findById(id) orelse return error.TestUnexpectedResult;
     const start = geometry.PointF.init(node.frame.x + node.frame.width * start_ratio, node.frame.center().y);
     const end = geometry.PointF.init(node.frame.x + node.frame.width * end_ratio, node.frame.center().y);
+    try dispatchComponentPointerDragPoints(runtime, app, start, end);
+}
+
+fn dispatchComponentPointerDragByDelta(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, delta_x: f32) !void {
+    const point = try componentWidgetCenter(runtime, id);
+    try dispatchComponentPointerDragPoints(runtime, app, point, geometry.PointF.init(point.x + delta_x, point.y));
+}
+
+fn dispatchComponentPointerDragPoints(runtime: *zero_native.Runtime, app: zero_native.App, start: geometry.PointF, end: geometry.PointF) !void {
     try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
@@ -1888,8 +1916,11 @@ fn contentRectForSidebar(sidebar_width: f32, x: f32, y: f32, width: f32, height:
 }
 
 fn sidebarResizeHandleFrame(sidebar_width: f32, surface_height: f32) geometry.RectF {
-    const y = @max(0, (surface_height - canvas_sidebar_resize_handle_width) * 0.5);
-    return rect(sidebar_width - canvas_sidebar_resize_handle_width * 0.5, y, canvas_sidebar_resize_handle_width, canvas_sidebar_resize_handle_width);
+    return rect(sidebar_width - canvas_sidebar_resize_handle_width * 0.5, 0, canvas_sidebar_resize_handle_width, @max(1, surface_height));
+}
+
+fn sidebarResizeLineFrame(sidebar_width: f32, surface_height: f32) geometry.RectF {
+    return rect(sidebar_width - canvas_sidebar_resize_line_width * 0.5, 0, canvas_sidebar_resize_line_width, @max(1, surface_height));
 }
 
 fn componentCommandPartId(id: canvas.ObjectId, slot: canvas.ObjectId) canvas.ObjectId {
@@ -1962,8 +1993,11 @@ test "gpu components layout keeps finished controls visually separated" {
 
     try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_width, canvas_height));
     try std.testing.expectEqual(@as(?f32, 0), layout.findById(canvas_sidebar_id).?.widget.style.radius);
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_width, canvas_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_width, canvas_height));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, 12))));
     try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(canvas_sidebar_width, canvas_height).center())));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_height - 12))));
     try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_width, 0, canvas_width - canvas_sidebar_width, canvas_height));
     try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, 78, 180, 34));
     try std.testing.expect(layout.findById(componentSectionNavId(.controls)).?.widget.state.selected);
@@ -2276,7 +2310,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 12620084233193515898), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 14677707473442518658), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -3332,7 +3366,8 @@ test "gpu components surface launchers open and close overlays" {
     try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_id) == null);
 
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, 176);
+    const drawer_click_timestamp_ns: u64 = 1_420_000_000;
+    try dispatchComponentPointerClickAtTimestamp(&harness.runtime, app_handle, 176, drawer_click_timestamp_ns);
     try std.testing.expectEqual(ComponentSurfaceOverlay.drawer, app.surface_overlay);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     const drawer_frame = surfaceOverlayFrame(default_canvas_size, .drawer);
@@ -3342,16 +3377,18 @@ test "gpu components surface launchers open and close overlays" {
     try std.testing.expectEqual(@as(usize, 8), animations.len);
     try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
     try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), 0, drawer_frame.height);
+    try expectSurfaceAnimationStart(animations, componentCommandPartId(surface_overlay_id, 2), drawer_click_timestamp_ns);
     try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_title_id, 1));
 
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, surface_overlay_backdrop_id);
+    try dispatchComponentPointerClickAtTimestamp(&harness.runtime, app_handle, surface_overlay_backdrop_id, 1_440_000_000);
     try std.testing.expectEqual(ComponentSurfaceOverlay.none, app.surface_overlay);
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_id) == null);
 
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, 177);
+    const sheet_click_timestamp_ns: u64 = 1_460_000_000;
+    try dispatchComponentPointerClickAtTimestamp(&harness.runtime, app_handle, 177, sheet_click_timestamp_ns);
     try std.testing.expectEqual(ComponentSurfaceOverlay.sheet, app.surface_overlay);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     const sheet_frame = surfaceOverlayFrame(default_canvas_size, .sheet);
@@ -3361,6 +3398,7 @@ test "gpu components surface launchers open and close overlays" {
     try std.testing.expectEqual(@as(usize, 8), animations.len);
     try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
     try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), sheet_frame.width, 0);
+    try expectSurfaceAnimationStart(animations, componentCommandPartId(surface_overlay_id, 2), sheet_click_timestamp_ns);
     try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_close_id, 4));
 }
 
@@ -3448,24 +3486,36 @@ test "gpu components sidebar handle drag resizes retained layout" {
         .nonblank = true,
     } });
 
+    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_move,
+        .x = canvas_sidebar_width,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(zero_native.platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
+
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerDrag(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, 0.5, 1.75);
+    try dispatchComponentPointerDragByDelta(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, 60);
     const widened_sidebar_width = canvas_sidebar_width + 60;
     try std.testing.expectApproxEqAbs(widened_sidebar_width, app.sidebar_width, 0.001);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, widened_sidebar_width, canvas_height));
     try expectComponentWidgetFrame(layout, content_scroll_id, rect(widened_sidebar_width, 0, canvas_width - widened_sidebar_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(widened_sidebar_width, canvas_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(widened_sidebar_width, canvas_height));
     var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, widened_sidebar_width));
     try std.testing.expect(harness.runtime.invalidated);
 
     resetComponentDirty(&harness.runtime);
-    try dispatchComponentPointerDrag(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, 0.5, -2.0);
+    try dispatchComponentPointerDragByDelta(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, -120);
     try std.testing.expectApproxEqAbs(canvas_sidebar_min_width, app.sidebar_width, 0.001);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_min_width, canvas_height));
     try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_min_width, 0, canvas_width - canvas_sidebar_min_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_min_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_min_width, canvas_height));
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, canvas_sidebar_min_width));
 
@@ -3491,6 +3541,15 @@ fn expectSurfaceTransformAnimation(animations: []const canvas.CanvasRenderAnimat
         try std.testing.expectEqualDeep(canvas.Affine.identity(), animation.to_transform.?);
         try std.testing.expectApproxEqAbs(tx, animation.from_transform.?.tx, 0.001);
         try std.testing.expectApproxEqAbs(ty, animation.from_transform.?.ty, 0.001);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn expectSurfaceAnimationStart(animations: []const canvas.CanvasRenderAnimation, id: canvas.ObjectId, start_ns: u64) !void {
+    for (animations) |animation| {
+        if (animation.id != id) continue;
+        try std.testing.expectEqual(start_ns, animation.start_ns);
         return;
     }
     return error.TestUnexpectedResult;

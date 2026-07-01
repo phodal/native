@@ -320,6 +320,13 @@ pub const builtinSurfaceEnterOffset = widget_model.builtinSurfaceEnterOffset;
 pub const max_widget_depth = widget_runtime.max_widget_depth;
 pub const max_widget_text_range_rects = widget_runtime.max_widget_text_range_rects;
 
+// Experimental declarative authoring layer lives in `ui.zig`.
+pub const ui_builder = @import("ui.zig");
+pub const Ui = ui_builder.Ui;
+pub const UiKey = ui_builder.UiKey;
+pub const UiHandlerEvent = ui_builder.UiHandlerEvent;
+pub const uiKey = ui_builder.uiKey;
+
 // Canvas widget event and semantics data lives in `events.zig`; root keeps the public API stable.
 pub const WidgetLayoutNode = event_model.WidgetLayoutNode;
 pub const WidgetHit = event_model.WidgetHit;

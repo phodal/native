@@ -1939,6 +1939,24 @@ pub const Runtime = struct {
         try self.refreshCanvasWidgetDisplayListIfOwned(index);
     }
 
+    fn dismissCanvasWidgetSurfaceFromKeyboardInput(self: *Runtime, input_event: GpuSurfaceInputEvent) anyerror!bool {
+        if (input_event.kind != .key_down) return false;
+        if (!canvasWidgetEscapeKey(input_event.key)) return false;
+        const modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers);
+        if (modifiers.shift or modifiers.hasNavigationModifier()) return false;
+
+        const index = self.findViewIndex(input_event.window_id, input_event.label) orelse return false;
+        if (self.views[index].kind != .gpu_surface or !self.views[index].focused) return false;
+        const focused_id = self.views[index].canvas_widget_focused_id;
+        if (focused_id == 0) return false;
+
+        const previous_cursor = self.views[index].canvas_widget_cursor;
+        const dirty = try self.views[index].dismissCanvasWidgetSurfaceForFocusedTarget(focused_id) orelse return false;
+        if (previous_cursor != self.views[index].canvas_widget_cursor) try self.syncCanvasWidgetCursorForView(index);
+        try self.invalidateForCanvasWidgetDirty(index, dirty);
+        return true;
+    }
+
     fn dispatchCanvasWidgetCommandForId(self: *Runtime, app: App, view_index: usize, id: canvas.ObjectId) anyerror!void {
         if (view_index >= self.view_count) return error.ViewNotFound;
         const node_index = self.views[view_index].canvasWidgetNodeIndexById(id) orelse return;
@@ -2471,25 +2489,32 @@ pub const Runtime = struct {
                     => null,
                     else => return err,
                 };
-                try self.updateCanvasWidgetFocusFromKeyboardInput(input_event);
-                const widget_keyboard_event = self.routeCanvasWidgetKeyboardInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
-                    error.WindowNotFound,
-                    error.ViewNotFound,
-                    error.InvalidViewOptions,
-                    => null,
-                    else => return err,
-                };
+                const widget_surface_dismissed = try self.dismissCanvasWidgetSurfaceFromKeyboardInput(input_event);
+                if (!widget_surface_dismissed) try self.updateCanvasWidgetFocusFromKeyboardInput(input_event);
+                const widget_keyboard_event = if (widget_surface_dismissed)
+                    null
+                else
+                    self.routeCanvasWidgetKeyboardInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
+                        error.WindowNotFound,
+                        error.ViewNotFound,
+                        error.InvalidViewOptions,
+                        => null,
+                        else => return err,
+                    };
                 if (widget_keyboard_event) |keyboard_event| {
                     try self.updateCanvasWidgetControlFromKeyboard(keyboard_event);
                     try self.updateCanvasWidgetTextFromKeyboard(keyboard_event);
                 }
-                const widget_text_input_event = self.routeCanvasWidgetTextInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
-                    error.WindowNotFound,
-                    error.ViewNotFound,
-                    error.InvalidViewOptions,
-                    => null,
-                    else => return err,
-                };
+                const widget_text_input_event = if (widget_surface_dismissed)
+                    null
+                else
+                    self.routeCanvasWidgetTextInput(input_event, &self.widget_event_route_entries) catch |err| switch (err) {
+                        error.WindowNotFound,
+                        error.ViewNotFound,
+                        error.InvalidViewOptions,
+                        => null,
+                        else => return err,
+                    };
                 if (widget_text_input_event) |text_input_event| {
                     try self.updateCanvasWidgetTextFromKeyboard(text_input_event);
                 }
@@ -5342,6 +5367,20 @@ fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     };
 }
 
+fn canvasWidgetDismissibleSurfaceKind(kind: canvas.WidgetKind) bool {
+    return switch (kind) {
+        .dialog,
+        .drawer,
+        .sheet,
+        .popover,
+        .menu_surface,
+        .dropdown_menu,
+        .tooltip,
+        => true,
+        else => false,
+    };
+}
+
 fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
     return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox or kind == .textarea;
 }
@@ -7041,6 +7080,57 @@ const RuntimeView = struct {
         try self.refreshCanvasWidgetSemantics();
         self.widget_revision += 1;
         return self.canvasWidgetDirtyBounds(index, widget.frame);
+    }
+
+    fn dismissCanvasWidgetSurfaceForFocusedTarget(self: *RuntimeView, focused_id: canvas.ObjectId) anyerror!?geometry.RectF {
+        const focused_index = self.canvasWidgetNodeIndexById(focused_id) orelse return null;
+        const focused_widget = self.widget_layout_nodes[focused_index].widget;
+        if (canvasWidgetEditableTextKind(focused_widget.kind) and focused_widget.text_composition != null) return null;
+
+        const surface_index = self.canvasWidgetDismissibleSurfaceIndexForTarget(focused_index) orelse return null;
+        const surface = self.widget_layout_nodes[surface_index].widget;
+        if (surface.semantics.hidden) return null;
+
+        const dirty = self.canvasWidgetDirtyBounds(surface_index, surface.frame) orelse surface.frame;
+        self.widget_layout_nodes[surface_index].widget.semantics.hidden = true;
+        if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focused_id, surface_index)) self.canvas_widget_focused_id = 0;
+        if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_hovered_id, surface_index)) {
+            self.canvas_widget_hovered_id = 0;
+            self.canvas_widget_cursor = .arrow;
+        }
+        if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_pressed_id, surface_index)) self.canvas_widget_pressed_id = 0;
+
+        try self.refreshCanvasWidgetSemantics();
+        self.widget_revision += 1;
+        return dirty;
+    }
+
+    fn canvasWidgetDismissibleSurfaceIndexForTarget(self: *const RuntimeView, target_index: usize) ?usize {
+        if (target_index >= self.widget_layout_node_count) return null;
+        var current: ?usize = target_index;
+        while (current) |index| {
+            if (index >= self.widget_layout_node_count) return null;
+            const widget = self.widget_layout_nodes[index].widget;
+            if (canvasWidgetDismissibleSurfaceKind(widget.kind) and !widget.semantics.hidden) return index;
+            current = self.widget_layout_nodes[index].parent_index;
+        }
+        return null;
+    }
+
+    fn canvasWidgetIdDescendsFromIndex(self: *const RuntimeView, id: canvas.ObjectId, ancestor_index: usize) bool {
+        const index = self.canvasWidgetNodeIndexById(id) orelse return false;
+        return self.canvasWidgetNodeIndexDescendsFrom(index, ancestor_index);
+    }
+
+    fn canvasWidgetNodeIndexDescendsFrom(self: *const RuntimeView, node_index: usize, ancestor_index: usize) bool {
+        if (node_index >= self.widget_layout_node_count or ancestor_index >= self.widget_layout_node_count) return false;
+        var current: ?usize = node_index;
+        while (current) |index| {
+            if (index >= self.widget_layout_node_count) return false;
+            if (index == ancestor_index) return true;
+            current = self.widget_layout_nodes[index].parent_index;
+        }
+        return false;
     }
 
     fn canvasWidgetNodeIndexById(self: *const RuntimeView, id: canvas.ObjectId) ?usize {
@@ -12941,6 +13031,152 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
     }
     try std.testing.expect(!saw_stale_focused_ring);
     try std.testing.expect(!saw_hidden_button_part);
+}
+
+test "runtime dismisses nearest canvas floating surface with escape" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-surface-dismiss", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(20, 30, 360, 220),
+    });
+
+    const popover_children = [_]canvas.Widget{.{
+        .id = 3,
+        .kind = .button,
+        .frame = geometry.RectF.init(16, 16, 100, 32),
+        .text = "Copy",
+    }};
+    const dialog_children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .popover,
+            .frame = geometry.RectF.init(18, 52, 160, 96),
+            .semantics = .{ .label = "Actions" },
+            .children = &popover_children,
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(196, 52, 100, 32),
+            .text = "Keep",
+        },
+    };
+    const dialog = canvas.Widget{
+        .id = 1,
+        .kind = .dialog,
+        .frame = geometry.RectF.init(12, 12, 320, 180),
+        .text = "Command palette",
+        .semantics = .{ .label = "Command palette" },
+        .children = &dialog_children,
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(dialog, dialog.frame, &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+    harness.runtime.views[0].canvas_widget_hovered_id = 3;
+    harness.runtime.views[0].canvas_widget_pressed_id = 3;
+    harness.runtime.views[0].canvas_widget_cursor = .pointing_hand;
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    try std.testing.expect((try harness.runtime.canvasDisplayList(1, "canvas")).findCommandById(testCanvasWidgetPartId(2, 2)) != null);
+
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "escape",
+    } });
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(1).?.widget.semantics.hidden);
+    try std.testing.expect(retained.findById(2).?.widget.semantics.hidden);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_pressed_id);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
+    try std.testing.expect(harness.runtime.invalidated);
+
+    for (harness.runtime.views[0].widgetSemantics()) |node| {
+        try std.testing.expect(node.id != 2);
+        try std.testing.expect(node.id != 3);
+    }
+    const retained_after_dismiss = try harness.runtime.canvasDisplayList(1, "canvas");
+    try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(2, 2)) == null);
+    try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(3, 1)) == null);
+    try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(1, 2)) != null);
+    try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(4, 1)) != null);
+}
+
+test "runtime keeps floating surface open when escape cancels text composition" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-surface-dismiss-ime", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 160),
+    });
+
+    const popover_children = [_]canvas.Widget{.{
+        .id = 3,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 12, 140, 34),
+        .text = "Cafe",
+        .text_selection = canvas.TextSelection.collapsed(4),
+        .text_composition = canvas.TextRange.init(2, 4),
+    }};
+    const popover = canvas.Widget{
+        .id = 2,
+        .kind = .popover,
+        .frame = geometry.RectF.init(18, 18, 180, 72),
+        .children = &popover_children,
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(popover, popover.frame, &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "escape",
+    } });
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(2).?.widget.semantics.hidden);
+    try std.testing.expect(retained.findById(3).?.widget.text_composition == null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expect((try harness.runtime.canvasDisplayList(1, "canvas")).findCommandById(testCanvasWidgetPartId(2, 2)) != null);
 }
 
 test "runtime clears canvas widget interaction state when layout replacement disables it" {

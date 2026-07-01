@@ -20,10 +20,8 @@ const PathElement = drawing_model.PathElement;
 const Easing = token_model.Easing;
 const SpringToken = token_model.SpringToken;
 
-const RenderPathGeometryPlanner = canvas.RenderPathGeometryPlanner;
 const RenderImagePlanner = canvas.RenderImagePlanner;
 const RenderLayerPlanner = canvas.RenderLayerPlanner;
-const RenderPathGeometryCachePlanner = canvas.RenderPathGeometryCachePlanner;
 const RenderImageCachePlanner = canvas.RenderImageCachePlanner;
 const RenderResourceCachePlanner = canvas.RenderResourceCachePlanner;
 const RenderLayerCachePlanner = canvas.RenderLayerCachePlanner;
@@ -32,6 +30,8 @@ const optionalRectsEqual = equality_model.optionalRectsEqual;
 
 pub const max_render_state_stack: usize = 32;
 const path_geometry_curve_segments: usize = 12;
+const resource_hash_offset: u64 = 14695981039346656037;
+const resource_hash_prime: u64 = 1099511628211;
 
 pub const RenderState = struct {
     opacity: f32 = 1,
@@ -518,6 +518,62 @@ pub const RenderPathGeometryPlan = struct {
     }
 };
 
+pub const RenderPathGeometryPlanner = struct {
+    geometries: []RenderPathGeometry,
+    len: usize = 0,
+
+    pub fn init(geometries: []RenderPathGeometry) RenderPathGeometryPlanner {
+        return .{ .geometries = geometries };
+    }
+
+    pub fn reset(self: *RenderPathGeometryPlanner) void {
+        self.len = 0;
+    }
+
+    pub fn build(self: *RenderPathGeometryPlanner, render_plan: RenderPlan) Error!RenderPathGeometryPlan {
+        self.reset();
+        for (render_plan.commands, 0..) |command, index| {
+            try self.consume(command, index);
+        }
+        return .{ .geometries = self.geometries[0..self.len] };
+    }
+
+    fn consume(self: *RenderPathGeometryPlanner, command: RenderCommand, index: usize) Error!void {
+        switch (command.command) {
+            .fill_path => |value| try self.consumePath(.fill, command, index, value.elements, 0),
+            .stroke_path => |value| {
+                const stroke_width = nonNegative(value.stroke.width) * referenceTransformScale(command.transform);
+                if (stroke_width <= 0) return;
+                try self.consumePath(.stroke, command, index, value.elements, stroke_width);
+            },
+            else => {},
+        }
+    }
+
+    fn consumePath(self: *RenderPathGeometryPlanner, kind: RenderPathGeometryKind, command: RenderCommand, index: usize, elements: []const PathElement, stroke_width: f32) Error!void {
+        const counts = analyzePathGeometry(elements, kind);
+        if (counts.vertex_count == 0 or counts.index_count == 0) return;
+        if (self.len >= self.geometries.len) return error.PathGeometryListFull;
+        self.geometries[self.len] = .{
+            .kind = kind,
+            .command_index = index,
+            .id = command.id,
+            .bounds = command.bounds,
+            .element_count = elements.len,
+            .contour_count = counts.contour_count,
+            .line_segment_count = counts.line_segment_count,
+            .quadratic_segment_count = counts.quadratic_segment_count,
+            .cubic_segment_count = counts.cubic_segment_count,
+            .flattened_segment_count = counts.flattened_segment_count,
+            .vertex_count = counts.vertex_count,
+            .index_count = counts.index_count,
+            .stroke_width = stroke_width,
+            .fingerprint = renderPathGeometryFingerprint(command, kind, elements, stroke_width),
+        };
+        self.len += 1;
+    }
+};
+
 pub const PathGeometryCounts = struct {
     contour_count: usize = 0,
     line_segment_count: usize = 0,
@@ -623,6 +679,112 @@ fn unionOptionalBounds(a: ?geometry.RectF, b: ?geometry.RectF) ?geometry.RectF {
     return b;
 }
 
+fn renderPathGeometryKey(geometry_plan: RenderPathGeometry) RenderPathGeometryKey {
+    return .{
+        .kind = geometry_plan.kind,
+        .id = geometry_plan.id,
+        .command_index = if (geometry_plan.id == null) geometry_plan.command_index else 0,
+        .fingerprint = geometry_plan.fingerprint,
+    };
+}
+
+fn findRenderPathGeometryCacheEntry(entries: []const RenderPathGeometryCacheEntry, key: RenderPathGeometryKey) ?usize {
+    for (entries, 0..) |entry, index| {
+        if (renderPathGeometryKeysEqual(entry.key, key)) return index;
+    }
+    return null;
+}
+
+fn renderPathGeometryKeysEqual(a: RenderPathGeometryKey, b: RenderPathGeometryKey) bool {
+    return a.kind == b.kind and
+        a.id == b.id and
+        a.command_index == b.command_index and
+        a.fingerprint == b.fingerprint;
+}
+
+fn renderPathGeometryFingerprint(command: RenderCommand, kind: RenderPathGeometryKind, elements: []const PathElement, stroke_width: f32) u64 {
+    var hash = resourceHashTag("path_geometry");
+    hash = resourceHashBytes(hash, @tagName(kind));
+    hash = resourceHashOptionalObjectId(hash, command.id);
+    hash = resourceHashAffine(hash, command.transform);
+    hash = resourceHashPath(hash, elements);
+    hash = resourceHashF32(hash, stroke_width);
+    return hash;
+}
+
+fn resourceHashTag(tag: []const u8) u64 {
+    return resourceHashBytes(resource_hash_offset, tag);
+}
+
+fn resourceHashBytes(initial: u64, bytes: []const u8) u64 {
+    var hash = initial;
+    for (bytes) |byte| hash = resourceHashU8(hash, byte);
+    return hash;
+}
+
+fn resourceHashU8(hash: u64, value: u8) u64 {
+    return (hash ^ value) *% resource_hash_prime;
+}
+
+fn resourceHashU32(hash: u64, value: u32) u64 {
+    var next = hash;
+    next = resourceHashU8(next, @intCast(value & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 8) & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 16) & 0xff));
+    next = resourceHashU8(next, @intCast((value >> 24) & 0xff));
+    return next;
+}
+
+fn resourceHashU64(hash: u64, value: u64) u64 {
+    var next = hash;
+    next = resourceHashU32(next, @intCast(value & 0xffff_ffff));
+    next = resourceHashU32(next, @intCast((value >> 32) & 0xffff_ffff));
+    return next;
+}
+
+fn resourceHashUsize(hash: u64, value: usize) u64 {
+    return resourceHashU64(hash, @intCast(value));
+}
+
+fn resourceHashEnum(hash: u64, value: anytype) u64 {
+    return resourceHashU64(hash, @intCast(value));
+}
+
+fn resourceHashF32(hash: u64, value: f32) u64 {
+    const bits: u32 = @bitCast(value);
+    return resourceHashU32(hash, bits);
+}
+
+fn resourceHashPoint(hash: u64, point: geometry.PointF) u64 {
+    return resourceHashF32(resourceHashF32(hash, point.x), point.y);
+}
+
+fn resourceHashOptionalObjectId(hash: u64, id: ?ObjectId) u64 {
+    if (id) |value| return resourceHashU64(resourceHashU8(hash, 1), value);
+    return resourceHashU8(hash, 0);
+}
+
+fn resourceHashAffine(hash: u64, matrix: Affine) u64 {
+    var next = resourceHashF32(hash, matrix.a);
+    next = resourceHashF32(next, matrix.b);
+    next = resourceHashF32(next, matrix.c);
+    next = resourceHashF32(next, matrix.d);
+    next = resourceHashF32(next, matrix.tx);
+    next = resourceHashF32(next, matrix.ty);
+    return next;
+}
+
+fn resourceHashPath(hash: u64, elements: []const PathElement) u64 {
+    var next = resourceHashUsize(resourceHashBytes(hash, "path"), elements.len);
+    for (elements) |element| {
+        next = resourceHashEnum(next, @intFromEnum(element.verb));
+        next = resourceHashPoint(next, element.points[0]);
+        next = resourceHashPoint(next, element.points[1]);
+        next = resourceHashPoint(next, element.points[2]);
+    }
+    return next;
+}
+
 pub const RenderPathGeometryKey = struct {
     kind: RenderPathGeometryKind,
     id: ?ObjectId = null,
@@ -678,6 +840,68 @@ pub const RenderPathGeometryCachePlan = struct {
             if (action.kind == kind) count += 1;
         }
         return count;
+    }
+};
+
+pub const RenderPathGeometryCachePlanner = struct {
+    entries: []RenderPathGeometryCacheEntry,
+    actions: []RenderPathGeometryCacheAction,
+    entry_len: usize = 0,
+    action_len: usize = 0,
+
+    pub fn init(entries: []RenderPathGeometryCacheEntry, actions: []RenderPathGeometryCacheAction) RenderPathGeometryCachePlanner {
+        return .{ .entries = entries, .actions = actions };
+    }
+
+    pub fn reset(self: *RenderPathGeometryCachePlanner) void {
+        self.entry_len = 0;
+        self.action_len = 0;
+    }
+
+    pub fn build(self: *RenderPathGeometryCachePlanner, geometry_plan: RenderPathGeometryPlan, previous: []const RenderPathGeometryCacheEntry, frame_index: u64) Error!RenderPathGeometryCachePlan {
+        self.reset();
+        for (geometry_plan.geometries, 0..) |geometry_plan_item, geometry_index| {
+            const key = renderPathGeometryKey(geometry_plan_item);
+            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
+
+            const previous_index = findRenderPathGeometryCacheEntry(previous, key);
+            try self.appendAction(.{
+                .kind = if (previous_index == null) .upload else .retain,
+                .key = key,
+                .geometry_index = geometry_index,
+                .cache_index = previous_index,
+            });
+            try self.appendEntry(.{
+                .key = key,
+                .last_used_frame = frame_index,
+            });
+        }
+
+        for (previous, 0..) |entry, cache_index| {
+            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
+            try self.appendAction(.{
+                .kind = .evict,
+                .key = entry.key,
+                .cache_index = cache_index,
+            });
+        }
+
+        return .{
+            .entries = self.entries[0..self.entry_len],
+            .actions = self.actions[0..self.action_len],
+        };
+    }
+
+    fn appendEntry(self: *RenderPathGeometryCachePlanner, entry: RenderPathGeometryCacheEntry) Error!void {
+        if (self.entry_len >= self.entries.len) return error.PathGeometryCacheListFull;
+        self.entries[self.entry_len] = entry;
+        self.entry_len += 1;
+    }
+
+    fn appendAction(self: *RenderPathGeometryCachePlanner, action: RenderPathGeometryCacheAction) Error!void {
+        if (self.action_len >= self.actions.len) return error.PathGeometryCacheListFull;
+        self.actions[self.action_len] = action;
+        self.action_len += 1;
     }
 };
 
@@ -1078,4 +1302,14 @@ fn affinesEqual(a: Affine, b: Affine) bool {
         a.d == b.d and
         a.tx == b.tx and
         a.ty == b.ty;
+}
+
+fn referenceTransformScale(transform: Affine) f32 {
+    const x_scale = @sqrt(transform.a * transform.a + transform.b * transform.b);
+    const y_scale = @sqrt(transform.c * transform.c + transform.d * transform.d);
+    return @max(0.0001, @max(x_scale, y_scale));
+}
+
+fn nonNegative(value: f32) f32 {
+    return @max(0, value);
 }

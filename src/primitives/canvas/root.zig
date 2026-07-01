@@ -148,11 +148,13 @@ pub const RenderPipelineCachePlan = render_model.RenderPipelineCachePlan;
 pub const RenderPathGeometryKind = render_model.RenderPathGeometryKind;
 pub const RenderPathGeometry = render_model.RenderPathGeometry;
 pub const RenderPathGeometryPlan = render_model.RenderPathGeometryPlan;
+pub const RenderPathGeometryPlanner = render_model.RenderPathGeometryPlanner;
 pub const RenderPathGeometryKey = render_model.RenderPathGeometryKey;
 pub const RenderPathGeometryCacheEntry = render_model.RenderPathGeometryCacheEntry;
 pub const RenderPathGeometryCacheActionKind = render_model.RenderPathGeometryCacheActionKind;
 pub const RenderPathGeometryCacheAction = render_model.RenderPathGeometryCacheAction;
 pub const RenderPathGeometryCachePlan = render_model.RenderPathGeometryCachePlan;
+pub const RenderPathGeometryCachePlanner = render_model.RenderPathGeometryCachePlanner;
 pub const RenderImage = render_model.RenderImage;
 pub const RenderImagePlan = render_model.RenderImagePlan;
 pub const RenderImageKey = render_model.RenderImageKey;
@@ -1493,7 +1495,6 @@ const textLineCaretX = text_model.textLineCaretX;
 
 pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimations;
 const motionProgress = render_model.motionProgress;
-const analyzePathGeometry = render_model.analyzePathGeometry;
 const commandsEqual = equality_model.commandsEqual;
 const rectsEqual = equality_model.rectsEqual;
 const optionalRectsEqual = equality_model.optionalRectsEqual;
@@ -1648,124 +1649,6 @@ pub fn emitWidgetLayout(builder: *Builder, layout: WidgetLayoutTree, tokens: Des
 fn emitWidgetLayoutWithState(builder: *Builder, layout: WidgetLayoutTree, tokens: DesignTokens, state: WidgetRenderState) Error!void {
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
 }
-
-pub const RenderPathGeometryPlanner = struct {
-    geometries: []RenderPathGeometry,
-    len: usize = 0,
-
-    pub fn init(geometries: []RenderPathGeometry) RenderPathGeometryPlanner {
-        return .{ .geometries = geometries };
-    }
-
-    pub fn reset(self: *RenderPathGeometryPlanner) void {
-        self.len = 0;
-    }
-
-    pub fn build(self: *RenderPathGeometryPlanner, render_plan: RenderPlan) Error!RenderPathGeometryPlan {
-        self.reset();
-        for (render_plan.commands, 0..) |command, index| {
-            try self.consume(command, index);
-        }
-        return .{ .geometries = self.geometries[0..self.len] };
-    }
-
-    fn consume(self: *RenderPathGeometryPlanner, command: RenderCommand, index: usize) Error!void {
-        switch (command.command) {
-            .fill_path => |value| try self.consumePath(.fill, command, index, value.elements, 0),
-            .stroke_path => |value| {
-                const stroke_width = nonNegative(value.stroke.width) * referenceTransformScale(command.transform);
-                if (stroke_width <= 0) return;
-                try self.consumePath(.stroke, command, index, value.elements, stroke_width);
-            },
-            else => {},
-        }
-    }
-
-    fn consumePath(self: *RenderPathGeometryPlanner, kind: RenderPathGeometryKind, command: RenderCommand, index: usize, elements: []const PathElement, stroke_width: f32) Error!void {
-        const counts = analyzePathGeometry(elements, kind);
-        if (counts.vertex_count == 0 or counts.index_count == 0) return;
-        if (self.len >= self.geometries.len) return error.PathGeometryListFull;
-        self.geometries[self.len] = .{
-            .kind = kind,
-            .command_index = index,
-            .id = command.id,
-            .bounds = command.bounds,
-            .element_count = elements.len,
-            .contour_count = counts.contour_count,
-            .line_segment_count = counts.line_segment_count,
-            .quadratic_segment_count = counts.quadratic_segment_count,
-            .cubic_segment_count = counts.cubic_segment_count,
-            .flattened_segment_count = counts.flattened_segment_count,
-            .vertex_count = counts.vertex_count,
-            .index_count = counts.index_count,
-            .stroke_width = stroke_width,
-            .fingerprint = renderPathGeometryFingerprint(command, kind, elements, stroke_width),
-        };
-        self.len += 1;
-    }
-};
-
-pub const RenderPathGeometryCachePlanner = struct {
-    entries: []RenderPathGeometryCacheEntry,
-    actions: []RenderPathGeometryCacheAction,
-    entry_len: usize = 0,
-    action_len: usize = 0,
-
-    pub fn init(entries: []RenderPathGeometryCacheEntry, actions: []RenderPathGeometryCacheAction) RenderPathGeometryCachePlanner {
-        return .{ .entries = entries, .actions = actions };
-    }
-
-    pub fn reset(self: *RenderPathGeometryCachePlanner) void {
-        self.entry_len = 0;
-        self.action_len = 0;
-    }
-
-    pub fn build(self: *RenderPathGeometryCachePlanner, geometry_plan: RenderPathGeometryPlan, previous: []const RenderPathGeometryCacheEntry, frame_index: u64) Error!RenderPathGeometryCachePlan {
-        self.reset();
-        for (geometry_plan.geometries, 0..) |geometry_plan_item, geometry_index| {
-            const key = renderPathGeometryKey(geometry_plan_item);
-            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], key) != null) continue;
-
-            const previous_index = findRenderPathGeometryCacheEntry(previous, key);
-            try self.appendAction(.{
-                .kind = if (previous_index == null) .upload else .retain,
-                .key = key,
-                .geometry_index = geometry_index,
-                .cache_index = previous_index,
-            });
-            try self.appendEntry(.{
-                .key = key,
-                .last_used_frame = frame_index,
-            });
-        }
-
-        for (previous, 0..) |entry, cache_index| {
-            if (findRenderPathGeometryCacheEntry(self.entries[0..self.entry_len], entry.key) != null) continue;
-            try self.appendAction(.{
-                .kind = .evict,
-                .key = entry.key,
-                .cache_index = cache_index,
-            });
-        }
-
-        return .{
-            .entries = self.entries[0..self.entry_len],
-            .actions = self.actions[0..self.action_len],
-        };
-    }
-
-    fn appendEntry(self: *RenderPathGeometryCachePlanner, entry: RenderPathGeometryCacheEntry) Error!void {
-        if (self.entry_len >= self.entries.len) return error.PathGeometryCacheListFull;
-        self.entries[self.entry_len] = entry;
-        self.entry_len += 1;
-    }
-
-    fn appendAction(self: *RenderPathGeometryCachePlanner, action: RenderPathGeometryCacheAction) Error!void {
-        if (self.action_len >= self.actions.len) return error.PathGeometryCacheListFull;
-        self.actions[self.action_len] = action;
-        self.action_len += 1;
-    }
-};
 
 fn renderCommandNeedsLayer(command: RenderCommand) bool {
     return command.opacity != 1 or command.clip != null or !affinesEqual(command.transform, Affine.identity());
@@ -2296,29 +2179,6 @@ fn renderResourceKeysEqual(a: RenderResourceKey, b: RenderResourceKey) bool {
         a.fingerprint == b.fingerprint;
 }
 
-fn renderPathGeometryKey(geometry_plan: RenderPathGeometry) RenderPathGeometryKey {
-    return .{
-        .kind = geometry_plan.kind,
-        .id = geometry_plan.id,
-        .command_index = if (geometry_plan.id == null) geometry_plan.command_index else 0,
-        .fingerprint = geometry_plan.fingerprint,
-    };
-}
-
-fn findRenderPathGeometryCacheEntry(entries: []const RenderPathGeometryCacheEntry, key: RenderPathGeometryKey) ?usize {
-    for (entries, 0..) |entry, index| {
-        if (renderPathGeometryKeysEqual(entry.key, key)) return index;
-    }
-    return null;
-}
-
-fn renderPathGeometryKeysEqual(a: RenderPathGeometryKey, b: RenderPathGeometryKey) bool {
-    return a.kind == b.kind and
-        a.id == b.id and
-        a.command_index == b.command_index and
-        a.fingerprint == b.fingerprint;
-}
-
 fn renderImageKey(image: RenderImage) RenderImageKey {
     return .{
         .image_id = image.image_id,
@@ -2384,16 +2244,6 @@ fn renderCommandFingerprint(command: RenderCommand) u64 {
     hash = resourceHashRect(hash, command.local_bounds);
     hash = resourceHashRect(hash, command.bounds);
     return resourceHashCanvasCommand(hash, command.command);
-}
-
-fn renderPathGeometryFingerprint(command: RenderCommand, kind: RenderPathGeometryKind, elements: []const PathElement, stroke_width: f32) u64 {
-    var hash = resourceHashTag("path_geometry");
-    hash = resourceHashBytes(hash, @tagName(kind));
-    hash = resourceHashOptionalObjectId(hash, command.id);
-    hash = resourceHashAffine(hash, command.transform);
-    hash = resourceHashPath(hash, elements);
-    hash = resourceHashF32(hash, stroke_width);
-    return hash;
 }
 
 fn visualEffectKey(effect: VisualEffect) VisualEffectKey {

@@ -215,7 +215,13 @@ pub fn pathElementsEqual(a: []const PathElement, b: []const PathElement) bool {
 pub fn glyphsEqual(a: []const Glyph, b: []const Glyph) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {
-        if (left.id != right.id or left.font_id != right.font_id or left.x != right.x or left.y != right.y or left.advance != right.advance) return false;
+        if (left.id != right.id or
+            left.font_id != right.font_id or
+            left.x != right.x or
+            left.y != right.y or
+            left.advance != right.advance or
+            left.text_start != right.text_start or
+            left.text_len != right.text_len) return false;
     }
     return true;
 }

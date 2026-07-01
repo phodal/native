@@ -21,6 +21,8 @@ pub const Glyph = struct {
     x: f32,
     y: f32,
     advance: f32 = 0,
+    text_start: usize = 0,
+    text_len: usize = 0,
 };
 
 pub const GlyphAtlasKey = struct {
@@ -819,7 +821,7 @@ fn appendGlyphTextLines(output: []TextLine, len: *usize, text: DrawText, options
         if (glyph_start >= text.glyphs.len) break;
 
         const glyph_end = nextGlyphLineEnd(text, glyph_start, options);
-        const range = textRangeForGlyphRange(text.text, glyph_start, glyph_end - glyph_start, text.glyphs.len);
+        const range = textRangeForGlyphRangeWithGlyphs(text.text, text.glyphs, glyph_start, glyph_end - glyph_start);
         try appendTextLine(output, len, text, range.start, range.byteLen(text.text.len), glyph_start, glyph_end - glyph_start, height, options, bounds);
         glyph_start = glyph_end;
     }
@@ -955,6 +957,10 @@ fn textLineGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset:
     if (offset <= range.start) return line.bounds.x;
     if (offset >= range.end) return line.bounds.x + line.bounds.width;
 
+    if (textGlyphLineHasExplicitRanges(text, line)) {
+        return textLineExplicitGlyphCaretX(text, line, range, offset);
+    }
+
     const scalar_count = utf8ScalarCount(text.text[range.start..range.end]);
     if (scalar_count == 0) return line.bounds.x;
     const scalar_index = utf8ScalarIndexForOffset(text.text[range.start..range.end], offset - range.start);
@@ -992,11 +998,15 @@ fn textLineGlyphOffsetForX(text: DrawText, line: TextLine, range: TextRange, x: 
     const raw_bounds = textLineBounds(text, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
     const first_x = text.glyphs[line.glyph_start].x;
     const dx = line.bounds.x - raw_bounds.x;
+    if (textGlyphLineHasExplicitRanges(text, line)) {
+        return textLineExplicitGlyphOffsetForX(text, line, range, x, first_x, dx);
+    }
+
     for (text.glyphs[line.glyph_start..glyph_end], 0..) |glyph, glyph_index| {
         const glyph_x = text.origin.x + glyph.x - first_x + dx;
         const advance = @max(1, estimatedGlyphAdvance(glyph, text.size));
         if (x < glyph_x + advance * 0.5) {
-            const glyph_range = textRangeForGlyphRange(text.text, line.glyph_start + glyph_index, 1, text.glyphs.len);
+            const glyph_range = textRangeForGlyph(text.text, text.glyphs, line.glyph_start + glyph_index);
             return clampTextOffsetToRange(text.text, range, glyph_range.start);
         }
     }
@@ -1182,8 +1192,29 @@ pub fn isTextBreakByte(byte: u8) bool {
 
 fn isGlyphTextBreak(text: DrawText, glyph_index: usize) bool {
     if (glyph_index >= text.glyphs.len) return false;
-    const range = textRangeForGlyphRange(text.text, glyph_index, 1, text.glyphs.len);
+    const range = textRangeForGlyph(text.text, text.glyphs, glyph_index);
     return range.start < range.end and isTextBreakByte(text.text[range.start]);
+}
+
+fn textRangeForGlyph(text: []const u8, glyphs: []const Glyph, glyph_index: usize) TextRange {
+    if (glyph_index >= glyphs.len) return TextRange.init(text.len, text.len);
+    const glyph = glyphs[glyph_index];
+    if (glyph.text_len > 0) return snapTextRange(text, TextRange.init(glyph.text_start, glyph.text_start + glyph.text_len));
+    return textRangeForGlyphRange(text, glyph_index, 1, glyphs.len);
+}
+
+fn textRangeForGlyphRangeWithGlyphs(text: []const u8, glyphs: []const Glyph, glyph_start: usize, glyph_len: usize) TextRange {
+    if (glyph_len == 0 or glyph_start >= glyphs.len) return textRangeForGlyphRange(text, glyph_start, glyph_len, glyphs.len);
+    const glyph_end = @min(glyphs.len, glyph_start + glyph_len);
+    var explicit_start: usize = text.len;
+    var explicit_end: usize = 0;
+    for (glyphs[glyph_start..glyph_end]) |glyph| {
+        if (glyph.text_len == 0) return textRangeForGlyphRange(text, glyph_start, glyph_len, glyphs.len);
+        const range = snapTextRange(text, TextRange.init(glyph.text_start, glyph.text_start + glyph.text_len));
+        explicit_start = @min(explicit_start, range.start);
+        explicit_end = @max(explicit_end, range.end);
+    }
+    return TextRange.init(explicit_start, explicit_end);
 }
 
 fn textRangeForGlyphRange(text: []const u8, glyph_start: usize, glyph_len: usize, glyph_count: usize) TextRange {
@@ -1195,6 +1226,72 @@ fn textRangeForGlyphRange(text: []const u8, glyph_start: usize, glyph_len: usize
     const start_scalar = @min(scalar_count, (glyph_start * scalar_count) / glyph_count);
     const end_scalar = @min(scalar_count, ((glyph_end * scalar_count) + glyph_count - 1) / glyph_count);
     return TextRange.init(textOffsetForScalarIndex(text, start_scalar), textOffsetForScalarIndex(text, end_scalar));
+}
+
+fn textGlyphLineHasExplicitRanges(text: DrawText, line: TextLine) bool {
+    if (line.glyph_len == 0 or line.glyph_start >= text.glyphs.len) return false;
+    const glyph_end = @min(text.glyphs.len, line.glyph_start + line.glyph_len);
+    for (text.glyphs[line.glyph_start..glyph_end]) |glyph| {
+        if (glyph.text_len == 0) return false;
+    }
+    return true;
+}
+
+fn textLineExplicitGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset: usize) f32 {
+    const glyph_end = @min(text.glyphs.len, line.glyph_start + line.glyph_len);
+    const raw_bounds = textLineBounds(text, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
+    const first_x = text.glyphs[line.glyph_start].x;
+    const dx = line.bounds.x - raw_bounds.x;
+
+    for (line.glyph_start..glyph_end) |glyph_index| {
+        const glyph = text.glyphs[glyph_index];
+        const glyph_range = textRangeForGlyph(text.text, text.glyphs, glyph_index);
+        if (glyph_range.end <= range.start or glyph_range.start >= range.end) continue;
+
+        const glyph_x = text.origin.x + glyph.x - first_x + dx;
+        if (offset <= glyph_range.start) return glyph_x;
+        if (offset < glyph_range.end) {
+            const advance = @max(1, estimatedGlyphAdvance(glyph, text.size));
+            return glyph_x + glyphTextRangeRatio(text.text, glyph_range, offset) * advance;
+        }
+    }
+    return line.bounds.x + line.bounds.width;
+}
+
+fn textLineExplicitGlyphOffsetForX(text: DrawText, line: TextLine, range: TextRange, x: f32, first_x: f32, dx: f32) usize {
+    const glyph_end = @min(text.glyphs.len, line.glyph_start + line.glyph_len);
+    for (line.glyph_start..glyph_end) |glyph_index| {
+        const glyph = text.glyphs[glyph_index];
+        const glyph_range = textRangeForGlyph(text.text, text.glyphs, glyph_index);
+        if (glyph_range.end <= range.start or glyph_range.start >= range.end) continue;
+
+        const glyph_x = text.origin.x + glyph.x - first_x + dx;
+        if (x <= glyph_x) return @max(range.start, glyph_range.start);
+
+        const advance = @max(1, estimatedGlyphAdvance(glyph, text.size));
+        if (x < glyph_x + advance) {
+            return textOffsetForGlyphRangeRatio(text.text, glyph_range, (x - glyph_x) / advance);
+        }
+    }
+    return range.end;
+}
+
+fn glyphTextRangeRatio(text: []const u8, range: TextRange, offset: usize) f32 {
+    const normalized = snapTextRange(text, range);
+    if (normalized.end <= normalized.start) return 0;
+    const scalar_count = utf8ScalarCount(text[normalized.start..normalized.end]);
+    if (scalar_count == 0) return 0;
+    const scalar_index = utf8ScalarIndexForOffset(text[normalized.start..normalized.end], offset - normalized.start);
+    return @as(f32, @floatFromInt(@min(scalar_index, scalar_count))) / @as(f32, @floatFromInt(scalar_count));
+}
+
+fn textOffsetForGlyphRangeRatio(text: []const u8, range: TextRange, ratio: f32) usize {
+    const normalized = snapTextRange(text, range);
+    const scalar_count = utf8ScalarCount(text[normalized.start..normalized.end]);
+    if (scalar_count == 0) return normalized.start;
+    const clamped = std.math.clamp(if (std.math.isFinite(ratio)) ratio else 0, 0, 1);
+    const scalar_index: usize = @intFromFloat(@floor(clamped * @as(f32, @floatFromInt(scalar_count)) + 0.5));
+    return normalized.start + textOffsetForScalarIndex(text[normalized.start..normalized.end], @min(scalar_index, scalar_count));
 }
 
 fn textOffsetForScalarIndex(text: []const u8, scalar_index: usize) usize {
@@ -1294,6 +1391,8 @@ fn drawTextFingerprint(text: DrawText) u64 {
         hash = resourceHashF32(hash, glyph.x);
         hash = resourceHashF32(hash, glyph.y);
         hash = resourceHashF32(hash, glyph.advance);
+        hash = resourceHashUsize(hash, glyph.text_start);
+        hash = resourceHashUsize(hash, glyph.text_len);
     }
     hash = resourceHashOptionalTextLayoutOptions(hash, text.text_layout);
     return hash;

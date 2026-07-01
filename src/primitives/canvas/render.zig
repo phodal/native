@@ -1991,6 +1991,8 @@ fn drawTextFingerprint(text: DrawText) u64 {
         hash = resourceHashF32(hash, glyph.x);
         hash = resourceHashF32(hash, glyph.y);
         hash = resourceHashF32(hash, glyph.advance);
+        hash = resourceHashUsize(hash, glyph.text_start);
+        hash = resourceHashUsize(hash, glyph.text_len);
     }
     hash = resourceHashOptionalTextLayoutOptions(hash, text.text_layout);
     return hash;

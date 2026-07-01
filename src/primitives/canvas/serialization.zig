@@ -896,7 +896,9 @@ fn writeGlyphsJson(glyphs: []const Glyph, writer: anytype) !void {
         if (index > 0) try writer.writeByte(',');
         try writer.print("{{\"id\":{d}", .{glyph.id});
         if (glyph.font_id != 0) try writer.print(",\"font\":{d}", .{glyph.font_id});
-        try writer.print(",\"x\":{d},\"y\":{d},\"advance\":{d}}}", .{ glyph.x, glyph.y, glyph.advance });
+        try writer.print(",\"x\":{d},\"y\":{d},\"advance\":{d}", .{ glyph.x, glyph.y, glyph.advance });
+        if (glyph.text_len != 0) try writer.print(",\"textStart\":{d},\"textLen\":{d}", .{ glyph.text_start, glyph.text_len });
+        try writer.writeByte('}');
     }
     try writer.writeByte(']');
 }

@@ -900,6 +900,46 @@ test "text layout maps caret selection and points across shaped glyph lines" {
     try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 10, 8);
 }
 
+test "text layout maps caret selection and points through glyph text clusters" {
+    const glyphs = [_]Glyph{
+        .{ .id = 'o', .x = 0, .y = 0, .advance = 6, .text_start = 0, .text_len = 1 },
+        .{ .id = 1001, .x = 6, .y = 0, .advance = 18, .text_start = 1, .text_len = 3 },
+        .{ .id = 'c', .x = 24, .y = 0, .advance = 5, .text_start = 4, .text_len = 1 },
+        .{ .id = 'e', .x = 29, .y = 0, .advance = 7, .text_start = 5, .text_len = 1 },
+    };
+    const text = DrawText{
+        .font_id = 2,
+        .size = 10,
+        .origin = geometry.PointF.init(10, 20),
+        .color = Color.rgb8(255, 255, 255),
+        .text = "office",
+        .glyphs = &glyphs,
+    };
+    const options = TextLayoutOptions{ .line_height = 12 };
+
+    var layout_lines: [1]TextLine = undefined;
+    const layout = try layoutTextRun(text, options, &layout_lines);
+    try std.testing.expectEqualDeep(TextRange.init(0, 6), textLineRange(text, layout.lines[0]));
+
+    var caret_lines: [1]TextLine = undefined;
+    try expectRectApprox(geometry.RectF.init(16, 10, 1, 12.5), try layoutTextCaretRect(text, options, 1, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(22, 10, 1, 12.5), try layoutTextCaretRect(text, options, 2, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(28, 10, 1, 12.5), try layoutTextCaretRect(text, options, 3, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(34, 10, 1, 12.5), try layoutTextCaretRect(text, options, 4, &caret_lines));
+
+    var selection_lines: [1]TextLine = undefined;
+    var selection_rects: [1]TextSelectionRect = undefined;
+    const rects = try layoutTextSelectionRects(text, options, TextRange.init(1, 4), &selection_lines, &selection_rects);
+    try std.testing.expectEqual(@as(usize, 1), rects.len);
+    try std.testing.expectEqualDeep(TextRange.init(1, 4), rects[0].range);
+    try expectRectApprox(geometry.RectF.init(16, 10, 18, 12.5), rects[0].rect);
+
+    var point_lines: [1]TextLine = undefined;
+    try std.testing.expectEqual(@as(usize, 2), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(21, 15), &point_lines)).?);
+    try std.testing.expectEqual(@as(usize, 3), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(27, 15), &point_lines)).?);
+    try std.testing.expectEqual(@as(usize, 4), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(33.5, 15), &point_lines)).?);
+}
+
 test "text layout measures utf8 scalars for fallback wrapping" {
     const text = DrawText{
         .font_id = 1,
@@ -1451,6 +1491,30 @@ test "display list serializes per-run text layout options" {
     try (DisplayList{ .commands = &commands }).writeJson(&writer);
     try std.testing.expectEqualStrings(
         "{\"commands\":[{\"op\":\"draw_text\",\"id\":3,\"font\":1,\"size\":10,\"origin\":[4,20],\"color\":[0,0,0,1],\"text\":\"Wrapped\",\"glyphs\":[],\"layout\":{\"maxWidth\":42,\"lineHeight\":14,\"wrap\":\"character\",\"align\":\"center\"}}]}",
+        writer.buffered(),
+    );
+}
+
+test "display list serializes glyph text clusters" {
+    const glyphs = [_]Glyph{
+        .{ .id = 42, .x = 12, .y = 28, .advance = 9, .text_start = 0, .text_len = 1 },
+        .{ .id = 1001, .x = 21, .y = 28, .advance = 12, .text_start = 1, .text_len = 2 },
+    };
+    const commands = [_]CanvasCommand{.{ .draw_text = .{
+        .id = 3,
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "ffi",
+        .glyphs = &glyphs,
+    } }};
+
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try (DisplayList{ .commands = &commands }).writeJson(&writer);
+    try std.testing.expectEqualStrings(
+        "{\"commands\":[{\"op\":\"draw_text\",\"id\":3,\"font\":1,\"size\":10,\"origin\":[4,20],\"color\":[0,0,0,1],\"text\":\"ffi\",\"glyphs\":[{\"id\":42,\"x\":12,\"y\":28,\"advance\":9,\"textStart\":0,\"textLen\":1},{\"id\":1001,\"x\":21,\"y\":28,\"advance\":12,\"textStart\":1,\"textLen\":2}]}]}",
         writer.buffered(),
     );
 }

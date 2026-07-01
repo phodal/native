@@ -204,6 +204,70 @@ test "typed handlers dispatch through the elm-style loop" {
     try testing.expectEqualStrings("1 open", findByKind(next.root, .status_bar).?.children[0].text);
 }
 
+test "pointer events resolve to typed messages through semantic intents" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const tasks = [_]Task{
+        .{ .id = 1, .title = "Ship IR" },
+        .{ .id = 2, .title = "Write RFC" },
+    };
+    const model = Model{ .tasks = &tasks, .open_count = 2 };
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(inboxView(&ui, &model));
+
+    // Released press on the add button dispatches its press message.
+    const add_button = findByKind(tree.root, .button).?;
+    try testing.expectEqual(Msg.add, tree.msgForPointer(add_button.id, .up).?);
+
+    // Released press on a checkbox resolves to its toggle message.
+    const checkbox = findRowByCheckboxToggle(tree, tree.root, 1).?;
+    const toggle_msg = tree.msgForPointer(checkbox.id, .up).?;
+    try testing.expectEqual(@as(u32, 1), toggle_msg.toggle);
+
+    // Non-activating phases and handler-less widgets dispatch nothing.
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(add_button.id, .down));
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(add_button.id, .hover));
+    const status_bar = findByKind(tree.root, .status_bar).?;
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(status_bar.id, .up));
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(0xdead_beef, .up));
+}
+
+test "keyboard events resolve activation and submit messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const tasks = [_]Task{.{ .id = 1, .title = "Ship IR" }};
+    const model = Model{ .tasks = &tasks, .open_count = 1 };
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(inboxView(&ui, &model));
+
+    // Space activates a focused checkbox as a toggle.
+    const checkbox = findRowByCheckboxToggle(tree, tree.root, 1).?;
+    const space_down = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "space" };
+    const toggle_msg = tree.msgForKeyboard(checkbox.id, space_down).?;
+    try testing.expectEqual(@as(u32, 1), toggle_msg.toggle);
+
+    // Enter submits from the text field.
+    const text_field = findByKind(tree.root, .text_field).?;
+    const enter_down = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    try testing.expectEqual(Msg.add, tree.msgForKeyboard(text_field.id, enter_down).?);
+
+    // Key-up, modified, and unrelated keys dispatch nothing.
+    const enter_up = canvas.WidgetKeyboardEvent{ .phase = .key_up, .key = "enter" };
+    try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(text_field.id, enter_up));
+    const control_enter = canvas.WidgetKeyboardEvent{
+        .phase = .key_down,
+        .key = "enter",
+        .modifiers = .{ .control = true },
+    };
+    try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(text_field.id, control_enter));
+    const letter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "a" };
+    try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(checkbox.id, letter));
+}
+
 test "allocation failure latches and surfaces from finalize" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
     var ui = InboxUi.init(failing.allocator());

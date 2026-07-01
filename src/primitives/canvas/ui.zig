@@ -96,6 +96,48 @@ pub fn Ui(comptime Msg: type) type {
                 }
                 return null;
             }
+
+            pub fn findWidget(self: Tree, id: ObjectId) ?Widget {
+                return findWidgetIn(self.root, id);
+            }
+
+            /// Typed dispatch for pointer events: a released press over a
+            /// widget resolves through the engine's semantic intent model
+            /// (press, then toggle, then select) to the matching handler.
+            pub fn msgForPointer(self: Tree, target_id: ObjectId, phase: canvas.WidgetPointerPhase) ?Msg {
+                if (phase != .up) return null;
+                const widget = self.findWidget(target_id) orelse return null;
+                const semantic_actions = [_]canvas.WidgetSemanticAction{ .press, .toggle, .select };
+                for (semantic_actions) |action| {
+                    const intent = canvas.widgetSemanticControlIntent(widget, action) orelse continue;
+                    if (self.msgForIntent(target_id, intent)) |msg| return msg;
+                }
+                return null;
+            }
+
+            /// Typed dispatch for keyboard events: engine control intents
+            /// (activation keys, slider steps) plus enter-to-submit on text
+            /// entry widgets.
+            pub fn msgForKeyboard(self: Tree, target_id: ObjectId, keyboard: canvas.WidgetKeyboardEvent) ?Msg {
+                const widget = self.findWidget(target_id) orelse return null;
+                if (canvas.widgetKeyboardControlIntent(widget, keyboard)) |intent| {
+                    if (self.msgForIntent(target_id, intent)) |msg| return msg;
+                }
+                if (isSubmitKeyboard(widget, keyboard)) {
+                    if (self.msgFor(target_id, .submit)) |msg| return msg;
+                }
+                return null;
+            }
+
+            fn msgForIntent(self: Tree, id: ObjectId, intent: canvas.WidgetControlIntent) ?Msg {
+                return switch (intent.kind) {
+                    .press => self.msgFor(id, .press),
+                    .toggle => self.msgFor(id, .toggle),
+                    .select => self.msgFor(id, .press),
+                    .set_value => self.msgFor(id, .change),
+                    .scroll_by, .scroll_to_start, .scroll_to_end => null,
+                };
+            }
         };
 
         pub fn init(arena: std.mem.Allocator) Self {
@@ -327,6 +369,24 @@ pub fn uiKey(value: anytype) UiKey {
         .pointer => .{ .str = value },
         else => @compileError("uiKey supports integers and byte slices"),
     };
+}
+
+fn findWidgetIn(widget: Widget, id: ObjectId) ?Widget {
+    if (widget.id == id) return widget;
+    for (widget.children) |child| {
+        if (findWidgetIn(child, id)) |found| return found;
+    }
+    return null;
+}
+
+fn isSubmitKeyboard(widget: Widget, keyboard: canvas.WidgetKeyboardEvent) bool {
+    const submits_on_enter = switch (widget.kind) {
+        .text_field, .search_field, .input, .combobox => true,
+        else => false,
+    };
+    if (!submits_on_enter or widget.state.disabled) return false;
+    if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return false;
+    return std.ascii.eqlIgnoreCase(keyboard.key, "enter");
 }
 
 fn structuralId(parent_id: ObjectId, kind: WidgetKind, key: UiKey) ObjectId {

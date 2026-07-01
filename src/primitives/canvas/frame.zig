@@ -1,3 +1,4 @@
+const std = @import("std");
 const geometry = @import("geometry");
 const json = @import("json");
 const canvas = @import("root.zig");
@@ -5,6 +6,7 @@ const render_model = @import("render.zig");
 const text_model = @import("text.zig");
 
 const DiffChange = canvas.DiffChange;
+const CanvasFrame = canvas.CanvasFrame;
 const ReferenceImage = canvas.ReferenceImage;
 const default_glyph_atlas_cache_retention_frames = canvas.default_glyph_atlas_cache_retention_frames;
 const default_text_layout_cache_retention_frames = canvas.default_text_layout_cache_retention_frames;
@@ -414,6 +416,126 @@ pub const CanvasFrameProfile = struct {
         try writer.writeByte('}');
     }
 };
+
+pub fn canvasFrameProfile(frame: CanvasFrame) CanvasFrameProfile {
+    const diagnostics = frame.diagnostics();
+    const surface_area = sizeArea(frame.surface_size);
+    const dirty_area = optionalRectArea(frame.dirty_bounds);
+    const cache_upload_count = diagnostics.pipeline_upload_count +
+        diagnostics.path_geometry_upload_count +
+        diagnostics.image_upload_count +
+        diagnostics.layer_upload_count +
+        diagnostics.resource_upload_count +
+        diagnostics.visual_effect_upload_count +
+        diagnostics.glyph_atlas_upload_count +
+        diagnostics.text_layout_upload_count;
+    const cache_retain_count = diagnostics.pipeline_retain_count +
+        diagnostics.path_geometry_retain_count +
+        diagnostics.image_retain_count +
+        diagnostics.layer_retain_count +
+        diagnostics.resource_retain_count +
+        diagnostics.visual_effect_retain_count +
+        diagnostics.glyph_atlas_retain_count +
+        diagnostics.text_layout_retain_count;
+    const cache_evict_count = diagnostics.pipeline_evict_count +
+        diagnostics.path_geometry_evict_count +
+        diagnostics.image_evict_count +
+        diagnostics.layer_evict_count +
+        diagnostics.resource_evict_count +
+        diagnostics.visual_effect_evict_count +
+        diagnostics.glyph_atlas_evict_count +
+        diagnostics.text_layout_evict_count;
+    var profile = CanvasFrameProfile{
+        .frame_index = frame.frame_index,
+        .requires_render = frame.requiresRender(),
+        .full_repaint = frame.full_repaint,
+        .dirty_bounds = frame.dirty_bounds,
+        .surface_area = surface_area,
+        .dirty_area = dirty_area,
+        .dirty_ratio = dirtyAreaRatio(dirty_area, surface_area),
+        .command_count = diagnostics.command_count,
+        .batch_count = diagnostics.batch_count,
+        .encoder_command_count = diagnostics.encoder_command_count,
+        .cache_action_count = cache_upload_count + cache_retain_count + cache_evict_count,
+        .cache_upload_count = cache_upload_count,
+        .cache_retain_count = cache_retain_count,
+        .cache_evict_count = cache_evict_count,
+        .path_geometry_vertex_count = diagnostics.path_geometry_vertex_count,
+        .path_geometry_index_count = diagnostics.path_geometry_index_count,
+        .image_count = diagnostics.image_count,
+        .layer_count = diagnostics.layer_count,
+        .visual_effect_count = diagnostics.visual_effect_count,
+        .glyph_atlas_entry_count = diagnostics.glyph_atlas_entry_count,
+        .text_layout_line_count = diagnostics.text_layout_line_count,
+    };
+    profile.work_units = canvasFrameProfileWorkUnits(profile, diagnostics);
+    profile.risk = canvasFrameProfileRisk(profile, diagnostics);
+    return profile;
+}
+
+fn canvasFrameProfileWorkUnits(profile: CanvasFrameProfile, diagnostics: CanvasFrameDiagnostics) usize {
+    if (!profile.requires_render) return 0;
+
+    var units = profile.command_count +
+        profile.batch_count * 2 +
+        profile.encoder_command_count +
+        profile.cache_upload_count * 12 +
+        profile.cache_retain_count +
+        profile.cache_evict_count * 3 +
+        profile.image_count * 4 +
+        profile.layer_count * 3 +
+        diagnostics.visual_effect_shadow_count * 20 +
+        diagnostics.visual_effect_blur_count * 24 +
+        profile.glyph_atlas_entry_count * 2 +
+        profile.text_layout_line_count * 2;
+    units += profile.path_geometry_vertex_count / 8;
+    units += profile.path_geometry_index_count / 12;
+    if (profile.full_repaint or profile.dirty_ratio >= 0.75) {
+        units += 25;
+    } else if (profile.dirty_ratio >= 0.25) {
+        units += 10;
+    }
+    return units;
+}
+
+fn canvasFrameProfileRisk(profile: CanvasFrameProfile, diagnostics: CanvasFrameDiagnostics) CanvasFrameProfileRisk {
+    if (!profile.requires_render) return .idle;
+    if (profile.full_repaint or
+        profile.dirty_ratio >= 0.75 or
+        profile.cache_upload_count > 16 or
+        profile.work_units >= 160 or
+        (diagnostics.visual_effect_blur_count > 0 and profile.dirty_ratio >= 0.25))
+    {
+        return .high;
+    }
+    if (profile.dirty_ratio >= 0.25 or
+        profile.cache_upload_count > 4 or
+        profile.work_units >= 80 or
+        profile.visual_effect_count > 0)
+    {
+        return .moderate;
+    }
+    return .low;
+}
+
+fn sizeArea(size: geometry.SizeF) f32 {
+    return nonNegative(size.width) * nonNegative(size.height);
+}
+
+fn optionalRectArea(rect: ?geometry.RectF) f32 {
+    const value = rect orelse return 0;
+    const normalized = value.normalized();
+    return nonNegative(normalized.width) * nonNegative(normalized.height);
+}
+
+fn dirtyAreaRatio(dirty_area: f32, surface_area: f32) f32 {
+    if (surface_area <= 0) return if (dirty_area > 0) 1 else 0;
+    return std.math.clamp(dirty_area / surface_area, 0, 1);
+}
+
+fn nonNegative(value: f32) f32 {
+    return @max(0, value);
+}
 
 fn budgetExceeded(limit: usize, value: usize) bool {
     return limit > 0 and value > limit;

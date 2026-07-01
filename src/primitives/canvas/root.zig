@@ -3893,6 +3893,7 @@ pub const WidgetKind = enum {
     list_item,
     data_row,
     data_cell,
+    status_bar,
     segmented_control,
     checkbox,
     radio,
@@ -4307,6 +4308,19 @@ pub const BuiltinSurfaceBackdropOptions = struct {
     dismissible: bool = true,
 };
 
+pub const BuiltinStatusBarOptions = struct {
+    id: ObjectId = 0,
+    frame: geometry.RectF,
+    text: []const u8 = "",
+    layer: ?i32 = null,
+    padding: geometry.InsetsF = geometry.InsetsF.symmetric(7, 14),
+    background: ?Color = null,
+    foreground: ?Color = null,
+    border: ?Color = null,
+    size: WidgetSize = .sm,
+    semantics: WidgetSemantics = .{},
+};
+
 pub const BuiltinSurfaceEnterAnimationOptions = struct {
     surface_id: ObjectId,
     frame: geometry.RectF,
@@ -4369,6 +4383,28 @@ pub fn builtinSurfaceBackdropWidget(options: BuiltinSurfaceBackdropOptions) Widg
             .label = options.label,
             .actions = .{ .dismiss = options.dismissible },
         },
+    };
+}
+
+pub fn builtinStatusBarWidget(options: BuiltinStatusBarOptions) Widget {
+    var semantics = options.semantics;
+    if (semantics.role == .none) semantics.role = .text;
+    if (semantics.label.len == 0) semantics.label = options.text;
+
+    return .{
+        .id = options.id,
+        .kind = .status_bar,
+        .frame = options.frame,
+        .text = options.text,
+        .layer = options.layer,
+        .layout = .{ .padding = options.padding },
+        .size = options.size,
+        .style = .{
+            .background = options.background,
+            .foreground = options.foreground,
+            .border = options.border,
+        },
+        .semantics = semantics,
     };
 }
 
@@ -7531,6 +7567,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try emitListItemWidget(builder, paint_widget, tokens),
         .data_cell => try emitDataCellWidget(builder, paint_widget, tokens),
+        .status_bar => try emitStatusBarWidget(builder, paint_widget, tokens),
         .segmented_control => try emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try emitRadioWidget(builder, paint_widget, tokens),
@@ -7640,6 +7677,7 @@ fn emitWidgetLayoutNodeContent(
         .menu_item => try emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try emitListItemWidget(builder, paint_widget, tokens),
         .data_cell => try emitDataCellWidget(builder, paint_widget, tokens),
+        .status_bar => try emitStatusBarWidget(builder, paint_widget, tokens),
         .segmented_control => try emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try emitRadioWidget(builder, paint_widget, tokens),
@@ -8426,6 +8464,60 @@ fn emitSeparatorWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         .rect = pixelSnapGeometryRect(tokens, line_rect),
         .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse visual.border orelse tokens.colors.border)),
     });
+}
+
+fn emitStatusBarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const frame = widget.frame.normalized();
+    if (frame.isEmpty()) return;
+
+    try builder.fillRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = pixelSnapGeometryRect(tokens, frame),
+        .fill = colorFill(widgetBackgroundColor(widget, tokens.colors.surface)),
+    });
+
+    const separator_height = @max(tokens.stroke.hairline, widget.style.stroke_width orelse tokens.stroke.hairline);
+    try builder.fillRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(frame.x, frame.y, frame.width, separator_height)),
+        .fill = widgetBorderFill(widget, tokens.colors.border),
+    });
+
+    if (widget.text.len == 0) return;
+
+    const text_size = widgetBodyTextSize(widget, tokens);
+    const padding = widgetStatusBarPadding(widget);
+    const content = frame.inset(padding).normalized();
+    if (content.isEmpty()) return;
+    const line_height = text_size * 1.25;
+    const text_frame = geometry.RectF.init(
+        content.x,
+        frame.y + @max(0, (frame.height - line_height) * 0.5),
+        content.width,
+        @min(content.height, line_height),
+    );
+    try builder.drawText(.{
+        .id = widgetPartId(widget.id, 3),
+        .font_id = tokens.typography.font_id,
+        .size = text_size,
+        .origin = pixelSnapTextPoint(tokens, textOrigin(text_frame, text_size, 0)),
+        .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
+        .text = widget.text,
+        .text_layout = .{
+            .max_width = text_frame.width,
+            .line_height = line_height,
+            .wrap = .none,
+            .alignment = widget.text_alignment,
+        },
+    });
+}
+
+fn widgetStatusBarPadding(widget: Widget) geometry.InsetsF {
+    const padding = widget.layout.padding;
+    if (padding.top == 0 and padding.right == 0 and padding.bottom == 0 and padding.left == 0) {
+        return geometry.InsetsF.symmetric(7, 14);
+    }
+    return padding;
 }
 
 fn emitSkeletonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -9985,7 +10077,7 @@ fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
-        .text, .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        .text, .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
     }
 
     return index;
@@ -10331,6 +10423,7 @@ pub fn intrinsicWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF 
         .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
         .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
         .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
+        .status_bar => intrinsicStatusBarWidgetSize(widget, tokens),
         .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
         .checkbox => intrinsicCheckboxWidgetSize(widget, tokens),
         .radio => intrinsicRadioWidgetSize(widget, tokens),
@@ -10357,6 +10450,13 @@ fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32)
 fn intrinsicPaddedTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32) geometry.SizeF {
     const text = intrinsicTextWidgetSize(widget, tokens, text_size);
     return geometry.SizeF.init(text.width + inset * 2, @max(widgetControlHeight(widget, tokens), text.height + widgetSizedDensityValue(widget, tokens, 8)));
+}
+
+fn intrinsicStatusBarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const text_size = widgetBodyTextSize(widget, tokens);
+    const text = intrinsicTextWidgetSize(widget, tokens, text_size);
+    const padding = widgetStatusBarPadding(widget);
+    return geometry.SizeF.init(text.width + padding.horizontal(), @max(widgetSizedDensityValue(widget, tokens, 32), text.height + padding.vertical()));
 }
 
 fn intrinsicAlertWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
@@ -11261,7 +11361,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .dialog, .drawer, .sheet, .popover => .dialog,
         .menu_surface, .dropdown_menu => .menu,
         .list => .list,
-        .text => .text,
+        .text, .status_bar => .text,
         .icon, .image, .avatar => .image,
         .badge => .text,
         .button, .toggle_button => .button,
@@ -11710,7 +11810,7 @@ fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     return switch (widget.kind) {
         .row, .column, .grid, .data_grid, .table, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .text, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .text, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
     };
 }
 
@@ -17207,6 +17307,62 @@ test "built-in card renders shadcn surface chrome and title" {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("Revenue pulse", text.text);
             try std.testing.expectEqualDeep(Color.rgb8(238, 242, 246), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "built-in status bar renders flat app chrome and text semantics" {
+    const status_bar = builtinStatusBarWidget(.{
+        .id = 47,
+        .frame = geometry.RectF.init(0, 120, 360, 32),
+        .text = "Canvas frame ready.",
+        .background = Color.rgb8(11, 12, 14),
+        .foreground = Color.rgb8(235, 236, 240),
+        .border = Color.rgb8(42, 44, 48),
+    });
+    try std.testing.expectEqual(WidgetKind.status_bar, status_bar.kind);
+    try std.testing.expectEqual(WidgetRole.text, status_bar.semantics.role);
+    try std.testing.expectEqualStrings("Canvas frame ready.", status_bar.semantics.label);
+    try std.testing.expectEqual(@as(f32, 7), status_bar.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 14), status_bar.layout.padding.left);
+
+    var nodes: [2]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(status_bar, geometry.RectF.init(0, 0, 360, 160), &nodes);
+    try std.testing.expectEqual(WidgetKind.status_bar, layout.hitTest(geometry.PointF.init(12, 140)).?.kind);
+
+    var semantics_buffer: [2]WidgetSemanticsNode = undefined;
+    const semantics = try layout.collectSemantics(&semantics_buffer);
+    try std.testing.expectEqual(@as(usize, 1), semantics.len);
+    try std.testing.expectEqual(WidgetRole.text, semantics[0].role);
+    try std.testing.expectEqualStrings("Canvas frame ready.", semantics[0].label);
+    try std.testing.expect(!semantics[0].focusable);
+
+    var commands: [4]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, status_bar, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.findCommandById(widgetPartId(47, 1)).?.command) {
+        .fill_rect => |fill| {
+            try std.testing.expectEqualDeep(geometry.RectF.init(0, 120, 360, 32), fill.rect);
+            try expectFillColor(Color.rgb8(11, 12, 14), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(47, 2)).?.command) {
+        .fill_rect => |fill| {
+            try std.testing.expectEqualDeep(geometry.RectF.init(0, 120, 360, 1), fill.rect);
+            try expectFillColor(Color.rgb8(42, 44, 48), fill.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(47, 3)).?.command) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("Canvas frame ready.", text.text);
+            try std.testing.expectEqualDeep(Color.rgb8(235, 236, 240), text.color);
+            try std.testing.expect(text.origin.y > 120);
+            try std.testing.expect(text.origin.y < 152);
         },
         else => return error.TestUnexpectedResult,
     }

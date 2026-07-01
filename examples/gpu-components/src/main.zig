@@ -26,7 +26,7 @@ const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes_per_view;
-const component_chrome_prefix_commands: usize = 5;
+const component_chrome_prefix_commands: usize = 4;
 const component_chrome_suffix_commands: usize = 0;
 const catalog_grid_columns: usize = 3;
 const catalog_card_width: f32 = 256;
@@ -78,7 +78,7 @@ const canvas_toolbar_separator_id: canvas.ObjectId = 84;
 const canvas_sidebar_resize_line_id: canvas.ObjectId = 88;
 const canvas_sidebar_resize_handle_id: canvas.ObjectId = 99;
 const canvas_status_text_id: canvas.ObjectId = 261;
-const canvas_status_separator_id: canvas.ObjectId = 262;
+const canvas_status_separator_id: canvas.ObjectId = canvas_status_text_id * 16 + 2;
 const surface_overlay_backdrop_id: canvas.ObjectId = 222;
 const surface_overlay_id: canvas.ObjectId = 223;
 const surface_overlay_title_id: canvas.ObjectId = 224;
@@ -1353,8 +1353,6 @@ fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLay
 
 fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
     const size = componentSurfaceSize(surface_size);
-    const content_y = componentContentYForSize(size);
-    const content_height = componentContentHeightForSize(size);
     try builder.fillRect(.{ .id = canvas_background_id, .rect = rect(0, 0, size.width, size.height), .fill = .{ .color = tokens.colors.background } });
     try builder.fillRect(.{ .id = canvas_toolbar_id, .rect = rect(0, 0, size.width, toolbar_height), .fill = .{ .color = tokens.colors.surface } });
     try builder.drawText(.{
@@ -1370,7 +1368,6 @@ fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.Wi
         },
     });
     try builder.fillRect(.{ .id = canvas_toolbar_separator_id, .rect = rect(0, toolbar_height - 1, size.width, 1), .fill = .{ .color = tokens.colors.border } });
-    try builder.fillRect(.{ .id = canvas_status_separator_id, .rect = rect(0, content_y + content_height, size.width, 1), .fill = .{ .color = tokens.colors.border } });
     try layout.emitDisplayList(builder, tokens);
 }
 
@@ -1666,6 +1663,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     const size = componentSurfaceSize(surface_size);
     const content_y = componentContentYForSize(size);
     const content_height_available = componentContentHeightForSize(size);
+    const statusbar_height_available = componentStatusbarHeightForSize(size);
     const sidebar_width = componentSidebarWidthForSize(ui_state.sidebar_width, size);
     const sidebar_title_width = @max(1, sidebar_width - 44);
     const sidebar_item_width = @max(1, sidebar_width - 28);
@@ -1798,14 +1796,12 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .style = .{ .background = rgba(0, 0, 0, 0), .foreground = rgba(0, 0, 0, 0), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
         .semantics = .{ .label = "Resize component sidebar" },
     });
-    try appendComponentWidget(&root_widgets, &root_widget_count, .{
+    try appendComponentWidget(&root_widgets, &root_widget_count, canvas.builtinStatusBarWidget(.{
         .id = canvas_status_text_id,
-        .kind = .text,
-        .frame = rect(14, content_y + content_height_available + 7, @max(1, size.width - 28), 18),
+        .frame = rect(0, content_y + content_height_available, size.width, statusbar_height_available),
         .text = ui_state.status_text,
-        .size = .sm,
         .semantics = .{ .label = ui_state.status_text },
-    });
+    }));
 
     var surface_overlay_children_storage: [3]canvas.Widget = undefined;
     if (ui_state.surface_overlay != .none) {
@@ -2242,7 +2238,8 @@ test "gpu components layout keeps finished controls visually separated" {
     try std.testing.expectEqual(transparent_content_style.stroke_width, content_scroll.style.stroke_width);
     const content_scroll_index = try expectComponentWidgetIndex(layout, content_scroll_id);
     try std.testing.expectEqual(content_scroll_index, layout.findById(101).?.parent_index.?);
-    try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(14, canvas_content_y + canvas_content_height + 7, canvas_width - 28, 18));
+    try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(0, canvas_content_y + canvas_content_height, canvas_width, statusbar_height));
+    try std.testing.expectEqual(canvas.WidgetKind.status_bar, layout.findById(canvas_status_text_id).?.widget.kind);
     try std.testing.expectEqualStrings(initial_component_status_text, layout.findById(canvas_status_text_id).?.widget.text);
     try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, canvas_content_y + 78, 180, 34));
     try std.testing.expect(layout.findById(componentSectionNavId(.controls)).?.widget.state.selected);
@@ -2553,7 +2550,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 12370818433616164314), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 4024187964698946890), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

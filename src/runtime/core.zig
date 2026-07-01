@@ -4,7 +4,6 @@ const trace = @import("trace");
 const json = @import("json");
 const validation = @import("validation.zig");
 const runtime_api = @import("api.zig");
-const bridge_payload = @import("bridge_payload.zig");
 const bridge_responses = @import("bridge_responses.zig");
 const runtime_async_bridge = @import("async_bridge.zig");
 const runtime_automation_snapshot = @import("automation_snapshot.zig");
@@ -20,6 +19,7 @@ const runtime_canvas_widget_state = @import("canvas_widget_state.zig");
 const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
 const runtime_state = @import("state.zig");
 const runtime_system_services = @import("system_services.zig");
+const runtime_builtin_bridge = @import("builtin_bridge.zig");
 const runtime_view = @import("view.zig");
 const runtime_window_views = @import("window_views.zig");
 const widget_bridge = @import("widget_bridge.zig");
@@ -32,7 +32,6 @@ const platform = @import("../platform/root.zig");
 const security = @import("../security/root.zig");
 
 const max_async_bridge_responses = runtime_async_bridge.max_async_bridge_responses;
-const max_command_id_bytes = validation.max_command_id_bytes;
 pub const max_canvas_commands_per_view = canvas_limits.max_canvas_commands_per_view;
 pub const max_canvas_gradient_stops_per_view = canvas_limits.max_canvas_gradient_stops_per_view;
 pub const max_canvas_path_elements_per_view = canvas_limits.max_canvas_path_elements_per_view;
@@ -53,40 +52,10 @@ const max_canvas_resource_cache_actions_per_view = canvas_limits.max_canvas_reso
 const max_canvas_visual_effects_per_view = canvas_limits.max_canvas_visual_effects_per_view;
 const max_canvas_visual_effect_cache_actions_per_view = canvas_limits.max_canvas_visual_effect_cache_actions_per_view;
 const validateCommandName = validation.validateCommandName;
-const validateWindowFrame = validation.validateWindowFrame;
-const isMainWebViewLabel = validation.isMainWebViewLabel;
-const validateWebViewLabel = validation.validateWebViewLabel;
-const validateChildWebViewLabel = validation.validateChildWebViewLabel;
-const validateViewOptions = validation.validateViewOptions;
-const validateViewLabel = validation.validateViewLabel;
-const validateViewFrame = validation.validateViewFrame;
-const isValidWebViewFrame = validation.isValidWebViewFrame;
 
-const jsonStringField = bridge_payload.jsonStringField;
-const webViewWindowIdFromJson = bridge_payload.webViewWindowIdFromJson;
-const viewWindowIdFromJson = bridge_payload.viewWindowIdFromJson;
-const viewKindFromString = bridge_payload.viewKindFromString;
-const gpuSurfaceOptionsFromJson = bridge_payload.gpuSurfaceOptionsFromJson;
-const viewFrameFromJson = bridge_payload.viewFrameFromJson;
-const viewLayerFromJson = bridge_payload.viewLayerFromJson;
-const webViewFrameFromJson = bridge_payload.webViewFrameFromJson;
-const webViewLayerFromJson = bridge_payload.webViewLayerFromJson;
-const webViewUrlOrigin = bridge_payload.webViewUrlOrigin;
-const jsonNumberField = bridge_payload.jsonNumberField;
-const writeWindowJson = bridge_responses.writeWindowJson;
-const writeWebViewOkJson = bridge_responses.writeWebViewOkJson;
-const writeWebViewJson = bridge_responses.writeWebViewJson;
 const writeViewJson = bridge_responses.writeViewJson;
-const writeCommandEventJson = bridge_responses.writeCommandEventJson;
-const writeCommandJsonToWriter = bridge_responses.writeCommandJsonToWriter;
-const writeViewJsonToWriter = bridge_responses.writeViewJsonToWriter;
-const viewInfoFromWebView = bridge_responses.viewInfoFromWebView;
-const writeWebViewJsonToWriter = bridge_responses.writeWebViewJsonToWriter;
-const writeWindowJsonToWriter = bridge_responses.writeWindowJsonToWriter;
 const builtinBridgeErrorMessage = bridge_responses.builtinBridgeErrorMessage;
 const builtinBridgeErrorCode = bridge_responses.builtinBridgeErrorCode;
-const jsonIntegerField = bridge_payload.jsonIntegerField;
-const jsonBoolField = bridge_payload.jsonBoolField;
 
 const AutomationWidgetAction = automation_commands.AutomationWidgetAction;
 const AutomationWidgetTarget = automation_commands.AutomationWidgetTarget;
@@ -104,38 +73,13 @@ const parseAutomationWidgetPointerDrag = automation_commands.parseAutomationWidg
 const parseAutomationResizeCommand = automation_commands.parseAutomationResizeCommand;
 
 const RuntimeShellLayout = shell_layout.RuntimeShellLayout;
-const ShellLayout = shell_layout.ShellLayout;
-const shellRestorePolicy = shell_layout.shellRestorePolicy;
 const sceneNeedsMainWebView = shell_layout.sceneNeedsMainWebView;
-const shellViewOptions = shell_layout.shellViewOptions;
-const combinedViewportInsets = shell_layout.combinedViewportInsets;
 
 pub const CanvasPixelSize = canvas_frame_helpers.CanvasPixelSize;
 pub const canvasSurfacePixelSize = canvas_frame_helpers.canvasSurfacePixelSize;
 pub const canvasFramePixelSize = canvas_frame_helpers.canvasFramePixelSize;
-const appendCanvasSummaryChange = canvas_frame_helpers.appendCanvasSummaryChange;
-const canvasDirtyBoundsFromChanges = canvas_frame_helpers.canvasDirtyBoundsFromChanges;
-const canvasFrameBudgetIsUnset = canvas_frame_helpers.canvasFrameBudgetIsUnset;
-const canvasFullRepaintBounds = canvas_frame_helpers.canvasFullRepaintBounds;
-const normalizedCanvasPresentationScale = canvas_frame_helpers.normalizedCanvasPresentationScale;
-const canvasColorToRgba8 = canvas_frame_helpers.canvasColorToRgba8;
-const clippedCanvasDirtyBounds = canvas_frame_helpers.clippedCanvasDirtyBounds;
-const unionRects = canvas_frame_helpers.unionRects;
-const canvasWidgetPointerEventFromGpuInput = canvas_frame_helpers.canvasWidgetPointerEventFromGpuInput;
-const canvasWidgetKeyboardEventFromGpuInput = canvas_frame_helpers.canvasWidgetKeyboardEventFromGpuInput;
-const canvasWidgetTextInputEventFromGpuInput = canvas_frame_helpers.canvasWidgetTextInputEventFromGpuInput;
-const canvasWidgetEscapeKey = canvas_frame_helpers.canvasWidgetEscapeKey;
-const canvasWidgetKeyboardModifiers = canvas_frame_helpers.canvasWidgetKeyboardModifiers;
-const mergeCanvasRenderOverrides = canvas_frame_helpers.mergeCanvasRenderOverrides;
-const findCanvasRenderOverrideIndex = canvas_frame_helpers.findCanvasRenderOverrideIndex;
-const canvasRenderOverrideNoop = canvas_frame_helpers.canvasRenderOverrideNoop;
-const canvasRenderAnimationFinalOverrideNoop = canvas_frame_helpers.canvasRenderAnimationFinalOverrideNoop;
-const canvasRenderAnimationActive = canvas_frame_helpers.canvasRenderAnimationActive;
 
 const RuntimeView = runtime_view.RuntimeView;
-const CanvasDisplayListScratch = runtime_view.CanvasDisplayListScratch;
-const CanvasWidgetToggleAnimation = runtime_view.CanvasWidgetToggleAnimation;
-const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
 const nowNanoseconds = runtime_clock.nowNanoseconds;
 const timestampToU64 = runtime_clock.timestampToU64;
 const RuntimeWindow = runtime_state.RuntimeWindow;
@@ -1076,6 +1020,40 @@ pub const Runtime = struct {
         }
     }
 
+    const BuiltinBridgeMethods = runtime_builtin_bridge.RuntimeBuiltinBridge(Runtime);
+    const allowsBuiltinBridgeCommand = BuiltinBridgeMethods.allowsBuiltinBridgeCommand;
+    const dispatchCommandBridgeCommand = BuiltinBridgeMethods.dispatchCommandBridgeCommand;
+    const dispatchPlatformBridgeCommand = BuiltinBridgeMethods.dispatchPlatformBridgeCommand;
+    const dispatchWindowBridgeCommand = BuiltinBridgeMethods.dispatchWindowBridgeCommand;
+    const invokeCommandFromJson = BuiltinBridgeMethods.invokeCommandFromJson;
+    const writeCommandListJson = BuiltinBridgeMethods.writeCommandListJson;
+    const dispatchViewBridgeCommand = BuiltinBridgeMethods.dispatchViewBridgeCommand;
+    const dispatchWebViewBridgeCommand = BuiltinBridgeMethods.dispatchWebViewBridgeCommand;
+    const dispatchDialogBridgeCommand = BuiltinBridgeMethods.dispatchDialogBridgeCommand;
+    const dispatchOsBridgeCommand = BuiltinBridgeMethods.dispatchOsBridgeCommand;
+    const dispatchCredentialBridgeCommand = BuiltinBridgeMethods.dispatchCredentialBridgeCommand;
+    const dispatchClipboardBridgeCommand = BuiltinBridgeMethods.dispatchClipboardBridgeCommand;
+    const createWindowFromJson = BuiltinBridgeMethods.createWindowFromJson;
+    const createViewFromJson = BuiltinBridgeMethods.createViewFromJson;
+    const updateViewFromJson = BuiltinBridgeMethods.updateViewFromJson;
+    const setViewFrameFromJson = BuiltinBridgeMethods.setViewFrameFromJson;
+    const setViewVisibleFromJson = BuiltinBridgeMethods.setViewVisibleFromJson;
+    const focusViewFromJson = BuiltinBridgeMethods.focusViewFromJson;
+    const focusNextViewFromJson = BuiltinBridgeMethods.focusNextViewFromJson;
+    const focusPreviousViewFromJson = BuiltinBridgeMethods.focusPreviousViewFromJson;
+    const closeViewFromJson = BuiltinBridgeMethods.closeViewFromJson;
+    const writeViewListJson = BuiltinBridgeMethods.writeViewListJson;
+    const createWebViewFromJson = BuiltinBridgeMethods.createWebViewFromJson;
+    const setWebViewFrameFromJson = BuiltinBridgeMethods.setWebViewFrameFromJson;
+    const navigateWebViewFromJson = BuiltinBridgeMethods.navigateWebViewFromJson;
+    const setWebViewZoomFromJson = BuiltinBridgeMethods.setWebViewZoomFromJson;
+    const setWebViewLayerFromJson = BuiltinBridgeMethods.setWebViewLayerFromJson;
+    const closeWebViewFromJson = BuiltinBridgeMethods.closeWebViewFromJson;
+    const focusWindowFromJson = BuiltinBridgeMethods.focusWindowFromJson;
+    const closeWindowFromJson = BuiltinBridgeMethods.closeWindowFromJson;
+    const resolveWindowSelector = BuiltinBridgeMethods.resolveWindowSelector;
+    const writeWindowListJson = BuiltinBridgeMethods.writeWindowListJson;
+
     fn handleBuiltinBridgeMessage(self: *Runtime, app: App, message: platform.BridgeMessage) anyerror!bool {
         const request = bridge.parseRequest(message.bytes) catch return false;
         const is_command = std.mem.startsWith(u8, request.command, "zero-native.command.");
@@ -1198,502 +1176,6 @@ pub const Runtime = struct {
         }
         try writer.writeAll("]}");
         try self.emitWindowEvent(drop.window_id, "drop:files", writer.buffered());
-    }
-
-    fn allowsBuiltinBridgeCommand(self: *Runtime, command: []const u8, origin: []const u8, js_permission: ?[]const u8) bool {
-        var policy = self.options.builtin_bridge;
-        if (self.options.security.permissions.len > 0) policy.permissions = self.options.security.permissions;
-        if (policy.enabled) return policy.allows(command, origin);
-        const permission = js_permission orelse return false;
-        if (!self.options.js_window_api) return false;
-        if (!security.allowsOrigin(self.options.security.navigation.allowed_origins, origin)) return false;
-        if (self.options.security.permissions.len == 0) return true;
-        return security.hasPermission(self.options.security.permissions, permission) or
-            (!std.mem.eql(u8, permission, security.permission_window) and security.hasPermission(self.options.security.permissions, security.permission_window));
-    }
-
-    fn dispatchCommandBridgeCommand(self: *Runtime, app: App, request: bridge.Request, source_window_id: platform.WindowId, source_view_label: []const u8, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.command.invoke"))
-            self.invokeCommandFromJson(app, request.payload, source_window_id, source_view_label, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.command.list"))
-            self.writeCommandListJson(result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown command command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchPlatformBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.platform.supports"))
-            self.supportsFeatureFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown platform command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchWindowBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.window.list"))
-            self.writeWindowListJson(result_buffer) catch return bridge.writeErrorResponse(response_buffer, request.id, .internal_error, "Failed to list windows")
-        else if (std.mem.eql(u8, request.command, "zero-native.window.create"))
-            self.createWindowFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.window.focus"))
-            self.focusWindowFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.window.close"))
-            self.closeWindowFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown window command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn invokeCommandFromJson(self: *Runtime, app: App, payload: []const u8, source_window_id: platform.WindowId, source_view_label: []const u8, output: []u8) ![]const u8 {
-        var scratch: [max_command_id_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const name = jsonStringField(payload, "name", &storage) orelse jsonStringField(payload, "id", &storage) orelse return error.InvalidCommand;
-        const view_label = if (std.mem.eql(u8, source_view_label, "main")) "" else source_view_label;
-        const event: CommandEvent = .{
-            .name = name,
-            .source = .bridge,
-            .window_id = source_window_id,
-            .view_label = view_label,
-        };
-        try self.dispatchCommand(app, event);
-        return writeCommandEventJson(event, output);
-    }
-
-    fn writeCommandListJson(self: *Runtime, output: []u8) ![]const u8 {
-        var writer = std.Io.Writer.fixed(output);
-        try writer.writeByte('[');
-        for (self.options.commands, 0..) |command, index| {
-            if (index > 0) try writer.writeByte(',');
-            try writeCommandJsonToWriter(command, &writer);
-        }
-        try writer.writeByte(']');
-        return writer.buffered();
-    }
-
-    fn dispatchViewBridgeCommand(self: *Runtime, request: bridge.Request, source_window_id: platform.WindowId, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.view.create"))
-            self.createViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.list"))
-            self.writeViewListJson(source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.update"))
-            self.updateViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.setFrame"))
-            self.setViewFrameFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.setVisible"))
-            self.setViewVisibleFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.focus"))
-            self.focusViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.focusNext"))
-            self.focusNextViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.focusPrevious"))
-            self.focusPreviousViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.view.close"))
-            self.closeViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown view command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchWebViewBridgeCommand(self: *Runtime, request: bridge.Request, source_window_id: platform.WindowId, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.webview.create"))
-            self.createWebViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.list"))
-            self.writeWebViewListJson(source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.setFrame"))
-            self.setWebViewFrameFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.navigate"))
-            self.navigateWebViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.setZoom"))
-            self.setWebViewZoomFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.setLayer"))
-            self.setWebViewLayerFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.webview.close"))
-            self.closeWebViewFromJson(request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown WebView command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchDialogBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.dialog.openFile"))
-            self.openFileDialogFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.dialog.saveFile"))
-            self.saveFileDialogFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.dialog.showMessage"))
-            self.showMessageDialogFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown dialog command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchOsBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.os.openUrl"))
-            self.openExternalUrlFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.os.showNotification"))
-            self.showNotificationFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.os.revealPath"))
-            self.revealPathFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.os.addRecentDocument"))
-            self.addRecentDocumentFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.os.clearRecentDocuments"))
-            self.clearRecentDocumentsFromJson(result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown OS command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchCredentialBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.credentials.set"))
-            self.setCredentialFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.credentials.get"))
-            self.getCredentialFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.credentials.delete"))
-            self.deleteCredentialFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown credentials command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn dispatchClipboardBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-        const result = if (std.mem.eql(u8, request.command, "zero-native.clipboard.readText"))
-            self.readClipboardTextFromJson(result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.writeText"))
-            self.writeClipboardTextFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.read"))
-            self.readClipboardDataFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else if (std.mem.eql(u8, request.command, "zero-native.clipboard.write"))
-            self.writeClipboardDataFromJson(request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-        else
-            return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown clipboard command");
-        return bridge.writeSuccessResponse(response_buffer, request.id, result);
-    }
-
-    fn createWindowFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
-        var storage = json.StringStorage.init(output);
-        const label = jsonStringField(payload, "label", &storage) orelse "window";
-        const title = jsonStringField(payload, "title", &storage) orelse "";
-        const width = jsonNumberField(payload, "width") orelse 720;
-        const height = jsonNumberField(payload, "height") orelse 480;
-        const x = jsonNumberField(payload, "x") orelse 0;
-        const y = jsonNumberField(payload, "y") orelse 0;
-        const source = if (jsonStringField(payload, "url", &storage)) |url| platform.WebViewSource.url(url) else null;
-        const info = try self.createWindow(.{
-            .label = label,
-            .title = title,
-            .default_frame = geometry.RectF.init(x, y, width, height),
-            .restore_state = jsonBoolField(payload, "restoreState") orelse true,
-            .source = source,
-        });
-        return writeWindowJson(info, output);
-    }
-
-    fn createViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes * 2 + platform.max_view_role_bytes + platform.max_view_accessibility_label_bytes + platform.max_view_text_bytes + platform.max_view_command_bytes + platform.max_webview_url_bytes + 96]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const kind_str = jsonStringField(payload, "kind", &storage) orelse return error.InvalidViewOptions;
-        const kind = viewKindFromString(kind_str) orelse return error.UnsupportedViewKind;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const role = jsonStringField(payload, "role", &storage) orelse "";
-        const accessibility_label = jsonStringField(payload, "accessibilityLabel", &storage) orelse jsonStringField(payload, "accessibility_label", &storage) orelse "";
-        const text = jsonStringField(payload, "text", &storage) orelse "";
-        const command = jsonStringField(payload, "command", &storage) orelse "";
-        const parent = jsonStringField(payload, "parent", &storage);
-        const url = jsonStringField(payload, "url", &storage) orelse "";
-        const info = try self.createView(.{
-            .window_id = window_id,
-            .label = label,
-            .kind = kind,
-            .parent = parent,
-            .frame = (try viewFrameFromJson(payload, kind == .webview)) orelse geometry.RectF.init(0, 0, 0, 0),
-            .layer = try viewLayerFromJson(payload) orelse 0,
-            .visible = jsonBoolField(payload, "visible") orelse true,
-            .enabled = jsonBoolField(payload, "enabled") orelse true,
-            .role = role,
-            .accessibility_label = accessibility_label,
-            .text = text,
-            .command = command,
-            .url = url,
-            .transparent = jsonBoolField(payload, "transparent") orelse false,
-            .bridge_enabled = jsonBoolField(payload, "bridge") orelse false,
-            .gpu_surface = try gpuSurfaceOptionsFromJson(payload, &storage),
-        });
-        return writeViewJson(info, output);
-    }
-
-    fn updateViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes + platform.max_view_role_bytes + platform.max_view_accessibility_label_bytes + platform.max_view_text_bytes + platform.max_view_command_bytes + platform.max_webview_url_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const patch: platform.ViewPatch = .{
-            .frame = try viewFrameFromJson(payload, false),
-            .layer = try viewLayerFromJson(payload),
-            .visible = jsonBoolField(payload, "visible"),
-            .enabled = jsonBoolField(payload, "enabled"),
-            .role = jsonStringField(payload, "role", &storage),
-            .accessibility_label = jsonStringField(payload, "accessibilityLabel", &storage) orelse jsonStringField(payload, "accessibility_label", &storage),
-            .text = jsonStringField(payload, "text", &storage),
-            .command = jsonStringField(payload, "command", &storage),
-            .url = jsonStringField(payload, "url", &storage),
-        };
-        const info = try self.updateView(window_id, label, patch);
-        return writeViewJson(info, output);
-    }
-
-    fn setViewFrameFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const info = try self.updateView(window_id, label, .{ .frame = try viewFrameFromJson(payload, true) });
-        return writeViewJson(info, output);
-    }
-
-    fn setViewVisibleFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const visible = jsonBoolField(payload, "visible") orelse return error.InvalidViewOptions;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const info = try self.updateView(window_id, label, .{ .visible = visible });
-        return writeViewJson(info, output);
-    }
-
-    fn focusViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        try self.focusView(window_id, label);
-        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        for (self.listViews(window_id, &views_buffer)) |view| {
-            if (std.mem.eql(u8, view.label, label)) return writeViewJson(view, output);
-        }
-        return error.ViewNotFound;
-    }
-
-    fn focusNextViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const info = try self.focusNextView(window_id);
-        return writeViewJson(info, output);
-    }
-
-    fn focusPreviousViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        const info = try self.focusPreviousView(window_id);
-        return writeViewJson(info, output);
-    }
-
-    fn closeViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_view_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse return error.InvalidViewOptions;
-        const window_id = try viewWindowIdFromJson(payload, source_window_id);
-        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        for (self.listViews(window_id, &views_buffer)) |view| {
-            if (std.mem.eql(u8, view.label, label)) {
-                var closed = view;
-                closed.open = false;
-                closed.focused = false;
-                const result = try writeViewJson(closed, output);
-                try self.closeView(window_id, label);
-                return result;
-            }
-        }
-        return error.ViewNotFound;
-    }
-
-    fn writeViewListJson(self: *Runtime, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        try self.validateViewParent(source_window_id);
-        var views_buffer: [platform.max_views + platform.max_webviews + 1]platform.ViewInfo = undefined;
-        const views = self.listViews(source_window_id, &views_buffer);
-        var writer = std.Io.Writer.fixed(output);
-        try writer.writeByte('[');
-        for (views, 0..) |view, index| {
-            if (index > 0) try writer.writeByte(',');
-            try writeViewJsonToWriter(view, &writer);
-        }
-        try writer.writeByte(']');
-        return writer.buffered();
-    }
-
-    fn createWebViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes + platform.max_webview_url_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const url = jsonStringField(payload, "url", &storage) orelse return error.MissingWebViewUrl;
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        const webview_frame = try webViewFrameFromJson(payload);
-        const layer = try webViewLayerFromJson(payload);
-        const transparent = jsonBoolField(payload, "transparent") orelse false;
-        const bridge_enabled = jsonBoolField(payload, "bridge") orelse false;
-        try self.validateWebViewParent(window_id);
-        try validateChildWebViewLabel(label);
-        try self.validateWebViewUrl(url);
-        if (self.findWebViewIndex(window_id, label) != null) return error.DuplicateWebViewLabel;
-        if (self.viewLabelExists(window_id, label)) return error.DuplicateViewLabel;
-        if (self.webview_count >= platform.max_webviews) return error.WebViewLimitReached;
-        try self.options.platform.services.createWebView(.{
-            .window_id = window_id,
-            .label = label,
-            .url = url,
-            .frame = webview_frame,
-            .layer = layer,
-            .transparent = transparent,
-            .bridge_enabled = bridge_enabled,
-        });
-        var reserved = false;
-        errdefer {
-            if (reserved) {
-                if (self.findWebViewIndex(window_id, label)) |index| self.removeWebViewAt(index);
-            }
-            self.options.platform.services.closeWebView(window_id, label) catch {};
-        }
-        try self.reserveWebView(self.allocateViewId(), window_id, label, null, url, webview_frame, webview_frame, layer, transparent, bridge_enabled);
-        reserved = true;
-        return writeWebViewJson(self.webviews[self.webview_count - 1], output);
-    }
-
-    fn setWebViewFrameFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        const webview_frame = try webViewFrameFromJson(payload);
-        try self.validateWebViewParent(window_id);
-        try validateWebViewLabel(label);
-        if (isMainWebViewLabel(label)) {
-            const window_index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-            try self.options.platform.services.setWebViewFrame(window_id, label, webview_frame);
-            self.windows[window_index].main_frame = webview_frame;
-            self.windows[window_index].main_frame_set = true;
-            try self.relayoutDescendantWebViewBackends(window_id, label);
-            return writeWebViewJson(self.mainWebViewInfo(window_index), output);
-        }
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        try self.options.platform.services.setWebViewFrame(window_id, label, webview_frame);
-        self.webviews[webview_index].local_frame = try self.localFrameForView(window_id, self.webviews[webview_index].parent, webview_frame);
-        self.webviews[webview_index].frame = webview_frame;
-        try self.relayoutDescendantWebViewBackends(window_id, label);
-        return writeWebViewJson(self.webviews[webview_index], output);
-    }
-
-    fn navigateWebViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes + platform.max_webview_url_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const url = jsonStringField(payload, "url", &storage) orelse return error.MissingWebViewUrl;
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        try self.validateWebViewParent(window_id);
-        try validateWebViewLabel(label);
-        try self.validateWebViewUrl(url);
-        if (isMainWebViewLabel(label)) return error.InvalidWebViewOptions;
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        try self.options.platform.services.navigateWebView(window_id, label, url);
-        self.webviews[webview_index].url = try copyInto(&self.webviews[webview_index].url_storage, url);
-        return writeWebViewJson(self.webviews[webview_index], output);
-    }
-
-    fn setWebViewZoomFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const zoom_f32 = jsonNumberField(payload, "zoom") orelse return error.InvalidWebViewOptions;
-        const zoom: f64 = @floatCast(zoom_f32);
-        if (zoom < 0.25 or zoom > 5.0) return error.InvalidWebViewOptions;
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        try self.validateWebViewParent(window_id);
-        try validateWebViewLabel(label);
-        if (isMainWebViewLabel(label)) {
-            const window_index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-            try self.options.platform.services.setWebViewZoom(window_id, label, zoom);
-            self.windows[window_index].main_zoom = zoom;
-            return writeWebViewJson(self.mainWebViewInfo(window_index), output);
-        }
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        try self.options.platform.services.setWebViewZoom(window_id, label, zoom);
-        self.webviews[webview_index].zoom = zoom;
-        return writeWebViewJson(self.webviews[webview_index], output);
-    }
-
-    fn setWebViewLayerFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        try self.validateWebViewParent(window_id);
-        try validateWebViewLabel(label);
-        const layer = try webViewLayerFromJson(payload);
-        if (isMainWebViewLabel(label)) {
-            const window_index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-            try self.options.platform.services.setWebViewLayer(window_id, label, layer);
-            self.windows[window_index].main_layer = layer;
-            return writeWebViewJson(self.mainWebViewInfo(window_index), output);
-        }
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        try self.options.platform.services.setWebViewLayer(window_id, label, layer);
-        self.webviews[webview_index].layer = layer;
-        return writeWebViewJson(self.webviews[webview_index], output);
-    }
-
-    fn closeWebViewFromJson(self: *Runtime, payload: []const u8, source_window_id: platform.WindowId, output: []u8) ![]const u8 {
-        var scratch: [platform.max_webview_label_bytes]u8 = undefined;
-        var storage = json.StringStorage.init(&scratch);
-        const label = jsonStringField(payload, "label", &storage) orelse "webview";
-        const window_id = try webViewWindowIdFromJson(payload, source_window_id);
-        try self.validateWebViewParent(window_id);
-        try validateWebViewLabel(label);
-        if (isMainWebViewLabel(label)) return error.InvalidWebViewOptions;
-        const webview_index = self.findWebViewIndex(window_id, label) orelse return error.WebViewNotFound;
-        var closed_info = self.webviews[webview_index];
-        closed_info.open = false;
-        closed_info.focused = false;
-        const result = try writeWebViewJson(closed_info, output);
-        try self.options.platform.services.closeWebView(window_id, label);
-        const was_focused = self.webviews[webview_index].focused;
-        self.removeWebViewAt(webview_index);
-        if (was_focused) self.ensureFocusableViewFocused(window_id);
-        return result;
-    }
-
-    fn focusWindowFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
-        var storage = json.StringStorage.init(output);
-        const window_id = try self.resolveWindowSelector(payload, &storage);
-        try self.focusWindow(window_id);
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        return writeWindowJson(self.windows[index].info, output);
-    }
-
-    fn closeWindowFromJson(self: *Runtime, payload: []const u8, output: []u8) ![]const u8 {
-        var storage = json.StringStorage.init(output);
-        const window_id = try self.resolveWindowSelector(payload, &storage);
-        const index = self.findWindowIndexById(window_id) orelse return error.WindowNotFound;
-        var info = self.windows[index].info;
-        info.open = false;
-        info.focused = false;
-        try self.closeWindow(window_id);
-        return writeWindowJson(info, output);
-    }
-
-    fn resolveWindowSelector(self: *Runtime, payload: []const u8, storage: *json.StringStorage) !platform.WindowId {
-        if (jsonIntegerField(payload, "id")) |id| return id;
-        if (jsonStringField(payload, "label", storage)) |label| {
-            const index = self.findWindowIndexByLabel(label) orelse return error.WindowNotFound;
-            return self.windows[index].info.id;
-        }
-        return error.WindowNotFound;
-    }
-
-    fn writeWindowListJson(self: *Runtime, output: []u8) ![]const u8 {
-        var writer = std.Io.Writer.fixed(output);
-        try writer.writeByte('[');
-        for (self.windows[0..self.window_count], 0..) |window, index| {
-            if (index > 0) try writer.writeByte(',');
-            try writeWindowJsonToWriter(window.info, &writer);
-        }
-        try writer.writeByte(']');
-        return writer.buffered();
     }
 
     fn log(self: *Runtime, name_value: []const u8, message: ?[]const u8, fields: []const trace.Field) trace.WriteError!void {

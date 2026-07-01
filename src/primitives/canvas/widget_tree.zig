@@ -1,3 +1,4 @@
+const std = @import("std");
 const token_model = @import("tokens.zig");
 const widget_model = @import("widgets.zig");
 const drawing_model = @import("drawing.zig");
@@ -108,4 +109,18 @@ pub fn isWidgetHiddenInAncestors(layout: anytype, node_index: usize) bool {
         current = node.parent_index;
     }
     return false;
+}
+
+pub fn gridColumnCount(child_count: usize, requested_columns: usize) usize {
+    if (child_count == 0) return 0;
+    return if (requested_columns > 0) @min(requested_columns, child_count) else child_count;
+}
+
+pub fn gridRowCount(child_count: usize, columns: usize) usize {
+    if (child_count == 0 or columns == 0) return 0;
+    return (child_count + columns - 1) / columns;
+}
+
+pub fn saturatingU32(value: usize) u32 {
+    return if (value > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(value);
 }

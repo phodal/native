@@ -10,6 +10,7 @@ const equality_model = @import("equality.zig");
 const widget_tree = @import("widget_tree.zig");
 const widget_access = @import("widget_access.zig");
 const widget_routing = @import("widget_routing.zig");
+const widget_semantics = @import("widget_semantics.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -46,7 +47,13 @@ const widgetTransform = widget_tree.widgetTransform;
 const widgetClipsContent = widget_tree.widgetClipsContent;
 const widgetIndexById = widget_tree.widgetIndexById;
 const isWidgetHiddenInAncestors = widget_tree.isWidgetHiddenInAncestors;
-const semanticFocusable = widget_access.semanticFocusable;
+const gridColumnCount = widget_tree.gridColumnCount;
+const gridRowCount = widget_tree.gridRowCount;
+const saturatingU32 = widget_tree.saturatingU32;
+const booleanControlSelected = widget_access.booleanControlSelected;
+const widgetTextSelectionRange = widget_access.widgetTextSelectionRange;
+const widgetTextCompositionRange = widget_access.widgetTextCompositionRange;
+const widgetTextInputKind = widget_access.widgetTextInputKind;
 const WidgetKind = widget_model.WidgetKind;
 const WidgetCursor = widget_model.WidgetCursor;
 const WidgetState = widget_model.WidgetState;
@@ -57,7 +64,6 @@ const WidgetLayoutStyle = widget_model.WidgetLayoutStyle;
 const WidgetStyle = widget_model.WidgetStyle;
 const WidgetVariant = widget_model.WidgetVariant;
 const WidgetSize = widget_model.WidgetSize;
-const WidgetRole = widget_model.WidgetRole;
 const WidgetActions = widget_model.WidgetActions;
 const WidgetSemantics = widget_model.WidgetSemantics;
 const Widget = widget_model.Widget;
@@ -73,11 +79,9 @@ const WidgetKeyboardRoute = event_model.WidgetKeyboardRoute;
 const WidgetFocusDirection = event_model.WidgetFocusDirection;
 const WidgetFocusTarget = event_model.WidgetFocusTarget;
 const WidgetScrollMetrics = event_model.WidgetScrollMetrics;
-const WidgetListMetrics = event_model.WidgetListMetrics;
 const WidgetSemanticsNode = event_model.WidgetSemanticsNode;
 const WidgetInvalidationKind = event_model.WidgetInvalidationKind;
 const WidgetInvalidation = event_model.WidgetInvalidation;
-const semanticActions = event_model.semanticActions;
 const textLineBounds = text_model.textLineBounds;
 const estimateTextWidth = text_model.estimateTextWidth;
 const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
@@ -142,14 +146,14 @@ pub const WidgetLayoutTree = struct {
     pub fn virtualRangeById(self: WidgetLayoutTree, id: ObjectId) ?VirtualListRange {
         if (id == 0) return null;
         for (self.nodes) |node| {
-            if (node.widget.id == id) return widgetVirtualRangeForLayoutNode(node);
+            if (node.widget.id == id) return widget_semantics.widgetVirtualRangeForLayoutNode(node);
         }
         return null;
     }
 
     pub fn virtualRangeAt(self: WidgetLayoutTree, index: usize) ?VirtualListRange {
         if (index >= self.nodes.len) return null;
-        return widgetVirtualRangeForLayoutNode(self.nodes[index]);
+        return widget_semantics.widgetVirtualRangeForLayoutNode(self.nodes[index]);
     }
 
     pub fn hitTest(self: WidgetLayoutTree, point: geometry.PointF) ?WidgetHit {
@@ -1984,10 +1988,6 @@ fn emitControlLabelWithColor(builder: *Builder, widget: Widget, tokens: DesignTo
     });
 }
 
-fn booleanControlSelected(widget: Widget) bool {
-    return widget.state.selected or widget.value >= 0.5;
-}
-
 pub fn toggleWidgetKnobCommandId(id: ObjectId) ObjectId {
     return widgetPartId(id, 3);
 }
@@ -2080,25 +2080,6 @@ fn widgetIconGlyphScale(widget: Widget) f32 {
         .sm => 0.44,
         .default, .icon => 0.48,
         .lg => 0.52,
-    };
-}
-
-fn widgetTextSelectionRange(widget: Widget) ?TextRange {
-    if (!widgetTextInputKind(widget.kind)) return null;
-    if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
-    return null;
-}
-
-fn widgetTextCompositionRange(widget: Widget) ?TextRange {
-    if (!widgetTextInputKind(widget.kind)) return null;
-    if (widget.text_composition) |range| return snapTextRange(widget.text, range);
-    return null;
-}
-
-fn widgetTextInputKind(kind: WidgetKind) bool {
-    return switch (kind) {
-        .input, .text_field, .search_field, .combobox, .textarea => true,
-        else => false,
     };
 }
 
@@ -3014,16 +2995,6 @@ fn layoutVirtualGridChildren(
     }
 }
 
-fn gridColumnCount(child_count: usize, requested_columns: usize) usize {
-    if (child_count == 0) return 0;
-    return if (requested_columns > 0) @min(requested_columns, child_count) else child_count;
-}
-
-fn gridRowCount(child_count: usize, columns: usize) usize {
-    if (child_count == 0 or columns == 0) return 0;
-    return (child_count + columns - 1) / columns;
-}
-
 fn preferredGridRowExtent(children: []const Widget, columns: usize, tokens: DesignTokens) f32 {
     if (children.len == 0 or columns == 0) return 0;
     var max_height: f32 = 0;
@@ -3347,65 +3318,11 @@ pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor 
 }
 
 fn collectWidgetSemantics(layout: WidgetLayoutTree, output: []WidgetSemanticsNode) Error![]const WidgetSemanticsNode {
-    var len: usize = 0;
-    var semantic_stack: [max_widget_depth]?usize = [_]?usize{null} ** max_widget_depth;
-    var hidden_depth: ?usize = null;
+    return widget_semantics.collectWidgetSemantics(layout, output, widgetScrollSemantics);
+}
 
-    for (layout.nodes, 0..) |node, node_index| {
-        if (node.depth >= max_widget_depth) return error.WidgetDepthExceeded;
-        if (hidden_depth) |depth| {
-            if (node.depth > depth) continue;
-            hidden_depth = null;
-        }
-        var cursor = node.depth + 1;
-        while (cursor < semantic_stack.len) : (cursor += 1) {
-            semantic_stack[cursor] = null;
-        }
-
-        const role = semanticRole(node.widget);
-        if (node.widget.semantics.hidden) {
-            hidden_depth = node.depth;
-            continue;
-        }
-        if (role == .none or node.widget.id == 0) continue;
-        if (len >= output.len) return error.WidgetSemanticsListFull;
-
-        const parent_index = nearestSemanticParent(semantic_stack[0..node.depth]);
-        const grid = widgetGridSemantics(layout, node_index);
-        const list = widgetListSemantics(layout, node_index);
-        const scroll = widgetScrollSemantics(layout, node_index);
-        var actions = semanticActions(node.widget);
-        if (scroll.scrollable and !node.widget.state.disabled) {
-            actions.focus = true;
-            actions.increment = true;
-            actions.decrement = true;
-        }
-        output[len] = .{
-            .id = node.widget.id,
-            .role = role,
-            .label = semanticLabel(node.widget),
-            .value = scroll.value orelse semanticValue(node.widget),
-            .text_value = semanticTextValue(node.widget),
-            .placeholder = semanticPlaceholder(node.widget),
-            .grid_row_index = grid.row_index,
-            .grid_column_index = grid.column_index,
-            .grid_row_count = grid.row_count,
-            .grid_column_count = grid.column_count,
-            .list = list.metrics,
-            .scroll = scroll.metrics,
-            .bounds = node.frame,
-            .state = semanticState(node.widget),
-            .focusable = semanticFocusable(node.widget, actions),
-            .actions = actions,
-            .text_selection = widgetTextSelectionRange(node.widget),
-            .text_composition = widgetTextCompositionRange(node.widget),
-            .parent_index = parent_index,
-        };
-        semantic_stack[node.depth] = len;
-        len += 1;
-    }
-
-    return output[0..len];
+fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) widget_semantics.WidgetScrollSemantics {
+    return widget_semantics.widgetScrollSemantics(layout, node_index, virtualWidgetScrollContentExtent);
 }
 
 pub const WidgetTextGeometry = struct {
@@ -3476,347 +3393,6 @@ fn textRangeBoundsForLayout(text: DrawText, layout: TextLayout, range: TextRange
         value.rect_count += 1;
     }
     return value;
-}
-
-fn nearestSemanticParent(stack: []const ?usize) ?usize {
-    var index = stack.len;
-    while (index > 0) {
-        index -= 1;
-        if (stack[index]) |semantic_index| return semantic_index;
-    }
-    return null;
-}
-
-fn semanticRole(widget: Widget) WidgetRole {
-    if (widget.semantics.role != .none) return widget.semantics.role;
-    return switch (widget.kind) {
-        .stack, .row, .column, .grid, .scroll_view, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .accordion, .bubble, .resizable, .alert, .card, .panel => .group,
-        .data_grid, .table => .grid,
-        .data_row => .row,
-        .dialog, .drawer, .sheet, .popover => .dialog,
-        .menu_surface, .dropdown_menu => .menu,
-        .list => .list,
-        .text, .status_bar => .text,
-        .icon, .image, .avatar => .image,
-        .badge => .text,
-        .button, .toggle_button => .button,
-        .icon_button, .select => .button,
-        .input, .text_field, .search_field, .combobox, .textarea => .textbox,
-        .tooltip => .tooltip,
-        .menu_item => .menuitem,
-        .list_item => .listitem,
-        .data_cell => .gridcell,
-        .segmented_control => .tab,
-        .checkbox => .checkbox,
-        .radio => .radio,
-        .switch_control, .toggle => .switch_control,
-        .slider => .slider,
-        .progress => .progressbar,
-        .separator, .skeleton => .none,
-        .spinner => .progressbar,
-    };
-}
-
-fn semanticLabel(widget: Widget) []const u8 {
-    if (widget.semantics.label.len > 0) return widget.semantics.label;
-    return widget.text;
-}
-
-fn semanticValue(widget: Widget) ?f32 {
-    if (widget.semantics.value) |value| return value;
-    return switch (widget.kind) {
-        .radio, .list_item, .menu_item, .data_cell, .segmented_control => if (widget.state.selected or widget.value >= 0.5) 1 else 0,
-        .accordion, .checkbox, .switch_control, .toggle, .toggle_button => if (booleanControlSelected(widget)) 1 else 0,
-        .slider, .progress => std.math.clamp(widget.value, 0, 1),
-        .spinner => null,
-        else => null,
-    };
-}
-
-fn semanticState(widget: Widget) WidgetState {
-    var state = widget.state;
-    if (state.expanded == null) state.expanded = defaultExpandedState(widget);
-    return state;
-}
-
-fn defaultExpandedState(widget: Widget) ?bool {
-    return switch (widget.kind) {
-        .accordion => booleanControlSelected(widget),
-        .select, .combobox => false,
-        .popover, .menu_surface, .dropdown_menu => true,
-        else => null,
-    };
-}
-
-fn semanticTextValue(widget: Widget) []const u8 {
-    return switch (widget.kind) {
-        .input, .text_field, .search_field, .combobox, .textarea => widget.text,
-        else => "",
-    };
-}
-
-fn semanticPlaceholder(widget: Widget) []const u8 {
-    return switch (widget.kind) {
-        .select, .input, .text_field, .search_field, .combobox, .textarea => widget.placeholder,
-        else => "",
-    };
-}
-
-const WidgetGridSemantics = struct {
-    row_index: ?usize = null,
-    column_index: ?usize = null,
-    row_count: ?usize = null,
-    column_count: ?usize = null,
-};
-
-fn widgetGridSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetGridSemantics {
-    if (node_index >= layout.nodes.len) return .{};
-    const node = layout.nodes[node_index];
-    return switch (node.widget.kind) {
-        .grid => widgetLayoutGridSemantics(layout, node_index),
-        .data_grid, .table => .{
-            .row_count = dataGridRowCount(layout, node_index),
-            .column_count = maxDataGridColumnCount(layout, node_index),
-        },
-        .data_row => widgetDataRowGridSemantics(layout, node_index),
-        .data_cell => widgetDataCellGridSemantics(layout, node_index),
-        else => widgetGridChildSemantics(layout, node_index),
-    };
-}
-
-fn widgetLayoutGridSemantics(layout: WidgetLayoutTree, grid_index: usize) WidgetGridSemantics {
-    const grid = layout.nodes[grid_index].widget;
-    if (grid.semantics.role != .grid) return .{};
-    const columns = gridSemanticColumnCount(grid);
-    return .{
-        .row_count = gridSemanticRowCount(grid, columns),
-        .column_count = columns,
-    };
-}
-
-fn widgetGridChildSemantics(layout: WidgetLayoutTree, child_index: usize) WidgetGridSemantics {
-    const grid_index = layout.nodes[child_index].parent_index orelse return .{};
-    if (grid_index >= layout.nodes.len) return .{};
-    const grid = layout.nodes[grid_index].widget;
-    if (grid.kind != .grid or grid.semantics.role != .grid) return .{};
-
-    const columns = gridSemanticColumnCount(grid);
-    if (columns == 0) return .{};
-    const source_index = if (layout.nodes[child_index].widget.semantics.list_item_index) |index|
-        @as(usize, @intCast(index))
-    else
-        directChildOrdinal(layout, grid_index, child_index) orelse return .{};
-
-    return .{
-        .row_index = source_index / columns,
-        .column_index = source_index % columns,
-        .row_count = gridSemanticRowCount(grid, columns),
-        .column_count = columns,
-    };
-}
-
-fn gridSemanticColumnCount(grid: Widget) usize {
-    return gridColumnCount(grid.children.len, grid.layout.columns);
-}
-
-fn gridSemanticRowCount(grid: Widget, columns: usize) usize {
-    if (grid.semantics.list_item_count) |count| return @intCast(count);
-    return gridRowCount(grid.children.len, columns);
-}
-
-fn widgetDataRowGridSemantics(layout: WidgetLayoutTree, row_index: usize) WidgetGridSemantics {
-    const grid_index = layout.nodes[row_index].parent_index orelse return .{};
-    if (grid_index >= layout.nodes.len) return .{};
-    if (layout.nodes[grid_index].widget.kind == .grid) return widgetGridChildSemantics(layout, row_index);
-    if (!widgetTableContainerKind(layout.nodes[grid_index].widget.kind)) return .{};
-    const row = layout.nodes[row_index].widget;
-    return .{
-        .row_index = if (row.semantics.list_item_index) |source_index|
-            @as(usize, @intCast(source_index))
-        else
-            directChildOrdinalByKind(layout, grid_index, row_index, .data_row),
-        .row_count = dataGridRowCount(layout, grid_index),
-        .column_count = dataRowColumnCount(layout, row_index),
-    };
-}
-
-fn widgetDataCellGridSemantics(layout: WidgetLayoutTree, cell_index: usize) WidgetGridSemantics {
-    const row_index = layout.nodes[cell_index].parent_index orelse return .{};
-    if (row_index >= layout.nodes.len) return .{};
-    if (layout.nodes[row_index].widget.kind == .grid) return widgetGridChildSemantics(layout, cell_index);
-    if (layout.nodes[row_index].widget.kind != .data_row) return .{};
-    const grid_index = layout.nodes[row_index].parent_index orelse return .{};
-    if (grid_index >= layout.nodes.len or !widgetTableContainerKind(layout.nodes[grid_index].widget.kind)) return .{};
-    const row = layout.nodes[row_index].widget;
-    return .{
-        .row_index = if (row.semantics.list_item_index) |source_index|
-            @as(usize, @intCast(source_index))
-        else
-            directChildOrdinalByKind(layout, grid_index, row_index, .data_row),
-        .column_index = directChildOrdinalByKind(layout, row_index, cell_index, .data_cell),
-        .row_count = dataGridRowCount(layout, grid_index),
-        .column_count = dataRowColumnCount(layout, row_index),
-    };
-}
-
-fn widgetTableContainerKind(kind: WidgetKind) bool {
-    return kind == .data_grid or kind == .table;
-}
-
-fn dataGridRowCount(layout: WidgetLayoutTree, grid_index: usize) usize {
-    if (layout.nodes[grid_index].widget.semantics.list_item_count) |virtual_count| return @intCast(virtual_count);
-    return directChildCountByKind(layout, grid_index, .data_row);
-}
-
-fn dataRowColumnCount(layout: WidgetLayoutTree, row_index: usize) usize {
-    return directChildCountByKind(layout, row_index, .data_cell);
-}
-
-fn directChildCountByKind(layout: WidgetLayoutTree, parent_index: usize, kind: WidgetKind) usize {
-    var count: usize = 0;
-    for (layout.nodes) |node| {
-        if (node.parent_index == parent_index and node.widget.kind == kind) count += 1;
-    }
-    return count;
-}
-
-fn directChildOrdinalByKind(layout: WidgetLayoutTree, parent_index: usize, child_index: usize, kind: WidgetKind) ?usize {
-    var ordinal: usize = 0;
-    for (layout.nodes, 0..) |node, index| {
-        if (node.parent_index != parent_index or node.widget.kind != kind) continue;
-        if (index == child_index) return ordinal;
-        ordinal += 1;
-    }
-    return null;
-}
-
-fn directChildOrdinal(layout: WidgetLayoutTree, parent_index: usize, child_index: usize) ?usize {
-    var ordinal: usize = 0;
-    for (layout.nodes, 0..) |node, index| {
-        if (node.parent_index != parent_index) continue;
-        if (index == child_index) return ordinal;
-        ordinal += 1;
-    }
-    return null;
-}
-
-fn maxDataGridColumnCount(layout: WidgetLayoutTree, grid_index: usize) usize {
-    var max_columns: usize = 0;
-    for (layout.nodes, 0..) |node, index| {
-        if (node.parent_index != grid_index or node.widget.kind != .data_row) continue;
-        max_columns = @max(max_columns, dataRowColumnCount(layout, index));
-    }
-    return max_columns;
-}
-
-const WidgetListSemantics = struct {
-    metrics: WidgetListMetrics = .{},
-};
-
-fn widgetListSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetListSemantics {
-    if (node_index >= layout.nodes.len) return .{};
-    const node = layout.nodes[node_index];
-
-    const list_index = node.parent_index orelse return .{};
-    if (list_index >= layout.nodes.len or layout.nodes[list_index].widget.kind != .list) return .{};
-
-    if (node.widget.semantics.list_item_index) |item_index| {
-        if (node.widget.semantics.list_item_count) |item_count| {
-            return .{ .metrics = .{
-                .present = true,
-                .item_index = item_index,
-                .item_count = item_count,
-            } };
-        }
-    }
-
-    if (node.widget.kind != .list_item) return .{};
-
-    const item_count = directChildCountByKind(layout, list_index, .list_item);
-    if (item_count == 0) return .{};
-
-    const item_index = directChildOrdinalByKind(layout, list_index, node_index, .list_item) orelse return .{};
-    return .{ .metrics = .{
-        .present = true,
-        .item_index = saturatingU32(item_index),
-        .item_count = saturatingU32(item_count),
-    } };
-}
-
-fn saturatingU32(value: usize) u32 {
-    return if (value > std.math.maxInt(u32)) std.math.maxInt(u32) else @intCast(value);
-}
-
-fn widgetVirtualRangeForLayoutNode(node: WidgetLayoutNode) ?VirtualListRange {
-    if (!node.widget.layout.virtualized) return null;
-    const item_count = if (node.widget.semantics.list_item_count) |count|
-        @as(usize, @intCast(count))
-    else
-        return null;
-    if (item_count == 0 or node.widget.layout.virtual_item_extent <= 0) return null;
-    const viewport = node.frame.inset(node.widget.layout.padding).normalized();
-    if (viewport.isEmpty()) return null;
-    return virtualListRange(.{
-        .item_count = item_count,
-        .item_extent = node.widget.layout.virtual_item_extent,
-        .item_gap = node.widget.layout.gap,
-        .viewport_extent = viewport.height,
-        .scroll_offset = node.widget.value,
-        .overscan = node.widget.layout.virtual_overscan,
-    });
-}
-
-const WidgetScrollSemantics = struct {
-    metrics: WidgetScrollMetrics = .{},
-    value: ?f32 = null,
-    scrollable: bool = false,
-};
-
-fn widgetScrollSemantics(layout: WidgetLayoutTree, node_index: usize) WidgetScrollSemantics {
-    if (node_index >= layout.nodes.len) return .{};
-    const node = layout.nodes[node_index];
-    if (!widgetExposesScrollSemantics(node.widget)) return .{};
-
-    const viewport = node.frame.inset(node.widget.layout.padding).normalized();
-    if (viewport.isEmpty()) return .{};
-
-    const content_extent = widgetScrollContentExtent(layout, node_index, viewport);
-    const max_offset = @max(0, content_extent - viewport.height);
-    const offset = std.math.clamp(nonNegative(node.widget.value), 0, max_offset);
-    return .{
-        .metrics = .{
-            .present = true,
-            .offset = offset,
-            .viewport_extent = viewport.height,
-            .content_extent = content_extent,
-        },
-        .value = if (max_offset > 0) offset / max_offset else 0,
-        .scrollable = max_offset > 0,
-    };
-}
-
-fn widgetExposesScrollSemantics(widget: Widget) bool {
-    return switch (widget.kind) {
-        .scroll_view => true,
-        .grid, .list, .data_grid, .table => widget.layout.virtualized,
-        else => false,
-    };
-}
-
-fn widgetScrollContentExtent(layout: WidgetLayoutTree, scroll_index: usize, viewport: geometry.RectF) f32 {
-    const scroll_node = layout.nodes[scroll_index];
-    if (scroll_node.widget.layout.virtualized) {
-        return @max(viewport.height, virtualWidgetScrollContentExtent(scroll_node.widget, viewport.height));
-    }
-
-    const scroll_depth = scroll_node.depth;
-    const offset = scroll_node.widget.value;
-    var bottom = viewport.maxY();
-    var index = scroll_index + 1;
-    while (index < layout.nodes.len and layout.nodes[index].depth > scroll_depth) : (index += 1) {
-        bottom = @max(bottom, layout.nodes[index].frame.maxY() + offset);
-    }
-    return @max(0, bottom - viewport.y);
 }
 
 pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {

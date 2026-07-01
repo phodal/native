@@ -66,7 +66,6 @@ const environment_select_text_id: canvas.ObjectId = environment_select_id * 16 +
 const environment_menu_id: canvas.ObjectId = 216;
 const environment_option_base_id: canvas.ObjectId = 21601;
 const content_scroll_id: canvas.ObjectId = 90;
-const content_stack_id: canvas.ObjectId = 91;
 const canvas_sidebar_id: canvas.ObjectId = 92;
 const canvas_sidebar_title_id: canvas.ObjectId = 93;
 const section_nav_base_id: canvas.ObjectId = 94;
@@ -1738,13 +1737,16 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     }
     const content_width = @max(1, size.width - sidebar_width);
     const content_height = @max(content_height_available, componentSectionContentHeight(ui_state.section));
-    const content_children = [_]canvas.Widget{.{
-        .id = content_stack_id,
+    var content_children: [canvas.builtin_component_names.len + 17]canvas.Widget = undefined;
+    content_children[0] = .{
         .kind = .stack,
         .frame = rect(0, 0, content_width, content_height),
         .style = transparentContentStyle(),
-        .children = content_widgets[0..content_widget_count],
-    }};
+        .semantics = .{ .hidden = true },
+    };
+    for (content_widgets[0..content_widget_count], 0..) |widget, index| {
+        content_children[index + 1] = widget;
+    }
     var root_widgets: [9]canvas.Widget = undefined;
     var root_widget_count: usize = 0;
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
@@ -1780,7 +1782,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .layout = .{ .clip_content = true },
         .style = transparentContentStyle(),
         .semantics = .{ .label = "Component section content" },
-        .children = &content_children,
+        .children = content_children[0 .. content_widget_count + 1],
     });
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_resize_line_id,
@@ -2210,7 +2212,6 @@ test "gpu components display list covers finished live controls" {
     try std.testing.expect(display_list.findCommandById(menu_item_text_id) != null);
     try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
     try expectNoContentScrollContainerChrome(display_list);
-    try expectNoSurfaceChrome(display_list, content_stack_id);
     try expectComponentFillRectFrame(display_list, canvas_background_id, rect(0, 0, canvas_width, canvas_height));
     const bounds = display_list.bounds().?;
     try std.testing.expect(bounds.x <= 28);
@@ -2242,11 +2243,8 @@ test "gpu components layout keeps finished controls visually separated" {
     try std.testing.expectEqualDeep(transparent_content_style.border, content_scroll.style.border);
     try std.testing.expectEqual(transparent_content_style.radius, content_scroll.style.radius);
     try std.testing.expectEqual(transparent_content_style.stroke_width, content_scroll.style.stroke_width);
-    const content_stack = layout.findById(content_stack_id).?.widget;
-    try std.testing.expectEqualDeep(transparent_content_style.background, content_stack.style.background);
-    try std.testing.expectEqualDeep(transparent_content_style.border, content_stack.style.border);
-    try std.testing.expectEqual(transparent_content_style.radius, content_stack.style.radius);
-    try std.testing.expectEqual(transparent_content_style.stroke_width, content_stack.style.stroke_width);
+    const content_scroll_index = try expectComponentWidgetIndex(layout, content_scroll_id);
+    try std.testing.expectEqual(content_scroll_index, layout.findById(101).?.parent_index.?);
     try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(14, canvas_content_y + canvas_content_height + 7, canvas_width - 28, 18));
     try std.testing.expectEqualStrings(initial_component_status_text, layout.findById(canvas_status_text_id).?.widget.text);
     try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, canvas_content_y + 78, 180, 34));
@@ -3916,6 +3914,13 @@ fn expectSemantic(semantics: []const canvas.WidgetSemanticsNode, id: canvas.Obje
 fn expectComponentWidgetFrame(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId, expected: geometry.RectF) !void {
     const node = layout.findById(id) orelse return error.TestUnexpectedResult;
     try expectComponentRect(node.frame, expected);
+}
+
+fn expectComponentWidgetIndex(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) !usize {
+    for (layout.nodes, 0..) |node, index| {
+        if (node.widget.id == id) return index;
+    }
+    return error.TestUnexpectedResult;
 }
 
 fn expectComponentWidgetsDoNotOverlap(layout: canvas.WidgetLayoutTree, a_id: canvas.ObjectId, b_id: canvas.ObjectId) !void {

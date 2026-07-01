@@ -15,6 +15,8 @@ const default_glyph_atlas_cache_retention_frames = canvas.default_glyph_atlas_ca
 const default_text_layout_cache_retention_frames = canvas.default_text_layout_cache_retention_frames;
 
 const CanvasRenderOverride = render_model.CanvasRenderOverride;
+const applyRenderOverrides = render_model.applyRenderOverrides;
+const renderOverrideDirtyBounds = render_model.renderOverrideDirtyBounds;
 const RenderPipelineKind = render_model.RenderPipelineKind;
 const RenderCommand = render_model.RenderCommand;
 const RenderPlan = render_model.RenderPlan;
@@ -474,6 +476,178 @@ pub const CanvasFrameStorage = struct {
     text_layout_cache_actions: []TextLayoutCacheAction = &.{},
     changes: []DiffChange,
 };
+
+pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
+    var render_plan = try next.renderPlan(storage.render_commands);
+    const render_override_dirty_bounds = renderOverrideDirtyBounds(render_plan.commands, options.previous_render_overrides, options.render_overrides);
+    render_plan.bounds = applyRenderOverrides(storage.render_commands[0..render_plan.commandCount()], options.render_overrides);
+    const batch_plan = try render_plan.batchPlan(storage.render_batches);
+    const pipeline_cache_plan = if (storage.pipeline_cache_entries.len == 0 and storage.pipeline_cache_actions.len == 0)
+        RenderPipelineCachePlan{}
+    else
+        try batch_plan.cachePlan(
+            options.previous_pipeline_cache,
+            options.frame_index,
+            storage.pipeline_cache_entries,
+            storage.pipeline_cache_actions,
+        );
+    const path_geometry_plan = if (storage.path_geometries.len == 0)
+        RenderPathGeometryPlan{}
+    else
+        try render_plan.pathGeometryPlan(storage.path_geometries);
+    const path_geometry_cache_plan = if (storage.path_geometry_cache_entries.len == 0 and storage.path_geometry_cache_actions.len == 0)
+        RenderPathGeometryCachePlan{}
+    else
+        try path_geometry_plan.cachePlan(
+            options.previous_path_geometry_cache,
+            options.frame_index,
+            storage.path_geometry_cache_entries,
+            storage.path_geometry_cache_actions,
+        );
+    const image_plan = if (storage.images.len == 0)
+        RenderImagePlan{}
+    else
+        try render_plan.imagePlanWithResources(options.image_resources, storage.images);
+    const image_cache_plan = if (storage.image_cache_entries.len == 0 and storage.image_cache_actions.len == 0)
+        RenderImageCachePlan{}
+    else
+        try image_plan.cachePlan(
+            options.previous_image_cache,
+            options.frame_index,
+            storage.image_cache_entries,
+            storage.image_cache_actions,
+        );
+    const layer_plan = if (storage.layers.len == 0)
+        RenderLayerPlan{}
+    else
+        try render_plan.layerPlan(storage.layers);
+    const layer_cache_plan = if (storage.layer_cache_entries.len == 0 and storage.layer_cache_actions.len == 0)
+        RenderLayerCachePlan{}
+    else
+        try layer_plan.cachePlan(
+            options.previous_layer_cache,
+            options.frame_index,
+            storage.layer_cache_entries,
+            storage.layer_cache_actions,
+        );
+    const resource_plan = try next.resourcePlan(storage.resources);
+    const resource_cache_plan = try resource_plan.cachePlan(
+        options.previous_resource_cache,
+        options.frame_index,
+        storage.resource_cache_entries,
+        storage.resource_cache_actions,
+    );
+    const visual_effect_plan = if (storage.visual_effects.len == 0)
+        VisualEffectPlan{}
+    else
+        try next.visualEffectPlan(storage.visual_effects);
+    const visual_effect_cache_plan = if (storage.visual_effect_cache_entries.len == 0 and storage.visual_effect_cache_actions.len == 0)
+        VisualEffectCachePlan{}
+    else
+        try visual_effect_plan.cachePlan(
+            options.previous_visual_effect_cache,
+            options.frame_index,
+            storage.visual_effect_cache_entries,
+            storage.visual_effect_cache_actions,
+        );
+    const glyph_atlas_plan = try next.glyphAtlasPlan(storage.glyph_atlas_entries);
+    const glyph_atlas_cache_plan = try glyph_atlas_plan.cachePlanWithRetention(
+        options.previous_glyph_atlas_cache,
+        options.frame_index,
+        options.glyph_atlas_cache_retention_frames,
+        storage.glyph_atlas_cache_entries,
+        storage.glyph_atlas_cache_actions,
+    );
+    const text_layout_plan = try next.textLayoutPlan(options.text_layout_options, storage.text_layout_plans, storage.text_layout_lines);
+    const text_layout_cache_plan = if (storage.text_layout_cache_entries.len == 0 and storage.text_layout_cache_actions.len == 0)
+        TextLayoutCachePlan{}
+    else
+        try text_layout_plan.cachePlanWithRetention(
+            options.previous_text_layout_cache,
+            options.frame_index,
+            options.text_layout_cache_retention_frames,
+            storage.text_layout_cache_entries,
+            storage.text_layout_cache_actions,
+        );
+
+    const full_repaint = options.full_repaint or previous == null;
+    var changes: []const DiffChange = storage.changes[0..0];
+    var dirty_bounds: ?geometry.RectF = null;
+
+    if (full_repaint) {
+        dirty_bounds = fullRepaintBounds(options.surface_size, render_plan.bounds);
+    } else {
+        changes = try DisplayList.diff(previous.?, next, storage.changes);
+        dirty_bounds = clippedDirtyBounds(unionOptionalBounds(dirtyBoundsFromChanges(changes), render_override_dirty_bounds), options.surface_size);
+    }
+
+    return .{
+        .frame_index = options.frame_index,
+        .timestamp_ns = options.timestamp_ns,
+        .surface_size = options.surface_size,
+        .scale = options.scale,
+        .full_repaint = full_repaint,
+        .display_list = next,
+        .render_plan = render_plan,
+        .batch_plan = batch_plan,
+        .pipeline_cache_plan = pipeline_cache_plan,
+        .path_geometry_plan = path_geometry_plan,
+        .path_geometry_cache_plan = path_geometry_cache_plan,
+        .image_plan = image_plan,
+        .image_cache_plan = image_cache_plan,
+        .layer_plan = layer_plan,
+        .layer_cache_plan = layer_cache_plan,
+        .resource_plan = resource_plan,
+        .resource_cache_plan = resource_cache_plan,
+        .visual_effect_plan = visual_effect_plan,
+        .visual_effect_cache_plan = visual_effect_cache_plan,
+        .glyph_atlas_plan = glyph_atlas_plan,
+        .glyph_atlas_cache_plan = glyph_atlas_cache_plan,
+        .text_layout_plan = text_layout_plan,
+        .text_layout_cache_plan = text_layout_cache_plan,
+        .image_resources = options.image_resources,
+        .changes = changes,
+        .dirty_bounds = dirty_bounds,
+        .budget = options.budget,
+    };
+}
+
+fn dirtyBoundsFromChanges(changes: []const DiffChange) ?geometry.RectF {
+    var result: ?geometry.RectF = null;
+    for (changes) |change| {
+        result = unionOptionalBounds(result, change.dirty_bounds);
+    }
+    return result;
+}
+
+fn fullRepaintBounds(surface_size: geometry.SizeF, render_bounds: ?geometry.RectF) ?geometry.RectF {
+    if (surfaceRect(surface_size)) |surface| return surface;
+    return render_bounds;
+}
+
+fn clippedDirtyBounds(bounds: ?geometry.RectF, surface_size: geometry.SizeF) ?geometry.RectF {
+    const dirty = bounds orelse return null;
+    const normalized = dirty.normalized();
+    if (surfaceRect(surface_size)) |surface| {
+        const clipped = geometry.RectF.intersection(surface, normalized);
+        return if (clipped.isEmpty()) null else clipped;
+    }
+    return if (normalized.isEmpty()) null else normalized;
+}
+
+fn surfaceRect(surface_size: geometry.SizeF) ?geometry.RectF {
+    const rect = geometry.RectF.fromSize(surface_size).normalized();
+    return if (rect.isEmpty()) null else rect;
+}
+
+fn unionOptionalBounds(a: ?geometry.RectF, b: ?geometry.RectF) ?geometry.RectF {
+    if (a) |rect_a| {
+        if (b) |rect_b| return geometry.RectF.unionWith(rect_a.normalized(), rect_b.normalized());
+        return rect_a.normalized();
+    }
+    if (b) |rect_b| return rect_b.normalized();
+    return null;
+}
 
 pub const CanvasFrameBudget = struct {
     max_commands: usize = 0,

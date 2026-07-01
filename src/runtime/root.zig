@@ -2,6 +2,9 @@ const std = @import("std");
 const geometry = @import("geometry");
 const trace = @import("trace");
 const json = @import("json");
+const validation = @import("validation.zig");
+const bridge_payload = @import("bridge_payload.zig");
+const automation_commands = @import("automation_commands.zig");
 const canvas = @import("canvas");
 const automation = @import("../automation/root.zig");
 const bridge = @import("../bridge/root.zig");
@@ -13,7 +16,7 @@ const window_state = @import("../window_state/root.zig");
 
 const max_async_bridge_responses: usize = 64;
 const max_bridge_origin_bytes: usize = 512;
-const max_command_id_bytes: usize = 128;
+const max_command_id_bytes = validation.max_command_id_bytes;
 pub const max_canvas_commands_per_view: usize = 160;
 pub const max_canvas_gradient_stops_per_view: usize = 64;
 pub const max_canvas_path_elements_per_view: usize = 128;
@@ -41,6 +44,66 @@ threadlocal var canvas_frame_text_layout_plans_scratch: [max_canvas_text_layouts
 threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layouts_per_view]canvas.TextLine = undefined;
 threadlocal var canvas_frame_text_layout_cache_entries_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined;
 threadlocal var canvas_frame_text_layout_cache_actions_scratch: [max_canvas_text_layouts_per_view * 2]canvas.TextLayoutCacheAction = undefined;
+
+const validateCommandName = validation.validateCommandName;
+const validateRevealPath = validation.validateRevealPath;
+const validateRecentDocumentPath = validation.validateRecentDocumentPath;
+const validateOpenDialogOptions = validation.validateOpenDialogOptions;
+const validateSaveDialogOptions = validation.validateSaveDialogOptions;
+const validateMessageDialogOptions = validation.validateMessageDialogOptions;
+const validateNotificationOptions = validation.validateNotificationOptions;
+const validateClipboardData = validation.validateClipboardData;
+const validateClipboardMimeType = validation.validateClipboardMimeType;
+const validateCredential = validation.validateCredential;
+const validateCredentialKey = validation.validateCredentialKey;
+const validateTrayOptions = validation.validateTrayOptions;
+const validateTrayMenuItems = validation.validateTrayMenuItems;
+const validateWindowFrame = validation.validateWindowFrame;
+const isMainWebViewLabel = validation.isMainWebViewLabel;
+const validateWebViewLabel = validation.validateWebViewLabel;
+const validateChildWebViewLabel = validation.validateChildWebViewLabel;
+const validateViewOptions = validation.validateViewOptions;
+const validateViewLabel = validation.validateViewLabel;
+const validateViewFrame = validation.validateViewFrame;
+const isValidWebViewFrame = validation.isValidWebViewFrame;
+
+const jsonStringField = bridge_payload.jsonStringField;
+const webViewWindowIdFromJson = bridge_payload.webViewWindowIdFromJson;
+const viewWindowIdFromJson = bridge_payload.viewWindowIdFromJson;
+const viewKindFromString = bridge_payload.viewKindFromString;
+const gpuSurfaceOptionsFromJson = bridge_payload.gpuSurfaceOptionsFromJson;
+const platformFeatureFromString = bridge_payload.platformFeatureFromString;
+const viewFrameFromJson = bridge_payload.viewFrameFromJson;
+const viewLayerFromJson = bridge_payload.viewLayerFromJson;
+const webViewFrameFromJson = bridge_payload.webViewFrameFromJson;
+const webViewLayerFromJson = bridge_payload.webViewLayerFromJson;
+const webViewUrlOrigin = bridge_payload.webViewUrlOrigin;
+const jsonNumberField = bridge_payload.jsonNumberField;
+const jsonIntegerField = bridge_payload.jsonIntegerField;
+const jsonBoolField = bridge_payload.jsonBoolField;
+
+const AutomationNativeCommand = automation_commands.AutomationNativeCommand;
+const AutomationWidgetActionKind = automation_commands.AutomationWidgetActionKind;
+const AutomationWidgetAction = automation_commands.AutomationWidgetAction;
+const AutomationWidgetTarget = automation_commands.AutomationWidgetTarget;
+const AutomationWidgetWheel = automation_commands.AutomationWidgetWheel;
+const AutomationWidgetKey = automation_commands.AutomationWidgetKey;
+const AutomationWidgetPointerDrag = automation_commands.AutomationWidgetPointerDrag;
+const AutomationResizeCommand = automation_commands.AutomationResizeCommand;
+const parseAutomationCommandName = automation_commands.parseAutomationCommandName;
+const parseAutomationViewLabel = automation_commands.parseAutomationViewLabel;
+const parseAutomationNativeCommand = automation_commands.parseAutomationNativeCommand;
+const parseAutomationWidgetAction = automation_commands.parseAutomationWidgetAction;
+const parseAutomationWidgetTarget = automation_commands.parseAutomationWidgetTarget;
+const parseAutomationWidgetWheel = automation_commands.parseAutomationWidgetWheel;
+const parseAutomationWidgetKey = automation_commands.parseAutomationWidgetKey;
+const parseAutomationWidgetPointerDrag = automation_commands.parseAutomationWidgetPointerDrag;
+const automationWidgetActionSupported = automation_commands.automationWidgetActionSupported;
+const parseAutomationDropPaths = automation_commands.parseAutomationDropPaths;
+const parseAutomationTextSelection = automation_commands.parseAutomationTextSelection;
+const parseAutomationDragDelta = automation_commands.parseAutomationDragDelta;
+const parseAutomationResizeCommand = automation_commands.parseAutomationResizeCommand;
+
 pub const max_canvas_widget_nodes_per_view: usize = 64;
 pub const max_canvas_widget_semantics_per_view: usize = 64;
 pub const max_canvas_widget_text_bytes_per_view: usize = 2048;
@@ -9307,232 +9370,6 @@ fn builtinBridgeErrorCode(err: anyerror) bridge.ErrorCode {
     };
 }
 
-fn jsonStringField(payload: []const u8, field: []const u8, storage: *json.StringStorage) ?[]const u8 {
-    return json.stringField(payload, field, storage);
-}
-
-const AutomationNativeCommand = struct {
-    name: []const u8,
-    view_label: []const u8 = "",
-};
-
-const AutomationWidgetActionKind = enum {
-    focus,
-    press,
-    toggle,
-    increment,
-    decrement,
-    set_text,
-    set_selection,
-    set_composition,
-    commit_composition,
-    cancel_composition,
-    select,
-    drag,
-    drop_files,
-    dismiss,
-};
-
-const AutomationWidgetAction = struct {
-    view_label: []const u8,
-    id: canvas.ObjectId,
-    action: AutomationWidgetActionKind,
-    value: []const u8 = "",
-};
-
-const AutomationWidgetTarget = struct {
-    view_label: []const u8,
-    id: canvas.ObjectId,
-};
-
-const AutomationWidgetWheel = struct {
-    target: AutomationWidgetTarget,
-    delta_y: f32,
-};
-
-const AutomationWidgetKey = struct {
-    view_label: []const u8,
-    key: []const u8,
-    text: []const u8 = "",
-};
-
-const AutomationWidgetPointerDrag = struct {
-    target: AutomationWidgetTarget,
-    start_x_ratio: f32,
-    end_x_ratio: f32,
-    start_y_ratio: f32 = 0.5,
-    end_y_ratio: f32 = 0.5,
-};
-
-const AutomationToken = struct {
-    token: []const u8,
-    rest: []const u8 = "",
-};
-
-const AutomationResizeCommand = struct {
-    width: f32,
-    height: f32,
-    scale_factor: f32 = 1,
-};
-
-fn parseAutomationCommandName(value: []const u8) ![]const u8 {
-    const trimmed = std.mem.trim(u8, value, " \n\r\t");
-    if (trimmed.len == 0) return error.InvalidCommand;
-    const separator = std.mem.indexOfAny(u8, trimmed, " \n\r\t") orelse return trimmed;
-    return trimmed[0..separator];
-}
-
-fn parseAutomationViewLabel(value: []const u8) ![]const u8 {
-    const trimmed = std.mem.trim(u8, value, " \n\r\t");
-    if (trimmed.len == 0) return error.InvalidCommand;
-    return trimmed;
-}
-
-fn parseAutomationNativeCommand(value: []const u8) !AutomationNativeCommand {
-    const trimmed = std.mem.trim(u8, value, " \n\r\t");
-    if (trimmed.len == 0) return error.InvalidCommand;
-    const separator = std.mem.indexOfAny(u8, trimmed, " \n\r\t") orelse return .{ .name = trimmed };
-    const view_label = std.mem.trim(u8, trimmed[separator + 1 ..], " \n\r\t");
-    return .{
-        .name = trimmed[0..separator],
-        .view_label = view_label,
-    };
-}
-
-fn parseAutomationWidgetAction(value: []const u8) !AutomationWidgetAction {
-    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
-    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
-    const action_part = takeAutomationToken(id_part.rest) orelse return error.InvalidCommand;
-    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
-    if (id == 0) return error.InvalidCommand;
-    const action = automationWidgetActionKindFromString(action_part.token) orelse return error.InvalidCommand;
-    const action_value = std.mem.trim(u8, action_part.rest, " \n\r\t");
-    if (action == .set_selection and action_value.len == 0) return error.InvalidCommand;
-    if (action == .drop_files and action_value.len == 0) return error.InvalidCommand;
-    if (action != .set_text and
-        action != .set_selection and
-        action != .set_composition and
-        action != .drag and
-        action != .drop_files and
-        action_value.len > 0) return error.InvalidCommand;
-    return .{
-        .view_label = view.token,
-        .id = id,
-        .action = action,
-        .value = action_value,
-    };
-}
-
-fn parseAutomationWidgetTarget(value: []const u8) !AutomationWidgetTarget {
-    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
-    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
-    if (takeAutomationToken(id_part.rest) != null) return error.InvalidCommand;
-    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
-    if (id == 0) return error.InvalidCommand;
-    return .{ .view_label = view.token, .id = id };
-}
-
-fn parseAutomationWidgetWheel(value: []const u8) !AutomationWidgetWheel {
-    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
-    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
-    const delta_part = takeAutomationToken(id_part.rest) orelse return error.InvalidCommand;
-    if (takeAutomationToken(delta_part.rest) != null) return error.InvalidCommand;
-    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
-    if (id == 0) return error.InvalidCommand;
-    const delta_y = std.fmt.parseFloat(f32, delta_part.token) catch return error.InvalidCommand;
-    if (!std.math.isFinite(delta_y)) return error.InvalidCommand;
-    return .{
-        .target = .{ .view_label = view.token, .id = id },
-        .delta_y = delta_y,
-    };
-}
-
-fn parseAutomationWidgetKey(value: []const u8) !AutomationWidgetKey {
-    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
-    const key_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
-    const text = std.mem.trim(u8, key_part.rest, " \n\r\t");
-    if (key_part.token.len == 0) return error.InvalidCommand;
-    return .{ .view_label = view.token, .key = key_part.token, .text = text };
-}
-
-fn parseAutomationWidgetPointerDrag(value: []const u8) !AutomationWidgetPointerDrag {
-    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
-    const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
-    const start_x_part = takeAutomationToken(id_part.rest) orelse return error.InvalidCommand;
-    const end_x_part = takeAutomationToken(start_x_part.rest) orelse return error.InvalidCommand;
-    const start_y_part = takeAutomationToken(end_x_part.rest);
-    const end_y_part = if (start_y_part) |part| takeAutomationToken(part.rest) else null;
-    if (end_y_part) |part| {
-        if (takeAutomationToken(part.rest) != null) return error.InvalidCommand;
-    } else if (start_y_part != null) {
-        return error.InvalidCommand;
-    }
-
-    const id = std.fmt.parseInt(canvas.ObjectId, id_part.token, 10) catch return error.InvalidCommand;
-    if (id == 0) return error.InvalidCommand;
-    const start_x_ratio = std.fmt.parseFloat(f32, start_x_part.token) catch return error.InvalidCommand;
-    const end_x_ratio = std.fmt.parseFloat(f32, end_x_part.token) catch return error.InvalidCommand;
-    const start_y_ratio = if (start_y_part) |part| std.fmt.parseFloat(f32, part.token) catch return error.InvalidCommand else 0.5;
-    const end_y_ratio = if (end_y_part) |part| std.fmt.parseFloat(f32, part.token) catch return error.InvalidCommand else 0.5;
-    if (!std.math.isFinite(start_x_ratio) or
-        !std.math.isFinite(end_x_ratio) or
-        !std.math.isFinite(start_y_ratio) or
-        !std.math.isFinite(end_y_ratio)) return error.InvalidCommand;
-
-    return .{
-        .target = .{ .view_label = view.token, .id = id },
-        .start_x_ratio = start_x_ratio,
-        .end_x_ratio = end_x_ratio,
-        .start_y_ratio = start_y_ratio,
-        .end_y_ratio = end_y_ratio,
-    };
-}
-
-fn takeAutomationToken(value: []const u8) ?AutomationToken {
-    const trimmed = std.mem.trim(u8, value, " \n\r\t");
-    if (trimmed.len == 0) return null;
-    const separator = std.mem.indexOfAny(u8, trimmed, " \n\r\t") orelse return .{ .token = trimmed };
-    return .{
-        .token = trimmed[0..separator],
-        .rest = std.mem.trim(u8, trimmed[separator + 1 ..], " \n\r\t"),
-    };
-}
-
-fn automationWidgetActionKindFromString(value: []const u8) ?AutomationWidgetActionKind {
-    if (std.ascii.eqlIgnoreCase(value, "focus")) return .focus;
-    if (std.ascii.eqlIgnoreCase(value, "press")) return .press;
-    if (std.ascii.eqlIgnoreCase(value, "toggle")) return .toggle;
-    if (std.ascii.eqlIgnoreCase(value, "increment")) return .increment;
-    if (std.ascii.eqlIgnoreCase(value, "decrement")) return .decrement;
-    if (std.ascii.eqlIgnoreCase(value, "set_text") or std.ascii.eqlIgnoreCase(value, "set-text")) return .set_text;
-    if (std.ascii.eqlIgnoreCase(value, "set_selection") or std.ascii.eqlIgnoreCase(value, "set-selection")) return .set_selection;
-    if (std.ascii.eqlIgnoreCase(value, "set_composition") or std.ascii.eqlIgnoreCase(value, "set-composition")) return .set_composition;
-    if (std.ascii.eqlIgnoreCase(value, "commit_composition") or std.ascii.eqlIgnoreCase(value, "commit-composition")) return .commit_composition;
-    if (std.ascii.eqlIgnoreCase(value, "cancel_composition") or std.ascii.eqlIgnoreCase(value, "cancel-composition")) return .cancel_composition;
-    if (std.ascii.eqlIgnoreCase(value, "select")) return .select;
-    if (std.ascii.eqlIgnoreCase(value, "drag")) return .drag;
-    if (std.ascii.eqlIgnoreCase(value, "drop_files") or std.ascii.eqlIgnoreCase(value, "drop-files")) return .drop_files;
-    if (std.ascii.eqlIgnoreCase(value, "dismiss")) return .dismiss;
-    return null;
-}
-
-fn automationWidgetActionSupported(actions: canvas.WidgetActions, action: AutomationWidgetActionKind) bool {
-    return switch (action) {
-        .focus => actions.focus,
-        .press => actions.press,
-        .toggle => actions.toggle,
-        .increment => actions.increment,
-        .decrement => actions.decrement,
-        .set_text => actions.set_text,
-        .set_selection => actions.set_selection,
-        .set_composition, .commit_composition, .cancel_composition => actions.set_text,
-        .select => actions.select,
-        .drag => actions.drag,
-        .drop_files => actions.drop_files,
-        .dismiss => actions.dismiss,
-    };
-}
-
 fn canvasWidgetAccessibilityActionSupported(actions: canvas.WidgetActions, action: CanvasWidgetAccessibilityActionKind) bool {
     return switch (action) {
         .focus => actions.focus,
@@ -9577,644 +9414,8 @@ fn canvasWidgetAccessibilityActionKindFromPlatform(action: platform.WidgetAccess
     };
 }
 
-fn parseAutomationDropPaths(value: []const u8, output: [][]const u8) ![]const []const u8 {
-    var parts = std.mem.tokenizeAny(u8, value, " \n\r\t");
-    var len: usize = 0;
-    while (parts.next()) |path| {
-        if (len >= output.len) return error.InvalidCommand;
-        output[len] = path;
-        len += 1;
-    }
-    if (len == 0) return error.InvalidCommand;
-    return output[0..len];
-}
-
-fn parseAutomationTextSelection(value: []const u8) !canvas.TextSelection {
-    var parts = std.mem.tokenizeAny(u8, value, " \n\r\t");
-    const anchor_bytes = parts.next() orelse return error.InvalidCommand;
-    const focus_bytes = parts.next() orelse return error.InvalidCommand;
-    if (parts.next() != null) return error.InvalidCommand;
-    return .{
-        .anchor = std.fmt.parseInt(usize, anchor_bytes, 10) catch return error.InvalidCommand,
-        .focus = std.fmt.parseInt(usize, focus_bytes, 10) catch return error.InvalidCommand,
-    };
-}
-
-fn parseAutomationDragDelta(value: []const u8) !geometry.OffsetF {
-    const trimmed = std.mem.trim(u8, value, " \n\r\t");
-    if (trimmed.len == 0) return geometry.OffsetF.init(16, 0);
-    var parts = std.mem.tokenizeAny(u8, trimmed, " \n\r\t");
-    const dx_bytes = parts.next() orelse return error.InvalidCommand;
-    const dy_bytes = parts.next() orelse return error.InvalidCommand;
-    if (parts.next() != null) return error.InvalidCommand;
-    const dx = std.fmt.parseFloat(f32, dx_bytes) catch return error.InvalidCommand;
-    const dy = std.fmt.parseFloat(f32, dy_bytes) catch return error.InvalidCommand;
-    if (!std.math.isFinite(dx) or !std.math.isFinite(dy)) return error.InvalidCommand;
-    return geometry.OffsetF.init(dx, dy);
-}
-
-fn parseAutomationResizeCommand(value: []const u8) !AutomationResizeCommand {
-    var parts = std.mem.tokenizeAny(u8, value, " \n\r\t");
-    const width_bytes = parts.next() orelse return error.InvalidCommand;
-    const height_bytes = parts.next() orelse return error.InvalidCommand;
-    const scale_bytes = parts.next();
-    if (parts.next() != null) return error.InvalidCommand;
-    const width = std.fmt.parseFloat(f32, width_bytes) catch return error.InvalidCommand;
-    const height = std.fmt.parseFloat(f32, height_bytes) catch return error.InvalidCommand;
-    const scale_factor = if (scale_bytes) |bytes| std.fmt.parseFloat(f32, bytes) catch return error.InvalidCommand else 1;
-    if (!std.math.isFinite(width) or !std.math.isFinite(height) or !std.math.isFinite(scale_factor)) return error.InvalidCommand;
-    if (width <= 0 or height <= 0 or scale_factor <= 0) return error.InvalidCommand;
-    return .{
-        .width = width,
-        .height = height,
-        .scale_factor = scale_factor,
-    };
-}
-
-test "runtime parses automation resize commands" {
-    const resize = try parseAutomationResizeCommand("900 640");
-    try std.testing.expectEqual(@as(f32, 900), resize.width);
-    try std.testing.expectEqual(@as(f32, 640), resize.height);
-    try std.testing.expectEqual(@as(f32, 1), resize.scale_factor);
-
-    const scaled = try parseAutomationResizeCommand("900 640 2");
-    try std.testing.expectEqual(@as(f32, 2), scaled.scale_factor);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("900"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("0 640"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("900 nan"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("900 640 1 2"));
-}
-
-test "runtime parses automation drag deltas" {
-    const default_delta = try parseAutomationDragDelta("");
-    try std.testing.expectEqual(@as(f32, 16), default_delta.dx);
-    try std.testing.expectEqual(@as(f32, 0), default_delta.dy);
-
-    const explicit_delta = try parseAutomationDragDelta("18 2");
-    try std.testing.expectEqual(@as(f32, 18), explicit_delta.dx);
-    try std.testing.expectEqual(@as(f32, 2), explicit_delta.dy);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationDragDelta("18"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationDragDelta("18 nope"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationDragDelta("18 2 3"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationDragDelta("nan 2"));
-}
-
-test "runtime parses automation text selections" {
-    const selection = try parseAutomationTextSelection("1 4");
-    try std.testing.expectEqual(@as(usize, 1), selection.anchor);
-    try std.testing.expectEqual(@as(usize, 4), selection.focus);
-
-    const reverse = try parseAutomationTextSelection("8 2");
-    try std.testing.expectEqual(@as(usize, 8), reverse.anchor);
-    try std.testing.expectEqual(@as(usize, 2), reverse.focus);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationTextSelection(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationTextSelection("1"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationTextSelection("-1 2"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationTextSelection("1 nope"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationTextSelection("1 2 3"));
-}
-
-test "runtime parses automation focus view labels" {
-    const label = try parseAutomationViewLabel(" refresh-button \n");
-    try std.testing.expectEqualStrings("refresh-button", label);
-    try std.testing.expectError(error.InvalidCommand, parseAutomationViewLabel(""));
-}
-
-test "runtime parses automation widget actions" {
-    const press = try parseAutomationWidgetAction("canvas 42 press");
-    try std.testing.expectEqualStrings("canvas", press.view_label);
-    try std.testing.expectEqual(@as(canvas.ObjectId, 42), press.id);
-    try std.testing.expectEqual(AutomationWidgetActionKind.press, press.action);
-    try std.testing.expectEqualStrings("", press.value);
-
-    const set_text = try parseAutomationWidgetAction("canvas 7 set-text hello world");
-    try std.testing.expectEqual(@as(canvas.ObjectId, 7), set_text.id);
-    try std.testing.expectEqual(AutomationWidgetActionKind.set_text, set_text.action);
-    try std.testing.expectEqualStrings("hello world", set_text.value);
-
-    const set_text_underscore = try parseAutomationWidgetAction("canvas 7 set_text");
-    try std.testing.expectEqual(AutomationWidgetActionKind.set_text, set_text_underscore.action);
-    try std.testing.expectEqualStrings("", set_text_underscore.value);
-
-    const set_selection = try parseAutomationWidgetAction("canvas 7 set-selection 1 4");
-    try std.testing.expectEqual(AutomationWidgetActionKind.set_selection, set_selection.action);
-    try std.testing.expectEqualStrings("1 4", set_selection.value);
-
-    const set_selection_underscore = try parseAutomationWidgetAction("canvas 7 set_selection 4 1");
-    try std.testing.expectEqual(AutomationWidgetActionKind.set_selection, set_selection_underscore.action);
-    try std.testing.expectEqualStrings("4 1", set_selection_underscore.value);
-
-    const set_composition = try parseAutomationWidgetAction("canvas 7 set-composition composing text");
-    try std.testing.expectEqual(AutomationWidgetActionKind.set_composition, set_composition.action);
-    try std.testing.expectEqualStrings("composing text", set_composition.value);
-
-    const commit_composition = try parseAutomationWidgetAction("canvas 7 commit-composition");
-    try std.testing.expectEqual(AutomationWidgetActionKind.commit_composition, commit_composition.action);
-
-    const cancel_composition = try parseAutomationWidgetAction("canvas 7 cancel_composition");
-    try std.testing.expectEqual(AutomationWidgetActionKind.cancel_composition, cancel_composition.action);
-
-    const drag = try parseAutomationWidgetAction("canvas 2 drag");
-    try std.testing.expectEqual(@as(canvas.ObjectId, 2), drag.id);
-    try std.testing.expectEqual(AutomationWidgetActionKind.drag, drag.action);
-    try std.testing.expectEqualStrings("", drag.value);
-
-    const drag_delta = try parseAutomationWidgetAction("canvas 2 drag 18 2");
-    try std.testing.expectEqual(AutomationWidgetActionKind.drag, drag_delta.action);
-    try std.testing.expectEqualStrings("18 2", drag_delta.value);
-
-    const drop_files = try parseAutomationWidgetAction("canvas 9 drop-files /tmp/report.csv /tmp/chart.png");
-    try std.testing.expectEqual(@as(canvas.ObjectId, 9), drop_files.id);
-    try std.testing.expectEqual(AutomationWidgetActionKind.drop_files, drop_files.action);
-    try std.testing.expectEqualStrings("/tmp/report.csv /tmp/chart.png", drop_files.value);
-
-    const drop_files_underscore = try parseAutomationWidgetAction("canvas 9 drop_files /tmp/report.csv");
-    try std.testing.expectEqual(AutomationWidgetActionKind.drop_files, drop_files_underscore.action);
-    try std.testing.expectEqualStrings("/tmp/report.csv", drop_files_underscore.value);
-
-    const dismiss = try parseAutomationWidgetAction("canvas 10 dismiss");
-    try std.testing.expectEqual(@as(canvas.ObjectId, 10), dismiss.id);
-    try std.testing.expectEqual(AutomationWidgetActionKind.dismiss, dismiss.action);
-    try std.testing.expectEqualStrings("", dismiss.value);
-
-    var drop_paths_buffer: [2][]const u8 = undefined;
-    const drop_paths = try parseAutomationDropPaths(" /tmp/report.csv /tmp/chart.png ", drop_paths_buffer[0..]);
-    try std.testing.expectEqual(@as(usize, 2), drop_paths.len);
-    try std.testing.expectEqualStrings("/tmp/report.csv", drop_paths[0]);
-    try std.testing.expectEqualStrings("/tmp/chart.png", drop_paths[1]);
-    try std.testing.expectError(error.InvalidCommand, parseAutomationDropPaths("", drop_paths_buffer[0..]));
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 0 press"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas nope press"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 press extra"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 set-selection"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 commit-composition extra"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 drop-files"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 dismiss extra"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 unknown"));
-}
-
-test "runtime parses automation widget click targets" {
-    const target = try parseAutomationWidgetTarget("canvas 42");
-    try std.testing.expectEqualStrings("canvas", target.view_label);
-    try std.testing.expectEqual(@as(canvas.ObjectId, 42), target.id);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 0"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas nope"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 42 extra"));
-}
-
-test "runtime parses automation widget wheel targets" {
-    const wheel = try parseAutomationWidgetWheel("canvas 42 18.5");
-    try std.testing.expectEqualStrings("canvas", wheel.target.view_label);
-    try std.testing.expectEqual(@as(canvas.ObjectId, 42), wheel.target.id);
-    try std.testing.expectEqual(@as(f32, 18.5), wheel.delta_y);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 0 18"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas nope 18"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nope"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 nan"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetWheel("canvas 42 18 extra"));
-}
-
-test "runtime parses automation widget key inputs" {
-    const tab = try parseAutomationWidgetKey("canvas tab");
-    try std.testing.expectEqualStrings("canvas", tab.view_label);
-    try std.testing.expectEqualStrings("tab", tab.key);
-    try std.testing.expectEqualStrings("", tab.text);
-
-    const typed = try parseAutomationWidgetKey("canvas a a");
-    try std.testing.expectEqualStrings("canvas", typed.view_label);
-    try std.testing.expectEqualStrings("a", typed.key);
-    try std.testing.expectEqualStrings("a", typed.text);
-
-    const named_text = try parseAutomationWidgetKey("canvas space word value");
-    try std.testing.expectEqualStrings("space", named_text.key);
-    try std.testing.expectEqualStrings("word value", named_text.text);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetKey(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetKey("canvas"));
-}
-
-test "runtime parses automation widget pointer drags" {
-    const centered = try parseAutomationWidgetPointerDrag("canvas 42 0.25 0.82");
-    try std.testing.expectEqualStrings("canvas", centered.target.view_label);
-    try std.testing.expectEqual(@as(canvas.ObjectId, 42), centered.target.id);
-    try std.testing.expectEqual(@as(f32, 0.25), centered.start_x_ratio);
-    try std.testing.expectEqual(@as(f32, 0.82), centered.end_x_ratio);
-    try std.testing.expectEqual(@as(f32, 0.5), centered.start_y_ratio);
-    try std.testing.expectEqual(@as(f32, 0.5), centered.end_y_ratio);
-
-    const diagonal = try parseAutomationWidgetPointerDrag("canvas 42 -0.1 1.1 0.2 0.9");
-    try std.testing.expectEqual(@as(f32, -0.1), diagonal.start_x_ratio);
-    try std.testing.expectEqual(@as(f32, 1.1), diagonal.end_x_ratio);
-    try std.testing.expectEqual(@as(f32, 0.2), diagonal.start_y_ratio);
-    try std.testing.expectEqual(@as(f32, 0.9), diagonal.end_y_ratio);
-
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag(""));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 0 0.2 0.8"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas nope 0.2 0.8"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 nope 0.8"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 nan"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 0.8 0.5"));
-    try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetPointerDrag("canvas 42 0.2 0.8 0.5 0.5 extra"));
-}
-
-fn validateCommandName(name: []const u8) !void {
-    if (name.len == 0 or name.len > max_command_id_bytes) return error.InvalidCommand;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidCommand;
-    for (name) |ch| {
-        if (ch == 0 or ch == '/' or ch == '\\' or ch == '\n' or ch == '\r' or ch == '\t') return error.InvalidCommand;
-    }
-}
-
-fn validateRevealPath(path: []const u8) !void {
-    if (path.len == 0) return error.InvalidRevealPath;
-    if (path.len > platform.max_reveal_path_bytes) return error.RevealPathTooLarge;
-    for (path) |ch| {
-        if (ch == 0) return error.InvalidRevealPath;
-    }
-}
-
-fn validateRecentDocumentPath(path: []const u8) !void {
-    if (path.len == 0) return error.InvalidRecentDocumentPath;
-    if (path.len > platform.max_recent_document_path_bytes) return error.RecentDocumentPathTooLarge;
-    for (path) |ch| {
-        if (ch == 0) return error.InvalidRecentDocumentPath;
-    }
-}
-
-fn validateOpenDialogOptions(options: platform.OpenDialogOptions, buffer: []u8) !void {
-    if (buffer.len == 0) return error.InvalidDialogOptions;
-    try validateDialogString(options.title, platform.max_dialog_title_bytes, true);
-    try validateDialogString(options.default_path, platform.max_dialog_path_bytes, true);
-    try validateDialogFilters(options.filters);
-}
-
-fn validateSaveDialogOptions(options: platform.SaveDialogOptions, buffer: []u8) !void {
-    if (buffer.len == 0) return error.InvalidDialogOptions;
-    try validateDialogString(options.title, platform.max_dialog_title_bytes, true);
-    try validateDialogString(options.default_path, platform.max_dialog_path_bytes, true);
-    try validateDialogString(options.default_name, platform.max_dialog_path_bytes, true);
-    try validateDialogFilters(options.filters);
-}
-
-fn validateMessageDialogOptions(options: platform.MessageDialogOptions) !void {
-    try validateDialogString(options.title, platform.max_dialog_title_bytes, true);
-    try validateDialogString(options.message, platform.max_dialog_message_bytes, true);
-    try validateDialogString(options.informative_text, platform.max_dialog_message_bytes, true);
-    try validateDialogString(options.primary_button, platform.max_dialog_button_bytes, false);
-    try validateDialogString(options.secondary_button, platform.max_dialog_button_bytes, true);
-    try validateDialogString(options.tertiary_button, platform.max_dialog_button_bytes, true);
-}
-
-fn validateDialogFilters(filters: []const platform.FileFilter) !void {
-    var flattened_len: usize = 0;
-    for (filters) |filter| {
-        try validateDialogString(filter.name, platform.max_dialog_filter_name_bytes, true);
-        for (filter.extensions) |extension| {
-            try validateDialogString(extension, platform.max_dialog_filter_bytes, false);
-            if (std.mem.indexOfScalar(u8, extension, ';') != null) return error.InvalidDialogOptions;
-            flattened_len += extension.len;
-            if (flattened_len > platform.max_dialog_filter_bytes) return error.DialogFieldTooLarge;
-            flattened_len += 1;
-            if (flattened_len > platform.max_dialog_filter_bytes + 1) return error.DialogFieldTooLarge;
-        }
-    }
-}
-
-fn validateDialogString(value: []const u8, max_len: usize, allow_empty: bool) !void {
-    if (!allow_empty and value.len == 0) return error.InvalidDialogOptions;
-    if (value.len > max_len) return error.DialogFieldTooLarge;
-    for (value) |ch| {
-        if (ch == 0) return error.InvalidDialogOptions;
-    }
-}
-
-fn validateNotificationOptions(options: platform.NotificationOptions) !void {
-    if (options.title.len == 0) return error.InvalidNotificationOptions;
-    try validateNotificationField(options.title, platform.max_notification_title_bytes);
-    try validateNotificationField(options.subtitle, platform.max_notification_subtitle_bytes);
-    try validateNotificationField(options.body, platform.max_notification_body_bytes);
-}
-
-fn validateClipboardData(data: platform.ClipboardData) !void {
-    try validateClipboardMimeType(data.mime_type);
-    if (data.bytes.len > platform.max_clipboard_data_bytes) return error.ClipboardFieldTooLarge;
-}
-
-fn validateClipboardMimeType(mime_type: []const u8) !void {
-    if (mime_type.len == 0) return error.InvalidClipboardOptions;
-    if (mime_type.len > platform.max_clipboard_mime_type_bytes) return error.ClipboardFieldTooLarge;
-    for (mime_type) |ch| {
-        if (ch == 0 or ch == '/' or ch == '\\') {
-            if (ch != '/') return error.InvalidClipboardOptions;
-        }
-        if (ch <= 0x20 or ch == 0x7f) return error.InvalidClipboardOptions;
-    }
-}
-
-fn validateCredential(credential: platform.Credential) !void {
-    try validateCredentialKey(.{ .service = credential.service, .account = credential.account });
-    try validateCredentialField(credential.secret, platform.max_credential_secret_bytes);
-}
-
-fn validateCredentialKey(key: platform.CredentialKey) !void {
-    try validateCredentialField(key.service, platform.max_credential_service_bytes);
-    try validateCredentialField(key.account, platform.max_credential_account_bytes);
-}
-
-fn validateCredentialField(value: []const u8, max_len: usize) !void {
-    if (value.len == 0) return error.InvalidCredentialOptions;
-    if (value.len > max_len) return error.CredentialFieldTooLarge;
-    for (value) |ch| {
-        if (ch == 0) return error.InvalidCredentialOptions;
-    }
-}
-
-fn validateTrayOptions(options: platform.TrayOptions) !void {
-    try validateTrayField(options.icon_path, platform.max_tray_icon_path_bytes);
-    try validateTrayField(options.tooltip, platform.max_tray_tooltip_bytes);
-    try validateTrayMenuItems(options.items);
-}
-
-fn validateTrayMenuItems(items: []const platform.TrayMenuItem) !void {
-    if (items.len > platform.max_tray_items) return error.InvalidTrayOptions;
-    for (items, 0..) |item, index| {
-        try validateTrayField(item.label, platform.max_tray_item_label_bytes);
-        try validateTrayField(item.command, platform.max_tray_item_command_bytes);
-        if (item.id != 0) {
-            for (items[0..index]) |previous| {
-                if (previous.id == item.id) return error.InvalidTrayOptions;
-            }
-        }
-        if (item.command.len > 0) {
-            if (item.separator or item.id == 0) return error.InvalidTrayOptions;
-            try validateCommandName(item.command);
-        }
-        if (!item.separator and item.label.len == 0) return error.InvalidTrayOptions;
-    }
-}
-
-fn validateTrayField(value: []const u8, max_len: usize) !void {
-    if (value.len > max_len) return error.TrayFieldTooLarge;
-    for (value) |ch| {
-        if (ch == 0) return error.InvalidTrayOptions;
-    }
-}
-
-fn validateNotificationField(value: []const u8, max_len: usize) !void {
-    if (value.len > max_len) return error.NotificationFieldTooLarge;
-    for (value) |ch| {
-        if (ch == 0) return error.InvalidNotificationOptions;
-    }
-}
-
-fn webViewWindowIdFromJson(payload: []const u8, default_window_id: platform.WindowId) !platform.WindowId {
-    if (json.fieldValue(payload, "windowId") == null) return default_window_id;
-    const window_id = jsonIntegerField(payload, "windowId") orelse return error.InvalidWebViewWindowId;
-    if (window_id != default_window_id) return error.CrossWindowWebViewDenied;
-    return window_id;
-}
-
-fn viewWindowIdFromJson(payload: []const u8, default_window_id: platform.WindowId) !platform.WindowId {
-    if (json.fieldValue(payload, "windowId") == null) return default_window_id;
-    const window_id = jsonIntegerField(payload, "windowId") orelse return error.InvalidViewWindowId;
-    if (window_id != default_window_id) return error.CrossWindowViewDenied;
-    return window_id;
-}
-
-fn viewKindFromString(value: []const u8) ?platform.ViewKind {
-    inline for (@typeInfo(platform.ViewKind).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.ViewKind, field.name);
-    }
-    if (std.mem.eql(u8, value, "titlebarAccessory")) return .titlebar_accessory;
-    if (std.mem.eql(u8, value, "iconButton")) return .icon_button;
-    if (std.mem.eql(u8, value, "listItem")) return .list_item;
-    if (std.mem.eql(u8, value, "segmentedControl")) return .segmented_control;
-    if (std.mem.eql(u8, value, "textField")) return .text_field;
-    if (std.mem.eql(u8, value, "searchField")) return .search_field;
-    if (std.mem.eql(u8, value, "gpuSurface")) return .gpu_surface;
-    if (std.mem.eql(u8, value, "progressIndicator")) return .progress_indicator;
-    return null;
-}
-
-fn gpuSurfaceOptionsFromJson(payload: []const u8, storage: *json.StringStorage) !platform.GpuSurfaceOptions {
-    var options = platform.GpuSurfaceOptions{};
-    if (jsonStringField(payload, "gpuBackend", storage) orelse jsonStringField(payload, "gpu_backend", storage)) |value| {
-        options.backend = gpuSurfaceBackendFromString(value) orelse return error.UnsupportedViewKind;
-    }
-    if (jsonStringField(payload, "gpuPixelFormat", storage) orelse jsonStringField(payload, "gpu_pixel_format", storage)) |value| {
-        options.pixel_format = gpuSurfacePixelFormatFromString(value) orelse return error.UnsupportedViewKind;
-    }
-    if (jsonStringField(payload, "gpuPresentMode", storage) orelse jsonStringField(payload, "gpu_present_mode", storage)) |value| {
-        options.present_mode = gpuSurfacePresentModeFromString(value) orelse return error.UnsupportedViewKind;
-    }
-    if (jsonStringField(payload, "gpuAlphaMode", storage) orelse jsonStringField(payload, "gpu_alpha_mode", storage)) |value| {
-        options.alpha_mode = gpuSurfaceAlphaModeFromString(value) orelse return error.UnsupportedViewKind;
-    }
-    if (jsonStringField(payload, "gpuColorSpace", storage) orelse jsonStringField(payload, "gpu_color_space", storage)) |value| {
-        options.color_space = gpuSurfaceColorSpaceFromString(value) orelse return error.UnsupportedViewKind;
-    }
-    if (jsonBoolField(payload, "gpuVsync") orelse jsonBoolField(payload, "gpu_vsync")) |value| {
-        options.vsync = value;
-    }
-    return options;
-}
-
-fn gpuSurfaceBackendFromString(value: []const u8) ?platform.GpuSurfaceBackend {
-    inline for (@typeInfo(platform.GpuSurfaceBackend).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfaceBackend, field.name);
-    }
-    return null;
-}
-
-fn gpuSurfacePixelFormatFromString(value: []const u8) ?platform.GpuSurfacePixelFormat {
-    inline for (@typeInfo(platform.GpuSurfacePixelFormat).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfacePixelFormat, field.name);
-    }
-    return null;
-}
-
-fn gpuSurfacePresentModeFromString(value: []const u8) ?platform.GpuSurfacePresentMode {
-    inline for (@typeInfo(platform.GpuSurfacePresentMode).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfacePresentMode, field.name);
-    }
-    return null;
-}
-
-fn gpuSurfaceAlphaModeFromString(value: []const u8) ?platform.GpuSurfaceAlphaMode {
-    inline for (@typeInfo(platform.GpuSurfaceAlphaMode).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfaceAlphaMode, field.name);
-    }
-    return null;
-}
-
-fn gpuSurfaceColorSpaceFromString(value: []const u8) ?platform.GpuSurfaceColorSpace {
-    inline for (@typeInfo(platform.GpuSurfaceColorSpace).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.GpuSurfaceColorSpace, field.name);
-    }
-    return null;
-}
-
-fn platformFeatureFromString(value: []const u8) ?platform.PlatformFeature {
-    inline for (@typeInfo(platform.PlatformFeature).@"enum".fields) |field| {
-        if (std.mem.eql(u8, value, field.name)) return @field(platform.PlatformFeature, field.name);
-    }
-    if (std.mem.eql(u8, value, "mainWebView")) return .main_webview;
-    if (std.mem.eql(u8, value, "childWebViews")) return .child_webviews;
-    if (std.mem.eql(u8, value, "nativeViews")) return .native_views;
-    if (std.mem.eql(u8, value, "nativeControlCommands")) return .native_control_commands;
-    if (std.mem.eql(u8, value, "clipboardText")) return .clipboard_text;
-    if (std.mem.eql(u8, value, "clipboardRichData")) return .clipboard_rich_data;
-    if (std.mem.eql(u8, value, "openUrl")) return .open_url;
-    if (std.mem.eql(u8, value, "revealPath")) return .reveal_path;
-    if (std.mem.eql(u8, value, "recentDocuments")) return .recent_documents;
-    if (std.mem.eql(u8, value, "fileDrops")) return .file_drops;
-    if (std.mem.eql(u8, value, "appActivationEvents")) return .app_activation_events;
-    if (std.mem.eql(u8, value, "gpuSurfaces")) return .gpu_surfaces;
-    return null;
-}
-
-fn viewFrameFromJson(payload: []const u8, required: bool) !?geometry.RectF {
-    const frame_payload = json.fieldValue(payload, "frame") orelse {
-        if (required) return error.InvalidViewOptions;
-        return null;
-    };
-    const width = jsonNumberField(frame_payload, "width") orelse return error.InvalidViewOptions;
-    const height = jsonNumberField(frame_payload, "height") orelse return error.InvalidViewOptions;
-    const frame = geometry.RectF.init(
-        jsonNumberField(frame_payload, "x") orelse 0,
-        jsonNumberField(frame_payload, "y") orelse 0,
-        width,
-        height,
-    );
-    if (frame.x < 0 or frame.y < 0 or frame.width < 0 or frame.height < 0) return error.InvalidViewOptions;
-    return frame;
-}
-
-fn viewLayerFromJson(payload: []const u8) !?i32 {
-    if (json.fieldValue(payload, "layer") == null) return null;
-    const layer_bytes = json.fieldValue(payload, "layer") orelse return error.InvalidViewOptions;
-    const layer_value = std.fmt.parseFloat(f64, layer_bytes) catch return error.InvalidViewOptions;
-    if (!std.math.isFinite(layer_value)) return error.InvalidViewOptions;
-    if (@trunc(layer_value) != layer_value) return error.InvalidViewOptions;
-    const max_layer: f64 = @floatFromInt(std.math.maxInt(i32));
-    const min_layer: f64 = @floatFromInt(std.math.minInt(i32));
-    if (layer_value > max_layer or layer_value < min_layer) return error.InvalidViewOptions;
-    return @as(i32, @intFromFloat(layer_value));
-}
-
-fn webViewFrameFromJson(payload: []const u8) !geometry.RectF {
-    const frame_payload = json.fieldValue(payload, "frame") orelse payload;
-    const width = jsonNumberField(frame_payload, "width") orelse return error.InvalidWebViewOptions;
-    const height = jsonNumberField(frame_payload, "height") orelse return error.InvalidWebViewOptions;
-    const frame = geometry.RectF.init(
-        jsonNumberField(frame_payload, "x") orelse 0,
-        jsonNumberField(frame_payload, "y") orelse 0,
-        width,
-        height,
-    );
-    if (frame.x < 0 or frame.y < 0 or frame.width <= 0 or frame.height <= 0) return error.InvalidWebViewOptions;
-    return frame;
-}
-
-fn validateWindowFrame(frame: geometry.RectF) !void {
-    if (!std.math.isFinite(frame.x) or !std.math.isFinite(frame.y) or !std.math.isFinite(frame.width) or !std.math.isFinite(frame.height)) return error.InvalidWindowOptions;
-    if (frame.width <= 0 or frame.height <= 0) return error.InvalidWindowOptions;
-}
-
-fn webViewLayerFromJson(payload: []const u8) !i32 {
-    if (json.fieldValue(payload, "layer") == null) return 0;
-    const layer_bytes = json.fieldValue(payload, "layer") orelse return error.InvalidWebViewOptions;
-    const layer_value = std.fmt.parseFloat(f64, layer_bytes) catch return error.InvalidWebViewOptions;
-    if (!std.math.isFinite(layer_value)) return error.InvalidWebViewOptions;
-    if (@trunc(layer_value) != layer_value) return error.InvalidWebViewOptions;
-    const max_layer: f64 = @floatFromInt(std.math.maxInt(i32));
-    const min_layer: f64 = @floatFromInt(std.math.minInt(i32));
-    if (layer_value > max_layer or layer_value < min_layer) return error.InvalidWebViewOptions;
-    return @as(i32, @intFromFloat(layer_value));
-}
-
-fn isMainWebViewLabel(label: []const u8) bool {
-    return std.mem.eql(u8, label, "main");
-}
-
 fn isFocusableViewInfo(view: platform.ViewInfo) bool {
     return view.open and view.visible and view.enabled;
-}
-
-fn validateWebViewLabel(label: []const u8) !void {
-    if (label.len == 0) return error.InvalidWebViewOptions;
-    if (label.len > platform.max_webview_label_bytes) return error.WebViewLabelTooLarge;
-}
-
-fn validateChildWebViewLabel(label: []const u8) !void {
-    try validateWebViewLabel(label);
-    if (isMainWebViewLabel(label)) return error.ReservedWebViewLabel;
-}
-
-fn validateViewOptions(options: platform.ViewOptions) !void {
-    try validateViewLabel(options.label);
-    try validateViewFrame(options.frame);
-    if (options.parent) |parent| {
-        if (parent.len == 0 or parent.len > platform.max_view_label_bytes) return error.InvalidViewOptions;
-    }
-    if (options.role.len > platform.max_view_role_bytes) return error.ViewRoleTooLarge;
-    if (options.accessibility_label.len > platform.max_view_accessibility_label_bytes) return error.ViewAccessibilityLabelTooLarge;
-    if (options.text.len > platform.max_view_text_bytes) return error.ViewTextTooLarge;
-    if (options.command.len > 0) try validateCommandName(options.command);
-    if (options.kind != .webview and options.url.len > 0) return error.InvalidViewOptions;
-    if (options.kind == .gpu_surface and !options.gpu_surface.isSupported()) return error.UnsupportedViewKind;
-}
-
-fn validateViewLabel(label: []const u8) !void {
-    if (label.len == 0) return error.InvalidViewOptions;
-    if (label.len > platform.max_view_label_bytes) return error.ViewLabelTooLarge;
-}
-
-fn validateViewFrame(frame: geometry.RectF) !void {
-    if (frame.x < 0 or frame.y < 0 or frame.width < 0 or frame.height < 0) return error.InvalidViewOptions;
-}
-
-fn isValidWebViewFrame(frame: geometry.RectF) bool {
-    return frame.x >= 0 and frame.y >= 0 and frame.width > 0 and frame.height > 0;
-}
-
-fn webViewUrlOrigin(url: []const u8, buffer: []u8) ![]const u8 {
-    if (std.mem.startsWith(u8, url, "about:")) return "about://local";
-    const scheme_end = std.mem.indexOf(u8, url, "://") orelse return error.InvalidWebViewOptions;
-    const host_start = scheme_end + 3;
-    if (host_start >= url.len) return error.InvalidWebViewOptions;
-    var host_end = host_start;
-    while (host_end < url.len and url[host_end] != '/' and url[host_end] != '?' and url[host_end] != '#') : (host_end += 1) {}
-    if (host_end == host_start) return error.InvalidWebViewOptions;
-    if (host_end > buffer.len) return error.InvalidWebViewOptions;
-    @memcpy(buffer[0..host_end], url[0..host_end]);
-    return buffer[0..host_end];
-}
-
-fn jsonNumberField(payload: []const u8, field: []const u8) ?f32 {
-    return json.numberField(payload, field);
-}
-
-fn jsonIntegerField(payload: []const u8, field: []const u8) ?platform.WindowId {
-    return json.unsignedField(platform.WindowId, payload, field);
-}
-
-fn jsonBoolField(payload: []const u8, field: []const u8) ?bool {
-    return json.boolField(payload, field);
 }
 
 pub fn TestHarness() type {

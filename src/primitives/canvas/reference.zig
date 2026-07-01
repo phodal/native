@@ -36,6 +36,16 @@ const textLineBounds = text_model.textLineBounds;
 const estimatedGlyphAdvance = text_model.estimatedGlyphAdvance;
 const nextTextOffset = text_model.nextTextOffset;
 
+const reference_blur = @import("reference_blur.zig");
+const reference_paths = @import("reference_paths.zig");
+
+const referenceBlurKernel = reference_blur.referenceBlurKernel;
+const referenceBlurSampleWithKernel = reference_blur.referenceBlurSampleWithKernel;
+const referenceBlurSample = reference_blur.referenceBlurSample;
+const referenceDistanceToSegment = reference_paths.referenceDistanceToSegment;
+const referencePathContainsPoint = reference_paths.referencePathContainsPoint;
+const referenceDistanceToPath = reference_paths.referenceDistanceToPath;
+
 const max_reference_text_layout_lines: usize = 64;
 const max_reference_blur_kernel_samples: usize = 4096;
 
@@ -434,98 +444,6 @@ pub const ReferenceRenderSurface = struct {
     }
 };
 
-fn referenceBlurKernel(output: []f32, kernel_radius: i64, radius: f32) []const f32 {
-    const kernel_width: usize = @intCast(kernel_radius * 2 + 1);
-    var index: usize = 0;
-    var dy: i64 = -kernel_radius;
-    while (dy <= kernel_radius) : (dy += 1) {
-        var dx: i64 = -kernel_radius;
-        while (dx <= kernel_radius) : (dx += 1) {
-            output[index] = referenceBlurWeight(dx, dy, radius);
-            index += 1;
-        }
-    }
-    return output[0 .. kernel_width * kernel_width];
-}
-
-fn referenceBlurSampleWithKernel(source: []const u8, width: usize, height: usize, x: i64, y: i64, kernel_radius: i64, kernel: []const f32) [4]u8 {
-    const width_i: i64 = @intCast(width);
-    const height_i: i64 = @intCast(height);
-    const kernel_width: usize = @intCast(kernel_radius * 2 + 1);
-    var premultiplied = [_]f32{0} ** 3;
-    var alpha_total: f32 = 0;
-    var weight_total: f32 = 0;
-
-    var dy: i64 = -kernel_radius;
-    while (dy <= kernel_radius) : (dy += 1) {
-        const sample_y = y + dy;
-        if (sample_y < 0 or sample_y >= height_i) continue;
-
-        var dx: i64 = -kernel_radius;
-        while (dx <= kernel_radius) : (dx += 1) {
-            const sample_x = x + dx;
-            if (sample_x < 0 or sample_x >= width_i) continue;
-
-            const kernel_y: usize = @intCast(dy + kernel_radius);
-            const kernel_x: usize = @intCast(dx + kernel_radius);
-            const weight = kernel[kernel_y * kernel_width + kernel_x];
-            const sample_index = (@as(usize, @intCast(sample_y)) * width + @as(usize, @intCast(sample_x))) * 4;
-            const alpha = @as(f32, @floatFromInt(source[sample_index + 3])) / 255.0;
-            premultiplied[0] += (@as(f32, @floatFromInt(source[sample_index + 0])) / 255.0) * alpha * weight;
-            premultiplied[1] += (@as(f32, @floatFromInt(source[sample_index + 1])) / 255.0) * alpha * weight;
-            premultiplied[2] += (@as(f32, @floatFromInt(source[sample_index + 2])) / 255.0) * alpha * weight;
-            alpha_total += alpha * weight;
-            weight_total += weight;
-        }
-    }
-
-    return referenceBlurOutput(premultiplied, alpha_total, weight_total);
-}
-
-fn referenceBlurSample(source: []const u8, width: usize, height: usize, x: i64, y: i64, kernel_radius: i64, radius: f32) [4]u8 {
-    const width_i: i64 = @intCast(width);
-    const height_i: i64 = @intCast(height);
-    var premultiplied = [_]f32{0} ** 3;
-    var alpha_total: f32 = 0;
-    var weight_total: f32 = 0;
-
-    var dy: i64 = -kernel_radius;
-    while (dy <= kernel_radius) : (dy += 1) {
-        const sample_y = y + dy;
-        if (sample_y < 0 or sample_y >= height_i) continue;
-
-        var dx: i64 = -kernel_radius;
-        while (dx <= kernel_radius) : (dx += 1) {
-            const sample_x = x + dx;
-            if (sample_x < 0 or sample_x >= width_i) continue;
-
-            const weight = referenceBlurWeight(dx, dy, radius);
-            const sample_index = (@as(usize, @intCast(sample_y)) * width + @as(usize, @intCast(sample_x))) * 4;
-            const alpha = @as(f32, @floatFromInt(source[sample_index + 3])) / 255.0;
-            premultiplied[0] += (@as(f32, @floatFromInt(source[sample_index + 0])) / 255.0) * alpha * weight;
-            premultiplied[1] += (@as(f32, @floatFromInt(source[sample_index + 1])) / 255.0) * alpha * weight;
-            premultiplied[2] += (@as(f32, @floatFromInt(source[sample_index + 2])) / 255.0) * alpha * weight;
-            alpha_total += alpha * weight;
-            weight_total += weight;
-        }
-    }
-
-    return referenceBlurOutput(premultiplied, alpha_total, weight_total);
-}
-
-fn referenceBlurOutput(premultiplied: [3]f32, alpha_total: f32, weight_total: f32) [4]u8 {
-    if (weight_total <= 0) return .{ 0, 0, 0, 0 };
-    const alpha = alpha_total / weight_total;
-    if (alpha <= 0) return .{ 0, 0, 0, 0 };
-    const unpremultiply = 1 / (weight_total * alpha);
-    return .{
-        colorChannelToByte(premultiplied[0] * unpremultiply),
-        colorChannelToByte(premultiplied[1] * unpremultiply),
-        colorChannelToByte(premultiplied[2] * unpremultiply),
-        colorChannelToByte(alpha),
-    };
-}
-
 fn referenceMixRgba8(a: [4]u8, b: [4]u8, t: f32) [4]u8 {
     const value = std.math.clamp(t, 0, 1);
     return .{
@@ -542,23 +460,12 @@ fn referenceMixByte(a: u8, b: u8, t: f32) u8 {
     return @intFromFloat(@round(start + (end - start) * t));
 }
 
-fn referenceBlurWeight(dx: i64, dy: i64, radius: f32) f32 {
-    const sigma = @max(radius, 0.5);
-    const x = @as(f32, @floatFromInt(dx));
-    const y = @as(f32, @floatFromInt(dy));
-    return @exp(-(x * x + y * y) / (2 * sigma * sigma));
-}
-
-// Canvas design tokens live in `tokens.zig`; root keeps the public API stable.
-
 const ReferencePixelRect = struct {
     x: usize = 0,
     y: usize = 0,
     width: usize = 0,
     height: usize = 0,
 };
-
-const reference_curve_segments: usize = 12;
 
 fn referenceCommandBounds(command: RenderCommand, scissor: ?geometry.RectF) ?geometry.RectF {
     var bounds = command.bounds.normalized();
@@ -668,183 +575,6 @@ fn referenceShadowFalloff(distance: f32, blur_radius: f32) f32 {
     if (blur_radius <= 0) return if (distance <= 0) 1 else 0;
     const t = std.math.clamp(1 - distance / blur_radius, 0, 1);
     return t * t * (3 - 2 * t);
-}
-
-fn referenceDistanceToSegment(point: geometry.PointF, from: geometry.PointF, to: geometry.PointF) f32 {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const length_sq = dx * dx + dy * dy;
-    if (length_sq <= 0.000001) {
-        const px = point.x - from.x;
-        const py = point.y - from.y;
-        return @sqrt(px * px + py * py);
-    }
-
-    const t = std.math.clamp(((point.x - from.x) * dx + (point.y - from.y) * dy) / length_sq, 0, 1);
-    const closest = geometry.PointF.init(from.x + dx * t, from.y + dy * t);
-    const px = point.x - closest.x;
-    const py = point.y - closest.y;
-    return @sqrt(px * px + py * py);
-}
-
-fn referencePathContainsPoint(point: geometry.PointF, elements: []const PathElement, transform: Affine) bool {
-    var inside = false;
-    var has_current = false;
-    var current = geometry.PointF.zero();
-    var subpath_start = geometry.PointF.zero();
-
-    for (elements) |element| {
-        switch (element.verb) {
-            .move_to => {
-                current = transform.transformPoint(element.points[0]);
-                subpath_start = current;
-                has_current = true;
-            },
-            .line_to => {
-                if (!has_current) {
-                    current = transform.transformPoint(element.points[0]);
-                    subpath_start = current;
-                    has_current = true;
-                    continue;
-                }
-                const next = transform.transformPoint(element.points[0]);
-                if (referenceSegmentCrossesRay(point, current, next)) inside = !inside;
-                current = next;
-            },
-            .quad_to => {
-                if (!has_current) continue;
-                const control = transform.transformPoint(element.points[0]);
-                const end = transform.transformPoint(element.points[1]);
-                var previous = current;
-                var index: usize = 1;
-                while (index <= reference_curve_segments) : (index += 1) {
-                    const t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(reference_curve_segments));
-                    const next = referenceQuadPoint(current, control, end, t);
-                    if (referenceSegmentCrossesRay(point, previous, next)) inside = !inside;
-                    previous = next;
-                }
-                current = end;
-            },
-            .cubic_to => {
-                if (!has_current) continue;
-                const control_a = transform.transformPoint(element.points[0]);
-                const control_b = transform.transformPoint(element.points[1]);
-                const end = transform.transformPoint(element.points[2]);
-                var previous = current;
-                var index: usize = 1;
-                while (index <= reference_curve_segments) : (index += 1) {
-                    const t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(reference_curve_segments));
-                    const next = referenceCubicPoint(current, control_a, control_b, end, t);
-                    if (referenceSegmentCrossesRay(point, previous, next)) inside = !inside;
-                    previous = next;
-                }
-                current = end;
-            },
-            .close => {
-                if (has_current) {
-                    if (referenceSegmentCrossesRay(point, current, subpath_start)) inside = !inside;
-                    current = subpath_start;
-                }
-            },
-        }
-    }
-
-    return inside;
-}
-
-fn referenceDistanceToPath(point: geometry.PointF, elements: []const PathElement, transform: Affine) ?f32 {
-    var has_distance = false;
-    var min_distance: f32 = 0;
-    var has_current = false;
-    var current = geometry.PointF.zero();
-    var subpath_start = geometry.PointF.zero();
-
-    for (elements) |element| {
-        switch (element.verb) {
-            .move_to => {
-                current = transform.transformPoint(element.points[0]);
-                subpath_start = current;
-                has_current = true;
-            },
-            .line_to => {
-                if (!has_current) {
-                    current = transform.transformPoint(element.points[0]);
-                    subpath_start = current;
-                    has_current = true;
-                    continue;
-                }
-                const next = transform.transformPoint(element.points[0]);
-                referenceMinDistance(&has_distance, &min_distance, referenceDistanceToSegment(point, current, next));
-                current = next;
-            },
-            .quad_to => {
-                if (!has_current) continue;
-                const control = transform.transformPoint(element.points[0]);
-                const end = transform.transformPoint(element.points[1]);
-                var previous = current;
-                var index: usize = 1;
-                while (index <= reference_curve_segments) : (index += 1) {
-                    const t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(reference_curve_segments));
-                    const next = referenceQuadPoint(current, control, end, t);
-                    referenceMinDistance(&has_distance, &min_distance, referenceDistanceToSegment(point, previous, next));
-                    previous = next;
-                }
-                current = end;
-            },
-            .cubic_to => {
-                if (!has_current) continue;
-                const control_a = transform.transformPoint(element.points[0]);
-                const control_b = transform.transformPoint(element.points[1]);
-                const end = transform.transformPoint(element.points[2]);
-                var previous = current;
-                var index: usize = 1;
-                while (index <= reference_curve_segments) : (index += 1) {
-                    const t = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(reference_curve_segments));
-                    const next = referenceCubicPoint(current, control_a, control_b, end, t);
-                    referenceMinDistance(&has_distance, &min_distance, referenceDistanceToSegment(point, previous, next));
-                    previous = next;
-                }
-                current = end;
-            },
-            .close => {
-                if (has_current) {
-                    referenceMinDistance(&has_distance, &min_distance, referenceDistanceToSegment(point, current, subpath_start));
-                    current = subpath_start;
-                }
-            },
-        }
-    }
-
-    return if (has_distance) min_distance else null;
-}
-
-fn referenceMinDistance(has_distance: *bool, min_distance: *f32, distance: f32) void {
-    if (!has_distance.* or distance < min_distance.*) {
-        has_distance.* = true;
-        min_distance.* = distance;
-    }
-}
-
-fn referenceSegmentCrossesRay(point: geometry.PointF, a: geometry.PointF, b: geometry.PointF) bool {
-    if ((a.y > point.y) == (b.y > point.y)) return false;
-    const x = a.x + (point.y - a.y) * (b.x - a.x) / (b.y - a.y);
-    return x > point.x;
-}
-
-fn referenceQuadPoint(a: geometry.PointF, b: geometry.PointF, c: geometry.PointF, t: f32) geometry.PointF {
-    const u = 1 - t;
-    return geometry.PointF.init(
-        u * u * a.x + 2 * u * t * b.x + t * t * c.x,
-        u * u * a.y + 2 * u * t * b.y + t * t * c.y,
-    );
-}
-
-fn referenceCubicPoint(a: geometry.PointF, b: geometry.PointF, c: geometry.PointF, d: geometry.PointF, t: f32) geometry.PointF {
-    const u = 1 - t;
-    return geometry.PointF.init(
-        u * u * u * a.x + 3 * u * u * t * b.x + 3 * u * t * t * c.x + t * t * t * d.x,
-        u * u * u * a.y + 3 * u * u * t * b.y + 3 * u * t * t * c.y + t * t * t * d.y,
-    );
 }
 
 fn referenceSpreadRect(rect: geometry.RectF, spread: f32) geometry.RectF {

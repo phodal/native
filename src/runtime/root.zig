@@ -2013,7 +2013,10 @@ pub const Runtime = struct {
         const current_id: ?canvas.ObjectId = if (self.views[index].canvas_widget_focused_id == 0) null else self.views[index].canvas_widget_focused_id;
         if (std.ascii.eqlIgnoreCase(input_event.key, "tab")) {
             const direction: canvas.WidgetFocusDirection = if (input_event.modifiers.shift) .backward else .forward;
-            const target = self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return;
+            const target = if (current_id) |id|
+                self.views[index].canvasWidgetScopedFocusTarget(id, direction) orelse self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return
+            else
+                self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return;
             try self.setCanvasWidgetFocusFromKeyboard(index, target.id);
             return;
         }
@@ -7148,6 +7151,58 @@ const RuntimeView = struct {
             if (self.canvasWidgetNodeIndexDescendsFrom(entry.node_index, ancestor_index)) return true;
         }
         return false;
+    }
+
+    fn canvasWidgetScopedFocusTarget(self: *const RuntimeView, current_id: canvas.ObjectId, direction: canvas.WidgetFocusDirection) ?canvas.WidgetFocusTarget {
+        const current_index = self.canvasWidgetNodeIndexById(current_id) orelse return null;
+        const surface_index = self.canvasWidgetDismissibleSurfaceIndexForTarget(current_index) orelse return null;
+        return self.canvasWidgetFocusTargetInScope(surface_index, current_index, direction);
+    }
+
+    fn canvasWidgetFocusTargetInScope(
+        self: *const RuntimeView,
+        surface_index: usize,
+        current_index: usize,
+        direction: canvas.WidgetFocusDirection,
+    ) ?canvas.WidgetFocusTarget {
+        if (surface_index >= self.widget_layout_node_count or current_index >= self.widget_layout_node_count) return null;
+        return switch (direction) {
+            .forward => self.canvasWidgetForwardFocusTargetInScope(surface_index, current_index),
+            .backward => self.canvasWidgetBackwardFocusTargetInScope(surface_index, current_index),
+            .left, .right, .up, .down => null,
+        };
+    }
+
+    fn canvasWidgetForwardFocusTargetInScope(self: *const RuntimeView, surface_index: usize, current_index: usize) ?canvas.WidgetFocusTarget {
+        var index = current_index + 1;
+        while (index < self.widget_layout_node_count) : (index += 1) {
+            if (self.canvasWidgetFocusTargetAtScopedIndex(surface_index, index)) |target| return target;
+        }
+        index = surface_index;
+        while (index <= current_index and index < self.widget_layout_node_count) : (index += 1) {
+            if (self.canvasWidgetFocusTargetAtScopedIndex(surface_index, index)) |target| return target;
+        }
+        return null;
+    }
+
+    fn canvasWidgetBackwardFocusTargetInScope(self: *const RuntimeView, surface_index: usize, current_index: usize) ?canvas.WidgetFocusTarget {
+        var index = current_index;
+        while (index > 0) {
+            index -= 1;
+            if (self.canvasWidgetFocusTargetAtScopedIndex(surface_index, index)) |target| return target;
+        }
+        index = self.widget_layout_node_count;
+        while (index > current_index) {
+            index -= 1;
+            if (self.canvasWidgetFocusTargetAtScopedIndex(surface_index, index)) |target| return target;
+        }
+        return null;
+    }
+
+    fn canvasWidgetFocusTargetAtScopedIndex(self: *const RuntimeView, surface_index: usize, index: usize) ?canvas.WidgetFocusTarget {
+        if (!self.canvasWidgetNodeIndexDescendsFrom(index, surface_index)) return null;
+        const id = self.widget_layout_nodes[index].widget.id;
+        return self.widgetLayoutTree().focusTargetById(id);
     }
 
     fn canvasWidgetIdDescendsFromIndex(self: *const RuntimeView, id: canvas.ObjectId, ancestor_index: usize) bool {
@@ -13244,6 +13299,158 @@ test "runtime dismisses focused canvas floating surface from outside pointer dow
     try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(2, 2)) == null);
     try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(3, 1)) == null);
     try std.testing.expect(retained_after_dismiss.findCommandById(testCanvasWidgetPartId(4, 1)) != null);
+}
+
+test "runtime traps tab focus inside canvas floating surfaces" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-surface-focus-scope", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 360, 200),
+    });
+
+    const popover_children = [_]canvas.Widget{
+        .{
+            .id = 3,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 12, 96, 32),
+            .text = "First",
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(12, 52, 96, 32),
+            .text = "Second",
+        },
+    };
+    const widgets = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 20, 90, 32),
+            .text = "Before",
+        },
+        .{
+            .id = 10,
+            .kind = .popover,
+            .frame = geometry.RectF.init(120, 20, 140, 104),
+            .children = &popover_children,
+        },
+        .{
+            .id = 5,
+            .kind = .button,
+            .frame = geometry.RectF.init(280, 20, 70, 32),
+            .text = "After",
+        },
+    };
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 360, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_focused_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+        .modifiers = .{ .shift = true },
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_focused_id);
+}
+
+test "runtime keeps single focus target scoped inside canvas floating surface" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-surface-single-focus-scope", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 140),
+    });
+
+    const popover_children = [_]canvas.Widget{.{
+        .id = 3,
+        .kind = .button,
+        .frame = geometry.RectF.init(12, 12, 96, 32),
+        .text = "Only",
+    }};
+    const widgets = [_]canvas.Widget{
+        .{
+            .id = 10,
+            .kind = .popover,
+            .frame = geometry.RectF.init(20, 20, 140, 64),
+            .children = &popover_children,
+        },
+        .{
+            .id = 4,
+            .kind = .button,
+            .frame = geometry.RectF.init(180, 20, 64, 32),
+            .text = "After",
+        },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &widgets }, geometry.RectF.init(0, 0, 260, 140), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try harness.runtime.focusView(1, "canvas");
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+        .modifiers = .{ .shift = true },
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
 }
 
 test "runtime keeps floating surface open when escape cancels text composition" {

@@ -25,7 +25,7 @@ const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes_per_view;
-const component_chrome_prefix_commands: usize = 2;
+const component_chrome_prefix_commands: usize = 1;
 const component_chrome_suffix_commands: usize = 0;
 const catalog_grid_columns: usize = 3;
 const catalog_card_width: f32 = 238;
@@ -1156,22 +1156,6 @@ fn componentVirtualScrollStep(widget: canvas.Widget) ?f32 {
     return if (step > 0) step else null;
 }
 
-fn componentSurfaceCardRect(surface_size: geometry.SizeF) geometry.RectF {
-    return componentSurfaceCardRectForSidebar(surface_size, canvas_sidebar_width);
-}
-
-fn componentSurfaceCardRectForSidebar(surface_size: geometry.SizeF, sidebar_width: f32) geometry.RectF {
-    const size = componentSurfaceSize(surface_size);
-    const resolved_sidebar_width = componentSidebarWidthForSize(sidebar_width, size);
-    const content_width = @max(1, size.width - resolved_sidebar_width);
-    return rect(resolved_sidebar_width + 28, 26, @max(916, content_width - 56), @max(616, componentContentHeightForSize(size) - 60));
-}
-
-fn componentSidebarWidthFromLayout(layout: canvas.WidgetLayoutTree) f32 {
-    if (layout.findById(canvas_sidebar_id)) |node| return node.frame.width;
-    return canvas_sidebar_width;
-}
-
 fn componentSizesEqual(a: geometry.SizeF, b: geometry.SizeF) bool {
     return a.width == b.width and a.height == b.height;
 }
@@ -1184,7 +1168,6 @@ fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.Wi
     const size = componentSurfaceSize(surface_size);
     const content_height = componentContentHeightForSize(size);
     try builder.fillRect(.{ .id = canvas_status_separator_id, .rect = rect(0, content_height, size.width, 1), .fill = .{ .color = tokens.colors.border } });
-    try builder.fillRoundedRect(.{ .id = 3, .rect = componentSurfaceCardRectForSidebar(surface_size, componentSidebarWidthFromLayout(layout)), .radius = canvas.Radius.all(tokens.radius.xl), .fill = .{ .color = tokens.colors.surface } });
     try layout.emitDisplayList(builder, tokens);
 }
 
@@ -2016,10 +1999,9 @@ test "gpu components display list covers finished live controls" {
     try buildComponentsDisplayListFromWidgets(&builder);
     const display_list = builder.displayList();
 
-    try std.testing.expect(display_list.commandCount() >= 54);
+    try std.testing.expect(display_list.commandCount() >= 53);
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
     try std.testing.expect(display_list.findCommandById(canvas_status_separator_id) != null);
-    try std.testing.expect(display_list.findCommandById(3) != null);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
     try std.testing.expect(display_list.findCommandById(project_static_text_id) != null);
     try std.testing.expect(display_list.findCommandById(search_text_id) != null);
@@ -2225,7 +2207,7 @@ test "gpu components layout supports resized sidebar width" {
     var commands: [max_component_commands]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
     try buildComponentsDisplayListForSize(&builder, layout, componentTokens(), default_canvas_size);
-    try expectComponentRoundedRectFrame(builder.displayList(), 3, componentSurfaceCardRectForSidebar(default_canvas_size, resized_sidebar_width));
+    try std.testing.expect(builder.displayList().findCommandById(3) == null);
 
     var dialog_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const dialog_layout = try buildComponentsWidgetLayoutWithStateAndSize(&dialog_nodes, .{}, .{
@@ -2362,7 +2344,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 3860118020799347774), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 1472325111842855716), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -2619,7 +2601,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(f32, canvas_width + 320), resized_frame.size.width);
     try std.testing.expectEqual(@as(f32, canvas_height), resized_frame.size.height);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRect(geometry.SizeF.init(canvas_width + 320, canvas_height)));
+    try std.testing.expect(display_list.findCommandById(3) == null);
 
     const widget_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expect(widget_layout.nodeCount() >= 26);
@@ -3042,7 +3024,6 @@ test "gpu components native theme command updates retained design tokens" {
     } });
     try std.testing.expectEqualDeep(componentTokensForScale(.light, 2), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
     var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensForScale(.light, 2).colors.surface);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.light, 2).colors.accent);
 
     resetComponentDirty(&harness.runtime);
@@ -3058,7 +3039,6 @@ test "gpu components native theme command updates retained design tokens" {
     try std.testing.expectEqualDeep(componentTokensForScale(.dark, 2), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_dark);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensForScale(.dark, 2).colors.surface);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.dark, 2).colors.accent);
     try expectComponentStatusContains(&harness.runtime, "GPU component theme: Dark from toolbar");
 
@@ -3074,7 +3054,6 @@ test "gpu components native theme command updates retained design tokens" {
     try std.testing.expectEqualDeep(componentTokensForScale(.high, 2), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_high);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentFillRoundedRectColor(display_list, 3, componentTokensForScale(.high, 2).colors.surface);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.high, 2).colors.accent);
     try expectComponentStatusContains(&harness.runtime, "GPU component theme: High contrast from toolbar");
 
@@ -3563,7 +3542,7 @@ test "gpu components sidebar handle drag resizes retained layout" {
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(widened_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(widened_sidebar_width, canvas_content_height));
     var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, widened_sidebar_width));
+    try std.testing.expect(display_list.findCommandById(3) == null);
     try std.testing.expect(harness.runtime.invalidated);
 
     resetComponentDirty(&harness.runtime);
@@ -3575,7 +3554,7 @@ test "gpu components sidebar handle drag resizes retained layout" {
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_min_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_min_width, canvas_content_height));
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, canvas_sidebar_min_width));
+    try std.testing.expect(display_list.findCommandById(3) == null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 175);

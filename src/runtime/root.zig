@@ -5442,6 +5442,7 @@ fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
         .toggle,
         .toggle_button,
         .slider,
+        .resizable,
         .list_item,
         .menu_item,
         .data_cell,
@@ -5449,6 +5450,10 @@ fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
         => true,
         else => false,
     };
+}
+
+fn canvasWidgetResizableMinWidth(widget: canvas.Widget) f32 {
+    return @max(@as(f32, 48), widget.frame.height);
 }
 
 fn collectCanvasWidgetControlReconcileEntries(
@@ -5463,7 +5468,7 @@ fn collectCanvasWidgetControlReconcileEntries(
             .id = node.widget.id,
             .kind = node.widget.kind,
             .state = node.widget.state,
-            .value = node.widget.value,
+            .value = if (node.widget.kind == .resizable) node.frame.width else node.widget.value,
         };
         len += 1;
     }
@@ -5545,6 +5550,11 @@ fn canvasWidgetLayoutNodeWithControlReconcileState(
             },
             .slider => {
                 copy.widget.value = std.math.clamp(entry.value, 0, 1);
+            },
+            .resizable => {
+                const width = @max(canvasWidgetResizableMinWidth(copy.widget), entry.value);
+                copy.frame.width = width;
+                copy.widget.frame.width = width;
             },
             .radio, .list_item, .menu_item, .data_cell, .segmented_control => {
                 const selected = entry.state.selected or entry.value >= 0.5;
@@ -7448,7 +7458,10 @@ const RuntimeView = struct {
     fn applyCanvasWidgetControlPointer(self: *RuntimeView, pointer: canvas.WidgetPointerEvent, target: ?canvas.WidgetHit, pressed_id: canvas.ObjectId) anyerror!?geometry.RectF {
         return switch (pointer.phase) {
             .down => if (target) |hit| try self.applyCanvasWidgetSliderValue(hit.id, pointer.point) else null,
-            .move => if (pressed_id != 0) try self.applyCanvasWidgetSliderValue(pressed_id, pointer.point) else null,
+            .move => if (pressed_id != 0) blk: {
+                if (try self.applyCanvasWidgetSliderValue(pressed_id, pointer.point)) |dirty| break :blk dirty;
+                break :blk try self.applyCanvasWidgetResizableDelta(pressed_id, pointer.delta.dx);
+            } else null,
             .up => blk: {
                 if (pressed_id == 0) break :blk null;
                 if (try self.applyCanvasWidgetSliderValue(pressed_id, pointer.point)) |dirty| break :blk dirty;
@@ -7460,6 +7473,26 @@ const RuntimeView = struct {
             },
             .hover, .cancel, .wheel => null,
         };
+    }
+
+    fn applyCanvasWidgetResizableDelta(self: *RuntimeView, id: canvas.ObjectId, delta_x: f32) anyerror!?geometry.RectF {
+        if (!std.math.isFinite(delta_x) or delta_x == 0) return null;
+        const index = self.canvasWidgetNodeIndexById(id) orelse return null;
+        const widget = self.widget_layout_nodes[index].widget;
+        if (widget.kind != .resizable or widget.state.disabled) return null;
+        if (!std.math.isFinite(widget.frame.width)) return null;
+
+        const previous_frame = self.widget_layout_nodes[index].frame;
+        const min_width = canvasWidgetResizableMinWidth(widget);
+        const next_width = @max(min_width, previous_frame.width + delta_x);
+        if (next_width == previous_frame.width) return null;
+
+        self.widget_layout_nodes[index].frame.width = next_width;
+        self.widget_layout_nodes[index].widget.frame.width = next_width;
+        try self.refreshCanvasWidgetSemantics();
+        self.widget_revision += 1;
+        const dirty = unionRects(previous_frame, self.widget_layout_nodes[index].frame) orelse self.widget_layout_nodes[index].frame;
+        return self.canvasWidgetDirtyBounds(index, dirty);
     }
 
     fn applyCanvasWidgetControlKeyboard(self: *RuntimeView, id: canvas.ObjectId, keyboard: canvas.WidgetKeyboardEvent) anyerror!?geometry.RectF {
@@ -21415,6 +21448,89 @@ test "runtime dispatches opted-in canvas widget drag events" {
     const snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expect(snapshot.widgets[1].actions.drag);
     try std.testing.expect(!snapshot.widgets[2].actions.drag);
+}
+
+test "runtime resizes retained canvas resizable widgets from pointer drag" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-resizable-drag", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+
+    var harness: TestHarness() = undefined;
+    harness.init(.{});
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 120),
+    });
+
+    const resizable = canvas.Widget{
+        .id = 2,
+        .kind = .resizable,
+        .frame = geometry.RectF.init(10, 16, 120, 44),
+        .text = "Resizable",
+        .semantics = .{ .label = "Resizable panel" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .stack, .children = &.{resizable} }, geometry.RectF.init(0, 0, 260, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 126,
+        .y = 38,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_drag,
+        .x = 156,
+        .y = 38,
+        .delta_x = 30,
+    } });
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 16, 150, 44), retained.findById(2).?.frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(10, 16, 150, 44), retained.findById(2).?.widget.frame);
+
+    var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    switch (display_list.findCommandById(testCanvasWidgetPartId(2, 5)).?.command) {
+        .draw_line => |line| try std.testing.expect(line.from.x > 152),
+        else => return error.TestUnexpectedResult,
+    }
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_drag,
+        .x = 10,
+        .y = 38,
+        .delta_x = -200,
+    } });
+
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 48), retained.findById(2).?.frame.width);
+
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 48), retained.findById(2).?.frame.width);
+    try std.testing.expectEqual(@as(f32, 48), retained.findById(2).?.widget.frame.width);
+
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    switch (display_list.findCommandById(testCanvasWidgetPartId(2, 5)).?.command) {
+        .draw_line => |line| try std.testing.expect(line.from.x < 56),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "runtime dispatches automation canvas widget actions" {

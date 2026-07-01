@@ -8707,7 +8707,7 @@ fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
-    if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
+    if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 3, box, radius);
     if (selected) {
         const left = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.26, box.y + box.height * 0.54));
         const mid = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.43, box.y + box.height * 0.70));
@@ -8754,7 +8754,7 @@ fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Erro
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
-    if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
+    if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 3, circle, radius);
     if (selected) {
         const dot_size = @max(0, circle_size * 0.48);
         const dot = pixelSnapGeometryRect(tokens, geometry.RectF.init(
@@ -8817,7 +8817,7 @@ fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
         .radius = controlRadius(widget, visual, knob.height * 0.5),
         .fill = colorFill(if (selected) widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text) else widgetBackgroundColor(widget, visual.foreground orelse tokens.colors.surface)),
     });
-    if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 4);
+    if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 4, track, track_radius);
     try emitControlLabelWithColor(builder, widget, tokens, track.x + track.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5, visual.foreground orelse tokens.colors.text);
 }
 
@@ -8899,10 +8899,14 @@ fn emitProgressWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
 }
 
 fn emitWidgetFocusRing(builder: *Builder, widget: Widget, tokens: DesignTokens, slot: ObjectId) Error!void {
+    return emitWidgetFocusRingForRect(builder, widget, tokens, slot, widget.frame, widgetRadius(widget, tokens.radius.md));
+}
+
+fn emitWidgetFocusRingForRect(builder: *Builder, widget: Widget, tokens: DesignTokens, slot: ObjectId, rect: geometry.RectF, radius: Radius) Error!void {
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, slot),
-        .rect = widget.frame,
-        .radius = widgetRadius(widget, tokens.radius.md),
+        .rect = rect,
+        .radius = radius,
         .stroke = .{
             .fill = widgetFocusRingFill(widget, tokens),
             .width = tokens.stroke.focus,
@@ -17513,6 +17517,14 @@ test "widget controls expose roles values focus and hit testing" {
     try std.testing.expectEqual(@as(ObjectId, 5), slider_hit.id);
     try std.testing.expectEqual(WidgetKind.slider, slider_hit.kind);
 
+    const checkbox_label_hit = layout.hitTest(geometry.PointF.init(80, 24)).?;
+    try std.testing.expectEqual(@as(ObjectId, 2), checkbox_label_hit.id);
+    try std.testing.expectEqual(WidgetKind.checkbox, checkbox_label_hit.kind);
+
+    const toggle_label_hit = layout.hitTest(geometry.PointF.init(100, 96)).?;
+    try std.testing.expectEqual(@as(ObjectId, 4), toggle_label_hit.id);
+    try std.testing.expectEqual(WidgetKind.toggle, toggle_label_hit.kind);
+
     var semantics_buffer: [5]WidgetSemanticsNode = undefined;
     const semantics = try layout.collectSemantics(&semantics_buffer);
     try std.testing.expectEqual(@as(usize, 5), semantics.len);
@@ -20936,6 +20948,88 @@ test "widget emitter renders checkbox radio toggle and slider controls" {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(13, 4)), stroke.id);
             try std.testing.expectEqual(@as(f32, 3), stroke.stroke.width);
             try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "checkbox radio and switch focus rings stay on the control glyph" {
+    const tokens = DesignTokens{
+        .colors = .{ .focus_ring = Color.rgb8(1, 2, 3) },
+        .stroke = .{ .focus = 3 },
+    };
+
+    var checkbox_commands: [8]CanvasCommand = undefined;
+    var checkbox_builder = Builder.init(&checkbox_commands);
+    try emitWidgetTree(&checkbox_builder, .{
+        .id = 20,
+        .kind = .checkbox,
+        .frame = geometry.RectF.init(10, 10, 160, 32),
+        .text = "Live",
+        .state = .{ .focused = true },
+    }, tokens);
+    const checkbox_display_list = checkbox_builder.displayList();
+    const checkbox_box = checkbox_display_list.findCommandById(widgetPartId(20, 2)).?.command;
+    const checkbox_focus = checkbox_display_list.findCommandById(widgetPartId(20, 3)).?.command;
+    switch (checkbox_box) {
+        .stroke_rect => |box| switch (checkbox_focus) {
+            .stroke_rect => |focus| {
+                try std.testing.expectEqualDeep(box.rect, focus.rect);
+                try std.testing.expect(focus.rect.width < 32);
+                try std.testing.expect(focus.rect.width < 160);
+                try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var radio_commands: [8]CanvasCommand = undefined;
+    var radio_builder = Builder.init(&radio_commands);
+    try emitWidgetTree(&radio_builder, .{
+        .id = 21,
+        .kind = .radio,
+        .frame = geometry.RectF.init(10, 52, 160, 32),
+        .text = "Monthly",
+        .state = .{ .focused = true },
+    }, tokens);
+    const radio_display_list = radio_builder.displayList();
+    const radio_circle = radio_display_list.findCommandById(widgetPartId(21, 2)).?.command;
+    const radio_focus = radio_display_list.findCommandById(widgetPartId(21, 3)).?.command;
+    switch (radio_circle) {
+        .stroke_rect => |circle| switch (radio_focus) {
+            .stroke_rect => |focus| {
+                try std.testing.expectEqualDeep(circle.rect, focus.rect);
+                try std.testing.expect(focus.rect.width < 32);
+                try std.testing.expect(focus.rect.width < 160);
+                try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    var switch_commands: [8]CanvasCommand = undefined;
+    var switch_builder = Builder.init(&switch_commands);
+    try emitWidgetTree(&switch_builder, .{
+        .id = 22,
+        .kind = .switch_control,
+        .frame = geometry.RectF.init(10, 94, 160, 32),
+        .text = "Alerts",
+        .state = .{ .focused = true },
+    }, tokens);
+    const switch_display_list = switch_builder.displayList();
+    const switch_track = switch_display_list.findCommandById(widgetPartId(22, 2)).?.command;
+    const switch_focus = switch_display_list.findCommandById(widgetPartId(22, 4)).?.command;
+    switch (switch_track) {
+        .stroke_rect => |track| switch (switch_focus) {
+            .stroke_rect => |focus| {
+                try std.testing.expectEqualDeep(track.rect, focus.rect);
+                try std.testing.expect(focus.rect.width < 80);
+                try std.testing.expect(focus.rect.width < 160);
+                try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);
+            },
+            else => return error.TestUnexpectedResult,
         },
         else => return error.TestUnexpectedResult,
     }

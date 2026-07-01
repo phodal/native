@@ -16198,14 +16198,14 @@ test "runtime applies pointer values to canvas controls" {
         .window_id = 1,
         .label = "canvas",
         .kind = .pointer_down,
-        .x = 18,
+        .x = 82,
         .y = 20,
     } });
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
         .kind = .pointer_up,
-        .x = 18,
+        .x = 82,
         .y = 20,
     } });
     try std.testing.expectEqual(@as(u64, 2), harness.runtime.views[0].widget_revision);
@@ -16214,14 +16214,14 @@ test "runtime applies pointer values to canvas controls" {
         .window_id = 1,
         .label = "canvas",
         .kind = .pointer_down,
-        .x = 18,
+        .x = 84,
         .y = 60,
     } });
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
         .kind = .pointer_up,
-        .x = 18,
+        .x = 84,
         .y = 60,
     } });
     try std.testing.expectEqual(@as(u64, 3), harness.runtime.views[0].widget_revision);

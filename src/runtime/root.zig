@@ -1247,6 +1247,7 @@ pub const Runtime = struct {
         var previous_control_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined;
         var previous_text_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined;
         var previous_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
+        const tokens = self.views[index].widget_tokens;
         const reconciled_layout = try canvasWidgetLayoutTreeWithRuntimeReconcileState(
             previous_layout,
             layout,
@@ -1255,9 +1256,9 @@ pub const Runtime = struct {
             &previous_control_entries,
             &previous_text_entries,
             &previous_text_bytes,
+            tokens,
         );
         var widget_invalidations: [max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined;
-        const tokens = self.views[index].widget_tokens;
         const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &widget_invalidations);
         const previous_render_state = self.views[index].canvasWidgetRenderState();
         const next_render_state = canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);
@@ -5308,6 +5309,7 @@ const CanvasWidgetTextReconcileEntry = struct {
     text: []const u8 = &.{},
     text_selection: ?canvas.TextSelection = null,
     text_composition: ?canvas.TextRange = null,
+    value: f32 = 0,
 };
 
 fn canvasWidgetInteractionTargetExists(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) bool {
@@ -5423,6 +5425,10 @@ fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
     return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox or kind == .textarea;
 }
 
+fn canvasWidgetScrollableKind(kind: canvas.WidgetKind) bool {
+    return kind == .scroll_view or kind == .textarea;
+}
+
 fn canvasWidgetRuntimeControlKind(kind: canvas.WidgetKind) bool {
     return switch (kind) {
         .accordion,
@@ -5508,6 +5514,7 @@ fn collectCanvasWidgetTextReconcileEntries(
             .text = text_storage[text_range.start..text_range.end],
             .text_selection = node.widget.text_selection,
             .text_composition = node.widget.text_composition,
+            .value = node.widget.value,
         };
         len += 1;
     }
@@ -5556,13 +5563,15 @@ fn canvasWidgetLayoutNodeWithTextReconcileState(
     var copy = node;
     if (copy.widget.id == 0 or !canvasWidgetEditableTextKind(copy.widget.kind)) return copy;
     if (copy.widget.state.disabled or canvasWidgetLayoutNodeHidden(layout, node_index)) return copy;
-    if (copy.widget.text_selection != null or copy.widget.text_composition != null) return copy;
 
     for (previous) |entry| {
         if (entry.id != copy.widget.id or entry.kind != copy.widget.kind) continue;
         if (!std.mem.eql(u8, entry.text, copy.widget.text)) continue;
-        copy.widget.text_selection = entry.text_selection;
-        copy.widget.text_composition = entry.text_composition;
+        if (copy.widget.kind == .textarea) copy.widget.value = entry.value;
+        if (copy.widget.text_selection == null and copy.widget.text_composition == null) {
+            copy.widget.text_selection = entry.text_selection;
+            copy.widget.text_composition = entry.text_composition;
+        }
         break;
     }
     return copy;
@@ -5576,6 +5585,7 @@ fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     control_entries: []CanvasWidgetControlReconcileEntry,
     text_entries: []CanvasWidgetTextReconcileEntry,
     text_storage: []u8,
+    tokens: canvas.DesignTokens,
 ) anyerror!canvas.WidgetLayoutTree {
     if (next.nodes.len > node_buffer.len) return error.WidgetNodeLimitReached;
 
@@ -5598,6 +5608,7 @@ fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     }
     const reconciled = node_buffer[0..next.nodes.len];
     clampCanvasWidgetLayoutScrollOffsets(reconciled, null);
+    clampCanvasWidgetLayoutTextOffsets(reconciled, tokens);
     return .{ .nodes = reconciled };
 }
 
@@ -5653,6 +5664,13 @@ fn clampCanvasWidgetLayoutScrollOffsets(nodes: []canvas.WidgetLayoutNode, states
                 scroll_states[index].content_extent = content_extent;
             }
         }
+    }
+}
+
+fn clampCanvasWidgetLayoutTextOffsets(nodes: []canvas.WidgetLayoutNode, tokens: canvas.DesignTokens) void {
+    for (nodes) |*node| {
+        if (node.widget.kind != .textarea) continue;
+        node.widget.value = canvas.clampedTextInputScrollOffsetForWidget(node.widget, tokens, node.widget.value);
     }
 }
 
@@ -6825,6 +6843,10 @@ const RuntimeView = struct {
             self.widget_layout_nodes[0..self.widget_layout_node_count],
             self.widget_scroll_states[0..self.widget_layout_node_count],
         );
+        clampCanvasWidgetLayoutTextOffsets(
+            self.widget_layout_nodes[0..self.widget_layout_node_count],
+            self.widget_tokens,
+        );
 
         const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
         applyCanvasWidgetSourceScrollSemantics(self.widget_semantics_nodes[0..semantics.len], source_semantics);
@@ -6902,7 +6924,7 @@ const RuntimeView = struct {
         var result: ?usize = null;
         var result_depth: usize = 0;
         for (route) |entry| {
-            if (entry.kind != .scroll_view or entry.node_index >= self.widget_layout_node_count) continue;
+            if (!canvasWidgetScrollableKind(entry.kind) or entry.node_index >= self.widget_layout_node_count) continue;
             const depth = self.widget_layout_nodes[entry.node_index].depth;
             if (depth_limit) |limit| {
                 if (depth >= limit) continue;
@@ -6928,7 +6950,15 @@ const RuntimeView = struct {
     fn canvasWidgetScrollCanConsume(self: *const RuntimeView, scroll_index: usize, delta_y: f32) bool {
         if (scroll_index >= self.widget_layout_node_count or delta_y == 0) return false;
         const scroll_node = self.widget_layout_nodes[scroll_index];
-        if (scroll_node.widget.kind != .scroll_view or scroll_node.widget.layout.virtualized) return false;
+        if (!canvasWidgetScrollableKind(scroll_node.widget.kind)) return false;
+        if (scroll_node.widget.kind == .scroll_view and scroll_node.widget.layout.virtualized) return false;
+
+        if (scroll_node.widget.kind == .textarea) {
+            const max_offset = canvas.textInputMaxScrollOffsetForWidget(scroll_node.widget, self.widget_tokens);
+            if (max_offset <= 0) return false;
+            const current_offset = std.math.clamp(scroll_node.widget.value, 0, max_offset);
+            return if (delta_y > 0) current_offset < max_offset else current_offset > 0;
+        }
 
         const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
         if (viewport.isEmpty()) return false;
@@ -6943,7 +6973,9 @@ const RuntimeView = struct {
     fn applyCanvasWidgetScroll(self: *RuntimeView, scroll_index: usize, delta_y: f32, source: CanvasWidgetScrollSource, allow_rubberband: bool) anyerror!?geometry.RectF {
         if (scroll_index >= self.widget_layout_node_count) return null;
         const scroll_node = self.widget_layout_nodes[scroll_index];
-        if (scroll_node.widget.kind != .scroll_view or scroll_node.widget.layout.virtualized) return null;
+        if (!canvasWidgetScrollableKind(scroll_node.widget.kind)) return null;
+        if (scroll_node.widget.kind == .textarea) return self.applyCanvasWidgetTextareaScroll(scroll_index, delta_y, source);
+        if (scroll_node.widget.layout.virtualized) return null;
 
         const viewport = scroll_node.frame.inset(scroll_node.widget.layout.padding).normalized();
         if (viewport.isEmpty()) return null;
@@ -6971,6 +7003,34 @@ const RuntimeView = struct {
         try self.refreshCanvasWidgetSemantics();
         self.widget_revision += 1;
         return self.canvasWidgetDirtyBounds(scroll_index, scroll_node.frame);
+    }
+
+    fn applyCanvasWidgetTextareaScroll(self: *RuntimeView, scroll_index: usize, delta_y: f32, source: CanvasWidgetScrollSource) anyerror!?geometry.RectF {
+        if (scroll_index >= self.widget_layout_node_count) return null;
+        const widget = self.widget_layout_nodes[scroll_index].widget;
+        if (widget.kind != .textarea) return null;
+
+        const viewport = canvas.textInputViewportForWidget(widget, self.widget_tokens) orelse return null;
+        const current = canvas.ScrollState{
+            .offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, widget.value),
+            .viewport_extent = viewport.height,
+            .content_extent = canvas.textInputContentExtentForWidget(widget, self.widget_tokens),
+        };
+        const next = switch (source) {
+            .wheel => current.applyWheelClamped(delta_y, self.widget_tokens.scroll),
+            .discrete => discrete: {
+                var state = current;
+                state.offset += delta_y;
+                state.velocity = 0;
+                break :discrete state.clamped();
+            },
+        };
+        if (next.offset == current.offset) return null;
+
+        self.widget_layout_nodes[scroll_index].widget.value = next.offset;
+        try self.refreshCanvasWidgetSemantics();
+        self.widget_revision += 1;
+        return self.canvasWidgetDirtyBounds(scroll_index, widget.frame);
     }
 
     fn applyCanvasWidgetScrollKeyboardTarget(self: *RuntimeView, scroll_index: usize, target: CanvasWidgetScrollKeyboardTarget) anyerror!?geometry.RectF {
@@ -7039,6 +7099,9 @@ const RuntimeView = struct {
     }
 
     fn canvasWidgetScrollContentExtent(self: *const RuntimeView, scroll_index: usize, viewport: geometry.RectF) f32 {
+        if (scroll_index < self.widget_layout_node_count and self.widget_layout_nodes[scroll_index].widget.kind == .textarea) {
+            return canvas.textInputContentExtentForWidget(self.widget_layout_nodes[scroll_index].widget, self.widget_tokens);
+        }
         const scroll_depth = self.widget_layout_nodes[scroll_index].depth;
         const offset = self.widget_layout_nodes[scroll_index].widget.value;
         var bottom = viewport.maxY();
@@ -7064,6 +7127,7 @@ const RuntimeView = struct {
         const widget = self.widget_layout_nodes[index].widget;
         if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
 
+        const previous_bounds = widget.frame;
         var edit_buffer: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
         const current_state = canvas.TextEditState{
             .text = widget.text,
@@ -7074,10 +7138,11 @@ const RuntimeView = struct {
         if (canvasWidgetTextEditUnchanged(current_state, next_state)) return null;
 
         try self.rewriteCanvasWidgetTextStorage(index, next_state);
+        self.scrollCanvasTextareaCaretIntoView(index);
         const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
         self.widget_semantics_node_count = semantics.len;
         self.widget_revision += 1;
-        return self.canvasWidgetDirtyBounds(index, self.widget_layout_nodes[index].frame);
+        return self.canvasWidgetDirtyBounds(index, unionRects(previous_bounds, self.widget_layout_nodes[index].frame) orelse self.widget_layout_nodes[index].frame);
     }
 
     fn canvasWidgetKeyboardTextEdit(self: *const RuntimeView, target: canvas.WidgetFocusTarget, keyboard: canvas.WidgetKeyboardEvent) ?canvas.TextInputEvent {
@@ -7089,6 +7154,12 @@ const RuntimeView = struct {
             if (widget.text_composition != null) return .cancel_composition;
             if (widget.kind == .search_field or widget.kind == .combobox) return .clear;
             return null;
+        }
+
+        if (widget.kind == .textarea and keyboard.phase == .key_down and keyboard.text.len == 0 and keyboard.modifiers.shift and !keyboard.modifiers.control and !keyboard.modifiers.alt and !keyboard.modifiers.super) {
+            if (std.ascii.eqlIgnoreCase(keyboard.key, "enter") or std.ascii.eqlIgnoreCase(keyboard.key, "return")) {
+                return .{ .insert_text = "\n" };
+            }
         }
 
         return keyboard.textEditEvent();
@@ -7310,6 +7381,28 @@ const RuntimeView = struct {
         self.widget_layout_nodes[edited_index].widget.text_composition = next_state.composition;
     }
 
+    fn scrollCanvasTextareaCaretIntoView(self: *RuntimeView, index: usize) void {
+        if (index >= self.widget_layout_node_count) return;
+        var widget = self.widget_layout_nodes[index].widget;
+        if (widget.kind != .textarea) return;
+
+        const viewport = canvas.textInputViewportForWidget(widget, self.widget_tokens) orelse return;
+        const geometry_value = canvas.textGeometryForWidget(widget, self.widget_tokens);
+        const caret = geometry_value.caret_bounds orelse return;
+
+        var next_offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, widget.value);
+        const padding: f32 = 2;
+        if (caret.y < viewport.y) {
+            next_offset -= viewport.y - caret.y + padding;
+        } else if (caret.maxY() > viewport.maxY()) {
+            next_offset += caret.maxY() - viewport.maxY() + padding;
+        }
+        next_offset = canvas.clampedTextInputScrollOffsetForWidget(widget, self.widget_tokens, next_offset);
+        if (next_offset == widget.value) return;
+        widget.value = next_offset;
+        self.widget_layout_nodes[index].widget.value = next_offset;
+    }
+
     fn canvasWidgetToggleAnimation(self: *const RuntimeView, id: canvas.ObjectId) ?CanvasWidgetToggleAnimation {
         const index = self.canvasWidgetNodeIndexById(id) orelse return null;
         const widget = self.widget_layout_nodes[index].widget;
@@ -7452,6 +7545,7 @@ const RuntimeView = struct {
             .selection = canvas.TextSelection.collapsed(text.len),
             .composition = null,
         });
+        self.scrollCanvasTextareaCaretIntoView(index);
         try self.refreshCanvasWidgetSemantics();
         self.widget_revision += 1;
         return self.canvasWidgetDirtyBounds(index, self.widget_layout_nodes[index].frame);
@@ -15173,7 +15267,20 @@ test "runtime applies text input to canvas textareas" {
     try std.testing.expectEqualStrings("First!", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(6), retained.nodes[1].widget.text_selection.?);
 
-    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "\nSecond" });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+        .modifiers = .{ .shift = true },
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("First!\n", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(7), retained.nodes[1].widget.text_selection.?);
+    const newline_geometry = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
+    try std.testing.expect(newline_geometry.caret_bounds.?.y > textarea.frame.y + 24);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "Second" });
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqualStrings("First!\nSecond", retained.nodes[1].widget.text);
     try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(13), retained.nodes[1].widget.text_selection.?);
@@ -15204,6 +15311,32 @@ test "runtime applies text input to canvas textareas" {
         }
     }
     try std.testing.expect(saw_textarea_text);
+
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "\nThird\nFourth\nFifth\nSixth\nSeventh\nEighth" });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.nodes[1].widget.value > 0);
+    try std.testing.expect(canvas.textInputMaxScrollOffsetForWidget(retained.nodes[1].widget, .{}) > 0);
+    const scrolled_viewport = canvas.textInputViewportForWidget(retained.nodes[1].widget, .{}).?;
+    const scrolled_geometry = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
+    const scrolled_caret = scrolled_geometry.caret_bounds.?;
+    try std.testing.expect(scrolled_caret.y >= scrolled_viewport.y - 0.001);
+    try std.testing.expect(scrolled_caret.maxY() <= scrolled_viewport.maxY() + 0.001);
+
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    const scrolled_display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_textarea_clip = false;
+    for (scrolled_display_list.commands) |command| {
+        switch (command) {
+            .push_clip => |clip| {
+                if (clip.id == testCanvasWidgetPartId(2, 16)) {
+                    try std.testing.expectEqualDeep(scrolled_viewport, clip.rect);
+                    saw_textarea_clip = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_textarea_clip);
 }
 
 test "runtime applies ime composition edits to canvas text fields" {

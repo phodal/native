@@ -4908,9 +4908,10 @@ pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []T
     }
 
     var start: usize = 0;
-    while (start < text.text.len) {
+    while (start <= text.text.len and text.text.len > 0) {
         const end = nextTextLineEnd(text.text, start, text.font_id, text.size, options);
         try appendTextLine(output, &len, text, start, end - start, start, end - start, lineHeight(text, options), options, &bounds);
+        if (end >= text.text.len) break;
         start = end;
         if (start < text.text.len and text.text[start] == '\n') start += 1;
         while (options.wrap == .word and start < text.text.len and isTextBreakByte(text.text[start])) start += 1;
@@ -8390,12 +8391,14 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const clip_rect = widgetTextInputClipRect(widget, tokens, text_size, text_inset, layout_options);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const text_color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, text_color, layout_options);
     const selection_range = widgetTextSelectionRange(widget);
     const composition_range = widgetTextCompositionRange(widget);
     const has_text_affordances = selection_range != null or composition_range != null;
+    const clips_text = widget.kind == .textarea;
 
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
@@ -8412,6 +8415,7 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .width = if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
+    if (clips_text) try builder.pushClip(.{ .id = widgetPartId(widget.id, 16), .rect = clip_rect, .radius = radius });
     if (selection_range) |range| {
         if (!range.isCollapsed(widget.text.len)) {
             try emitWidgetTextSelectionRects(builder, widget, draw_text, layout_options, range, 3, 13, max_widget_text_range_rects, tokens);
@@ -8440,6 +8444,7 @@ fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             }
         }
     }
+    if (clips_text) try builder.popClip();
 }
 
 fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
@@ -9114,14 +9119,91 @@ fn widgetTextInputWrap(widget: Widget, line_height: f32) TextWrap {
     return .none;
 }
 
+fn widgetTextInputVerticalInset(widget: Widget, tokens: DesignTokens, text_size: f32, options: TextLayoutOptions) f32 {
+    if (options.wrap != .none) return widgetControlInset(widget, tokens, tokens.spacing.sm);
+    return @max(0, (widget.frame.height - widgetTextInputLineHeight(text_size)) * 0.5);
+}
+
+fn widgetTextInputScrollOffset(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) f32 {
+    if (widget.kind != .textarea) return 0;
+    return std.math.clamp(widget.value, 0, widgetTextInputMaxScrollOffset(widget, tokens, text_size, text_inset, options));
+}
+
 fn widgetTextInputOrigin(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32, options: TextLayoutOptions) geometry.PointF {
     if (options.wrap != .none) {
+        const scroll_offset = widgetTextInputScrollOffset(widget, tokens, text_size, inset, options);
         return geometry.PointF.init(
             widget.frame.x + inset,
-            widget.frame.y + widgetControlInset(widget, tokens, tokens.spacing.sm) + text_size,
+            widget.frame.y + widgetTextInputVerticalInset(widget, tokens, text_size, options) + text_size - scroll_offset,
         );
     }
     return textOrigin(widget.frame, text_size, inset);
+}
+
+fn widgetTextInputClipRect(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32, options: TextLayoutOptions) geometry.RectF {
+    const vertical_inset = widgetTextInputVerticalInset(widget, tokens, text_size, options);
+    const trailing_inset = widgetTextInputTrailingInset(widget, text_size, inset);
+    return widget.frame.normalized().deflate(.{
+        .top = vertical_inset,
+        .right = trailing_inset,
+        .bottom = vertical_inset,
+        .left = inset,
+    });
+}
+
+pub fn textInputViewportForWidget(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    if (!widgetTextInputKind(widget.kind)) return null;
+    if (widget.state.disabled) return null;
+    const text_size = widgetTextInputSize(widget, tokens);
+    const text_inset = widgetTextInputInset(widget, tokens);
+    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    return widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
+}
+
+pub fn textInputContentExtentForWidget(widget: Widget, tokens: DesignTokens) f32 {
+    if (!widgetTextInputKind(widget.kind)) return 0;
+    const text_size = widgetTextInputSize(widget, tokens);
+    const text_inset = widgetTextInputInset(widget, tokens);
+    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const line_height = widgetTextInputLineHeight(text_size);
+    return @as(f32, @floatFromInt(widgetTextInputLineCount(widget, tokens.typography.font_id, text_size, options))) * line_height;
+}
+
+pub fn textInputMaxScrollOffsetForWidget(widget: Widget, tokens: DesignTokens) f32 {
+    if (!widgetTextInputKind(widget.kind)) return 0;
+    const text_size = widgetTextInputSize(widget, tokens);
+    const text_inset = widgetTextInputInset(widget, tokens);
+    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    return widgetTextInputMaxScrollOffset(widget, tokens, text_size, text_inset, options);
+}
+
+pub fn clampedTextInputScrollOffsetForWidget(widget: Widget, tokens: DesignTokens, offset: f32) f32 {
+    if (!widgetTextInputKind(widget.kind)) return 0;
+    return std.math.clamp(offset, 0, textInputMaxScrollOffsetForWidget(widget, tokens));
+}
+
+fn widgetTextInputMaxScrollOffset(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) f32 {
+    const viewport = widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
+    return @max(0, textInputContentExtentForWidgetWithOptions(widget, tokens.typography.font_id, text_size, options) - viewport.height);
+}
+
+fn textInputContentExtentForWidgetWithOptions(widget: Widget, font_id: FontId, text_size: f32, options: TextLayoutOptions) f32 {
+    return @as(f32, @floatFromInt(widgetTextInputLineCount(widget, font_id, text_size, options))) * widgetTextInputLineHeight(text_size);
+}
+
+fn widgetTextInputLineCount(widget: Widget, font_id: FontId, text_size: f32, options: TextLayoutOptions) usize {
+    if (widget.text.len == 0) return 1;
+    var count: usize = 0;
+    var start: usize = 0;
+    while (start <= widget.text.len) {
+        const end = nextTextLineEnd(widget.text, start, font_id, text_size, options);
+        count += 1;
+        if (end >= widget.text.len) break;
+        start = end;
+        if (start < widget.text.len and widget.text[start] == '\n') start += 1;
+        while (options.wrap == .word and start < widget.text.len and isTextBreakByte(widget.text[start])) start += 1;
+    }
+    return @max(1, count);
 }
 
 fn widgetTextInputDrawText(
@@ -17994,12 +18076,16 @@ test "widget textareas expose multiline textbox semantics and render wrapped tex
     const offset = textOffsetForWidgetPoint(textarea, geometry.PointF.init(28, 36), .{}) orelse return error.TestUnexpectedResult;
     try std.testing.expect(offset <= textarea.text.len);
 
-    var commands: [4]CanvasCommand = undefined;
+    var commands: [6]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, textarea, .{});
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
     switch (display_list.commands[2]) {
+        .push_clip => |clip| try expectRectApprox(textInputViewportForWidget(textarea, .{}).?, clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("First line Second line", text.text);
             try std.testing.expect(text.text_layout != null);
@@ -18008,10 +18094,11 @@ test "widget textareas expose multiline textbox semantics and render wrapped tex
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[4]) {
         .draw_line => |line| try expectFillColor(ColorTokens.light().focus_ring, line.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[5]);
 }
 
 test "widget text fields render selection caret and composition ranges" {
@@ -19966,7 +20053,7 @@ test "widget emitter applies input and list control tokens" {
         },
     };
 
-    var commands: [16]CanvasCommand = undefined;
+    var commands: [24]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, .{ .id = 50, .kind = .input, .frame = geometry.RectF.init(0, 0, 160, 34), .text = "Input" }, tokens);
     try emitWidgetTree(&builder, .{ .id = 51, .kind = .search_field, .frame = geometry.RectF.init(0, 44, 180, 34), .semantics = .{ .label = "Search" } }, tokens);
@@ -19974,7 +20061,7 @@ test "widget emitter applies input and list control tokens" {
     try emitWidgetTree(&builder, .{ .id = 53, .kind = .list_item, .frame = geometry.RectF.init(0, 168, 180, 30), .text = "Inbox", .state = .{ .selected = true } }, tokens);
 
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 16), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 18), display_list.commandCount());
     switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(20, 24, 28), fill.fill),
         else => return error.TestUnexpectedResult,
@@ -20015,14 +20102,19 @@ test "widget emitter applies input and list control tokens" {
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[13]) {
-        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(236, 240, 244), text.color),
+        .push_clip => {},
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[14]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(236, 240, 244), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[15]);
+    switch (display_list.commands[16]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(52, 62, 72), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[15]) {
+    switch (display_list.commands[17]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(244, 248, 252), text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -25157,6 +25249,34 @@ test "text layout handles newlines and shaped glyph runs" {
     try std.testing.expectEqual(@as(usize, 4), layout.lines[1].text_start);
     try std.testing.expectEqual(@as(usize, 3), layout.lines[1].text_len);
     try std.testing.expectEqual(@as(f32, 28), layout.lines[1].baseline);
+
+    const trailing = DrawText{
+        .font_id = 1,
+        .size = 12,
+        .origin = geometry.PointF.init(0, 12),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "One\n",
+    };
+    var trailing_lines: [2]TextLine = undefined;
+    const trailing_layout = try layoutTextRun(trailing, .{ .line_height = 16, .wrap = .none }, &trailing_lines);
+    try std.testing.expectEqual(@as(usize, 2), trailing_layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 4), trailing_layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 0), trailing_layout.lines[1].text_len);
+    try std.testing.expectEqual(@as(f32, 28), trailing_layout.lines[1].baseline);
+
+    const blank = DrawText{
+        .font_id = 1,
+        .size = 12,
+        .origin = geometry.PointF.init(0, 12),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "One\n\nTwo",
+    };
+    var blank_lines: [3]TextLine = undefined;
+    const blank_layout = try layoutTextRun(blank, .{ .line_height = 16, .wrap = .none }, &blank_lines);
+    try std.testing.expectEqual(@as(usize, 3), blank_layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 4), blank_layout.lines[1].text_start);
+    try std.testing.expectEqual(@as(usize, 0), blank_layout.lines[1].text_len);
+    try std.testing.expectEqual(@as(usize, 5), blank_layout.lines[2].text_start);
 
     const glyphs = [_]Glyph{
         .{ .id = 1, .x = 0, .y = 0, .advance = 9 },

@@ -18,13 +18,14 @@ const canvas_sidebar_resize_handle_width: f32 = 14;
 const canvas_sidebar_resize_line_width: f32 = 1;
 const statusbar_height: f32 = 32;
 const canvas_width: f32 = window_width;
-const canvas_height: f32 = window_height - toolbar_height - statusbar_height;
+const canvas_height: f32 = window_height - toolbar_height;
+const canvas_content_height: f32 = canvas_height - statusbar_height;
 const default_canvas_size = geometry.SizeF.init(canvas_width, canvas_height);
 const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
 const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
 const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes_per_view;
-const component_chrome_prefix_commands: usize = 1;
+const component_chrome_prefix_commands: usize = 2;
 const component_chrome_suffix_commands: usize = 0;
 const catalog_grid_columns: usize = 3;
 const catalog_card_width: f32 = 238;
@@ -68,6 +69,8 @@ const canvas_sidebar_title_id: canvas.ObjectId = 93;
 const section_nav_base_id: canvas.ObjectId = 94;
 const canvas_sidebar_resize_line_id: canvas.ObjectId = 88;
 const canvas_sidebar_resize_handle_id: canvas.ObjectId = 99;
+const canvas_status_text_id: canvas.ObjectId = 261;
+const canvas_status_separator_id: canvas.ObjectId = 262;
 const surface_overlay_backdrop_id: canvas.ObjectId = 222;
 const surface_overlay_id: canvas.ObjectId = 223;
 const surface_overlay_title_id: canvas.ObjectId = 224;
@@ -80,6 +83,8 @@ const popover_blur_id: canvas.ObjectId = 140 * 16 + 12;
 const preview_image_id: canvas.ImageId = 42;
 const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
 const environment_options = [_][]const u8{ "Production", "Preview", "Staging" };
+const initial_component_status_text = "Component lab waiting for the first GPU frame.";
+const max_component_status_text: usize = 192;
 const section_nav_commands = [_][]const u8{
     "components.section.controls",
     "components.section.inputs",
@@ -105,6 +110,7 @@ const ComponentUiState = struct {
     surface_overlay: ComponentSurfaceOverlay = .none,
     section: ComponentSection = .controls,
     sidebar_width: f32 = canvas_sidebar_width,
+    status_text: []const u8 = initial_component_status_text,
 };
 
 const ComponentSurfaceOverlay = enum {
@@ -293,8 +299,6 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "refresh", .kind = .button, .parent = "toolbar", .x = 482, .y = 11, .width = 86, .height = 30, .layer = 31, .text = "Refresh", .command = refresh_command },
     .{ .label = "body", .kind = .split, .fill = true, .axis = .row },
     .{ .label = canvas_label, .kind = .gpu_surface, .parent = "body", .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
-    .{ .label = "statusbar", .kind = .statusbar, .edge = .bottom, .height = statusbar_height, .layer = 30, .role = "Status" },
-    .{ .label = "status-label", .kind = .label, .parent = "statusbar", .x = 14, .y = 7, .width = 820, .height = 18, .layer = 31, .text = "Component lab waiting for the first GPU frame." },
 };
 const shell_windows = [_]zero_native.ShellWindow{.{
     .label = "main",
@@ -323,6 +327,8 @@ const GpuComponentsApp = struct {
     sidebar_width: f32 = canvas_sidebar_width,
     canvas_size: geometry.SizeF = default_canvas_size,
     pixel_snap_scale: f32 = 1,
+    status_text_storage: [max_component_status_text]u8 = [_]u8{0} ** max_component_status_text,
+    status_text_len: usize = 0,
     pixels: ?[]u8 = null,
     scratch: ?[]u8 = null,
     gpu_commands: [max_component_commands]canvas.CanvasGpuCommand = undefined,
@@ -419,11 +425,9 @@ const GpuComponentsApp = struct {
         const scale_changed = self.updatePixelSnapScale(frame_event.scale_factor);
         const size_changed = self.updateCanvasSize(componentSurfaceSize(frame_event.size));
         if (first_install or scale_changed or size_changed) {
+            if (first_install) self.setStatusText("Component lab display list presented on the GPU surface.");
             try installComponentsCanvasModel(runtime, frame_event.window_id, self.virtual_scroll, self.componentUiState(), self.componentTokens(), self.canvas_size);
             _ = try self.presentComponentsCanvas(runtime, frame_event, true);
-            if (first_install) {
-                try self.updateStatus(runtime, frame_event.window_id, "Component lab display list presented on the GPU surface.");
-            }
             self.canvas_installed = true;
             return;
         }
@@ -848,9 +852,20 @@ const GpuComponentsApp = struct {
         return normalized;
     }
 
+    fn setStatusText(self: *@This(), text: []const u8) void {
+        const len = @min(text.len, self.status_text_storage.len);
+        @memcpy(self.status_text_storage[0..len], text[0..len]);
+        self.status_text_len = len;
+    }
+
+    fn statusText(self: @This()) []const u8 {
+        if (self.status_text_len == 0) return initial_component_status_text;
+        return self.status_text_storage[0..self.status_text_len];
+    }
+
     fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
-        _ = self;
-        _ = try runtime.updateView(window_id, "status-label", .{ .text = text });
+        self.setStatusText(text);
+        if (self.canvas_installed) try self.updateComponentsCanvasModel(runtime, window_id);
     }
 
     fn reportFrameStatus(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
@@ -903,6 +918,7 @@ const GpuComponentsApp = struct {
             .surface_overlay = self.surface_overlay,
             .section = self.section,
             .sidebar_width = self.sidebar_width,
+            .status_text = self.statusText(),
         };
     }
 
@@ -1042,6 +1058,21 @@ fn componentSurfaceSize(size: geometry.SizeF) geometry.SizeF {
     };
 }
 
+fn componentStatusbarHeightForSize(surface_size: geometry.SizeF) f32 {
+    const size = componentSurfaceSize(surface_size);
+    return @min(statusbar_height, @max(0, size.height - 1));
+}
+
+fn componentContentHeightForSize(surface_size: geometry.SizeF) f32 {
+    const size = componentSurfaceSize(surface_size);
+    return @max(1, size.height - componentStatusbarHeightForSize(size));
+}
+
+fn componentOverlaySize(surface_size: geometry.SizeF) geometry.SizeF {
+    const size = componentSurfaceSize(surface_size);
+    return geometry.SizeF.init(size.width, componentContentHeightForSize(size));
+}
+
 fn componentSidebarWidthForSize(requested_width: f32, surface_size: geometry.SizeF) f32 {
     const size = componentSurfaceSize(surface_size);
     const requested = if (std.math.isFinite(requested_width) and requested_width > 0) requested_width else canvas_sidebar_width;
@@ -1133,7 +1164,7 @@ fn componentSurfaceCardRectForSidebar(surface_size: geometry.SizeF, sidebar_widt
     const size = componentSurfaceSize(surface_size);
     const resolved_sidebar_width = componentSidebarWidthForSize(sidebar_width, size);
     const content_width = @max(1, size.width - resolved_sidebar_width);
-    return rect(resolved_sidebar_width + 28, 26, @max(916, content_width - 56), @max(616, size.height - 60));
+    return rect(resolved_sidebar_width + 28, 26, @max(916, content_width - 56), @max(616, componentContentHeightForSize(size) - 60));
 }
 
 fn componentSidebarWidthFromLayout(layout: canvas.WidgetLayoutTree) f32 {
@@ -1150,6 +1181,9 @@ fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLay
 }
 
 fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
+    const size = componentSurfaceSize(surface_size);
+    const content_height = componentContentHeightForSize(size);
+    try builder.fillRect(.{ .id = canvas_status_separator_id, .rect = rect(0, content_height, size.width, 1), .fill = .{ .color = tokens.colors.border } });
     try builder.fillRoundedRect(.{ .id = 3, .rect = componentSurfaceCardRectForSidebar(surface_size, componentSidebarWidthFromLayout(layout)), .radius = canvas.Radius.all(tokens.radius.xl), .fill = .{ .color = tokens.colors.surface } });
     try layout.emitDisplayList(builder, tokens);
 }
@@ -1293,7 +1327,7 @@ fn surfaceOverlayFrame(surface_size: geometry.SizeF, overlay: ComponentSurfaceOv
 
 fn surfaceOverlayFrameForSidebar(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay, sidebar_width: f32) geometry.RectF {
     _ = sidebar_width;
-    const size = componentSurfaceSize(surface_size);
+    const size = componentOverlaySize(surface_size);
     return switch (overlay) {
         .dialog => centeredWindowOverlayFrame(size, 460, 220),
         .drawer => bottomDrawerOverlayFrame(size, 260),
@@ -1477,6 +1511,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .{ .id = environmentOptionId(2), .kind = .menu_item, .text = environment_options[2], .command = environment_option_commands[2], .state = .{ .selected = ui_state.environment_index == 2 }, .semantics = .{ .label = environment_options[2] } },
     };
     const size = componentSurfaceSize(surface_size);
+    const content_height_available = componentContentHeightForSize(size);
     const sidebar_width = componentSidebarWidthForSize(ui_state.sidebar_width, size);
     const sidebar_title_width = @max(1, sidebar_width - 44);
     const sidebar_item_width = @max(1, sidebar_width - 28);
@@ -1544,19 +1579,19 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         });
     }
     const content_width = @max(1, size.width - sidebar_width);
-    const content_height = @max(size.height, componentSectionContentHeight(ui_state.section));
+    const content_height = @max(content_height_available, componentSectionContentHeight(ui_state.section));
     const content_children = [_]canvas.Widget{.{
         .id = content_stack_id,
         .kind = .stack,
         .frame = rect(0, 0, content_width, content_height),
         .children = content_widgets[0..content_widget_count],
     }};
-    var root_widgets: [6]canvas.Widget = undefined;
+    var root_widgets: [7]canvas.Widget = undefined;
     var root_widget_count: usize = 0;
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_id,
         .kind = .panel,
-        .frame = rect(0, 0, sidebar_width, size.height),
+        .frame = rect(0, 0, sidebar_width, content_height_available),
         .style = .{ .radius = 0 },
         .semantics = .{ .label = "Component sections" },
         .children = &sidebar_children,
@@ -1564,7 +1599,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = content_scroll_id,
         .kind = .scroll_view,
-        .frame = rect(sidebar_width, 0, content_width, size.height),
+        .frame = rect(sidebar_width, 0, content_width, content_height_available),
         .value = virtual_scroll.page,
         .layout = .{ .clip_content = true },
         .semantics = .{ .label = "Component section content" },
@@ -1573,16 +1608,24 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_resize_line_id,
         .kind = .separator,
-        .frame = sidebarResizeLineFrame(sidebar_width, size.height),
+        .frame = sidebarResizeLineFrame(sidebar_width, content_height_available),
         .style = .{ .stroke_width = canvas_sidebar_resize_line_width },
     });
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_resize_handle_id,
         .kind = .slider,
-        .frame = sidebarResizeHandleFrame(sidebar_width, size.height),
+        .frame = sidebarResizeHandleFrame(sidebar_width, content_height_available),
         .opacity = 0,
         .style = .{ .background = rgba(0, 0, 0, 0), .foreground = rgba(0, 0, 0, 0), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
         .semantics = .{ .label = "Resize component sidebar" },
+    });
+    try appendComponentWidget(&root_widgets, &root_widget_count, .{
+        .id = canvas_status_text_id,
+        .kind = .text,
+        .frame = rect(14, content_height_available + 7, @max(1, size.width - 28), 18),
+        .text = ui_state.status_text,
+        .size = .sm,
+        .semantics = .{ .label = ui_state.status_text },
     });
 
     var surface_overlay_children_storage: [3]canvas.Widget = undefined;
@@ -1598,7 +1641,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         try appendComponentWidget(&root_widgets, &root_widget_count, .{
             .id = surface_overlay_backdrop_id,
             .kind = .panel,
-            .frame = rect(0, 0, size.width, size.height),
+            .frame = rect(0, 0, size.width, content_height_available),
             .layer = surface_backdrop_layer,
             .style = .{ .background = rgba(0, 0, 0, 154), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
             .semantics = .{ .label = "Surface backdrop" },
@@ -1790,13 +1833,14 @@ fn componentSnapshotWidget(snapshot: zero_native.automation.snapshot.Input, id: 
     return null;
 }
 
-fn componentViewByLabel(runtime: *const zero_native.Runtime, label: []const u8) ?zero_native.ViewInfo {
-    var views_buffer: [zero_native.platform.max_views + zero_native.platform.max_webviews + 1]zero_native.ViewInfo = undefined;
-    const views = runtime.listViews(1, &views_buffer);
-    for (views) |view| {
-        if (std.mem.eql(u8, view.label, label)) return view;
-    }
-    return null;
+fn componentStatusText(runtime: *const zero_native.Runtime) ![]const u8 {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    const node = layout.findById(canvas_status_text_id) orelse return error.TestUnexpectedResult;
+    return node.widget.text;
+}
+
+fn expectComponentStatusContains(runtime: *const zero_native.Runtime, text: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, try componentStatusText(runtime), text) != null);
 }
 
 fn resetComponentDirty(runtime: *zero_native.Runtime) void {
@@ -1946,7 +1990,6 @@ pub fn main(init: std.process.Init) !void {
 test "gpu components scene declares native shell and gpu canvas" {
     try std.testing.expect(shell_views[0].kind == .toolbar);
     try std.testing.expect(shell_views[5].kind == .gpu_surface);
-    try std.testing.expect(shell_views[6].kind == .statusbar);
     try std.testing.expectEqualStrings("body", shell_views[5].parent.?);
     try std.testing.expect(shell_views[5].gpu_backend.? == .metal);
     try std.testing.expect(shell_views[5].gpu_pixel_format.? == .bgra8_unorm);
@@ -1964,6 +2007,7 @@ test "gpu components display list covers finished live controls" {
 
     try std.testing.expect(display_list.commandCount() >= 54);
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
+    try std.testing.expect(display_list.findCommandById(canvas_status_separator_id) != null);
     try std.testing.expect(display_list.findCommandById(3) != null);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
     try std.testing.expect(display_list.findCommandById(project_static_text_id) != null);
@@ -1986,14 +2030,16 @@ test "gpu components layout keeps finished controls visually separated" {
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const layout = try buildComponentsWidgetLayoutWithScroll(&nodes, .{});
 
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_width, canvas_content_height));
     try std.testing.expectEqual(@as(?f32, 0), layout.findById(canvas_sidebar_id).?.widget.style.radius);
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_width, canvas_content_height));
     try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, 12))));
-    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(canvas_sidebar_width, canvas_height).center())));
-    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_height - 12))));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_width, 0, canvas_width - canvas_sidebar_width, canvas_height));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(canvas_sidebar_width, canvas_content_height).center())));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_content_height - 12))));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_width, 0, canvas_width - canvas_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(14, canvas_content_height + 7, canvas_width - 28, 18));
+    try std.testing.expectEqualStrings(initial_component_status_text, layout.findById(canvas_status_text_id).?.widget.text);
     try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, 78, 180, 34));
     try std.testing.expect(layout.findById(componentSectionNavId(.controls)).?.widget.state.selected);
     try expectComponentWidgetFrame(layout, 111, contentRect(64, 124, 148, 34));
@@ -2086,7 +2132,7 @@ test "gpu components layout keeps finished controls visually separated" {
         .surface_overlay = .dialog,
     }, default_canvas_size);
     const dialog_frame = surfaceOverlayFrame(default_canvas_size, .dialog);
-    try expectComponentWidgetFrame(dialog_layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_height));
+    try expectComponentWidgetFrame(dialog_layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_content_height));
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_id, dialog_frame);
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_title_id, rect(dialog_frame.x + 20, dialog_frame.y + 20, dialog_frame.width - 40, 28));
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_body_id, rect(dialog_frame.x + 20, dialog_frame.y + 68, dialog_frame.width - 40, 44));
@@ -2113,7 +2159,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(drawer_layout, surface_overlay_id, drawer_frame);
     try std.testing.expectEqual(@as(f32, 0), drawer_frame.x);
     try std.testing.expectEqual(canvas_width, drawer_frame.width);
-    try std.testing.expectEqual(canvas_height, drawer_frame.y + drawer_frame.height);
+    try std.testing.expectEqual(canvas_content_height, drawer_frame.y + drawer_frame.height);
 
     var sheet_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const sheet_layout = try buildComponentsWidgetLayoutWithStateAndSize(&sheet_nodes, .{}, .{
@@ -2123,7 +2169,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(sheet_layout, surface_overlay_id, sheet_frame);
     try std.testing.expectEqual(canvas_width, sheet_frame.x + sheet_frame.width);
     try std.testing.expectEqual(@as(f32, 0), sheet_frame.y);
-    try std.testing.expectEqual(canvas_height, sheet_frame.height);
+    try std.testing.expectEqual(canvas_content_height, sheet_frame.height);
 
     var scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const scrolled_layout = try buildComponentsWidgetLayoutWithScroll(&scrolled_nodes, .{
@@ -2158,12 +2204,12 @@ test "gpu components layout supports resized sidebar width" {
         .sidebar_width = resized_sidebar_width,
     }, default_canvas_size);
 
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, resized_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(resized_sidebar_width, 0, canvas_width - resized_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(resized_sidebar_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, resized_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(resized_sidebar_width, 0, canvas_width - resized_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(resized_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, 78, resized_sidebar_width - 28, 34));
     try expectComponentWidgetFrame(layout, 111, contentRectForSidebar(resized_sidebar_width, 64, 124, 148, 34));
-    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(resized_sidebar_width, canvas_height).center())));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(resized_sidebar_width, canvas_content_height).center())));
 
     var commands: [max_component_commands]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
@@ -2305,7 +2351,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 14677707473442518658), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 3860118020799347774), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -2634,8 +2680,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try std.testing.expectEqual(@as(?bool, false), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, environment_select_text_id, "Staging");
-    const environment_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, environment_status_view.text, "Environment selected: Staging.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Environment selected: Staging.");
     const snapshot_nav_list = componentSnapshotWidget(snapshot, 120).?;
     try std.testing.expect(snapshot_nav_list.scroll.present);
     try std.testing.expect(snapshot_nav_list.actions.increment);
@@ -2796,8 +2841,7 @@ test "gpu components app registers component lab on first gpu frame" {
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
 
-    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Keyed slider #115") != null);
+    try expectComponentStatusContains(&harness.runtime, "Keyed slider #115");
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 130 increment");
@@ -2808,8 +2852,7 @@ test "gpu components app registers component lab on first gpu frame" {
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
 
-    const scroll_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, scroll_status_view.text, "Keyed scroll_view #130: offset 84") != null);
+    try expectComponentStatusContains(&harness.runtime, "Keyed scroll_view #130: offset 84");
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 120 increment");
@@ -2817,8 +2860,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const keyed_list = componentSnapshotWidget(snapshot, 120).?;
     try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_list.scroll.offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.nav, 0.001);
-    const list_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, list_status_view.text, "Keyed list #120: offset 56") != null);
+    try expectComponentStatusContains(&harness.runtime, "Keyed list #120: offset 56");
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 150 increment");
@@ -2826,8 +2868,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const keyed_grid = componentSnapshotWidget(snapshot, 150).?;
     try std.testing.expectApproxEqAbs(@as(f32, 56), keyed_grid.scroll.offset, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 56), app.virtual_scroll.data, 0.001);
-    const grid_status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, grid_status_view.text, "Keyed table #150: offset 56") != null);
+    try expectComponentStatusContains(&harness.runtime, "Keyed table #150: offset 56");
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 142 select");
@@ -3000,8 +3041,7 @@ test "gpu components native theme command updates retained design tokens" {
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentFillRoundedRectColor(display_list, 3, componentTokensForScale(.dark, 2).colors.surface);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.dark, 2).colors.accent);
-    var status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "GPU component theme: Dark from toolbar") != null);
+    try expectComponentStatusContains(&harness.runtime, "GPU component theme: Dark from toolbar");
 
     const packet_count_before_high = harness.null_platform.gpu_surface_packet_present_count;
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
@@ -3017,8 +3057,7 @@ test "gpu components native theme command updates retained design tokens" {
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentFillRoundedRectColor(display_list, 3, componentTokensForScale(.high, 2).colors.surface);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.high, 2).colors.accent);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "GPU component theme: High contrast from toolbar") != null);
+    try expectComponentStatusContains(&harness.runtime, "GPU component theme: High contrast from toolbar");
 
     const themed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try expectComponentWidgetFrame(themed_layout, 111, contentRect(64, 124, 148, 34));
@@ -3057,8 +3096,7 @@ test "gpu components follow system appearance until toolbar theme override" {
     try std.testing.expect(!app.high_contrast);
     try std.testing.expectEqualDeep(componentTokensForScale(.light, 2), try harness.runtime.canvasWidgetDesignTokens(1, canvas_label));
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_light);
-    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "GPU component theme: Light from system appearance.") != null);
+    try expectComponentStatusContains(&harness.runtime, "GPU component theme: Light from system appearance.");
 
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
         .name = theme_command,
@@ -3106,8 +3144,7 @@ test "gpu components pointer clicks update retained controls" {
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(!componentSnapshotWidget(snapshot, 113).?.selected);
     try std.testing.expect(harness.runtime.invalidated);
-    var status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked checkbox #113: off.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked checkbox #113: off.");
 
     const present_count = harness.null_platform.gpu_surface_packet_present_count;
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
@@ -3127,8 +3164,7 @@ test "gpu components pointer clicks update retained controls" {
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(!componentSnapshotWidget(snapshot, 114).?.selected);
     try std.testing.expectEqual(@as(?f32, 0), componentSnapshotWidget(snapshot, 114).?.value);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked switch_control #114: off.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked switch_control #114: off.");
 
     const slider = (try harness.runtime.canvasWidgetLayout(1, canvas_label)).findById(115).?;
     const slider_point = geometry.PointF.init(slider.frame.x + slider.frame.width * 0.25, slider.frame.center().y);
@@ -3151,8 +3187,7 @@ test "gpu components pointer clicks update retained controls" {
     } });
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), componentSnapshotWidget(snapshot, 115).?.value.?, 0.001);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked slider #115");
 
     resetComponentDirty(&harness.runtime);
     var before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
@@ -3161,9 +3196,8 @@ test "gpu components pointer clicks update retained controls" {
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expectApproxEqAbs(before_nav_scroll + 22, scrolled_layout.findById(120).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled") == null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked slider #115");
+    try std.testing.expect(std.mem.indexOf(u8, try componentStatusText(&harness.runtime), "Scrolled") == null);
 
     resetComponentDirty(&harness.runtime);
     before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
@@ -3172,9 +3206,8 @@ test "gpu components pointer clicks update retained controls" {
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expectApproxEqAbs(before_behavior_scroll + 22, scrolled_layout.findById(130).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled") == null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked slider #115");
+    try std.testing.expect(std.mem.indexOf(u8, try componentStatusText(&harness.runtime), "Scrolled") == null);
 
     resetComponentDirty(&harness.runtime);
     before_scroll_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
@@ -3183,9 +3216,8 @@ test "gpu components pointer clicks update retained controls" {
     scrolled_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try std.testing.expectApproxEqAbs(before_data_scroll + 22, scrolled_layout.findById(150).?.widget.value, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115") != null);
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Scrolled") == null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked slider #115");
+    try std.testing.expect(std.mem.indexOf(u8, try componentStatusText(&harness.runtime), "Scrolled") == null);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 158);
@@ -3197,8 +3229,7 @@ test "gpu components pointer clicks update retained controls" {
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectApproxEqAbs(@as(f32, 1), componentSnapshotWidget(snapshot, 142).?.value.?, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked menu_item #142: selected.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked menu_item #142: selected.");
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 104);
@@ -3236,8 +3267,7 @@ test "gpu components pointer opens and selects environment dropdown options" {
     try std.testing.expect(app.environment_select_open);
     var snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) != null);
-    var status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Environment menu opened.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Environment menu opened.");
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, environmentOptionId(1));
@@ -3247,8 +3277,7 @@ test "gpu components pointer opens and selects environment dropdown options" {
     try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
     const display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, environment_select_text_id, "Preview");
-    status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Environment selected: Preview.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Environment selected: Preview.");
 }
 
 test "gpu components keyboard navigates and dismisses environment dropdown" {
@@ -3345,14 +3374,13 @@ test "gpu components surface launchers open and close overlays" {
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 175);
     try std.testing.expectEqual(ComponentSurfaceOverlay.dialog, app.surface_overlay);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_height));
+    try expectComponentWidgetFrame(layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, surface_overlay_id, surfaceOverlayFrame(default_canvas_size, .dialog));
     try std.testing.expectEqualStrings("Confirm deployment", layout.findById(surface_overlay_title_id).?.widget.text);
     var snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expectEqualStrings("dialog", componentSnapshotWidget(snapshot, surface_overlay_id).?.role);
     try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_close_id).?.actions.press);
-    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Confirm deployment surface opened.") != null);
+    try expectComponentStatusContains(&harness.runtime, "Confirm deployment surface opened.");
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, surface_overlay_close_id);
@@ -3430,8 +3458,7 @@ test "gpu components slider drag presents incremental cached frame" {
     try std.testing.expect(dragged_slider.focused);
     try std.testing.expect(!dragged_slider.pressed);
     try std.testing.expect(harness.runtime.invalidated);
-    const status_view = componentViewByLabel(&harness.runtime, "status-label").?;
-    try std.testing.expect(std.mem.indexOf(u8, status_view.text, "Clicked slider #115: value 0.82") != null);
+    try expectComponentStatusContains(&harness.runtime, "Clicked slider #115: value 0.82");
 
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .gpu_surface_frame = .{
         .label = canvas_label,
@@ -3495,10 +3522,10 @@ test "gpu components sidebar handle drag resizes retained layout" {
     const widened_sidebar_width = canvas_sidebar_width + 60;
     try std.testing.expectApproxEqAbs(widened_sidebar_width, app.sidebar_width, 0.001);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, widened_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(widened_sidebar_width, 0, canvas_width - widened_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(widened_sidebar_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(widened_sidebar_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, widened_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(widened_sidebar_width, 0, canvas_width - widened_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(widened_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(widened_sidebar_width, canvas_content_height));
     var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, widened_sidebar_width));
     try std.testing.expect(harness.runtime.invalidated);
@@ -3507,10 +3534,10 @@ test "gpu components sidebar handle drag resizes retained layout" {
     try dispatchComponentPointerDragByDelta(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, -120);
     try std.testing.expectApproxEqAbs(canvas_sidebar_min_width, app.sidebar_width, 0.001);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_min_width, canvas_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_min_width, 0, canvas_width - canvas_sidebar_min_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_min_width, canvas_height));
-    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_min_width, canvas_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_min_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_min_width, 0, canvas_width - canvas_sidebar_min_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_min_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_min_width, canvas_content_height));
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentRoundedRectFrame(display_list, 3, componentSurfaceCardRectForSidebar(default_canvas_size, canvas_sidebar_min_width));
 

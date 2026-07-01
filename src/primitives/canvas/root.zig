@@ -4287,10 +4287,24 @@ pub const BuiltinComponentOptions = struct {
     children: []const Widget = &.{},
 };
 
+pub const WidgetCommandPart = struct {
+    widget_id: ObjectId,
+    slot: ObjectId = 1,
+};
+
 pub const BuiltinSurfacePlacementOptions = struct {
     bounds: geometry.RectF,
     preferred_size: geometry.SizeF = .{},
     margin: f32 = 24,
+};
+
+pub const BuiltinSurfaceEnterAnimationOptions = struct {
+    surface_id: ObjectId,
+    frame: geometry.RectF,
+    motion: MotionTokens = .{},
+    start_ns: u64 = 0,
+    duration: MotionDuration = .normal,
+    content: []const WidgetCommandPart = &.{},
 };
 
 pub fn builtinComponentWidget(kind: BuiltinComponentKind, options: BuiltinComponentOptions) Widget {
@@ -4326,6 +4340,10 @@ pub fn builtinComponentWidget(kind: BuiltinComponentKind, options: BuiltinCompon
     };
 }
 
+pub fn widgetCommandPartId(part: WidgetCommandPart) ObjectId {
+    return widgetPartId(part.widget_id, part.slot);
+}
+
 pub fn builtinSurfaceFrame(kind: BuiltinComponentKind, options: BuiltinSurfacePlacementOptions) ?geometry.RectF {
     const bounds = options.bounds.normalized();
     if (bounds.isEmpty()) return null;
@@ -4339,6 +4357,24 @@ pub fn builtinSurfaceFrame(kind: BuiltinComponentKind, options: BuiltinSurfacePl
     };
 }
 
+pub fn appendBuiltinSurfaceEnterAnimations(kind: BuiltinComponentKind, options: BuiltinSurfaceEnterAnimationOptions, output: []CanvasRenderAnimation, len: *usize) Error!void {
+    if (!builtinSurfaceComponentKind(kind)) return;
+    if (options.surface_id == 0) return;
+    if (options.motion.durationMs(options.duration) == 0) return;
+
+    if (builtinSurfaceEnterOffset(kind, options.frame)) |offset| {
+        try appendBuiltinSurfaceChromeTransformAnimations(
+            options,
+            output,
+            len,
+            Affine.translate(offset.dx, offset.dy),
+        );
+    } else {
+        try appendBuiltinSurfaceChromeOpacityAnimations(options, output, len);
+    }
+    try appendBuiltinSurfaceContentOpacityAnimations(options, output, len);
+}
+
 pub fn builtinSurfaceEnterOffset(kind: BuiltinComponentKind, frame: geometry.RectF) ?geometry.OffsetF {
     const normalized = frame.normalized();
     return switch (kind) {
@@ -4347,6 +4383,58 @@ pub fn builtinSurfaceEnterOffset(kind: BuiltinComponentKind, frame: geometry.Rec
         .dialog => null,
         else => null,
     };
+}
+
+fn builtinSurfaceComponentKind(kind: BuiltinComponentKind) bool {
+    return switch (kind) {
+        .dialog, .drawer, .sheet => true,
+        else => false,
+    };
+}
+
+const builtin_surface_chrome_slots = [_]ObjectId{ 1, 2, 3 };
+
+fn appendBuiltinSurfaceChromeTransformAnimations(options: BuiltinSurfaceEnterAnimationOptions, output: []CanvasRenderAnimation, len: *usize, from_transform: Affine) Error!void {
+    for (builtin_surface_chrome_slots) |slot| {
+        try appendBuiltinSurfaceAnimation(output, len, options.motion.animation(.{
+            .id = widgetPartId(options.surface_id, slot),
+            .start_ns = options.start_ns,
+            .duration = options.duration,
+            .from_transform = from_transform,
+            .to_transform = Affine.identity(),
+        }));
+    }
+}
+
+fn appendBuiltinSurfaceChromeOpacityAnimations(options: BuiltinSurfaceEnterAnimationOptions, output: []CanvasRenderAnimation, len: *usize) Error!void {
+    for (builtin_surface_chrome_slots) |slot| {
+        try appendBuiltinSurfaceAnimation(output, len, options.motion.animation(.{
+            .id = widgetPartId(options.surface_id, slot),
+            .start_ns = options.start_ns,
+            .duration = options.duration,
+            .from_opacity = 0,
+            .to_opacity = 1,
+        }));
+    }
+}
+
+fn appendBuiltinSurfaceContentOpacityAnimations(options: BuiltinSurfaceEnterAnimationOptions, output: []CanvasRenderAnimation, len: *usize) Error!void {
+    for (options.content) |part| {
+        if (part.widget_id == 0) continue;
+        try appendBuiltinSurfaceAnimation(output, len, options.motion.animation(.{
+            .id = widgetCommandPartId(part),
+            .start_ns = options.start_ns,
+            .duration = options.duration,
+            .from_opacity = 0,
+            .to_opacity = 1,
+        }));
+    }
+}
+
+fn appendBuiltinSurfaceAnimation(output: []CanvasRenderAnimation, len: *usize, animation: CanvasRenderAnimation) Error!void {
+    if (len.* >= output.len) return error.RenderOverrideListFull;
+    output[len.*] = animation;
+    len.* += 1;
 }
 
 fn builtinSurfacePreferredSize(kind: BuiltinComponentKind, requested: geometry.SizeF) ?geometry.SizeF {
@@ -17121,6 +17209,54 @@ test "built-in modal surfaces render shadcn chrome and semantics" {
 
     try std.testing.expect(builtinSurfaceFrame(.card, .{ .bounds = viewport }) == null);
     try std.testing.expect(builtinSurfaceEnterOffset(.card, viewport) == null);
+
+    const fade_parts = [_]WidgetCommandPart{
+        .{ .widget_id = 70, .slot = 1 },
+        .{ .widget_id = 71, .slot = 4 },
+    };
+    var dialog_animations: [5]CanvasRenderAnimation = undefined;
+    var dialog_animation_count: usize = 0;
+    try appendBuiltinSurfaceEnterAnimations(.dialog, .{
+        .surface_id = 50,
+        .frame = dialog_frame,
+        .start_ns = 99,
+        .content = &fade_parts,
+    }, &dialog_animations, &dialog_animation_count);
+    try std.testing.expectEqual(@as(usize, 5), dialog_animation_count);
+    try std.testing.expectEqual(widgetCommandPartId(.{ .widget_id = 50, .slot = 1 }), dialog_animations[0].id);
+    try std.testing.expectEqual(@as(u64, 99), dialog_animations[0].start_ns);
+    try std.testing.expectEqual(@as(?f32, 0), dialog_animations[0].from_opacity);
+    try std.testing.expectEqual(@as(?f32, 1), dialog_animations[0].to_opacity);
+    try std.testing.expect(dialog_animations[0].from_transform == null);
+    try std.testing.expectEqual(widgetCommandPartId(.{ .widget_id = 70, .slot = 1 }), dialog_animations[3].id);
+    try std.testing.expectEqual(widgetCommandPartId(.{ .widget_id = 71, .slot = 4 }), dialog_animations[4].id);
+
+    var drawer_animations: [3]CanvasRenderAnimation = undefined;
+    var drawer_animation_count: usize = 0;
+    try appendBuiltinSurfaceEnterAnimations(.drawer, .{
+        .surface_id = 51,
+        .frame = drawer_frame,
+        .start_ns = 120,
+    }, &drawer_animations, &drawer_animation_count);
+    try std.testing.expectEqual(@as(usize, 3), drawer_animation_count);
+    try std.testing.expectEqual(widgetCommandPartId(.{ .widget_id = 51, .slot = 2 }), drawer_animations[1].id);
+    try std.testing.expectEqualDeep(Affine.translate(0, drawer_frame.height), drawer_animations[1].from_transform.?);
+    try std.testing.expectEqualDeep(Affine.identity(), drawer_animations[1].to_transform.?);
+    try std.testing.expect(drawer_animations[1].from_opacity == null);
+
+    var reduced_animations: [1]CanvasRenderAnimation = undefined;
+    var reduced_animation_count: usize = 0;
+    try appendBuiltinSurfaceEnterAnimations(.sheet, .{
+        .surface_id = 52,
+        .frame = sheet_frame,
+        .motion = MotionTokens.reduced(),
+    }, &reduced_animations, &reduced_animation_count);
+    try std.testing.expectEqual(@as(usize, 0), reduced_animation_count);
+    try appendBuiltinSurfaceEnterAnimations(.card, .{
+        .surface_id = 53,
+        .frame = viewport,
+    }, &reduced_animations, &reduced_animation_count);
+    try std.testing.expectEqual(@as(usize, 0), reduced_animation_count);
 
     const dialog = builtinComponentWidget(.dialog, .{
         .id = 50,

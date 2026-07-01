@@ -85,6 +85,13 @@ const surface_overlay_id: canvas.ObjectId = 223;
 const surface_overlay_title_id: canvas.ObjectId = 224;
 const surface_overlay_body_id: canvas.ObjectId = 225;
 const surface_overlay_close_id: canvas.ObjectId = 226;
+const surface_overlay_content_parts = [_]canvas.WidgetCommandPart{
+    .{ .widget_id = surface_overlay_title_id, .slot = 1 },
+    .{ .widget_id = surface_overlay_body_id, .slot = 1 },
+    .{ .widget_id = surface_overlay_close_id, .slot = 1 },
+    .{ .widget_id = surface_overlay_close_id, .slot = 2 },
+    .{ .widget_id = surface_overlay_close_id, .slot = 4 },
+};
 const surface_backdrop_layer: i32 = 300;
 const surface_overlay_layer: i32 = 301;
 const max_surface_overlay_animations: usize = 12;
@@ -890,9 +897,7 @@ const GpuComponentsApp = struct {
     }
 
     fn scheduleSurfaceOverlayAnimation(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, overlay: ComponentSurfaceOverlay) anyerror!void {
-        const offset = surfaceOverlayEnterOffsetForSidebar(self.canvas_size, overlay, self.sidebar_width) orelse return;
         const motion = self.componentTokens().motion;
-        if (motion.durationMs(.normal) == 0) return;
 
         const start_ns = runtime.canvasRenderAnimationStartNs(window_id, canvas_label) catch |err| switch (err) {
             error.WindowNotFound, error.ViewNotFound, error.InvalidViewOptions => return,
@@ -900,8 +905,14 @@ const GpuComponentsApp = struct {
         };
         var animations: [max_surface_overlay_animations]canvas.CanvasRenderAnimation = undefined;
         var count: usize = 0;
-        try appendSurfaceChromeSlideAnimations(&animations, &count, motion, start_ns, canvas.Affine.translate(offset.dx, offset.dy));
-        try appendSurfaceContentFadeAnimations(&animations, &count, motion, start_ns);
+        try canvas.appendBuiltinSurfaceEnterAnimations(surfaceOverlayKind(overlay), .{
+            .surface_id = surface_overlay_id,
+            .frame = surfaceOverlayFrameForSidebar(self.canvas_size, overlay, self.sidebar_width),
+            .motion = motion,
+            .start_ns = start_ns,
+            .content = &surface_overlay_content_parts,
+        }, &animations, &count);
+        if (count == 0) return;
         _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
@@ -1555,54 +1566,6 @@ fn surfaceOverlayFrameForSidebar(surface_size: geometry.SizeF, overlay: Componen
     }).?;
 }
 
-fn surfaceOverlayEnterOffset(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay) ?geometry.OffsetF {
-    return surfaceOverlayEnterOffsetForSidebar(surface_size, overlay, canvas_sidebar_width);
-}
-
-fn surfaceOverlayEnterOffsetForSidebar(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay, sidebar_width: f32) ?geometry.OffsetF {
-    return canvas.builtinSurfaceEnterOffset(surfaceOverlayKind(overlay), surfaceOverlayFrameForSidebar(surface_size, overlay, sidebar_width));
-}
-
-fn appendSurfaceChromeSlideAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, from_transform: canvas.Affine) canvas.Error!void {
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 1), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 2), from_transform);
-    try appendSurfaceTransformAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_id, 3), from_transform);
-}
-
-fn appendSurfaceContentFadeAnimations(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64) canvas.Error!void {
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_title_id, 1));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_body_id, 1));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 1));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 2));
-    try appendSurfaceOpacityAnimation(output, count, motion, start_ns, componentCommandPartId(surface_overlay_close_id, 4));
-}
-
-fn appendSurfaceOpacityAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, id: canvas.ObjectId) canvas.Error!void {
-    try appendSurfaceAnimation(output, count, motion.animation(.{
-        .id = id,
-        .start_ns = start_ns,
-        .duration = .normal,
-        .from_opacity = 0,
-        .to_opacity = 1,
-    }));
-}
-
-fn appendSurfaceTransformAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, motion: canvas.MotionTokens, start_ns: u64, id: canvas.ObjectId, from_transform: canvas.Affine) canvas.Error!void {
-    try appendSurfaceAnimation(output, count, motion.animation(.{
-        .id = id,
-        .start_ns = start_ns,
-        .duration = .normal,
-        .from_transform = from_transform,
-        .to_transform = canvas.Affine.identity(),
-    }));
-}
-
-fn appendSurfaceAnimation(output: []canvas.CanvasRenderAnimation, count: *usize, animation: canvas.CanvasRenderAnimation) canvas.Error!void {
-    if (count.* >= output.len) return error.RenderOverrideListFull;
-    output[count.*] = animation;
-    count.* += 1;
-}
-
 fn appendComponentWidget(output: []canvas.Widget, count: *usize, widget: canvas.Widget) canvas.Error!void {
     if (count.* >= output.len) return error.WidgetLayoutListFull;
     output[count.*] = widget;
@@ -2177,7 +2140,7 @@ fn sidebarResizeLineFrame(sidebar_width: f32, surface_height: f32) geometry.Rect
 }
 
 fn componentCommandPartId(id: canvas.ObjectId, slot: canvas.ObjectId) canvas.ObjectId {
-    return id * 16 + slot;
+    return canvas.widgetCommandPartId(.{ .widget_id = id, .slot = slot });
 }
 
 fn pt(x: f32, y: f32) geometry.PointF {
@@ -3652,6 +3615,11 @@ test "gpu components surface launchers open and close overlays" {
     try std.testing.expectEqualStrings("dialog", componentSnapshotWidget(snapshot, surface_overlay_id).?.role);
     try std.testing.expect(componentSnapshotWidget(snapshot, surface_overlay_close_id).?.actions.press);
     try expectComponentStatusContains(&harness.runtime, "Confirm deployment surface opened.");
+    var animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    try std.testing.expectEqual(@as(usize, 8), animations.len);
+    try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
+    try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_id, 2));
+    try expectSurfaceOpacityAnimation(animations, componentCommandPartId(surface_overlay_title_id, 1));
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, surface_overlay_close_id);
@@ -3667,7 +3635,7 @@ test "gpu components surface launchers open and close overlays" {
     const drawer_frame = surfaceOverlayFrame(default_canvas_size, .drawer);
     try expectComponentWidgetFrame(layout, surface_overlay_id, drawer_frame);
     try std.testing.expectEqualStrings("Project settings", layout.findById(surface_overlay_title_id).?.widget.text);
-    var animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
+    animations = try harness.runtime.canvasRenderAnimations(1, canvas_label);
     try std.testing.expectEqual(@as(usize, 8), animations.len);
     try expectNoSurfaceAnimation(animations, componentCommandPartId(surface_overlay_backdrop_id, 2));
     try expectSurfaceTransformAnimation(animations, componentCommandPartId(surface_overlay_id, 2), 0, drawer_frame.height);

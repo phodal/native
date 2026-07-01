@@ -18,8 +18,9 @@ const canvas_sidebar_resize_handle_width: f32 = 14;
 const canvas_sidebar_resize_line_width: f32 = 1;
 const statusbar_height: f32 = 32;
 const canvas_width: f32 = window_width;
-const canvas_height: f32 = window_height - toolbar_height;
-const canvas_content_height: f32 = canvas_height - statusbar_height;
+const canvas_height: f32 = window_height;
+const canvas_content_y: f32 = toolbar_height;
+const canvas_content_height: f32 = canvas_height - toolbar_height - statusbar_height;
 const default_canvas_size = geometry.SizeF.init(canvas_width, canvas_height);
 const max_component_pipelines: usize = 8;
 const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
@@ -69,6 +70,11 @@ const content_stack_id: canvas.ObjectId = 91;
 const canvas_sidebar_id: canvas.ObjectId = 92;
 const canvas_sidebar_title_id: canvas.ObjectId = 93;
 const section_nav_base_id: canvas.ObjectId = 94;
+const canvas_toolbar_id: canvas.ObjectId = 80;
+const canvas_toolbar_title_id: canvas.ObjectId = 81;
+const canvas_toolbar_theme_id: canvas.ObjectId = 82;
+const canvas_toolbar_refresh_id: canvas.ObjectId = 83;
+const canvas_toolbar_separator_id: canvas.ObjectId = 84;
 const canvas_sidebar_resize_line_id: canvas.ObjectId = 88;
 const canvas_sidebar_resize_handle_id: canvas.ObjectId = 99;
 const canvas_status_text_id: canvas.ObjectId = 261;
@@ -83,7 +89,6 @@ const surface_overlay_layer: i32 = 301;
 const max_surface_overlay_animations: usize = 12;
 const popover_blur_id: canvas.ObjectId = 140 * 16 + 12;
 const preview_image_id: canvas.ImageId = 42;
-const preview_image_command_id: canvas.ObjectId = 118 * 16 + 1;
 const environment_options = [_][]const u8{ "Production", "Preview", "Staging" };
 const initial_component_status_text = "Component lab waiting for the first GPU frame.";
 const max_component_status_text: usize = 192;
@@ -462,12 +467,7 @@ const html =
 
 const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
 const shell_views = [_]zero_native.ShellView{
-    .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = toolbar_height, .layer = 30, .role = "Toolbar" },
-    .{ .label = "toolbar-title", .kind = .label, .parent = "toolbar", .x = 18, .y = 16, .width = 260, .height = 20, .layer = 31, .text = "GPU Components" },
-    .{ .label = "theme-mode", .kind = .segmented_control, .parent = "toolbar", .x = 292, .y = 11, .width = 174, .height = 30, .layer = 31, .text = "Light|Dark|High", .command = theme_command },
-    .{ .label = "refresh", .kind = .button, .parent = "toolbar", .x = 482, .y = 11, .width = 86, .height = 30, .layer = 31, .text = "Refresh", .command = refresh_command },
-    .{ .label = "body", .kind = .split, .fill = true, .axis = .row },
-    .{ .label = canvas_label, .kind = .gpu_surface, .parent = "body", .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
+    .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
 };
 const shell_windows = [_]zero_native.ShellWindow{.{
     .label = "main",
@@ -627,6 +627,8 @@ const GpuComponentsApp = struct {
                     return;
                 }
                 if (target.id == environment_select_id or
+                    target.id == canvas_toolbar_theme_id or
+                    target.id == canvas_toolbar_refresh_id or
                     environmentOptionIndex(target.id) != null or
                     target.id == 175 or
                     target.id == 176 or
@@ -1236,9 +1238,19 @@ fn componentStatusbarHeightForSize(surface_size: geometry.SizeF) f32 {
     return @min(statusbar_height, @max(0, size.height - 1));
 }
 
+fn componentToolbarHeightForSize(surface_size: geometry.SizeF) f32 {
+    const size = componentSurfaceSize(surface_size);
+    const status_height = componentStatusbarHeightForSize(size);
+    return @min(toolbar_height, @max(0, size.height - status_height - 1));
+}
+
+fn componentContentYForSize(surface_size: geometry.SizeF) f32 {
+    return componentToolbarHeightForSize(surface_size);
+}
+
 fn componentContentHeightForSize(surface_size: geometry.SizeF) f32 {
     const size = componentSurfaceSize(surface_size);
-    return @max(1, size.height - componentStatusbarHeightForSize(size));
+    return @max(1, size.height - componentToolbarHeightForSize(size) - componentStatusbarHeightForSize(size));
 }
 
 fn componentOverlaySize(surface_size: geometry.SizeF) geometry.SizeF {
@@ -1339,8 +1351,23 @@ fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.WidgetLay
 
 fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
     const size = componentSurfaceSize(surface_size);
+    const content_y = componentContentYForSize(size);
     const content_height = componentContentHeightForSize(size);
-    try builder.fillRect(.{ .id = canvas_status_separator_id, .rect = rect(0, content_height, size.width, 1), .fill = .{ .color = tokens.colors.border } });
+    try builder.fillRect(.{ .id = canvas_toolbar_id, .rect = rect(0, 0, size.width, toolbar_height), .fill = .{ .color = tokens.colors.surface } });
+    try builder.drawText(.{
+        .id = canvas_toolbar_title_id,
+        .font_id = tokens.typography.font_id,
+        .size = 16,
+        .origin = geometry.PointF.init(18, 33),
+        .color = tokens.colors.text,
+        .text = "GPU Components",
+        .text_layout = .{
+            .max_width = 260,
+            .line_height = 20,
+        },
+    });
+    try builder.fillRect(.{ .id = canvas_toolbar_separator_id, .rect = rect(0, toolbar_height - 1, size.width, 1), .fill = .{ .color = tokens.colors.border } });
+    try builder.fillRect(.{ .id = canvas_status_separator_id, .rect = rect(0, content_y + content_height, size.width, 1), .fill = .{ .color = tokens.colors.border } });
     try layout.emitDisplayList(builder, tokens);
 }
 
@@ -1524,12 +1551,14 @@ fn surfaceOverlayFrame(surface_size: geometry.SizeF, overlay: ComponentSurfaceOv
 fn surfaceOverlayFrameForSidebar(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay, sidebar_width: f32) geometry.RectF {
     _ = sidebar_width;
     const size = componentOverlaySize(surface_size);
-    return switch (overlay) {
+    var frame = switch (overlay) {
         .dialog => centeredWindowOverlayFrame(size, 460, 220),
         .drawer => bottomDrawerOverlayFrame(size, 260),
         .sheet => rightSheetOverlayFrame(size, 380),
         .none => unreachable,
     };
+    frame.y += componentContentYForSize(surface_size);
+    return frame;
 }
 
 fn surfaceOverlayEnterOffset(surface_size: geometry.SizeF, overlay: ComponentSurfaceOverlay) ?geometry.OffsetF {
@@ -1646,7 +1675,6 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .{ .id = 116, .kind = .progress, .frame = rect(202, 118, 134, 8), .value = 1, .semantics = .{ .label = "Build progress" } },
         .{ .id = 167, .kind = .radio_group, .frame = rect(0, 148, 160, 28), .layout = .{ .gap = 10, .cross_alignment = .center }, .semantics = .{ .label = "Layout radio group" }, .children = &radio_controls },
         .{ .id = 168, .kind = .tabs, .frame = rect(0, 200, 148, 34), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density tabs" }, .children = &segment_controls },
-        .{ .id = 118, .kind = .image, .frame = rect(190, 160, 124, 54), .image_id = preview_image_id, .image_src = rect(0, 0, 4, 4), .image_fit = .cover, .image_sampling = .nearest, .image_opacity = 0.94, .semantics = .{ .label = "GPU image preview" } },
         .{ .id = 171, .kind = .textarea, .frame = rect(0, 246, 336, 72), .text = "Compose a native-rendered message", .semantics = .{ .label = "Message textarea" } },
         .{ .id = environment_select_id, .kind = .select, .frame = rect(0, 330, 180, 34), .text = environmentLabel(ui_state.environment_index), .command = environment_toggle_command, .state = .{ .expanded = ui_state.environment_select_open }, .semantics = .{ .label = "Environment select" } },
     };
@@ -1706,6 +1734,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .{ .id = environmentOptionId(2), .kind = .menu_item, .text = environment_options[2], .command = environment_option_commands[2], .state = .{ .selected = ui_state.environment_index == 2 }, .semantics = .{ .label = environment_options[2] } },
     };
     const size = componentSurfaceSize(surface_size);
+    const content_y = componentContentYForSize(size);
     const content_height_available = componentContentHeightForSize(size);
     const sidebar_width = componentSidebarWidthForSize(ui_state.sidebar_width, size);
     const sidebar_title_width = @max(1, sidebar_width - 44);
@@ -1785,12 +1814,29 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         .style = transparentContentStyle(),
         .children = content_widgets[0..content_widget_count],
     }};
-    var root_widgets: [7]canvas.Widget = undefined;
+    var root_widgets: [9]canvas.Widget = undefined;
     var root_widget_count: usize = 0;
+    try appendComponentWidget(&root_widgets, &root_widget_count, .{
+        .id = canvas_toolbar_theme_id,
+        .kind = .segmented_control,
+        .frame = rect(292, 11, 174, 30),
+        .text = "Light|Dark|High",
+        .command = theme_command,
+        .semantics = .{ .label = "Theme mode" },
+    });
+    try appendComponentWidget(&root_widgets, &root_widget_count, .{
+        .id = canvas_toolbar_refresh_id,
+        .kind = .button,
+        .frame = rect(482, 11, 86, 30),
+        .text = "Refresh",
+        .variant = .secondary,
+        .command = refresh_command,
+        .semantics = .{ .label = "Refresh components" },
+    });
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_id,
         .kind = .panel,
-        .frame = rect(0, 0, sidebar_width, content_height_available),
+        .frame = rect(0, content_y, sidebar_width, content_height_available),
         .style = .{ .radius = 0 },
         .semantics = .{ .label = "Component sections" },
         .children = &sidebar_children,
@@ -1798,7 +1844,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = content_scroll_id,
         .kind = .scroll_view,
-        .frame = rect(sidebar_width, 0, content_width, content_height_available),
+        .frame = rect(sidebar_width, content_y, content_width, content_height_available),
         .value = virtual_scroll.page,
         .layout = .{ .clip_content = true },
         .style = transparentContentStyle(),
@@ -1822,7 +1868,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_status_text_id,
         .kind = .text,
-        .frame = rect(14, content_height_available + 7, @max(1, size.width - 28), 18),
+        .frame = rect(14, content_y + content_height_available + 7, @max(1, size.width - 28), 18),
         .text = ui_state.status_text,
         .size = .sm,
         .semantics = .{ .label = ui_state.status_text },
@@ -1841,7 +1887,7 @@ fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutNode,
         try appendComponentWidget(&root_widgets, &root_widget_count, .{
             .id = surface_overlay_backdrop_id,
             .kind = .panel,
-            .frame = rect(0, 0, size.width, content_height_available),
+            .frame = rect(0, content_y, size.width, content_height_available),
             .layer = surface_backdrop_layer,
             .style = .{ .background = rgba(0, 0, 0, 154), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
             .semantics = .{ .label = "Surface backdrop" },
@@ -2151,15 +2197,15 @@ fn contentRect(x: f32, y: f32, width: f32, height: f32) geometry.RectF {
 }
 
 fn contentRectForSidebar(sidebar_width: f32, x: f32, y: f32, width: f32, height: f32) geometry.RectF {
-    return rect(sidebar_width + x, y, width, height);
+    return rect(sidebar_width + x, canvas_content_y + y, width, height);
 }
 
 fn sidebarResizeHandleFrame(sidebar_width: f32, surface_height: f32) geometry.RectF {
-    return rect(sidebar_width - canvas_sidebar_resize_handle_width * 0.5, 0, canvas_sidebar_resize_handle_width, @max(1, surface_height));
+    return rect(sidebar_width - canvas_sidebar_resize_handle_width * 0.5, canvas_content_y, canvas_sidebar_resize_handle_width, @max(1, surface_height));
 }
 
 fn sidebarResizeLineFrame(sidebar_width: f32, surface_height: f32) geometry.RectF {
-    return rect(sidebar_width - canvas_sidebar_resize_line_width * 0.5, 0, canvas_sidebar_resize_line_width, @max(1, surface_height));
+    return rect(sidebar_width - canvas_sidebar_resize_line_width * 0.5, canvas_content_y, canvas_sidebar_resize_line_width, @max(1, surface_height));
 }
 
 fn componentCommandPartId(id: canvas.ObjectId, slot: canvas.ObjectId) canvas.ObjectId {
@@ -2188,15 +2234,16 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "gpu components scene declares native shell and gpu canvas" {
-    try std.testing.expect(shell_views[0].kind == .toolbar);
-    try std.testing.expect(shell_views[5].kind == .gpu_surface);
-    try std.testing.expectEqualStrings("body", shell_views[5].parent.?);
-    try std.testing.expect(shell_views[5].gpu_backend.? == .metal);
-    try std.testing.expect(shell_views[5].gpu_pixel_format.? == .bgra8_unorm);
-    try std.testing.expect(shell_views[5].gpu_present_mode.? == .timer);
-    try std.testing.expect(shell_views[5].gpu_alpha_mode.? == .@"opaque");
-    try std.testing.expect(shell_views[5].gpu_color_space.? == .srgb);
-    try std.testing.expect(shell_views[5].gpu_vsync.?);
+    try std.testing.expectEqual(@as(usize, 1), shell_views.len);
+    try std.testing.expect(shell_views[0].kind == .gpu_surface);
+    try std.testing.expect(shell_views[0].parent == null);
+    try std.testing.expect(shell_views[0].fill);
+    try std.testing.expect(shell_views[0].gpu_backend.? == .metal);
+    try std.testing.expect(shell_views[0].gpu_pixel_format.? == .bgra8_unorm);
+    try std.testing.expect(shell_views[0].gpu_present_mode.? == .timer);
+    try std.testing.expect(shell_views[0].gpu_alpha_mode.? == .@"opaque");
+    try std.testing.expect(shell_views[0].gpu_color_space.? == .srgb);
+    try std.testing.expect(shell_views[0].gpu_vsync.?);
 }
 
 test "gpu components status text state keeps app-owned storage" {
@@ -2218,6 +2265,9 @@ test "gpu components display list covers finished live controls" {
 
     try std.testing.expect(display_list.commandCount() >= 53);
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
+    try std.testing.expect(display_list.findCommandById(canvas_toolbar_id) != null);
+    try std.testing.expect(display_list.findCommandById(canvas_toolbar_title_id) != null);
+    try std.testing.expect(display_list.findCommandById(canvas_toolbar_separator_id) != null);
     try std.testing.expect(display_list.findCommandById(canvas_status_separator_id) != null);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
     try std.testing.expect(display_list.findCommandById(project_static_text_id) != null);
@@ -2225,7 +2275,6 @@ test "gpu components display list covers finished live controls" {
     try expectComponentTextCommand(display_list, environment_select_text_id, "Production");
     try std.testing.expect(display_list.findCommandById(scroll_track_id) != null);
     try std.testing.expect(display_list.findCommandById(scroll_thumb_id) != null);
-    try std.testing.expect(display_list.findCommandById(preview_image_command_id) != null);
     try std.testing.expect(display_list.findCommandById(popover_blur_id) != null);
     try std.testing.expect(display_list.findCommandById(menu_item_text_id) != null);
     try std.testing.expect(display_list.findCommandById(data_cell_text_id) != null);
@@ -2242,14 +2291,19 @@ test "gpu components layout keeps finished controls visually separated" {
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const layout = try buildComponentsWidgetLayoutWithScroll(&nodes, .{});
 
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_width, canvas_content_height));
+    try std.testing.expect(layout.findById(canvas_toolbar_id) == null);
+    try std.testing.expect(layout.findById(canvas_toolbar_title_id) == null);
+    try expectComponentWidgetFrame(layout, canvas_toolbar_theme_id, rect(292, 11, 174, 30));
+    try expectComponentWidgetFrame(layout, canvas_toolbar_refresh_id, rect(482, 11, 86, 30));
+    try std.testing.expect(layout.findById(canvas_toolbar_separator_id) == null);
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, canvas_content_y, canvas_sidebar_width, canvas_content_height));
     try std.testing.expectEqual(@as(?f32, 0), layout.findById(canvas_sidebar_id).?.widget.style.radius);
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_width, canvas_content_height));
-    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, 12))));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_content_y + 12))));
     try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(canvas_sidebar_width, canvas_content_height).center())));
-    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_content_height - 12))));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_width, 0, canvas_width - canvas_sidebar_width, canvas_content_height));
+    try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(pt(canvas_sidebar_width, canvas_content_y + canvas_content_height - 12))));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_width, canvas_content_y, canvas_width - canvas_sidebar_width, canvas_content_height));
     const transparent_content_style = transparentContentStyle();
     const content_scroll = layout.findById(content_scroll_id).?.widget;
     try std.testing.expectEqualDeep(transparent_content_style.background, content_scroll.style.background);
@@ -2261,9 +2315,9 @@ test "gpu components layout keeps finished controls visually separated" {
     try std.testing.expectEqualDeep(transparent_content_style.border, content_stack.style.border);
     try std.testing.expectEqual(transparent_content_style.radius, content_stack.style.radius);
     try std.testing.expectEqual(transparent_content_style.stroke_width, content_stack.style.stroke_width);
-    try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(14, canvas_content_height + 7, canvas_width - 28, 18));
+    try expectComponentWidgetFrame(layout, canvas_status_text_id, rect(14, canvas_content_y + canvas_content_height + 7, canvas_width - 28, 18));
     try std.testing.expectEqualStrings(initial_component_status_text, layout.findById(canvas_status_text_id).?.widget.text);
-    try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, 78, 180, 34));
+    try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, canvas_content_y + 78, 180, 34));
     try std.testing.expect(layout.findById(componentSectionNavId(.controls)).?.widget.state.selected);
     try expectComponentWidgetFrame(layout, 111, contentRect(64, 124, 148, 34));
     try expectComponentWidgetFrame(layout, 112, contentRect(230, 124, 172, 34));
@@ -2274,7 +2328,6 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 116, contentRect(266, 242, 134, 8));
     try expectComponentWidgetFrame(layout, 167, contentRect(64, 272, 160, 28));
     try expectComponentWidgetFrame(layout, 168, contentRect(64, 324, 148, 34));
-    try expectComponentWidgetFrame(layout, 118, contentRect(254, 284, 124, 54));
     try expectComponentWidgetFrame(layout, 171, contentRect(64, 370, 336, 72));
     try expectComponentWidgetFrame(layout, 172, contentRect(64, 454, 180, 34));
     try std.testing.expect(layout.findById(environment_menu_id) == null);
@@ -2300,10 +2353,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetsDoNotOverlap(layout, 113, 114);
     try expectComponentWidgetsDoNotOverlap(layout, 114, 215);
     try expectComponentWidgetsDoNotOverlap(layout, 115, 116);
-    try expectComponentWidgetsDoNotOverlap(layout, 167, 118);
-    try expectComponentWidgetsDoNotOverlap(layout, 168, 118);
     try expectComponentWidgetsDoNotOverlap(layout, 171, 168);
-    try expectComponentWidgetsDoNotOverlap(layout, 171, 118);
     try expectComponentWidgetsDoNotOverlap(layout, 172, 171);
     try expectComponentWidgetsDoNotOverlap(layout, 106, 120);
     try expectComponentWidgetsDoNotOverlap(layout, 120, 130);
@@ -2357,7 +2407,7 @@ test "gpu components layout keeps finished controls visually separated" {
         .surface_overlay = .dialog,
     }, default_canvas_size);
     const dialog_frame = surfaceOverlayFrame(default_canvas_size, .dialog);
-    try expectComponentWidgetFrame(dialog_layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_content_height));
+    try expectComponentWidgetFrame(dialog_layout, surface_overlay_backdrop_id, rect(0, canvas_content_y, canvas_width, canvas_content_height));
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_id, dialog_frame);
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_title_id, rect(dialog_frame.x + 20, dialog_frame.y + 20, dialog_frame.width - 40, 28));
     try expectComponentWidgetFrame(dialog_layout, surface_overlay_body_id, rect(dialog_frame.x + 20, dialog_frame.y + 68, dialog_frame.width - 40, 44));
@@ -2384,7 +2434,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(drawer_layout, surface_overlay_id, drawer_frame);
     try std.testing.expectEqual(@as(f32, 0), drawer_frame.x);
     try std.testing.expectEqual(canvas_width, drawer_frame.width);
-    try std.testing.expectEqual(canvas_content_height, drawer_frame.y + drawer_frame.height);
+    try std.testing.expectEqual(canvas_content_y + canvas_content_height, drawer_frame.y + drawer_frame.height);
 
     var sheet_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const sheet_layout = try buildComponentsWidgetLayoutWithStateAndSize(&sheet_nodes, .{}, .{
@@ -2393,7 +2443,7 @@ test "gpu components layout keeps finished controls visually separated" {
     const sheet_frame = surfaceOverlayFrame(default_canvas_size, .sheet);
     try expectComponentWidgetFrame(sheet_layout, surface_overlay_id, sheet_frame);
     try std.testing.expectEqual(canvas_width, sheet_frame.x + sheet_frame.width);
-    try std.testing.expectEqual(@as(f32, 0), sheet_frame.y);
+    try std.testing.expectEqual(canvas_content_y, sheet_frame.y);
     try std.testing.expectEqual(canvas_content_height, sheet_frame.height);
 
     var scrolled_nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
@@ -2429,10 +2479,10 @@ test "gpu components layout supports resized sidebar width" {
         .sidebar_width = resized_sidebar_width,
     }, default_canvas_size);
 
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, resized_sidebar_width, canvas_content_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(resized_sidebar_width, 0, canvas_width - resized_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, canvas_content_y, resized_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(resized_sidebar_width, canvas_content_y, canvas_width - resized_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(resized_sidebar_width, canvas_content_height));
-    try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, 78, resized_sidebar_width - 28, 34));
+    try expectComponentWidgetFrame(layout, componentSectionNavId(.controls), rect(14, canvas_content_y + 78, resized_sidebar_width - 28, 34));
     try expectComponentWidgetFrame(layout, 111, contentRectForSidebar(resized_sidebar_width, 64, 124, 148, 34));
     try std.testing.expectEqual(canvas.WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(sidebarResizeHandleFrame(resized_sidebar_width, canvas_content_height).center())));
 
@@ -2523,8 +2573,8 @@ test "gpu components frame plan stays within runtime budgets" {
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
-    try std.testing.expectEqual(@as(usize, 1), frame.image_plan.imageCount());
-    try std.testing.expectEqual(@as(usize, 1), frame.image_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 0), frame.image_plan.imageCount());
+    try std.testing.expectEqual(@as(usize, 0), frame.image_cache_plan.uploadCount());
     try std.testing.expect(frame.visual_effect_plan.effectCount() >= 3);
     try std.testing.expect(frame.text_layout_plan.planCount() >= 12);
     try std.testing.expect(frame.profile().work_units > 0);
@@ -2576,11 +2626,10 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 13969850760233604556), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 4451198717990493977), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
-    try std.testing.expectEqual(@as(u8, 255), surface.pixelRgba8(288, 190)[3]);
 }
 
 test "gpu components catalog previews use canonical built-in foundations" {
@@ -2646,6 +2695,8 @@ test "gpu components semantics cover retained widget families" {
     const semantics = try layout.collectSemantics(&semantics_buffer);
 
     try expectSemanticRole(semantics, content_scroll_id, .group);
+    try expectSemanticRole(semantics, canvas_toolbar_theme_id, .tab);
+    try expectSemanticRole(semantics, canvas_toolbar_refresh_id, .button);
     try expectSemanticRole(semantics, canvas_sidebar_id, .group);
     try expectSemanticRole(semantics, componentSectionNavId(.controls), .listitem);
     try expectSemanticRole(semantics, componentSectionNavId(.components), .listitem);
@@ -2660,7 +2711,6 @@ test "gpu components semantics cover retained widget families" {
     try expectSemanticRole(semantics, 115, .slider);
     try expectSemanticRole(semantics, 116, .progressbar);
     try expectSemanticRole(semantics, 117, .tab);
-    try expectSemanticRole(semantics, 118, .image);
     try expectSemanticRole(semantics, 119, .tab);
     try expectSemanticRole(semantics, 120, .list);
     try expectSemanticRole(semantics, 121, .listitem);
@@ -2819,7 +2869,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_resized = .{
         .window_id = 1,
         .label = canvas_label,
-        .frame = geometry.RectF.init(0, toolbar_height, canvas_width + 320, canvas_height),
+        .frame = geometry.RectF.init(0, 0, canvas_width + 320, canvas_height),
         .scale_factor = 2,
     } });
     const packet_count_before_resize_frame = harness.null_platform.gpu_surface_packet_present_count;
@@ -3277,11 +3327,7 @@ test "gpu components native theme command updates retained design tokens" {
 
     resetComponentDirty(&harness.runtime);
     const packet_count_before_dark = harness.null_platform.gpu_surface_packet_present_count;
-    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
-        .name = theme_command,
-        .window_id = 1,
-        .view_label = "theme-mode",
-    } });
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
 
     try std.testing.expectEqual(ComponentThemeMode.dark, app.theme_mode);
     try std.testing.expectEqual(@as(u32, 1), app.theme_count);
@@ -3289,14 +3335,10 @@ test "gpu components native theme command updates retained design tokens" {
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_dark);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.dark, 2).colors.accent);
-    try expectComponentStatusContains(&harness.runtime, "GPU component theme: Dark from toolbar");
+    try expectComponentStatusContains(&harness.runtime, "GPU component theme: Dark from native_view");
 
     const packet_count_before_high = harness.null_platform.gpu_surface_packet_present_count;
-    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
-        .name = theme_command,
-        .window_id = 1,
-        .view_label = "theme-mode",
-    } });
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
 
     try std.testing.expectEqual(ComponentThemeMode.high, app.theme_mode);
     try std.testing.expectEqual(@as(u32, 2), app.theme_count);
@@ -3304,7 +3346,7 @@ test "gpu components native theme command updates retained design tokens" {
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_high);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentFillRoundedRectColor(display_list, primary_button_fill_id, componentTokensForScale(.high, 2).colors.accent);
-    try expectComponentStatusContains(&harness.runtime, "GPU component theme: High contrast from toolbar");
+    try expectComponentStatusContains(&harness.runtime, "GPU component theme: High contrast from native_view");
 
     const themed_layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     try expectComponentWidgetFrame(themed_layout, 111, contentRect(64, 124, 148, 34));
@@ -3345,11 +3387,7 @@ test "gpu components follow system appearance until toolbar theme override" {
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_light);
     try expectComponentStatusContains(&harness.runtime, "GPU component theme: Light from system appearance.");
 
-    try harness.runtime.dispatchPlatformEvent(app_handle, .{ .native_command = .{
-        .name = theme_command,
-        .window_id = 1,
-        .view_label = "theme-mode",
-    } });
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
     try std.testing.expect(app.theme_overridden);
     try std.testing.expectEqual(ComponentThemeMode.dark, app.theme_mode);
 
@@ -3638,7 +3676,7 @@ test "gpu components surface launchers open and close overlays" {
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 175);
     try std.testing.expectEqual(ComponentSurfaceOverlay.dialog, app.surface_overlay);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, surface_overlay_backdrop_id, rect(0, 0, canvas_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, surface_overlay_backdrop_id, rect(0, canvas_content_y, canvas_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, surface_overlay_id, surfaceOverlayFrame(default_canvas_size, .dialog));
     try std.testing.expectEqualStrings("Confirm deployment", layout.findById(surface_overlay_title_id).?.widget.text);
     var snapshot = harness.runtime.automationSnapshot("Components");
@@ -3777,7 +3815,7 @@ test "gpu components sidebar handle drag resizes retained layout" {
         .label = canvas_label,
         .kind = .pointer_move,
         .x = canvas_sidebar_width,
-        .y = 20,
+        .y = canvas_content_y + 20,
     } });
     try std.testing.expectEqual(zero_native.platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
 
@@ -3786,8 +3824,8 @@ test "gpu components sidebar handle drag resizes retained layout" {
     const widened_sidebar_width = canvas_sidebar_width + 60;
     try std.testing.expectApproxEqAbs(widened_sidebar_width, app.sidebar_width, 0.001);
     var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, widened_sidebar_width, canvas_content_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(widened_sidebar_width, 0, canvas_width - widened_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, canvas_content_y, widened_sidebar_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(widened_sidebar_width, canvas_content_y, canvas_width - widened_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(widened_sidebar_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(widened_sidebar_width, canvas_content_height));
     var display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
@@ -3798,8 +3836,8 @@ test "gpu components sidebar handle drag resizes retained layout" {
     try dispatchComponentPointerDragByDelta(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, -120);
     try std.testing.expectApproxEqAbs(canvas_sidebar_min_width, app.sidebar_width, 0.001);
     layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, 0, canvas_sidebar_min_width, canvas_content_height));
-    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_min_width, 0, canvas_width - canvas_sidebar_min_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, canvas_sidebar_id, rect(0, canvas_content_y, canvas_sidebar_min_width, canvas_content_height));
+    try expectComponentWidgetFrame(layout, content_scroll_id, rect(canvas_sidebar_min_width, canvas_content_y, canvas_width - canvas_sidebar_min_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_line_id, sidebarResizeLineFrame(canvas_sidebar_min_width, canvas_content_height));
     try expectComponentWidgetFrame(layout, canvas_sidebar_resize_handle_id, sidebarResizeHandleFrame(canvas_sidebar_min_width, canvas_content_height));
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
@@ -3901,6 +3939,21 @@ fn expectNoContentScrollContainerChrome(display_list: canvas.DisplayList) !void 
     const clip_ref = display_list.findCommandById(componentCommandPartId(content_scroll_id, 1)) orelse return error.TestUnexpectedResult;
     if (clip_ref.command != .push_clip) return error.TestUnexpectedResult;
     try std.testing.expect(display_list.findCommandById(componentCommandPartId(content_scroll_id, 4)) == null);
+    const content_frame = rect(canvas_sidebar_width, canvas_content_y, canvas_width - canvas_sidebar_width, canvas_content_height);
+    for (display_list.commands) |command| {
+        switch (command) {
+            .fill_rounded_rect => |fill| if (rectLooksLikeMainContentContainer(fill.rect, content_frame)) return error.TestUnexpectedResult,
+            .stroke_rect => |stroke| if (rectLooksLikeMainContentContainer(stroke.rect, content_frame)) return error.TestUnexpectedResult,
+            .shadow => |shadow| if (rectLooksLikeMainContentContainer(shadow.rect, content_frame)) return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+}
+
+fn rectLooksLikeMainContentContainer(actual: geometry.RectF, content_frame: geometry.RectF) bool {
+    const normalized = actual.normalized();
+    if (!content_frame.containsRect(normalized)) return false;
+    return normalized.width >= content_frame.width - 160 and normalized.height >= content_frame.height - 160;
 }
 
 fn expectSemanticRole(semantics: []const canvas.WidgetSemanticsNode, id: canvas.ObjectId, role: canvas.WidgetRole) !void {

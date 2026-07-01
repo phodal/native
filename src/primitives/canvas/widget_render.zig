@@ -8,11 +8,13 @@ const widget_model = @import("widgets.zig");
 const event_model = @import("events.zig");
 const equality_model = @import("equality.zig");
 const widget_tree = @import("widget_tree.zig");
+const widget_layout = @import("widget_layout.zig");
 const widget_access = @import("widget_access.zig");
 const widget_semantics = @import("widget_semantics.zig");
 const widget_metrics = @import("widget_metrics.zig");
 const widget_text_input = @import("widget_text_input.zig");
 const widget_render_style = @import("widget_render_style.zig");
+const widget_render_scroll = @import("widget_render_scroll.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -33,7 +35,6 @@ const TextRange = text_model.TextRange;
 const TextSelectionRect = text_model.TextSelectionRect;
 const DesignTokens = token_model.DesignTokens;
 const ControlVisualTokens = token_model.ControlVisualTokens;
-const virtualListRange = token_model.virtualListRange;
 const WidgetPaintOrder = widget_tree.WidgetPaintOrder;
 const widgetPaintLayer = widget_tree.widgetPaintLayer;
 const nextWidgetPaintChild = widget_tree.nextWidgetPaintChild;
@@ -41,8 +42,6 @@ const widgetLayoutDirectChildCount = widget_tree.widgetLayoutDirectChildCount;
 const nextWidgetLayoutPaintChild = widget_tree.nextWidgetLayoutPaintChild;
 const widgetTransform = widget_tree.widgetTransform;
 const widgetClipsContent = widget_tree.widgetClipsContent;
-const gridColumnCount = widget_tree.gridColumnCount;
-const gridRowCount = widget_tree.gridRowCount;
 const booleanControlSelected = widget_access.booleanControlSelected;
 const widgetTextSelectionRange = widget_access.widgetTextSelectionRange;
 const widgetTextCompositionRange = widget_access.widgetTextCompositionRange;
@@ -69,7 +68,6 @@ const WidgetState = widget_model.WidgetState;
 const WidgetRenderState = widget_model.WidgetRenderState;
 const WidgetSize = widget_model.WidgetSize;
 const Widget = widget_model.Widget;
-const WidgetScrollMetrics = event_model.WidgetScrollMetrics;
 const estimateTextWidth = text_model.estimateTextWidth;
 const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
 const layoutTextCaretRect = text_model.layoutTextCaretRect;
@@ -276,7 +274,7 @@ fn emitWidgetLayoutNodeContent(
             try builder.pushClip(.{ .id = widgetPartId(paint_widget.id, 1), .rect = paint_widget.frame });
             try emitWidgetLayoutChildren(builder, layout, node_index, tokens, state);
             try builder.popClip();
-            try emitScrollViewScrollbar(builder, paint_widget.frame, widgetScrollSemantics(layout, node_index).metrics, tokens, paint_widget.id);
+            try widget_render_scroll.emitScrollViewScrollbar(builder, paint_widget.frame, widgetScrollSemantics(layout, node_index).metrics, tokens, paint_widget.id);
             return;
         },
         .alert => try emitAlertWidgetChrome(builder, paint_widget, tokens),
@@ -331,7 +329,7 @@ fn emitWidgetLayoutScrollableChildren(
     try builder.pushClip(clip);
     try emitWidgetLayoutChildren(builder, layout, parent_index, tokens, state);
     try builder.popClip();
-    try emitScrollViewScrollbar(builder, widget.frame, widgetScrollSemantics(layout, parent_index).metrics, tokens, widget.id);
+    try widget_render_scroll.emitScrollViewScrollbar(builder, widget.frame, widgetScrollSemantics(layout, parent_index).metrics, tokens, widget.id);
 }
 
 fn widgetOpacity(widget: Widget) f32 {
@@ -633,7 +631,7 @@ fn emitScrollViewWidget(builder: *Builder, widget: Widget, tokens: DesignTokens,
     try builder.pushClip(.{ .id = widgetPartId(widget.id, 1), .rect = widget.frame });
     try emitWidgetChildren(builder, widget.children, tokens, depth);
     try builder.popClip();
-    try emitScrollViewScrollbar(builder, widget.frame, widgetScrollMetricsForWidget(widget), tokens, widget.id);
+    try widget_render_scroll.emitScrollViewScrollbar(builder, widget.frame, widget_render_scroll.widgetScrollMetricsForWidget(widget, tokens), tokens, widget.id);
 }
 
 fn emitWidgetClippedChildren(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
@@ -642,135 +640,8 @@ fn emitWidgetClippedChildren(builder: *Builder, widget: Widget, tokens: DesignTo
     if (widget.layout.clip_content) try builder.popClip();
 }
 
-const ScrollbarGeometry = struct {
-    track: geometry.RectF,
-    thumb: geometry.RectF,
-};
-
-fn emitScrollViewScrollbar(builder: *Builder, frame: geometry.RectF, metrics: WidgetScrollMetrics, tokens: DesignTokens, id: ObjectId) Error!void {
-    const scrollbar = scrollViewScrollbarGeometry(frame, metrics, tokens) orelse return;
-    const track = pixelSnapGeometryRect(tokens, scrollbar.track);
-    const thumb = pixelSnapGeometryRect(tokens, scrollbar.thumb);
-    const visual = tokens.controls.scrollbar;
-    const radius = Radius.all(if (visual.radius) |value| nonNegative(value) else track.width * 0.5);
-    const track_fill = visual.background orelse colorWithAlpha(tokens.colors.border, @min(tokens.colors.border.a, 0.22));
-    const thumb_fill = visual.foreground orelse visual.active_background orelse colorWithAlpha(tokens.colors.text_muted, 0.55);
-    try builder.fillRoundedRect(.{
-        .id = widgetPartId(id, 2),
-        .rect = track,
-        .radius = radius,
-        .fill = colorFill(track_fill),
-    });
-    try builder.fillRoundedRect(.{
-        .id = widgetPartId(id, 3),
-        .rect = thumb,
-        .radius = radius,
-        .fill = colorFill(thumb_fill),
-    });
-}
-
-fn scrollViewScrollbarGeometry(frame: geometry.RectF, metrics: WidgetScrollMetrics, tokens: DesignTokens) ?ScrollbarGeometry {
-    if (!metrics.present) return null;
-    const viewport = nonNegative(metrics.viewport_extent);
-    const content = nonNegative(metrics.content_extent);
-    const max_offset = @max(0, content - viewport);
-    if (frame.isEmpty() or viewport <= 0 or content <= viewport or max_offset <= 0) return null;
-
-    const inset = densityValue(tokens, 3);
-    const thickness = @min(@max(densityValue(tokens, 3), frame.width * 0.0125), densityValue(tokens, 6));
-    const track_height = @max(0, frame.height - inset * 2);
-    if (track_height <= 0 or thickness <= 0) return null;
-
-    const track = geometry.RectF.init(
-        frame.x + frame.width - inset - thickness,
-        frame.y + inset,
-        thickness,
-        track_height,
-    );
-    const thumb_ratio = std.math.clamp(viewport / content, 0, 1);
-    const min_thumb = @min(track_height, densityValue(tokens, 18));
-    const thumb_height = @min(track_height, @max(min_thumb, track_height * thumb_ratio));
-    const travel = @max(0, track_height - thumb_height);
-    const offset_ratio = std.math.clamp(nonNegative(metrics.offset) / max_offset, 0, 1);
-    return .{
-        .track = track,
-        .thumb = geometry.RectF.init(track.x, track.y + travel * offset_ratio, track.width, thumb_height),
-    };
-}
-
-fn widgetScrollMetricsForWidget(widget: Widget) WidgetScrollMetrics {
-    if (widget.kind != .scroll_view) return .{};
-
-    const viewport = widget.frame.inset(widget.layout.padding).normalized();
-    if (viewport.isEmpty()) return .{};
-
-    const content_extent = widgetScrollContentExtentForWidget(widget, viewport);
-    const max_offset = @max(0, content_extent - viewport.height);
-    return .{
-        .present = true,
-        .offset = std.math.clamp(nonNegative(widget.value), 0, max_offset),
-        .viewport_extent = viewport.height,
-        .content_extent = content_extent,
-    };
-}
-
-fn widgetScrollContentExtentForWidget(widget: Widget, viewport: geometry.RectF) f32 {
-    if (widget.layout.virtualized) {
-        return @max(viewport.height, virtualWidgetScrollContentExtent(widget, viewport.height));
-    }
-
-    const offset = widget.value;
-    var bottom = viewport.maxY();
-    for (widget.children) |child| {
-        bottom = @max(bottom, child.frame.maxY() + offset);
-    }
-    return @max(0, bottom - viewport.y);
-}
-
 fn widgetScrollSemantics(layout: anytype, node_index: usize) widget_semantics.WidgetScrollSemantics {
-    return widget_semantics.widgetScrollSemantics(layout, node_index, virtualWidgetScrollContentExtent);
-}
-
-fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {
-    const item_count = virtualWidgetScrollItemCount(widget);
-    if (item_count == 0) return 0;
-    const item_extent = if (widget.layout.virtual_item_extent > 0)
-        widget.layout.virtual_item_extent
-    else if (widget.kind == .grid and widget.children.len > 0)
-        virtualGridRowExtent(widget)
-    else if (widget.children.len > 0)
-        @max(1, widget.children[0].frame.height)
-    else
-        return 0;
-    return virtualListRange(.{
-        .item_count = item_count,
-        .item_extent = item_extent,
-        .item_gap = widget.layout.gap,
-        .viewport_extent = viewport_extent,
-        .scroll_offset = widget.value,
-    }).content_extent;
-}
-
-fn virtualWidgetScrollItemCount(widget: Widget) usize {
-    if (widget.kind == .grid and widget.children.len > 0) {
-        const columns = gridColumnCount(widget.children.len, widget.layout.columns);
-        return gridRowCount(widget.children.len, columns);
-    }
-    if (widget.children.len > 0) return widget.children.len;
-    if (widget.semantics.list_item_count) |count| return @intCast(count);
-    return 0;
-}
-
-fn virtualGridRowExtent(widget: Widget) f32 {
-    if (widget.children.len == 0) return 0;
-    const columns = gridColumnCount(widget.children.len, widget.layout.columns);
-    if (columns == 0) return 0;
-    var max_height: f32 = 0;
-    var index: usize = 0;
-    while (index < columns and index < widget.children.len) : (index += 1) {
-        max_height = @max(max_height, widget.children[index].frame.height);
-    }
-    return max_height;
+    return widget_semantics.widgetScrollSemantics(layout, node_index, widget_layout.virtualWidgetScrollContentExtent);
 }
 
 fn emitWidgetLayoutClippedChildren(

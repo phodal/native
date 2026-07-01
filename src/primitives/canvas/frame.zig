@@ -4,7 +4,10 @@ const json = @import("json");
 const canvas = @import("root.zig");
 const render_model = @import("render.zig");
 const text_model = @import("text.zig");
+const gpu_model = @import("gpu.zig");
+const serialization = @import("serialization.zig");
 
+const Error = canvas.Error;
 const DiffChange = canvas.DiffChange;
 const CanvasFrame = canvas.CanvasFrame;
 const ReferenceImage = canvas.ReferenceImage;
@@ -12,6 +15,7 @@ const default_glyph_atlas_cache_retention_frames = canvas.default_glyph_atlas_ca
 const default_text_layout_cache_retention_frames = canvas.default_text_layout_cache_retention_frames;
 
 const CanvasRenderOverride = render_model.CanvasRenderOverride;
+const RenderPipelineKind = render_model.RenderPipelineKind;
 const RenderCommand = render_model.RenderCommand;
 const RenderBatch = render_model.RenderBatch;
 const RenderPipelineCacheEntry = render_model.RenderPipelineCacheEntry;
@@ -40,6 +44,210 @@ const TextLine = text_model.TextLine;
 const TextLayoutPlan = text_model.TextLayoutPlan;
 const TextLayoutCacheEntry = text_model.TextLayoutCacheEntry;
 const TextLayoutCacheAction = text_model.TextLayoutCacheAction;
+const CanvasRenderPassLoadAction = gpu_model.CanvasRenderPassLoadAction;
+const RenderEncoderCommand = gpu_model.RenderEncoderCommand;
+const RenderEncoderPlan = gpu_model.RenderEncoderPlan;
+const RenderEncoderPlanner = gpu_model.RenderEncoderPlanner;
+const CanvasGpuCommand = gpu_model.CanvasGpuCommand;
+const CanvasGpuPacket = gpu_model.CanvasGpuPacket;
+const CanvasGpuPacketSummary = gpu_model.CanvasGpuPacketSummary;
+const CanvasGpuPacketPlanner = gpu_model.CanvasGpuPacketPlanner;
+const renderCommandIntersectsDirtyBounds = gpu_model.renderCommandIntersectsDirtyBounds;
+const canvasGpuCommandFromRenderCommand = gpu_model.canvasGpuCommandFromRenderCommand;
+
+pub const CanvasRenderPass = struct {
+    frame_index: u64 = 0,
+    timestamp_ns: u64 = 0,
+    surface_size: geometry.SizeF = .{},
+    scale: f32 = 1,
+    full_repaint: bool = false,
+    dirty_bounds: ?geometry.RectF = null,
+    commands: []const RenderCommand = &.{},
+    batches: []const RenderBatch = &.{},
+    pipeline_actions: []const RenderPipelineCacheAction = &.{},
+    path_geometries: []const RenderPathGeometry = &.{},
+    path_geometry_actions: []const RenderPathGeometryCacheAction = &.{},
+    images: []const RenderImage = &.{},
+    image_actions: []const RenderImageCacheAction = &.{},
+    layers: []const RenderLayer = &.{},
+    layer_actions: []const RenderLayerCacheAction = &.{},
+    resources: []const RenderResource = &.{},
+    resource_actions: []const RenderResourceCacheAction = &.{},
+    visual_effects: []const VisualEffect = &.{},
+    visual_effect_actions: []const VisualEffectCacheAction = &.{},
+    glyph_atlas_entries: []const GlyphAtlasEntry = &.{},
+    glyph_atlas_actions: []const GlyphAtlasCacheAction = &.{},
+    text_layouts: []const TextLayoutPlan = &.{},
+    text_layout_actions: []const TextLayoutCacheAction = &.{},
+
+    pub fn requiresRender(self: CanvasRenderPass) bool {
+        return self.full_repaint or self.dirty_bounds != null;
+    }
+
+    pub fn loadAction(self: CanvasRenderPass) CanvasRenderPassLoadAction {
+        if (!self.requiresRender()) return .skip;
+        return if (self.full_repaint) .clear else .load;
+    }
+
+    pub fn scissorBounds(self: CanvasRenderPass) ?geometry.RectF {
+        return if (self.requiresRender()) self.dirty_bounds else null;
+    }
+
+    pub fn commandCount(self: CanvasRenderPass) usize {
+        return self.commands.len;
+    }
+
+    pub fn batchCount(self: CanvasRenderPass) usize {
+        return self.batches.len;
+    }
+
+    pub fn pipelineActionCount(self: CanvasRenderPass) usize {
+        return self.pipeline_actions.len;
+    }
+
+    pub fn pathGeometryCount(self: CanvasRenderPass) usize {
+        return self.path_geometries.len;
+    }
+
+    pub fn pathGeometryActionCount(self: CanvasRenderPass) usize {
+        return self.path_geometry_actions.len;
+    }
+
+    pub fn pathGeometryVertexCount(self: CanvasRenderPass) usize {
+        var count: usize = 0;
+        for (self.path_geometries) |geometry_plan| count += geometry_plan.vertex_count;
+        return count;
+    }
+
+    pub fn pathGeometryIndexCount(self: CanvasRenderPass) usize {
+        var count: usize = 0;
+        for (self.path_geometries) |geometry_plan| count += geometry_plan.index_count;
+        return count;
+    }
+
+    pub fn imageCount(self: CanvasRenderPass) usize {
+        return self.images.len;
+    }
+
+    pub fn imageActionCount(self: CanvasRenderPass) usize {
+        return self.image_actions.len;
+    }
+
+    pub fn layerCount(self: CanvasRenderPass) usize {
+        return self.layers.len;
+    }
+
+    pub fn layerActionCount(self: CanvasRenderPass) usize {
+        return self.layer_actions.len;
+    }
+
+    pub fn encoderCommandCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        var count: usize = 2 + self.encoderCacheActionCount() + self.encoderBindPipelineCount() + self.encoderDrawBatchCount();
+        if (self.scissorBounds() != null) count += 1;
+        return count;
+    }
+
+    pub fn encoderCacheActionCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        return self.pipeline_actions.len +
+            self.path_geometry_actions.len +
+            self.image_actions.len +
+            self.layer_actions.len +
+            self.resource_actions.len +
+            self.visual_effect_actions.len +
+            self.glyph_atlas_actions.len +
+            self.text_layout_actions.len;
+    }
+
+    pub fn encoderBindPipelineCount(self: CanvasRenderPass) usize {
+        if (!self.requiresRender()) return 0;
+        var count: usize = 0;
+        var bound_pipeline: ?RenderPipelineKind = null;
+        for (self.batches) |batch| {
+            if (bound_pipeline == null or bound_pipeline.? != batch.pipeline) {
+                count += 1;
+                bound_pipeline = batch.pipeline;
+            }
+        }
+        return count;
+    }
+
+    pub fn encoderDrawBatchCount(self: CanvasRenderPass) usize {
+        return if (self.requiresRender()) self.batches.len else 0;
+    }
+
+    pub fn resourceCount(self: CanvasRenderPass) usize {
+        return self.resources.len;
+    }
+
+    pub fn resourceActionCount(self: CanvasRenderPass) usize {
+        return self.resource_actions.len;
+    }
+
+    pub fn visualEffectCount(self: CanvasRenderPass) usize {
+        return self.visual_effects.len;
+    }
+
+    pub fn visualEffectActionCount(self: CanvasRenderPass) usize {
+        return self.visual_effect_actions.len;
+    }
+
+    pub fn glyphAtlasEntryCount(self: CanvasRenderPass) usize {
+        return self.glyph_atlas_entries.len;
+    }
+
+    pub fn glyphAtlasActionCount(self: CanvasRenderPass) usize {
+        return self.glyph_atlas_actions.len;
+    }
+
+    pub fn textLayoutCount(self: CanvasRenderPass) usize {
+        return self.text_layouts.len;
+    }
+
+    pub fn textLayoutLineCount(self: CanvasRenderPass) usize {
+        var count: usize = 0;
+        for (self.text_layouts) |plan| count += plan.lineCount();
+        return count;
+    }
+
+    pub fn textLayoutActionCount(self: CanvasRenderPass) usize {
+        return self.text_layout_actions.len;
+    }
+
+    pub fn writeJson(self: CanvasRenderPass, writer: anytype) !void {
+        try serialization.writeCanvasRenderPassJson(self, writer);
+    }
+
+    pub fn encoderPlan(self: CanvasRenderPass, output: []RenderEncoderCommand) Error!RenderEncoderPlan {
+        var planner = RenderEncoderPlanner.init(output);
+        return planner.build(self);
+    }
+
+    pub fn gpuPacket(self: CanvasRenderPass, output: []CanvasGpuCommand) Error!CanvasGpuPacket {
+        var planner = CanvasGpuPacketPlanner.init(output);
+        return planner.build(self);
+    }
+
+    pub fn gpuPacketSummary(self: CanvasRenderPass) CanvasGpuPacketSummary {
+        if (!self.requiresRender()) return .{};
+        var summary = CanvasGpuPacketSummary{
+            .load_action = self.loadAction(),
+            .cache_action_count = self.encoderCacheActionCount(),
+        };
+        const scissor_bounds = self.scissorBounds();
+        for (self.commands, 0..) |command, index| {
+            if (scissor_bounds) |scissor| {
+                if (!renderCommandIntersectsDirtyBounds(command, scissor)) continue;
+            }
+            const gpu_command = canvasGpuCommandFromRenderCommand(command, index);
+            summary.command_count += 1;
+            if (gpu_command.usesCachedResource()) summary.cached_resource_command_count += 1;
+            if (!gpu_command.supported()) summary.unsupported_command_count += 1;
+        }
+        return summary;
+    }
+};
 
 pub const CanvasFrameOptions = struct {
     frame_index: u64 = 0,

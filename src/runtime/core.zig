@@ -3,6 +3,7 @@ const geometry = @import("geometry");
 const trace = @import("trace");
 const json = @import("json");
 const validation = @import("validation.zig");
+const runtime_api = @import("api.zig");
 const bridge_payload = @import("bridge_payload.zig");
 const bridge_responses = @import("bridge_responses.zig");
 const runtime_async_bridge = @import("async_bridge.zig");
@@ -22,7 +23,6 @@ const extensions = @import("../extensions/root.zig");
 const app_manifest = @import("app_manifest");
 const platform = @import("../platform/root.zig");
 const security = @import("../security/root.zig");
-const window_state = @import("../window_state/root.zig");
 
 const max_async_bridge_responses = runtime_async_bridge.max_async_bridge_responses;
 const max_command_id_bytes = validation.max_command_id_bytes;
@@ -219,196 +219,30 @@ pub const max_canvas_widget_semantics_per_view = canvas_limits.max_canvas_widget
 pub const max_canvas_widget_text_bytes_per_view = canvas_limits.max_canvas_widget_text_bytes_per_view;
 const max_canvas_widget_invalidations_per_view = canvas_limits.max_canvas_widget_invalidations_per_view;
 
-pub const LifecycleEvent = enum {
-    start,
-    activate,
-    deactivate,
-    frame,
-    stop,
-};
-
-pub const CommandEvent = struct {
-    name: []const u8,
-    source: CommandSource = .runtime,
-    window_id: platform.WindowId = 0,
-    view_label: []const u8 = "",
-    tray_item_id: platform.TrayItemId = 0,
-};
-
-pub const Command = app_manifest.Command;
-
-pub const CommandSource = enum {
-    runtime,
-    menu,
-    shortcut,
-    toolbar,
-    tray,
-    native_view,
-    bridge,
-};
-
-pub const ShortcutEvent = platform.ShortcutEvent;
-pub const Appearance = platform.Appearance;
-pub const GpuFrame = platform.GpuFrame;
-pub const GpuSurfaceFrameEvent = platform.GpuSurfaceFrameEvent;
-pub const GpuSurfaceResizeEvent = platform.GpuSurfaceResizeEvent;
-pub const GpuSurfaceInputEvent = platform.GpuSurfaceInputEvent;
-
-pub const CanvasWidgetPointerEvent = struct {
-    window_id: platform.WindowId = 1,
-    view_label: []const u8,
-    pointer: canvas.WidgetPointerEvent,
-    target: ?canvas.WidgetHit = null,
-    route: []const canvas.WidgetEventRouteEntry = &.{},
-};
-
-pub const CanvasWidgetKeyboardEvent = struct {
-    window_id: platform.WindowId = 1,
-    view_label: []const u8,
-    keyboard: canvas.WidgetKeyboardEvent,
-    target: ?canvas.WidgetFocusTarget = null,
-    route: []const canvas.WidgetEventRouteEntry = &.{},
-};
-
-pub const CanvasWidgetDisplayListChrome = runtime_view.CanvasWidgetDisplayListChrome;
-
-pub const CanvasPresentationMode = enum {
-    skipped,
-    gpu_packet,
-    pixels,
-};
-
-pub const CanvasPresentationResult = struct {
-    frame: canvas.CanvasFrame,
-    mode: CanvasPresentationMode = .skipped,
-    packet_command_count: usize = 0,
-    packet_cache_action_count: usize = 0,
-    packet_cached_resource_command_count: usize = 0,
-    packet_unsupported_command_count: usize = 0,
-    packet_representable: bool = true,
-};
-
-pub const CanvasWidgetAccessibilityActionKind = widget_bridge.CanvasWidgetAccessibilityActionKind;
-pub const CanvasWidgetAccessibilityAction = widget_bridge.CanvasWidgetAccessibilityAction;
-
-pub const CanvasWidgetFileDropEvent = struct {
-    window_id: platform.WindowId = 1,
-    view_label: []const u8,
-    drop: canvas.WidgetFileDropEvent,
-    target: ?canvas.WidgetHit = null,
-    route: []const canvas.WidgetEventRouteEntry = &.{},
-};
-
-pub const CanvasWidgetDragEvent = struct {
-    window_id: platform.WindowId = 1,
-    view_label: []const u8,
-    drag: canvas.WidgetDragEvent,
-    source: ?canvas.WidgetHit = null,
-    route: []const canvas.WidgetEventRouteEntry = &.{},
-};
-
-pub const InvalidationReason = enum {
-    startup,
-    surface_resize,
-    command,
-    state,
-};
-
-pub const FrameDiagnostics = struct {
-    frame_index: u64 = 0,
-    command_count: usize = 0,
-    dirty_region_count: usize = 0,
-    resource_upload_count: usize = 0,
-    duration_ns: u64 = 0,
-};
-
-pub const Event = union(enum) {
-    lifecycle: LifecycleEvent,
-    appearance_changed: Appearance,
-    command: CommandEvent,
-    shortcut: ShortcutEvent,
-    files_dropped: platform.FileDropEvent,
-    gpu_surface_frame: GpuSurfaceFrameEvent,
-    gpu_surface_resized: GpuSurfaceResizeEvent,
-    gpu_surface_input: GpuSurfaceInputEvent,
-    canvas_widget_pointer: CanvasWidgetPointerEvent,
-    canvas_widget_keyboard: CanvasWidgetKeyboardEvent,
-    canvas_widget_file_drop: CanvasWidgetFileDropEvent,
-    canvas_widget_drag: CanvasWidgetDragEvent,
-
-    pub fn name(self: Event) []const u8 {
-        return switch (self) {
-            .lifecycle => |event_value| @tagName(event_value),
-            .appearance_changed => "appearance_changed",
-            .command => |event_value| event_value.name,
-            .shortcut => "shortcut",
-            .files_dropped => "files_dropped",
-            .gpu_surface_frame => "gpu_surface_frame",
-            .gpu_surface_resized => "gpu_surface_resized",
-            .gpu_surface_input => "gpu_surface_input",
-            .canvas_widget_pointer => "canvas_widget_pointer",
-            .canvas_widget_keyboard => "canvas_widget_keyboard",
-            .canvas_widget_file_drop => "canvas_widget_file_drop",
-            .canvas_widget_drag => "canvas_widget_drag",
-        };
-    }
-};
-
-const StartFn = *const fn (context: *anyopaque, runtime: *Runtime) anyerror!void;
-const EventFn = *const fn (context: *anyopaque, runtime: *Runtime, event: Event) anyerror!void;
-const SourceFn = *const fn (context: *anyopaque) anyerror!platform.WebViewSource;
-const SceneFn = *const fn (context: *anyopaque) anyerror!app_manifest.ShellConfig;
-const StopFn = *const fn (context: *anyopaque, runtime: *Runtime) anyerror!void;
-
-pub const App = struct {
-    context: *anyopaque,
-    name: []const u8,
-    source: platform.WebViewSource = platform.WebViewSource.html(""),
-    source_fn: ?SourceFn = null,
-    scene_fn: ?SceneFn = null,
-    start_fn: ?StartFn = null,
-    event_fn: ?EventFn = null,
-    stop_fn: ?StopFn = null,
-
-    pub fn start(self: App, runtime: *Runtime) anyerror!void {
-        if (self.start_fn) |start_fn| try start_fn(self.context, runtime);
-    }
-
-    pub fn event(self: App, runtime: *Runtime, event_value: Event) anyerror!void {
-        if (self.event_fn) |event_fn| try event_fn(self.context, runtime, event_value);
-    }
-
-    pub fn webViewSource(self: App) anyerror!platform.WebViewSource {
-        if (self.source_fn) |source_fn| return source_fn(self.context);
-        return self.source;
-    }
-
-    pub fn scene(self: App) anyerror!?app_manifest.ShellConfig {
-        if (self.scene_fn) |scene_fn| return try scene_fn(self.context);
-        return null;
-    }
-
-    pub fn stop(self: App, runtime: *Runtime) anyerror!void {
-        if (self.stop_fn) |stop_fn| try stop_fn(self.context, runtime);
-    }
-};
-
-pub const Options = struct {
-    platform: platform.Platform,
-    trace_sink: ?trace.Sink = null,
-    log_path: ?[]const u8 = null,
-    extensions: ?extensions.ModuleRegistry = null,
-    bridge: ?bridge.Dispatcher = null,
-    builtin_bridge: bridge.Policy = .{},
-    security: security.Policy = .{},
-    commands: []const Command = &.{},
-    menus: []const platform.Menu = &.{},
-    shortcuts: []const platform.Shortcut = &.{},
-    automation: ?automation.Server = null,
-    window_state_store: ?window_state.Store = null,
-    js_window_api: bool = false,
-    gpu_surface_frame_diagnostics: bool = true,
-};
+pub const LifecycleEvent = runtime_api.LifecycleEvent;
+pub const CommandEvent = runtime_api.CommandEvent;
+pub const Command = runtime_api.Command;
+pub const CommandSource = runtime_api.CommandSource;
+pub const ShortcutEvent = runtime_api.ShortcutEvent;
+pub const Appearance = runtime_api.Appearance;
+pub const GpuFrame = runtime_api.GpuFrame;
+pub const GpuSurfaceFrameEvent = runtime_api.GpuSurfaceFrameEvent;
+pub const GpuSurfaceResizeEvent = runtime_api.GpuSurfaceResizeEvent;
+pub const GpuSurfaceInputEvent = runtime_api.GpuSurfaceInputEvent;
+pub const CanvasWidgetPointerEvent = runtime_api.CanvasWidgetPointerEvent;
+pub const CanvasWidgetKeyboardEvent = runtime_api.CanvasWidgetKeyboardEvent;
+pub const CanvasWidgetDisplayListChrome = runtime_api.CanvasWidgetDisplayListChrome;
+pub const CanvasPresentationMode = runtime_api.CanvasPresentationMode;
+pub const CanvasPresentationResult = runtime_api.CanvasPresentationResult;
+pub const CanvasWidgetAccessibilityActionKind = runtime_api.CanvasWidgetAccessibilityActionKind;
+pub const CanvasWidgetAccessibilityAction = runtime_api.CanvasWidgetAccessibilityAction;
+pub const CanvasWidgetFileDropEvent = runtime_api.CanvasWidgetFileDropEvent;
+pub const CanvasWidgetDragEvent = runtime_api.CanvasWidgetDragEvent;
+pub const InvalidationReason = runtime_api.InvalidationReason;
+pub const FrameDiagnostics = runtime_api.FrameDiagnostics;
+pub const Event = runtime_api.Event;
+pub const App = runtime_api.App(Runtime);
+pub const Options = runtime_api.Options;
 
 pub const Runtime = struct {
     options: Options,

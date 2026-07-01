@@ -131,6 +131,7 @@ pub const CanvasCommand = command_model.CanvasCommand;
 pub const CommandRef = command_model.CommandRef;
 pub const DiffKind = command_model.DiffKind;
 pub const DiffChange = command_model.DiffChange;
+pub const Builder = command_model.Builder;
 
 // Canvas render data and cache plans live in `render.zig`; root keeps the public API stable.
 pub const max_render_state_stack = render_model.max_render_state_stack;
@@ -1044,89 +1045,6 @@ pub const DisplayList = struct {
 
     pub fn framePlan(self: DisplayList, previous: ?DisplayList, options: CanvasFrameOptions, storage: CanvasFrameStorage) Error!CanvasFrame {
         return buildCanvasFrame(previous, self, options, storage);
-    }
-};
-
-pub const Builder = struct {
-    commands: []CanvasCommand,
-    len: usize = 0,
-
-    pub fn init(commands: []CanvasCommand) Builder {
-        return .{ .commands = commands };
-    }
-
-    pub fn reset(self: *Builder) void {
-        self.len = 0;
-    }
-
-    pub fn displayList(self: *const Builder) DisplayList {
-        return .{ .commands = self.commands[0..self.len] };
-    }
-
-    pub fn append(self: *Builder, command: CanvasCommand) Error!void {
-        if (self.len >= self.commands.len) return error.DisplayListFull;
-        self.commands[self.len] = command;
-        self.len += 1;
-    }
-
-    pub fn pushClip(self: *Builder, clip: Clip) Error!void {
-        try self.append(.{ .push_clip = clip });
-    }
-
-    pub fn popClip(self: *Builder) Error!void {
-        try self.append(.pop_clip);
-    }
-
-    pub fn pushOpacity(self: *Builder, opacity: f32) Error!void {
-        try self.append(.{ .push_opacity = opacity });
-    }
-
-    pub fn popOpacity(self: *Builder) Error!void {
-        try self.append(.pop_opacity);
-    }
-
-    pub fn transform(self: *Builder, value: Affine) Error!void {
-        try self.append(.{ .transform = value });
-    }
-
-    pub fn fillRect(self: *Builder, value: FillRect) Error!void {
-        try self.append(.{ .fill_rect = value });
-    }
-
-    pub fn strokeRect(self: *Builder, value: StrokeRect) Error!void {
-        try self.append(.{ .stroke_rect = value });
-    }
-
-    pub fn fillRoundedRect(self: *Builder, value: FillRoundedRect) Error!void {
-        try self.append(.{ .fill_rounded_rect = value });
-    }
-
-    pub fn drawLine(self: *Builder, value: Line) Error!void {
-        try self.append(.{ .draw_line = value });
-    }
-
-    pub fn fillPath(self: *Builder, value: FillPath) Error!void {
-        try self.append(.{ .fill_path = value });
-    }
-
-    pub fn strokePath(self: *Builder, value: StrokePath) Error!void {
-        try self.append(.{ .stroke_path = value });
-    }
-
-    pub fn drawImage(self: *Builder, value: DrawImage) Error!void {
-        try self.append(.{ .draw_image = value });
-    }
-
-    pub fn drawText(self: *Builder, value: DrawText) Error!void {
-        try self.append(.{ .draw_text = value });
-    }
-
-    pub fn shadow(self: *Builder, value: Shadow) Error!void {
-        try self.append(.{ .shadow = value });
-    }
-
-    pub fn blur(self: *Builder, value: Blur) Error!void {
-        try self.append(.{ .blur = value });
     }
 };
 

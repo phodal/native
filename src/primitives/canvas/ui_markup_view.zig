@@ -251,6 +251,25 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     options.global_key = try self.attrKey(scope, node, attribute.value);
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "role")) {
+                    const value = try self.evalAttrExpression(scope, node, attribute.value);
+                    const text = switch (value) {
+                        .string => |text| text,
+                        else => return self.failVoid(node, "role expects a role name"),
+                    };
+                    options.semantics.role = std.meta.stringToEnum(canvas.WidgetRole, text) orelse {
+                        return self.failVoid(node, "unknown role");
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "label")) {
+                    const value = try self.evalAttrExpression(scope, node, attribute.value);
+                    options.semantics.label = switch (value) {
+                        .string => |text| text,
+                        else => return self.failVoid(node, "label expects text"),
+                    };
+                    continue;
+                }
                 if (!try self.applyOptionAttr(scope, node, options, attribute)) {
                     return self.failVoid(node, "unknown attribute for this element");
                 }

@@ -9,9 +9,12 @@ const KanbanUi = main.KanbanUi;
 const Model = main.Model;
 const Msg = main.Msg;
 
+const KanbanMarkup = canvas.MarkupView(Model, main.Msg);
+
 fn buildTree(arena: std.mem.Allocator, model: *const Model) !KanbanUi.Tree {
+    var view = try KanbanMarkup.init(arena, main.board_markup);
     var ui = KanbanUi.init(arena);
-    return ui.finalize(main.view(&ui, model));
+    return ui.finalize(try view.build(&ui, model));
 }
 
 fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) ?canvas.Widget {

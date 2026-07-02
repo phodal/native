@@ -1,0 +1,53 @@
+<!-- The kanban board view. Three explicit column blocks because markup
+     bindings are zero-argument: a per-column card query needs one model
+     function per column (todoCards/doingCards/doneCards). Cards carry a
+     global-key so their widget ids survive moving between columns, and the
+     move button is an <if> over card.movable. -->
+<column gap="12" padding="16">
+  <row gap="8" cross="center">
+    <text grow="1">Kanban</text>
+    <button variant="primary" on-press="add">Add card</button>
+  </row>
+  <row grow="1" gap="12">
+    <column grow="1" gap="8" padding="10" label="Todo">
+      <text>Todo</text>
+      <column gap="8">
+        <for each="todoCards" key="id" as="c">
+          <row global-key="{c.id}" gap="8" padding="8" cross="center" role="listitem" label="{c.title}">
+            <text grow="1">{c.title}</text>
+            <if test="{c.movable}">
+              <button size="sm" on-press="move_right:{c.id}">></button>
+            </if>
+          </row>
+        </for>
+      </column>
+    </column>
+    <column grow="1" gap="8" padding="10" label="Doing">
+      <text>Doing</text>
+      <column gap="8">
+        <for each="doingCards" key="id" as="c">
+          <row global-key="{c.id}" gap="8" padding="8" cross="center" role="listitem" label="{c.title}">
+            <text grow="1">{c.title}</text>
+            <if test="{c.movable}">
+              <button size="sm" on-press="move_right:{c.id}">></button>
+            </if>
+          </row>
+        </for>
+      </column>
+    </column>
+    <column grow="1" gap="8" padding="10" label="Done">
+      <text>Done</text>
+      <column gap="8">
+        <for each="doneCards" key="id" as="c">
+          <row global-key="{c.id}" gap="8" padding="8" cross="center" role="listitem" label="{c.title}">
+            <text grow="1">{c.title}</text>
+            <if test="{c.movable}">
+              <button size="sm" on-press="move_right:{c.id}">></button>
+            </if>
+          </row>
+        </for>
+      </column>
+    </column>
+  </row>
+  <status-bar>{todoCount} todo · {doingCount} doing · {doneCount} done</status-bar>
+</column>

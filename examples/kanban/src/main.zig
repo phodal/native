@@ -1,10 +1,11 @@
 //! kanban: a three-column board (Todo / Doing / Done) written with the
 //! `canvas.Ui` declarative builder on the runtime-owned `UiApp` loop.
 //!
-//! Cards are nested inside per-column flex containers and carry a
-//! `global_key`, which pins their widget ids to the card id independent of
-//! the parent chain — so a card keeps its identity (and its move button
-//! keeps its handler binding) when it migrates between columns.
+//! The board view lives in `board.zml` (embedded, hot-reloaded in dev);
+//! this file is the logic. Cards carry a markup `global-key`, which pins
+//! their widget ids to the card id independent of the parent chain — so a
+//! card keeps its identity (and its move button keeps its handler binding)
+//! when it migrates between columns.
 
 const std = @import("std");
 const runner = @import("runner");
@@ -78,6 +79,10 @@ pub const Card = struct {
     pub fn key(card: *const Card) canvas.UiKey {
         return canvas.uiKey(card.id);
     }
+
+    pub fn movable(card: *const Card) bool {
+        return card.column.next() != null;
+    }
 };
 
 pub const Msg = union(enum) {
@@ -137,6 +142,30 @@ pub const Model = struct {
         return total;
     }
 
+    pub fn todoCards(model: *const Model, arena: std.mem.Allocator) []const Card {
+        return model.columnCards(arena, .todo);
+    }
+
+    pub fn doingCards(model: *const Model, arena: std.mem.Allocator) []const Card {
+        return model.columnCards(arena, .doing);
+    }
+
+    pub fn doneCards(model: *const Model, arena: std.mem.Allocator) []const Card {
+        return model.columnCards(arena, .done);
+    }
+
+    pub fn todoCount(model: *const Model) usize {
+        return model.count(.todo);
+    }
+
+    pub fn doingCount(model: *const Model) usize {
+        return model.count(.doing);
+    }
+
+    pub fn doneCount(model: *const Model) usize {
+        return model.count(.done);
+    }
+
     /// Cards belonging to one column, in model order, copied into the
     /// build arena for the view pass.
     fn columnCards(model: *const Model, arena: std.mem.Allocator, column: Column) []const Card {
@@ -160,49 +189,9 @@ pub fn update(model: *Model, msg: Msg) void {
 }
 
 // ------------------------------------------------------------------- view
-//
-// Columns are plain flex; cards carry a `global_key` so their widget ids
-// (and their move buttons' handler bindings) survive moving between columns.
 
 pub const KanbanUi = canvas.Ui(Msg);
-
-pub fn view(ui: *KanbanUi, model: *const Model) KanbanUi.Node {
-    return ui.column(.{ .gap = 12, .padding = 16 }, .{
-        ui.row(.{ .gap = 8, .cross = .center }, .{
-            ui.text(.{ .grow = 1 }, "Kanban"),
-            ui.button(.{ .variant = .primary, .on_press = .add }, "Add card"),
-        }),
-        ui.row(.{ .grow = 1, .gap = 12 }, ui.eachCtx(model, &column_values, columnKey, columnView)),
-        ui.statusBar(.{}, ui.fmt("{d} todo · {d} doing · {d} done", .{
-            model.count(.todo),
-            model.count(.doing),
-            model.count(.done),
-        })),
-    });
-}
-
-fn columnKey(column: *const Column) canvas.UiKey {
-    return canvas.uiKey(@as(u32, @intFromEnum(column.*)));
-}
-
-fn columnView(ui: *KanbanUi, model: *const Model, column: *const Column) KanbanUi.Node {
-    return ui.column(.{ .grow = 1, .gap = 8, .padding = 10, .semantics = .{ .label = column.title() } }, .{
-        ui.text(.{}, column.title()),
-        ui.column(.{ .gap = 8 }, ui.each(model.columnCards(ui.arena, column.*), Card.key, cardView)),
-    });
-}
-
-fn cardView(ui: *KanbanUi, card: *const Card) KanbanUi.Node {
-    if (card.column.next() != null) {
-        return ui.row(.{ .global_key = canvas.uiKey(card.id), .gap = 8, .padding = 8, .cross = .center, .semantics = .{ .role = .listitem, .label = card.title() } }, .{
-            ui.text(.{ .grow = 1 }, card.title()),
-            ui.button(.{ .size = .sm, .on_press = Msg{ .move_right = card.id } }, ">"),
-        });
-    }
-    return ui.row(.{ .global_key = canvas.uiKey(card.id), .gap = 8, .padding = 8, .cross = .center, .semantics = .{ .role = .listitem, .label = card.title() } }, .{
-        ui.text(.{ .grow = 1 }, card.title()),
-    });
-}
+pub const board_markup = @embedFile("board.zml");
 
 // -------------------------------------------------------------------- app
 
@@ -231,7 +220,7 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
-        .view = view,
+        .markup = .{ .source = board_markup, .watch_path = "src/board.zml", .io = init.io },
     });
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{

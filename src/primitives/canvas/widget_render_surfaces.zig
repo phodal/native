@@ -87,6 +87,7 @@ pub fn emitAlertWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTo
             .line_height = widgetLineHeight(text_size),
             .wrap = .word,
             .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
         },
     });
 }
@@ -151,6 +152,7 @@ pub fn emitCardWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTok
             .line_height = widgetLineHeight(title_size),
             .wrap = .word,
             .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
         },
     });
 }
@@ -213,6 +215,7 @@ pub fn emitModalSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: D
             .line_height = widgetLineHeight(title_size),
             .wrap = .word,
             .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
         },
     });
 }
@@ -277,6 +280,7 @@ pub fn emitAccordionWidgetHeader(builder: *Builder, widget: Widget, tokens: Desi
                 .line_height = widgetLineHeight(text_size),
                 .wrap = .none,
                 .alignment = widget.text_alignment,
+                .measure = tokens.text_measure,
             },
         });
     }

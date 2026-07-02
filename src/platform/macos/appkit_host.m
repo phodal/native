@@ -1089,18 +1089,68 @@ static NSTextAlignment ZeroNativePacketTextAlignment(NSString *align) {
     return NSTextAlignmentNatural;
 }
 
-static NSFont *ZeroNativePacketPreferredFont(NSDictionary *text, CGFloat size) {
-    NSNumber *fontId = [text[@"font"] isKindOfClass:[NSNumber class]] ? text[@"font"] : nil;
-    unsigned long long value = fontId ? fontId.unsignedLongLongValue : 1;
+// Resolves a canvas font id to the NSFont presentation draws with. Both
+// packet text drawing and zero_native_appkit_measure_text go through this
+// single function so measured layout and drawn glyphs share font
+// resolution. Resolved fonts are cached per (font id, size).
+static NSFont *ZeroNativeFontForFontId(unsigned long long value, CGFloat size) {
+    static NSCache<NSString *, NSFont *> *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 256;
+    });
+    NSString *key = [NSString stringWithFormat:@"%llu/%.3f", value, (double)size];
+    NSFont *cached = [cache objectForKey:key];
+    if (cached) return cached;
     NSArray<NSString *> *candidates = value == 2
         ? @[ @"Geist Mono", @"GeistMono-Regular", @"Geist Mono Regular" ]
         : @[ @"Geist", @"Geist-Regular", @"Geist Sans", @"Geist Sans Regular" ];
+    NSFont *font = nil;
     for (NSString *name in candidates) {
-        NSFont *font = [NSFont fontWithName:name size:size];
-        if (font) return font;
+        font = [NSFont fontWithName:name size:size];
+        if (font) break;
     }
-    if (value == 2) return [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
-    return [NSFont systemFontOfSize:size];
+    if (!font) {
+        font = value == 2 ? [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular]
+                          : [NSFont systemFontOfSize:size];
+    }
+    if (font) [cache setObject:font forKey:key];
+    return font;
+}
+
+static NSFont *ZeroNativePacketPreferredFont(NSDictionary *text, CGFloat size) {
+    NSNumber *fontId = [text[@"font"] isKindOfClass:[NSNumber class]] ? text[@"font"] : nil;
+    unsigned long long value = fontId ? fontId.unsignedLongLongValue : 1;
+    return ZeroNativeFontForFontId(value, size);
+}
+
+// Typographic width of a single-line run, measured with the same font
+// resolution and string-attribute metrics ([NSString sizeWithAttributes:])
+// the packet renderer draws with. Returns a negative value when the bytes
+// are not valid UTF-8 so the caller can fall back to its estimator.
+// Shaped widths are memoized host-side.
+double zero_native_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len) {
+    if (!text || text_len == 0) return 0;
+    CGFloat clamped = MAX(1, size);
+    @autoreleasepool {
+        NSString *value = [[NSString alloc] initWithBytes:text length:text_len encoding:NSUTF8StringEncoding];
+        if (!value) return -1;
+        static NSCache<NSString *, NSNumber *> *widthCache = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            widthCache = [[NSCache alloc] init];
+            widthCache.countLimit = 16384;
+        });
+        NSString *key = [NSString stringWithFormat:@"%llu/%.3f/%@", (unsigned long long)font_id, (double)clamped, value];
+        NSNumber *cached = [widthCache objectForKey:key];
+        if (cached) return cached.doubleValue;
+        NSFont *font = ZeroNativeFontForFontId(font_id, clamped);
+        if (!font) return -1;
+        double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
+        [widthCache setObject:@(width) forKey:key];
+        return width;
+    }
 }
 
 static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {

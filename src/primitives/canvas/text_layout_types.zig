@@ -2,6 +2,7 @@ const geometry = @import("geometry");
 const canvas = @import("root.zig");
 const drawing_model = @import("drawing.zig");
 const text_atlas = @import("text_atlas.zig");
+const text_metrics = @import("text_metrics.zig");
 
 const ObjectId = canvas.ObjectId;
 const FontId = canvas.FontId;
@@ -36,6 +37,11 @@ pub const TextLayoutOptions = struct {
     line_height: f32 = 0,
     wrap: TextWrap = .word,
     alignment: TextAlign = .start,
+    /// Optional injected measurement used for line breaking, caret, and
+    /// hit-test geometry. Null falls back to the deterministic estimator.
+    /// Deliberately excluded from equality, hashing, and serialization:
+    /// it is process-local layout context, not drawn content.
+    measure: ?*const text_metrics.TextMeasureProvider = null,
 };
 
 pub const TextLine = struct {

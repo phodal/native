@@ -1389,6 +1389,12 @@ pub const PlatformServices = struct {
     present_gpu_surface_pixels_fn: ?*const fn (context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void = null,
     present_gpu_surface_packet_fn: ?*const fn (context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void = null,
     update_widget_accessibility_fn: ?*const fn (context: ?*anyopaque, snapshot: WidgetAccessibilitySnapshot) anyerror!void = null,
+    /// Single-line text measurement matching the fonts the platform draws
+    /// with: returns the typographic width of `text` at `size` for
+    /// `font_id` (the canvas font id namespace). Null on platforms without
+    /// real font metrics (the null platform), which keeps layout on the
+    /// deterministic estimator.
+    measure_text_fn: ?*const fn (context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 = null,
 
     pub fn readClipboard(self: PlatformServices, buffer: []u8) anyerror![]const u8 {
         const read_fn = self.read_clipboard_fn orelse return error.UnsupportedService;

@@ -1,5 +1,6 @@
 const std = @import("std");
 const canvas = @import("root.zig");
+const text_metrics = @import("text_metrics.zig");
 
 const ObjectId = canvas.ObjectId;
 const FontId = canvas.FontId;
@@ -855,6 +856,12 @@ pub const DesignTokens = struct {
     pixel_snap: PixelSnapTokens = .{},
     controls: ControlTokens = .{},
     density: Density = .regular,
+    /// Optional platform text measurement. Null (the default) keeps every
+    /// layout computation on the deterministic estimator; runtimes install
+    /// a provider so widget layout agrees with the fonts the platform
+    /// actually draws. Not themed and not part of overrides: the runtime
+    /// stamps it after theme resolution.
+    text_measure: ?*const text_metrics.TextMeasureProvider = null,
 
     pub fn theme(options: ThemeOptions) DesignTokens {
         return .{

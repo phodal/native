@@ -2067,3 +2067,45 @@ test "widget focus target lookup validates focusable ids" {
     try std.testing.expectEqual(@as(ObjectId, 3), target.id);
     try std.testing.expectEqual(WidgetKind.button, target.kind);
 }
+
+fn doubledTextMeasure(context: ?*anyopaque, font_id: FontId, size: f32, text: []const u8) f32 {
+    _ = context;
+    _ = font_id;
+    return size * 2 * @as(f32, @floatFromInt(text.len));
+}
+
+const doubled_text_measure = support.TextMeasureProvider{ .measure_fn = doubledTextMeasure };
+
+test "intrinsic text sizing defaults to the estimator and honors an injected provider" {
+    const widget = Widget{ .id = 1, .kind = .text, .text = "Refresh dashboard" };
+    const default_tokens = DesignTokens{};
+    const default_size = intrinsicWidgetSize(widget, default_tokens);
+    try std.testing.expectEqual(
+        estimateTextWidthForFont(default_tokens.typography.font_id, widget.text, default_tokens.typography.body_size),
+        default_size.width,
+    );
+
+    const measured_tokens = DesignTokens{ .text_measure = &doubled_text_measure };
+    const measured_size = intrinsicWidgetSize(widget, measured_tokens);
+    try std.testing.expectEqual(
+        default_tokens.typography.body_size * 2 * @as(f32, @floatFromInt(widget.text.len)),
+        measured_size.width,
+    );
+    try std.testing.expect(measured_size.width != default_size.width);
+    try std.testing.expectEqual(default_size.height, measured_size.height);
+}
+
+test "widget tree layout widths follow the injected text measure provider" {
+    const button = Widget{ .id = 2, .kind = .button, .text = "Run" };
+    const row_children = [_]Widget{button};
+    const row = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var default_nodes: [2]WidgetLayoutNode = undefined;
+    const default_layout = try layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 64), .{}, &default_nodes);
+
+    var measured_nodes: [2]WidgetLayoutNode = undefined;
+    const measured_tokens = DesignTokens{ .text_measure = &doubled_text_measure };
+    const measured_layout = try layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 64), measured_tokens, &measured_nodes);
+
+    try std.testing.expect(measured_layout.findById(2).?.frame.width > default_layout.findById(2).?.frame.width);
+}

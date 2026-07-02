@@ -17,7 +17,13 @@ const WidgetLayoutStyle = widget_model.WidgetLayoutStyle;
 const WidgetLayoutNode = event_model.WidgetLayoutNode;
 const DesignTokens = token_model.DesignTokens;
 const virtualListRange = token_model.virtualListRange;
-const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
+const measureTextWidthForFont = text_model.measureTextWidthForFont;
+
+/// Text width for intrinsic sizing: the injected provider on `tokens` when
+/// present, the deterministic estimator otherwise.
+fn measuredTextWidth(tokens: DesignTokens, text: []const u8, size: f32) f32 {
+    return measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, text, size);
+}
 const gridColumnCount = widget_tree.gridColumnCount;
 const gridRowCount = widget_tree.gridRowCount;
 const saturatingU32 = widget_tree.saturatingU32;
@@ -542,7 +548,7 @@ fn paddedIntrinsicSize(widget: Widget, content: geometry.SizeF) geometry.SizeF {
 
 fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32) geometry.SizeF {
     return geometry.SizeF.init(
-        estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size),
+        measuredTextWidth(tokens, widget.text, text_size),
         widgetLineHeight(text_size),
     );
 }
@@ -599,7 +605,7 @@ fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometr
 fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const height = widgetControlHeight(widget, tokens);
     if (widget.size == .icon) return geometry.SizeF.init(height, height);
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetButtonTextSize(widget, tokens));
+    const text_width = measuredTextWidth(tokens, widget.text, widgetButtonTextSize(widget, tokens));
     const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetButtonInset(widget, tokens) * 2);
     return geometry.SizeF.init(width, height);
 }
@@ -610,7 +616,7 @@ fn intrinsicAvatarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
 }
 
 fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetLabelTextSize(widget, tokens));
+    const text_width = measuredTextWidth(tokens, widget.text, widgetLabelTextSize(widget, tokens));
     const inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
     return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 22));
 }
@@ -621,7 +627,7 @@ fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.Siz
 }
 
 fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, widgetLabelTextSize(widget, tokens));
+    const text_width = measuredTextWidth(tokens, widget.text, widgetLabelTextSize(widget, tokens));
     const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetControlInset(widget, tokens, tokens.spacing.md) * 2);
     return geometry.SizeF.init(width, widgetControlHeight(widget, tokens));
 }
@@ -629,14 +635,14 @@ fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.
 fn intrinsicRowTextWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const text_size = widgetBodyTextSize(widget, tokens);
     const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-    const text_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, text_size);
+    const text_width = measuredTextWidth(tokens, widget.text, text_size);
     return geometry.SizeF.init(text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
 }
 
 fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const box_size = widgetSizedDensityValue(widget, tokens, 18);
     const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
+    const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
     return geometry.SizeF.init(box_size + gap + label_width, @max(box_size, widgetLineHeight(label_size)));
 }
@@ -644,7 +650,7 @@ fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Si
 fn intrinsicRadioWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const circle_size = widgetSizedDensityValue(widget, tokens, 18);
     const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
+    const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
     return geometry.SizeF.init(circle_size + gap + label_width, @max(circle_size, widgetLineHeight(label_size)));
 }
@@ -653,7 +659,7 @@ fn intrinsicToggleWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
     const track_width = widgetSizedDensityValue(widget, tokens, 42);
     const track_height = widgetSizedDensityValue(widget, tokens, 24);
     const label_size = widgetLabelTextSize(widget, tokens);
-    const label_width = estimateTextWidthForFont(tokens.typography.font_id, widget.text, label_size);
+    const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
     return geometry.SizeF.init(track_width + gap + label_width, @max(track_height, widgetLineHeight(label_size)));
 }

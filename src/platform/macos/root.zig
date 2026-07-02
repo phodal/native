@@ -131,6 +131,7 @@ extern fn zero_native_appkit_set_webview_zoom(host: *AppKitHost, window_id: u64,
 extern fn zero_native_appkit_set_webview_layer(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, layer: c_int) c_int;
 extern fn zero_native_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn zero_native_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
+extern fn zero_native_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
 extern fn zero_native_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
 extern fn zero_native_appkit_clipboard_read_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
 extern fn zero_native_appkit_clipboard_write_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, bytes: [*]const u8, bytes_len: usize) c_int;
@@ -355,6 +356,7 @@ pub const MacPlatform = struct {
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
+                .measure_text_fn = measureText,
             },
             .app_info = self.app_info,
         };
@@ -568,6 +570,14 @@ fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
     const len = zero_native_appkit_clipboard_read(self.host, buffer.ptr, buffer.len);
     if (len > buffer.len) return error.NoSpaceLeft;
     return buffer[0..len];
+}
+
+/// CoreText-backed text measurement matching `ZeroNativePacketDrawText`'s
+/// font resolution. Negative host results (invalid UTF-8) are surfaced as
+/// negative so the canvas provider falls back to its estimator.
+fn measureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
+    _ = context;
+    return @floatCast(zero_native_appkit_measure_text(font_id, size, text.ptr, text.len));
 }
 
 fn writeClipboard(context: ?*anyopaque, text: []const u8) anyerror!void {

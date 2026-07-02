@@ -52,7 +52,7 @@ pub fn textOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, tokens: 
     if (widget.state.disabled) return null;
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
-    const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const layout_options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, tokens.colors.text, layout_options);
     var lines: [max_widget_text_layout_lines]TextLine = undefined;
@@ -63,13 +63,14 @@ pub fn widgetTextInputSize(widget: Widget, tokens: DesignTokens) f32 {
     return widget_metrics.widgetBodyTextSize(widget, tokens);
 }
 
-pub fn widgetTextInputLayoutOptions(widget: Widget, text_size: f32, inset: f32) TextLayoutOptions {
+pub fn widgetTextInputLayoutOptions(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32) TextLayoutOptions {
     const line_height = widgetTextInputLineHeight(text_size);
     const trailing_inset = widgetTextInputTrailingInset(widget, text_size, inset);
     return .{
         .max_width = @max(1, widget.frame.width - inset - trailing_inset),
         .line_height = line_height,
         .wrap = widgetTextInputWrap(widget, line_height),
+        .measure = tokens.text_measure,
     };
 }
 
@@ -120,7 +121,7 @@ pub fn textInputViewportForWidget(widget: Widget, tokens: DesignTokens) ?geometr
     if (widget.state.disabled) return null;
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
-    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     return widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
 }
 
@@ -128,7 +129,7 @@ pub fn textInputContentExtentForWidget(widget: Widget, tokens: DesignTokens) f32
     if (!widget_access.widgetTextInputKind(widget.kind)) return 0;
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
-    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     const line_height = widgetTextInputLineHeight(text_size);
     return @as(f32, @floatFromInt(widgetTextInputLineCount(widget, tokens.typography.font_id, text_size, options))) * line_height;
 }
@@ -137,7 +138,7 @@ pub fn textInputMaxScrollOffsetForWidget(widget: Widget, tokens: DesignTokens) f
     if (!widget_access.widgetTextInputKind(widget.kind)) return 0;
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
-    const options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     return widgetTextInputMaxScrollOffset(widget, tokens, text_size, text_inset, options);
 }
 
@@ -216,7 +217,7 @@ pub fn textGeometryForWidget(widget: Widget, tokens: DesignTokens) WidgetTextGeo
 
     const text_size = widgetTextInputSize(widget, tokens);
     const text_inset = widgetTextInputInset(widget, tokens);
-    const layout_options = widgetTextInputLayoutOptions(widget, text_size, text_inset);
+    const layout_options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, tokens.colors.text, layout_options);
 

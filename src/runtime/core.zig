@@ -199,6 +199,11 @@ pub const Runtime = struct {
     canvas_frame_changes: [max_canvas_diff_changes_per_view]canvas.DiffChange = undefined,
     canvas_frame_render_override_samples: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
     canvas_frame_render_override_combined: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
+    /// Platform text measurement captured at init and owned by the
+    /// runtime so pointers stamped into design tokens stay valid for the
+    /// runtime's lifetime. Null when the platform has no `measure_text_fn`
+    /// (the null platform), keeping layout on the deterministic estimator.
+    text_measure_provider: ?canvas.TextMeasureProvider = null,
 
     pub fn init(options: Options) Runtime {
         return .{
@@ -208,6 +213,10 @@ pub const Runtime = struct {
             .windows = undefined,
             .views = undefined,
             .shell_layouts = undefined,
+            .text_measure_provider = if (options.platform.services.measure_text_fn) |measure_fn|
+                .{ .context = options.platform.services.context, .measure_fn = measure_fn }
+            else
+                null,
         };
     }
 
@@ -370,6 +379,26 @@ pub const Runtime = struct {
 
     pub fn cancelTimer(self: *Runtime, id: u64) anyerror!void {
         return self.options.platform.services.cancelTimer(id);
+    }
+
+    /// The platform's text measurement wrapped as a canvas provider, or
+    /// null when the platform has none (null platform, tests): layout then
+    /// stays on the deterministic estimator. The provider value lives on
+    /// the runtime (captured at init), so the returned pointer is stable
+    /// for the runtime's lifetime and tokens stamped with it compare equal
+    /// frame to frame.
+    pub fn textMeasureProvider(self: *const Runtime) ?*const canvas.TextMeasureProvider {
+        if (self.text_measure_provider) |*provider| return provider;
+        return null;
+    }
+
+    /// `tokens` with the platform text measurement stamped in. Runtimes and
+    /// apps should pass tokens through this before layout so measured text
+    /// agrees with the fonts presentation draws.
+    pub fn tokensWithTextMeasure(self: *const Runtime, tokens: canvas.DesignTokens) canvas.DesignTokens {
+        var next = tokens;
+        next.text_measure = self.textMeasureProvider();
+        return next;
     }
 
     pub fn listCommands(self: *const Runtime, output: []Command) []const Command {

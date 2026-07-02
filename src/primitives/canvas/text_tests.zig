@@ -1518,3 +1518,51 @@ test "display list serializes glyph text clusters" {
         writer.buffered(),
     );
 }
+
+fn wideTextMeasureForTests(context: ?*anyopaque, font_id: FontId, size: f32, text: []const u8) f32 {
+    _ = context;
+    _ = font_id;
+    var scalars: f32 = 0;
+    var index: usize = 0;
+    while (index < text.len) : (index += 1) {
+        if (!text_model.isUtf8ContinuationByte(text[index])) scalars += 1;
+    }
+    return size * 2 * scalars;
+}
+
+const wide_text_measure = support.TextMeasureProvider{ .measure_fn = wideTextMeasureForTests };
+
+test "injected measure provider drives line breaking and caret geometry" {
+    const estimator_text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "ab cd",
+        .text_layout = .{ .max_width = 50, .line_height = 12, .wrap = .word },
+    };
+    var estimator_lines: [4]TextLine = undefined;
+    const estimator_layout = try layoutTextRun(estimator_text, estimator_text.text_layout.?, &estimator_lines);
+    try std.testing.expectEqual(@as(usize, 1), estimator_layout.lineCount());
+
+    var measured_text = estimator_text;
+    measured_text.text_layout = .{
+        .max_width = 50,
+        .line_height = 12,
+        .wrap = .word,
+        .measure = &wide_text_measure,
+    };
+    var measured_lines: [4]TextLine = undefined;
+    const measured_layout = try layoutTextRun(measured_text, measured_text.text_layout.?, &measured_lines);
+    try std.testing.expectEqual(@as(usize, 2), measured_layout.lineCount());
+
+    // Caret after "ab" on the first line: 2 scalars x (2 x size) wide.
+    const measured_caret = textLineCaretX(measured_text, measured_layout.lines[0], 2);
+    try std.testing.expectEqual(@as(f32, 40), measured_caret);
+    const estimator_caret = textLineCaretX(estimator_text, estimator_layout.lines[0], 2);
+    try std.testing.expect(estimator_caret != measured_caret);
+
+    // Hit testing agrees with the provider-measured advances.
+    const hit = textOffsetForLayoutPoint(measured_text, measured_layout, geometry.PointF.init(39, 5)).?;
+    try std.testing.expectEqual(@as(usize, 2), hit);
+}

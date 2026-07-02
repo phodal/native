@@ -197,7 +197,7 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         /// commands + chrome suffix) here.
         pub fn rebuild(self: *Self, runtime: *Runtime, window_id: platform.WindowId) anyerror!void {
             self.syncModel(runtime, window_id);
-            const tokens = self.effectiveTokens();
+            const tokens = runtime.tokensWithTextMeasure(self.effectiveTokens());
             const next_index = self.arena_index ^ 1;
             _ = self.arenas[next_index].reset(.retain_capacity);
             var ui = Ui.init(self.arenas[next_index].allocator());
@@ -390,7 +390,7 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
                 self.pixel_snap_scale = scale;
                 try self.rebuild(runtime, frame_event.window_id);
                 if (self.options.chrome == null) {
-                    _ = try runtime.emitCanvasWidgetDisplayList(frame_event.window_id, self.options.canvas_label, self.effectiveTokens());
+                    _ = try runtime.emitCanvasWidgetDisplayList(frame_event.window_id, self.options.canvas_label, runtime.tokensWithTextMeasure(self.effectiveTokens()));
                 }
                 self.installed = true;
                 self.startMarkupWatch(runtime);

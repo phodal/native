@@ -8,6 +8,62 @@ const default_sans_font_id = canvas.default_sans_font_id;
 const default_mono_font_id = canvas.default_mono_font_id;
 const utf8SequenceLength = text_interaction.utf8SequenceLength;
 
+/// Injected text measurement. The engine stays pure: platforms provide a
+/// context pointer plus a function that returns the width of a single-line
+/// run of `text` at `size` for `font_id`, shaped with the same font
+/// resolution the presentation layer draws with. When no provider is
+/// installed every consumer falls back to the deterministic estimator
+/// below, keeping the reference renderer and golden tests bit-identical.
+pub const TextMeasureProvider = struct {
+    context: ?*anyopaque = null,
+    measure_fn: *const fn (context: ?*anyopaque, font_id: FontId, size: f32, text: []const u8) f32,
+
+    pub fn measureWidth(self: TextMeasureProvider, font_id: FontId, size: f32, text: []const u8) f32 {
+        if (text.len == 0) return 0;
+        const width = self.measure_fn(self.context, font_id, size, text);
+        if (!(width >= 0) or !isFiniteF32(width)) return estimateTextWidthForFont(font_id, text, size);
+        return width;
+    }
+};
+
+/// Width of a text run: the provider when installed, the deterministic
+/// estimator otherwise. This is the single measurement seam every layout
+/// consumer (intrinsic widget sizing, line breaking, caret and selection
+/// geometry) goes through. The provider is carried as a pointer so the
+/// seam costs one word inside retained command storage; the pointee must
+/// outlive layout state that carries it (runtimes own one for their whole
+/// lifetime).
+pub fn measureTextWidthForFont(provider: ?*const TextMeasureProvider, font_id: FontId, text: []const u8, size: f32) f32 {
+    if (provider) |value| return value.measureWidth(font_id, size, text);
+    return estimateTextWidthForFont(font_id, text, size);
+}
+
+/// Advance of the cluster `text[cluster_start..cluster_end]` within a line
+/// starting at `line_start`. With a provider the advance is the difference
+/// of two prefix widths so kerning against the preceding text is honored;
+/// without one it is the estimator's per-cluster advance (bit-identical to
+/// the historical behavior).
+pub fn measureTextAdvance(
+    provider: ?*const TextMeasureProvider,
+    font_id: FontId,
+    size: f32,
+    text: []const u8,
+    line_start: usize,
+    cluster_start: usize,
+    cluster_end: usize,
+) f32 {
+    if (provider) |value| {
+        const with_cluster = value.measureWidth(font_id, size, text[line_start..cluster_end]);
+        const without_cluster = value.measureWidth(font_id, size, text[line_start..cluster_start]);
+        return @max(0, with_cluster - without_cluster);
+    }
+    return estimateTextAdvanceForBytes(font_id, text[cluster_start..cluster_end], size);
+}
+
+fn isFiniteF32(value: f32) bool {
+    return value - value == 0;
+}
+
 pub fn estimateTextWidth(text: []const u8, size: f32) f32 {
     return estimateTextWidthForFont(default_sans_font_id, text, size);
 }

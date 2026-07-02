@@ -31,6 +31,16 @@ pub const estimateTextWidth = text_metrics.estimateTextWidth;
 pub const estimateTextWidthForFont = text_metrics.estimateTextWidthForFont;
 pub const estimateTextAdvanceForBytes = text_metrics.estimateTextAdvanceForBytes;
 pub const estimatedGlyphAdvance = text_metrics.estimatedGlyphAdvance;
+pub const TextMeasureProvider = text_metrics.TextMeasureProvider;
+pub const measureTextWidthForFont = text_metrics.measureTextWidthForFont;
+pub const measureTextAdvance = text_metrics.measureTextAdvance;
+
+/// The measurement provider a DrawText carries via its layout options, if
+/// any. Runs without layout options always measure with the estimator.
+fn drawTextMeasure(text: DrawText) ?*const text_metrics.TextMeasureProvider {
+    const options = text.text_layout orelse return null;
+    return options.measure;
+}
 
 const textLayoutOptionsForDrawText = text_layout_hash.textLayoutOptionsForDrawText;
 const textLayoutKey = text_layout_hash.textLayoutKey;
@@ -153,7 +163,7 @@ pub fn textBounds(value: DrawText) ?geometry.RectF {
             max_y = @max(max_y, glyph_y + value.size * 0.25);
         }
     } else {
-        max_x = value.origin.x + estimateTextWidthForFont(value.font_id, value.text, value.size);
+        max_x = value.origin.x + measureTextWidthForFont(drawTextMeasure(value), value.font_id, value.text, value.size);
     }
 
     return geometry.RectF.init(
@@ -232,7 +242,7 @@ pub fn nextTextLineEnd(text: []const u8, start: usize, font_id: FontId, size: f3
     while (index < text.len) {
         if (text[index] == '\n') return index;
         const next_index = nextTextOffset(text, index);
-        const next_width = estimateTextWidthForFont(font_id, text[start..next_index], size);
+        const next_width = measureTextWidthForFont(options.measure, font_id, text[start..next_index], size);
         if (isTextBreakByte(text[index])) last_break = next_index;
         if (next_width > max_width) {
             if (index == start) return next_index;
@@ -385,7 +395,7 @@ pub fn textLineCaretX(text: DrawText, line: TextLine, offset: usize) f32 {
     if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len) {
         return textLineGlyphCaretX(text, line, range, snapped);
     }
-    return line.bounds.x + estimateTextWidthForFont(text.font_id, text.text[range.start..snapped], text.size);
+    return line.bounds.x + measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[range.start..snapped], text.size);
 }
 
 fn textLineGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset: usize) f32 {
@@ -421,7 +431,7 @@ fn textLineOffsetForX(text: DrawText, line: TextLine, x: f32) usize {
     var caret_x = line.bounds.x;
     while (cursor < range.end) {
         const next_cursor = nextTextOffset(text.text, cursor);
-        const advance = @max(1, estimateTextAdvanceForBytes(text.font_id, text.text[cursor..next_cursor], text.size));
+        const advance = @max(1, measureTextAdvance(drawTextMeasure(text), text.font_id, text.size, text.text, range.start, cursor, next_cursor));
         if (x < caret_x + advance * 0.5) return cursor;
         caret_x += advance;
         cursor = next_cursor;
@@ -490,7 +500,7 @@ pub fn textLineBounds(text: DrawText, text_start: usize, text_len: usize, glyph_
     return geometry.RectF.init(
         text.origin.x,
         baseline - text.size,
-        estimateTextWidthForFont(text.font_id, text.text[text_start..@min(text.text.len, text_start + text_len)], text.size),
+        measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[text_start..@min(text.text.len, text_start + text_len)], text.size),
         line_height_value,
     );
 }

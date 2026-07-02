@@ -310,3 +310,43 @@ test "extension registry receives runtime lifecycle and command hooks" {
     try std.testing.expect(module_state.stopped);
     try std.testing.expectEqual(@as(u32, 1), module_state.commands);
 }
+
+fn fixedTextMeasureForTests(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
+    _ = context;
+    _ = font_id;
+    _ = size;
+    return @floatFromInt(text.len * 7);
+}
+
+test "runtime exposes no text measure provider on the null platform" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+
+    try std.testing.expect(harness.runtime.textMeasureProvider() == null);
+    const tokens = harness.runtime.tokensWithTextMeasure(.{});
+    try std.testing.expect(tokens.text_measure == null);
+    try std.testing.expect(std.meta.eql(canvas.DesignTokens{}, tokens));
+}
+
+test "runtime wraps a platform text measure service into a canvas provider" {
+    var null_platform = platform.NullPlatform.init(.{});
+    var measured_platform = null_platform.platform();
+    measured_platform.services.measure_text_fn = fixedTextMeasureForTests;
+
+    const runtime = try std.testing.allocator.create(Runtime);
+    defer std.testing.allocator.destroy(runtime);
+    runtime.* = Runtime.init(.{ .platform = measured_platform });
+
+    const provider = runtime.textMeasureProvider() orelse return error.MissingProvider;
+    try std.testing.expectEqual(@as(f32, 35), provider.measureWidth(1, 12, "hello"));
+
+    const tokens = runtime.tokensWithTextMeasure(.{});
+    try std.testing.expect(tokens.text_measure != null);
+    try std.testing.expectEqual(
+        @as(f32, 21),
+        canvas.measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, "abc", 12),
+    );
+    // Stable identity: stamping twice compares equal so token equality
+    // checks in the reconcile path stay quiescent frame to frame.
+    try std.testing.expect(std.meta.eql(tokens, runtime.tokensWithTextMeasure(.{})));
+}

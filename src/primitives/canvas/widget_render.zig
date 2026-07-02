@@ -480,6 +480,7 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
             .line_height = text_size * 1.25,
             .wrap = .word,
             .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
         },
     });
 }
@@ -491,7 +492,7 @@ fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .id = widgetPartId(widget.id, 1),
         .font_id = tokens.typography.font_id,
         .size = size,
-        .origin = pixelSnapTextPoint(tokens, centeredTextOrigin(widget.frame, widget.text, size)),
+        .origin = pixelSnapTextPoint(tokens, centeredTextOrigin(widget.frame, widget.text, size, tokens)),
         .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
     });
@@ -546,10 +547,10 @@ fn emitAvatarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
             .id = widgetPartId(widget.id, 3),
             .font_id = tokens.typography.font_id,
             .size = text_size,
-            .origin = pixelSnapTextPoint(tokens, centeredTextOrigin(widget.frame, widget.text, text_size)),
+            .origin = pixelSnapTextPoint(tokens, centeredTextOrigin(widget.frame, widget.text, text_size, tokens)),
             .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, 0, .center, .none),
+            .text_layout = boundedTextLayout(widget.frame, text_size, 0, .center, .none, tokens),
         });
     }
 
@@ -592,7 +593,7 @@ fn emitBadgeWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Erro
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = badgeTextColor(widget, tokens, visual),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, tokens),
         });
     }
 }
@@ -655,6 +656,7 @@ fn emitStatusBarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .line_height = line_height,
             .wrap = .none,
             .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
         },
     });
 }
@@ -755,21 +757,25 @@ fn boundedTextOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.Poin
     return geometry.PointF.init(frame.x + inset, textOrigin(frame, size, 0).y);
 }
 
-fn boundedTextLayout(frame: geometry.RectF, size: f32, inset: f32, alignment: TextAlign, wrap: TextWrap) TextLayoutOptions {
+fn boundedTextLayout(frame: geometry.RectF, size: f32, inset: f32, alignment: TextAlign, wrap: TextWrap, tokens: DesignTokens) TextLayoutOptions {
     return .{
         .max_width = @max(1, frame.width - inset * 2),
         .line_height = size * 1.25,
         .wrap = wrap,
         .alignment = alignment,
+        .measure = tokens.text_measure,
     };
 }
 
-fn centeredTextOrigin(frame: geometry.RectF, text: []const u8, size: f32) geometry.PointF {
-    return alignedTextOrigin(frame, text, size, 0, .center);
+fn centeredTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, tokens: DesignTokens) geometry.PointF {
+    return alignedTextOrigin(frame, text, size, 0, .center, tokens);
 }
 
-fn alignedTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, inset: f32, alignment: TextAlign) geometry.PointF {
-    const width = estimateTextWidth(text, size);
+fn alignedTextOrigin(frame: geometry.RectF, text: []const u8, size: f32, inset: f32, alignment: TextAlign, tokens: DesignTokens) geometry.PointF {
+    const width = if (tokens.text_measure) |measure|
+        measure.measureWidth(tokens.typography.font_id, size, text)
+    else
+        estimateTextWidth(text, size);
     const available_width = @max(0, frame.width - inset * 2);
     const offset = switch (alignment) {
         .start => 0,

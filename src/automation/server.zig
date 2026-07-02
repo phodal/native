@@ -42,6 +42,24 @@ pub const Server = struct {
         try writePath(self.io, self.path("bridge-response.txt", &path_buffer), response);
     }
 
+    /// Write a view screenshot artifact (`screenshot-<label>.png`). The
+    /// bytes land in a temporary file first and are renamed into place so
+    /// pollers never observe a partially written PNG.
+    pub fn publishScreenshot(self: Server, view_label: []const u8, png_bytes: []const u8) !void {
+        var cwd = std.Io.Dir.cwd();
+        try cwd.createDirPath(self.io, self.directory);
+        var name_buffer: [128]u8 = undefined;
+        const name = try protocol.screenshotFileName(view_label, &name_buffer);
+        var temp_name_buffer: [160]u8 = undefined;
+        const temp_name = try std.fmt.bufPrint(&temp_name_buffer, "{s}.tmp", .{name});
+        var path_buffer: [256]u8 = undefined;
+        var temp_path_buffer: [256]u8 = undefined;
+        const final_path = self.path(name, &path_buffer);
+        const temp_path = self.path(temp_name, &temp_path_buffer);
+        try writePath(self.io, temp_path, png_bytes);
+        try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), final_path, self.io);
+    }
+
     pub fn takeCommand(self: Server, buffer: []u8) !?protocol.Command {
         var path_buffer: [256]u8 = undefined;
         const command_path = self.path("command.txt", &path_buffer);
@@ -128,6 +146,33 @@ test "server publishes large retained widget snapshots" {
     const a11y = try readPath(std.testing.io, server.path("accessibility.txt", &path_buffer), &buffer);
     try std.testing.expect(a11y.len > 4 * 1024);
     try std.testing.expect(std.mem.indexOf(u8, a11y, "@w1/components-canvas#1079 role=textbox") != null);
+}
+
+test "server writes screenshot artifacts atomically" {
+    const directory = ".zig-cache/test-webview-automation-screenshot";
+    try resetTestDirectory(std.testing.io, directory);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, directory) catch {};
+
+    const server = Server.init(std.testing.io, directory, "Test");
+    const png_bytes = "\x89PNG\r\n\x1a\nfake-png-payload";
+    try server.publishScreenshot("inbox-canvas", png_bytes);
+
+    var buffer: [64]u8 = undefined;
+    var path_buffer: [256]u8 = undefined;
+    const bytes = try readPath(std.testing.io, server.path("screenshot-inbox-canvas.png", &path_buffer), &buffer);
+    try std.testing.expectEqualStrings(png_bytes, bytes);
+
+    // No temporary file is left behind.
+    var temp_buffer: [64]u8 = undefined;
+    try std.testing.expectError(
+        error.FileNotFound,
+        readPath(std.testing.io, server.path("screenshot-inbox-canvas.png.tmp", &path_buffer), &temp_buffer),
+    );
+
+    // Republish overwrites the previous artifact.
+    try server.publishScreenshot("inbox-canvas", "\x89PNG\r\n\x1a\nsecond");
+    const second = try readPath(std.testing.io, server.path("screenshot-inbox-canvas.png", &path_buffer), &buffer);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\nsecond", second);
 }
 
 test "server consumes automation command files" {

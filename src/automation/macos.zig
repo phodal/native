@@ -1,1 +1,1 @@
-pub const screenshot_note = "macOS automation screenshots use the app-published window artifact in this first pass.";
+pub const screenshot_note = "Automation screenshots render gpu_surface canvas views through the deterministic CPU reference renderer (screenshot-<view-label>.png).";

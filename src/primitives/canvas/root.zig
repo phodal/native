@@ -237,6 +237,9 @@ pub const CanvasGpuPacketPlanner = gpu_model.CanvasGpuPacketPlanner;
 pub const ReferenceImage = reference_model.ReferenceImage;
 pub const ReferenceRenderSurface = reference_model.ReferenceRenderSurface;
 
+// Deterministic PNG writer (stored-deflate zlib stream) lives in `png.zig`.
+pub const png = @import("png.zig");
+
 pub const Density = token_model.Density;
 pub const Easing = token_model.Easing;
 pub const ColorScheme = token_model.ColorScheme;

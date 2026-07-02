@@ -35,6 +35,8 @@ const parseAutomationWidgetWheel = automation_commands.parseAutomationWidgetWhee
 const parseAutomationWidgetKey = automation_commands.parseAutomationWidgetKey;
 const parseAutomationWidgetPointerDrag = automation_commands.parseAutomationWidgetPointerDrag;
 const parseAutomationResizeCommand = automation_commands.parseAutomationResizeCommand;
+const parseAutomationScreenshotCommand = automation_commands.parseAutomationScreenshotCommand;
+const canvas = @import("canvas");
 
 pub fn RuntimeFlow(comptime Runtime: type) type {
     return struct {
@@ -587,6 +589,11 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         .scale_factor = parsed.scale_factor,
                     } });
                 },
+                .screenshot => {
+                    publishAutomationScreenshot(self, command.value) catch |err| {
+                        try log(self, "automation.screenshot_failed", @errorName(err), &.{});
+                    };
+                },
                 .native_command => {
                     const parsed = try parseAutomationNativeCommand(command.value);
                     try dispatchPlatformEvent(self, app, .{ .native_command = .{
@@ -634,6 +641,37 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 },
                 .wait => {},
             }
+        }
+
+        /// Render the named gpu_surface view's current canvas frame through
+        /// the deterministic reference renderer and publish it as a PNG
+        /// (`screenshot-<label>.png`) in the automation directory. The
+        /// screenshot renders at scale 1 unless the command carries an
+        /// explicit scale, so an unchanged scene produces byte-identical
+        /// artifacts across captures.
+        pub fn publishAutomationScreenshot(self: *Runtime, value: []const u8) anyerror!void {
+            const server = self.options.automation orelse return;
+            const parsed = try parseAutomationScreenshotCommand(value);
+            const allocator = std.heap.page_allocator;
+            const pixel_size = try self.canvasScreenshotPixelSize(1, parsed.view_label, parsed.scale);
+            const pixels = try allocator.alloc(u8, pixel_size.byte_len);
+            defer allocator.free(pixels);
+            const scratch = try allocator.alloc(u8, pixel_size.byte_len);
+            defer allocator.free(scratch);
+            const screenshot = try self.renderCanvasScreenshot(1, parsed.view_label, parsed.scale, pixels, scratch);
+            var writer = try std.Io.Writer.Allocating.initCapacity(
+                allocator,
+                try canvas.png.encodedRgba8ByteLen(screenshot.width, screenshot.height),
+            );
+            defer writer.deinit();
+            try canvas.png.writeRgba8(&writer.writer, screenshot.width, screenshot.height, screenshot.rgba8);
+            try server.publishScreenshot(parsed.view_label, writer.written());
+            try log(self, "automation.screenshot", "screenshot published", &.{
+                trace.string("view", parsed.view_label),
+                trace.uint("width", screenshot.width),
+                trace.uint("height", screenshot.height),
+                trace.uint("bytes", writer.written().len),
+            });
         }
 
         const BuiltinBridgeMethods = runtime_builtin_bridge.RuntimeBuiltinBridge(Runtime);

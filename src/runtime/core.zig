@@ -77,6 +77,7 @@ const RuntimeShellLayout = shell_layout.RuntimeShellLayout;
 const sceneNeedsMainWebView = shell_layout.sceneNeedsMainWebView;
 
 pub const CanvasPixelSize = canvas_frame_helpers.CanvasPixelSize;
+pub const CanvasScreenshot = canvas_frame_helpers.CanvasScreenshot;
 pub const canvasSurfacePixelSize = canvas_frame_helpers.canvasSurfacePixelSize;
 pub const canvasFramePixelSize = canvas_frame_helpers.canvasFramePixelSize;
 
@@ -444,6 +445,8 @@ pub const Runtime = struct {
     pub const presentNextCanvasFrame = CanvasFrameMethods.presentNextCanvasFrame;
     pub const presentCanvasFramePixels = CanvasFrameMethods.presentCanvasFramePixels;
     pub const presentNextCanvasFramePixels = CanvasFrameMethods.presentNextCanvasFramePixels;
+    pub const renderCanvasScreenshot = CanvasFrameMethods.renderCanvasScreenshot;
+    pub const canvasScreenshotPixelSize = CanvasFrameMethods.canvasScreenshotPixelSize;
     const planCanvasFrameForView = CanvasFrameMethods.planCanvasFrameForView;
     pub const canvasFrameScratchStorage = CanvasFrameMethods.canvasFrameScratchStorage;
     pub const gpuSurfaceFrame = CanvasFrameMethods.gpuSurfaceFrame;

@@ -107,6 +107,10 @@ pub const RuntimeView = struct {
     canvas_widget_display_list_prefix_count: usize = 0,
     canvas_widget_display_list_suffix_count: usize = 0,
     canvas_widget_display_list_reserved_count: usize = 0,
+    /// Clear color from the most recent canvas presentation (GPU packet or
+    /// pixel path); automation screenshots reuse it so the rendered PNG
+    /// matches what presentation cleared to.
+    canvas_clear_color: canvas.Color = .{},
     presented_canvas_valid: bool = false,
     presented_canvas_revision: u64 = 0,
     presented_canvas_surface_size: geometry.SizeF = geometry.SizeF.init(0, 0),

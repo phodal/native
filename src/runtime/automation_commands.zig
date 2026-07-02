@@ -66,6 +66,13 @@ pub const AutomationResizeCommand = struct {
     scale_factor: f32 = 1,
 };
 
+pub const AutomationScreenshotCommand = struct {
+    view_label: []const u8,
+    /// Render scale for the screenshot pixels. Defaults to 1 for
+    /// deterministic output independent of the display's backing scale.
+    scale: ?f32 = null,
+};
+
 pub fn parseAutomationCommandName(value: []const u8) ![]const u8 {
     const trimmed = std.mem.trim(u8, value, " \n\r\t");
     if (trimmed.len == 0) return error.InvalidCommand;
@@ -177,6 +184,15 @@ pub fn parseAutomationWidgetPointerDrag(value: []const u8) !AutomationWidgetPoin
         .start_y_ratio = start_y_ratio,
         .end_y_ratio = end_y_ratio,
     };
+}
+
+pub fn parseAutomationScreenshotCommand(value: []const u8) !AutomationScreenshotCommand {
+    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
+    const scale_part = takeAutomationToken(view.rest) orelse return AutomationScreenshotCommand{ .view_label = view.token };
+    if (takeAutomationToken(scale_part.rest) != null) return error.InvalidCommand;
+    const scale = std.fmt.parseFloat(f32, scale_part.token) catch return error.InvalidCommand;
+    if (!std.math.isFinite(scale) or scale <= 0) return error.InvalidCommand;
+    return .{ .view_label = view.token, .scale = scale };
 }
 
 fn takeAutomationToken(value: []const u8) ?AutomationToken {
@@ -292,6 +308,23 @@ test "runtime parses automation resize commands" {
     try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("0 640"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("900 nan"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationResizeCommand("900 640 1 2"));
+}
+
+test "runtime parses automation screenshot commands" {
+    const plain = try parseAutomationScreenshotCommand("inbox-canvas");
+    try std.testing.expectEqualStrings("inbox-canvas", plain.view_label);
+    try std.testing.expect(plain.scale == null);
+
+    const scaled = try parseAutomationScreenshotCommand(" inbox-canvas 2 ");
+    try std.testing.expectEqualStrings("inbox-canvas", scaled.view_label);
+    try std.testing.expectEqual(@as(f32, 2), scaled.scale.?);
+
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand(""));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand("inbox-canvas nope"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand("inbox-canvas 0"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand("inbox-canvas -1"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand("inbox-canvas nan"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationScreenshotCommand("inbox-canvas 2 3"));
 }
 
 test "runtime parses automation drag deltas" {

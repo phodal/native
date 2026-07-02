@@ -11,8 +11,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
     } else if (std.mem.eql(u8, command, "snapshot")) {
         try printFile(io, "snapshot.txt");
     } else if (std.mem.eql(u8, command, "screenshot")) {
-        std.debug.print("screenshot capture is not available for this backend\n", .{});
-        return error.UnsupportedCommand;
+        if (args.len < 2 or args.len > 3) return usage();
+        var name_buffer: [128]u8 = undefined;
+        const name = protocol.screenshotFileName(args[1], &name_buffer) catch return usage();
+        deleteAutomationFile(io, name);
+        const value = try std.mem.join(allocator, " ", args[1..]);
+        defer allocator.free(value);
+        try sendCommand(allocator, io, "screenshot", value);
+        try waitForScreenshot(io, name);
     } else if (std.mem.eql(u8, command, "reload")) {
         try sendCommand(allocator, io, "reload", "");
     } else if (std.mem.eql(u8, command, "resize")) {
@@ -94,7 +100,7 @@ fn usage() void {
         \\commands:
         \\  list
         \\  snapshot
-        \\  screenshot
+        \\  screenshot <view-label> [scale]   (renders the gpu_surface view's canvas to screenshot-<view-label>.png)
         \\  reload
         \\  resize <width> <height> [scale]
         \\  menu-command <id>
@@ -148,6 +154,25 @@ fn waitForFile(allocator: std.mem.Allocator, io: std.Io, name: []const u8, marke
         try std.Io.sleep(io, std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
     }
     return fail("timed out waiting for automation");
+}
+
+fn waitForScreenshot(io: std.Io, name: []const u8) !void {
+    // Screenshots are published atomically (write + rename), so existence
+    // means the PNG is complete. Reference rendering large surfaces takes a
+    // moment, so poll longer than text artifacts.
+    var attempts: usize = 0;
+    while (attempts < 100) : (attempts += 1) {
+        var file_path: [256]u8 = undefined;
+        const screenshot_path = path(&file_path, name);
+        if (std.Io.Dir.cwd().openFile(io, screenshot_path, .{})) |opened| {
+            var file = opened;
+            file.close(io);
+            std.debug.print("{s}\n", .{screenshot_path});
+            return;
+        } else |_| {}
+        try std.Io.sleep(io, std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+    }
+    return fail("timed out waiting for screenshot");
 }
 
 fn deleteAutomationFile(io: std.Io, name: []const u8) void {

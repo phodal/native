@@ -1,6 +1,7 @@
 test {
     _ = @import("shell_view_tests.zig");
     _ = @import("canvas_frame_tests.zig");
+    _ = @import("canvas_screenshot_tests.zig");
     _ = @import("canvas_widget_layout_tests.zig");
     _ = @import("shell_layout_tests.zig");
     _ = @import("runtime_event_tests.zig");

@@ -17,12 +17,12 @@ Automation is not browser DOM automation. It reports runtime/window/source state
 - The JavaScript-to-Zig bridge can round-trip a request through `zero-native automate bridge`.
 - Builtin window/WebView commands work when exercised by a smoke test.
 - Reload requests are accepted by the runtime.
+- Real pixels of retained-canvas (`gpu_surface`) views: `zero-native automate screenshot <view-label>` renders the view's current canvas frame through the deterministic CPU reference renderer and writes a PNG artifact. Two captures of an unchanged scene are byte-identical, so screenshots can back golden-image or "did the UI change" checks.
 
 ## What automation cannot verify
 
-- Real screenshots. Current `screenshot` support is a placeholder/unsupported depending on backend.
+- Screenshots of WebView content. `screenshot` covers `gpu_surface` canvas views only; there is no DOM/WebView pixel capture.
 - Arbitrary DOM queries and clicks.
-- Visual layout correctness.
 - Browser network assertions.
 
 ## Prerequisites
@@ -59,6 +59,8 @@ zero-native automate wait
 zero-native automate list
 zero-native automate snapshot
 zero-native automate reload
+zero-native automate screenshot inbox-canvas
+zero-native automate screenshot inbox-canvas 2
 zero-native automate widget-action canvas 2 press
 zero-native automate widget-click canvas 3
 zero-native automate widget-drag canvas 4 0.25 0.82
@@ -86,7 +88,35 @@ zig-out/bin/zero-native automate snapshot
 8. Use `zero-native automate widget-drag <view-label> <widget-id> <start-x-ratio> <end-x-ratio> [start-y-ratio end-y-ratio]` for continuous pointer controls.
 9. Use `zero-native automate widget-wheel <view-label> <widget-id> <delta-y>` for retained widget scroll input.
 10. Use `zero-native automate widget-key <view-label> <key> [text]` for focused retained widget keyboard input.
-11. Use `zero-native automate reload` to request a WebView reload.
+11. Use `zero-native automate screenshot <view-label> [scale]` to capture the named `gpu_surface` view's canvas as `screenshot-<view-label>.png` (the CLI prints the artifact path and waits for the file).
+12. Use `zero-native automate reload` to request a WebView reload.
+
+## Screenshots
+
+`screenshot <view-label> [scale]` asks the runtime to rasterize the view's
+current retained canvas frame through the deterministic CPU reference
+renderer — the same pixel path the Linux software presentation uses — and
+publish it as an uncompressed PNG at
+`.zig-cache/zero-native-automation/screenshot-<view-label>.png`. The file is
+written atomically (temp file + rename), so its presence means the PNG is
+complete.
+
+Determinism semantics:
+
+- Screenshots render at scale 1 by default regardless of the display's
+  backing scale, so an unchanged scene produces byte-identical PNGs from
+  capture to capture on the same machine. Pass an explicit scale (for
+  example `2`) for high-DPI pixel dimensions.
+- Screenshots use the live retained scene, including live design tokens and
+  platform text measurement (CoreText on macOS): the layout matches what is
+  on screen. Glyphs are rasterized by the reference renderer's deterministic
+  block rendering, not the platform's font rasterizer, so screenshots are a
+  layout/structure/color signal rather than a font-rendering signal.
+- Cross-machine byte-identity is only guaranteed where text metrics are
+  deterministic (the null platform's estimator). On platforms with a native
+  text measurement provider, text widths can differ between OS versions, so
+  compare screenshots taken on the same machine or assert on properties
+  (dimensions, changed/unchanged) rather than exact bytes across machines.
 
 ## Bridge smoke test pattern
 
@@ -121,7 +151,7 @@ Files:
 - `windows.txt`: window list.
 - `command.txt`: command input written by CLI and consumed by runtime.
 - `bridge-response.txt`: last bridge response.
-- `screenshot.ppm`: placeholder screenshot artifact when supported by the runtime layer.
+- `screenshot-<view-label>.png`: deterministic reference-rendered PNG of a `gpu_surface` view, written by the `screenshot` command.
 
 The runtime polls `command.txt`. After processing a command, it writes `done`.
 
@@ -174,6 +204,6 @@ Do not use automation for exhaustive UI testing. It is a runtime and bridge smok
 ## Notes
 
 - Automation is compile-time gated: apps built without `-Dautomation=true` ignore automation files.
-- The current screenshot artifact is a placeholder PPM or unavailable depending on backend.
+- Screenshots cover retained-canvas (`gpu_surface`) views only; WebView pixels are not captured.
 - WebView DOM interaction is intentionally out of scope for this file-based automation layer.
 - Use `zero-native skills get core --full` for app architecture, bridge policy, packaging, and debugging context.

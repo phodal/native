@@ -12,6 +12,7 @@ pub const Action = enum {
     reload,
     wait,
     resize,
+    screenshot,
     bridge,
     native_command,
     widget_action,
@@ -39,6 +40,7 @@ pub const Command = struct {
         if (std.mem.eql(u8, action_text, "reload")) return .{ .action = .reload };
         if (std.mem.eql(u8, action_text, "wait")) return .{ .action = .wait, .value = value };
         if (std.mem.eql(u8, action_text, "resize") and value.len > 0) return .{ .action = .resize, .value = value };
+        if (std.mem.eql(u8, action_text, "screenshot") and value.len > 0) return .{ .action = .screenshot, .value = value };
         if (std.mem.eql(u8, action_text, "bridge") and value.len > 0) return .{ .action = .bridge, .value = value };
         if (std.mem.eql(u8, action_text, "native-command") and value.len > 0) return .{ .action = .native_command, .value = value };
         if (std.mem.eql(u8, action_text, "widget-action") and value.len > 0) return .{ .action = .widget_action, .value = value };
@@ -54,6 +56,27 @@ pub const Command = struct {
         return error.InvalidCommand;
     }
 };
+
+pub const max_screenshot_label_bytes: usize = 64;
+
+/// Artifact file name for a view screenshot: `screenshot-<label>.png` with
+/// any byte outside [A-Za-z0-9._-] replaced by `-` so labels can never
+/// escape the automation directory.
+pub fn screenshotFileName(view_label: []const u8, output: []u8) ![]const u8 {
+    if (view_label.len == 0) return error.InvalidCommand;
+    if (view_label.len > max_screenshot_label_bytes) return error.CommandTooLarge;
+    var writer = std.Io.Writer.fixed(output);
+    writer.writeAll("screenshot-") catch return error.CommandTooLarge;
+    for (view_label) |byte| {
+        const safe: u8 = switch (byte) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => byte,
+            else => '-',
+        };
+        writer.writeByte(safe) catch return error.CommandTooLarge;
+    }
+    writer.writeAll(".png") catch return error.CommandTooLarge;
+    return writer.buffered();
+}
 
 pub fn commandLine(action: []const u8, value: []const u8, output: []u8) ![]const u8 {
     if (action.len + value.len + 2 > max_command_bytes) return error.CommandTooLarge;
@@ -76,6 +99,13 @@ test "commands parse reload and wait" {
     const resize = try Command.parse("resize 900 640");
     try std.testing.expectEqual(Action.resize, resize.action);
     try std.testing.expectEqualStrings("900 640", resize.value);
+    const screenshot = try Command.parse("screenshot inbox-canvas");
+    try std.testing.expectEqual(Action.screenshot, screenshot.action);
+    try std.testing.expectEqualStrings("inbox-canvas", screenshot.value);
+    const scaled_screenshot = try Command.parse("screenshot inbox-canvas 2");
+    try std.testing.expectEqual(Action.screenshot, scaled_screenshot.action);
+    try std.testing.expectEqualStrings("inbox-canvas 2", scaled_screenshot.value);
+    try std.testing.expectError(error.InvalidCommand, Command.parse("screenshot"));
     const native_command = try Command.parse("native-command app.refresh refresh-button");
     try std.testing.expectEqual(Action.native_command, native_command.action);
     try std.testing.expectEqualStrings("app.refresh refresh-button", native_command.value);
@@ -105,4 +135,13 @@ test "commands parse reload and wait" {
     try std.testing.expectEqual(Action.focus_next_view, focus_next.action);
     const focus_previous = try Command.parse("focus-previous");
     try std.testing.expectEqual(Action.focus_previous_view, focus_previous.action);
+}
+
+test "screenshot file names stay inside the automation directory" {
+    var buffer: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("screenshot-inbox-canvas.png", try screenshotFileName("inbox-canvas", &buffer));
+    try std.testing.expectEqualStrings("screenshot-..-evil.png", try screenshotFileName("../evil", &buffer));
+    try std.testing.expectEqualStrings("screenshot-a-b.png", try screenshotFileName("a/b", &buffer));
+    try std.testing.expectError(error.InvalidCommand, screenshotFileName("", &buffer));
+    try std.testing.expectError(error.CommandTooLarge, screenshotFileName("x" ** 65, &buffer));
 }

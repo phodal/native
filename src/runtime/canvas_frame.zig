@@ -47,6 +47,14 @@ threadlocal var canvas_frame_text_layout_cache_actions_scratch: [max_canvas_text
 const validateViewLabel = validation.validateViewLabel;
 const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
 
+/// Result of `renderCanvasScreenshot`: tightly packed RGBA8 pixels sliced
+/// from the caller's buffer.
+pub const CanvasScreenshot = struct {
+    width: usize,
+    height: usize,
+    rgba8: []const u8,
+};
+
 pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
     return struct {
         pub fn setCanvasDisplayList(self: *Runtime, window_id: platform.WindowId, label: []const u8, display_list: canvas.DisplayList) anyerror!platform.ViewInfo {
@@ -167,6 +175,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             packet_scale: ?f32,
         ) anyerror!canvas.CanvasGpuPacket {
             const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
+            recordCanvasClearColor(self, window_id, label, clear_color);
             var packet = try canvas_frame.gpuPacket(output);
             packet.scale = normalizedCanvasPresentationScale(packet_scale, canvas_frame.scale);
             if (!packet.requiresRender()) return packet;
@@ -208,6 +217,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             pixel_scale: ?f32,
         ) anyerror!CanvasPresentationResult {
             const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
+            recordCanvasClearColor(self, window_id, label, clear_color);
             if (!canvas_frame.requiresRender()) {
                 return .{ .frame = canvas_frame, .mode = .skipped };
             }
@@ -290,6 +300,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             scratch: []u8,
             clear_color: canvas.Color,
         ) anyerror!void {
+            recordCanvasClearColor(self, window_id, label, clear_color);
             if (!canvas_frame.requiresRender()) return;
             const pixel_size = try canvasFramePixelSize(canvas_frame);
             var surface = if (scratch.len >= pixel_size.byte_len)
@@ -325,6 +336,73 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             const canvas_frame = try self.nextCanvasFrame(window_id, label, options, storage);
             try self.presentCanvasFramePixels(window_id, label, canvas_frame, pixels, scratch, clear_color);
             return canvas_frame;
+        }
+
+        fn recordCanvasClearColor(self: *Runtime, window_id: platform.WindowId, label: []const u8, clear_color: canvas.Color) void {
+            if (runtimeFindViewIndex(self, window_id, label)) |index| {
+                self.views[index].canvas_clear_color = clear_color;
+            }
+        }
+
+        /// Render the view's current retained canvas scene through the
+        /// deterministic CPU reference renderer — the same pixel path the
+        /// software presentation uses (`presentCanvasFramePixels`) — without
+        /// presenting or mutating presentation state. The frame is planned
+        /// as a full repaint at the view's last frame timestamp, cleared
+        /// with the last presented clear color. `pixels` (and optionally
+        /// `scratch`, for layer effects) must hold
+        /// `canvasScreenshotPixelSize(...).byte_len` bytes.
+        pub fn renderCanvasScreenshot(
+            self: *Runtime,
+            window_id: platform.WindowId,
+            label: []const u8,
+            scale: ?f32,
+            pixels: []u8,
+            scratch: []u8,
+        ) anyerror!CanvasScreenshot {
+            try validateRuntimeViewParent(self, window_id);
+            try validateViewLabel(label);
+            const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
+            if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+
+            const canvas_frame = try planCanvasFrameForView(self, index, .{
+                .frame_index = self.views[index].gpu_frame_index,
+                .timestamp_ns = self.views[index].gpu_timestamp_ns,
+                .surface_size = canvasScreenshotSurfaceSize(&self.views[index]),
+                .scale = normalizedCanvasPresentationScale(scale, 1),
+                .full_repaint = true,
+            }, canvasFrameScratchStorage(self), false);
+            const pixel_size = try canvasFramePixelSize(canvas_frame);
+            var surface = if (scratch.len >= pixel_size.byte_len)
+                try canvas.ReferenceRenderSurface.initWithScratch(pixel_size.width, pixel_size.height, pixels, scratch)
+            else
+                try canvas.ReferenceRenderSurface.init(pixel_size.width, pixel_size.height, pixels);
+            surface = surface.withImages(canvas_frame.image_resources);
+            try surface.renderPass(canvas_frame.renderPass(), self.views[index].canvas_clear_color);
+            return .{
+                .width = pixel_size.width,
+                .height = pixel_size.height,
+                .rgba8 = surface.pixels,
+            };
+        }
+
+        /// Pixel dimensions `renderCanvasScreenshot` will produce for the
+        /// view at the given scale (default 1).
+        pub fn canvasScreenshotPixelSize(
+            self: *const Runtime,
+            window_id: platform.WindowId,
+            label: []const u8,
+            scale: ?f32,
+        ) anyerror!CanvasPixelSize {
+            try validateRuntimeViewParent(self, window_id);
+            try validateViewLabel(label);
+            const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
+            if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+            return canvasSurfacePixelSize(canvasScreenshotSurfaceSize(&self.views[index]), normalizedCanvasPresentationScale(scale, 1));
+        }
+
+        fn canvasScreenshotSurfaceSize(view: anytype) geometry.SizeF {
+            return if (view.gpu_size.isEmpty()) view.frame.size() else view.gpu_size;
         }
 
         pub fn planCanvasFrameForView(self: *Runtime, index: usize, options: canvas.CanvasFrameOptions, storage: canvas.CanvasFrameStorage, record: bool) anyerror!canvas.CanvasFrame {

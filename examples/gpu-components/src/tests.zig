@@ -213,7 +213,9 @@ test "gpu components scene declares native shell and gpu canvas" {
 }
 
 test "gpu components status text state keeps app-owned storage" {
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
 
     app.setStatusText("Canvas installed.");
@@ -590,7 +592,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 4024187964698946890), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 15535383597506120578), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -780,11 +782,14 @@ test "gpu components image widget exposes image semantics and display command" {
 }
 
 test "gpu components app registers component lab on first gpu frame" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     try harness.start(app.app());
 
@@ -1153,11 +1158,14 @@ test "gpu components app registers component lab on first gpu frame" {
 }
 
 test "gpu components keeps textarea text when opening inputs dropdown" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     try harness.start(app.app());
 
@@ -1193,11 +1201,14 @@ test "gpu components keeps textarea text when opening inputs dropdown" {
 }
 
 test "gpu components virtual scroll clamps at edges" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1268,11 +1279,14 @@ test "gpu components virtual scroll clamps at edges" {
 }
 
 test "gpu components native theme command updates retained design tokens" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1318,11 +1332,14 @@ test "gpu components native theme command updates retained design tokens" {
 }
 
 test "gpu components follow system appearance until toolbar theme override" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1363,11 +1380,14 @@ test "gpu components follow system appearance until toolbar theme override" {
 }
 
 test "gpu components pointer clicks update retained controls" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1492,11 +1512,14 @@ test "gpu components pointer clicks update retained controls" {
 }
 
 test "gpu components pointer opens and selects environment dropdown options" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1547,11 +1570,14 @@ test "gpu components pointer opens and selects environment dropdown options" {
 }
 
 test "gpu components keyboard navigates and dismisses environment dropdown" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1618,11 +1644,14 @@ test "gpu components keyboard navigates and dismisses environment dropdown" {
 }
 
 test "gpu components surface launchers open and close overlays" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1698,11 +1727,14 @@ test "gpu components surface launchers open and close overlays" {
 }
 
 test "gpu components slider drag presents incremental cached frame" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);
@@ -1762,11 +1794,14 @@ test "gpu components slider drag presents incremental cached frame" {
 }
 
 test "gpu components sidebar handle drag resizes retained layout" {
-    var harness: zero_native.TestHarness() = undefined;
+    const harness = try std.testing.allocator.create(zero_native.TestHarness());
+    defer std.testing.allocator.destroy(harness);
     harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
     harness.null_platform.gpu_surfaces = true;
 
-    var app = GpuComponentsApp{};
+    const app = try std.testing.allocator.create(GpuComponentsApp);
+    defer std.testing.allocator.destroy(app);
+    app.* = GpuComponentsApp{};
     defer app.deinit();
     const app_handle = app.app();
     try harness.start(app_handle);

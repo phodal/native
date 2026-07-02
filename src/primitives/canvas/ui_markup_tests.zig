@@ -125,3 +125,29 @@ test "message expressions parse tag and optional payload binding" {
     try testing.expectEqual(@as(?markup.MessageExpression, null), markup.parseMessageExpression("toggle:{}"));
     try testing.expectEqual(@as(?markup.MessageExpression, null), markup.parseMessageExpression("1add"));
 }
+
+test "structural validation reports positions for grammar misuse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    // The inbox fixture is fully valid.
+    var parser = markup.Parser.init(arena_state.allocator(), inbox_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<column>\n  <weird />\n</column>", .message = "unknown element" },
+        .{ .source = "<column bogus=\"1\" />", .message = "unknown attribute" },
+        .{ .source = "<row>\n  <button on-press=\"a + b\">X</button>\n</row>", .message = "invalid message expression" },
+        .{ .source = "<row>\n  <button on-hover=\"x\">X</button>\n</row>", .message = "unknown event attribute" },
+        .{ .source = "<row gap=\"{a + b}\" />", .message = "invalid expression" },
+        .{ .source = "<column>\n  <for as=\"t\"><text>x</text></for>\n</column>", .message = "for requires an each attribute" },
+        .{ .source = "<column>\n  <if><text>x</text></if>\n</column>", .message = "if requires a test attribute" },
+        .{ .source = "<column>\n  <else><text>x</text></else>\n</column>", .message = "else must directly follow an if" },
+    };
+    for (cases) |case| {
+        var case_parser = markup.Parser.init(arena_state.allocator(), case.source);
+        const info = markup.validate(try case_parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}

@@ -686,7 +686,7 @@ fn pathTail(path: []const u8) ?[]const u8 {
 
 // -------------------------------------------------------------- elements
 
-fn elementKind(name: []const u8) ?canvas.WidgetKind {
+pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
     const map = .{
         .{ "row", canvas.WidgetKind.row },
         .{ "column", canvas.WidgetKind.column },

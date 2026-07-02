@@ -264,3 +264,9 @@ test "markup build failures carry position and message" {
         try testing.expect(view.diagnostic.line > 0);
     }
 }
+
+test "the validator's element list matches the interpreter" {
+    for (canvas.ui_markup.known_element_names) |name| {
+        try testing.expect(markup_view.elementKind(name) != null);
+    }
+}

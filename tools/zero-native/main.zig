@@ -1,5 +1,6 @@
 const std = @import("std");
 const automation_cli = @import("automation.zig");
+const markup_cli = @import("markup.zig");
 const skills_cli = @import("skills.zig");
 const tooling = @import("tooling");
 
@@ -38,6 +39,8 @@ pub fn main(init: std.process.Init) !void {
             => std.process.exit(1),
             else => return err,
         };
+    } else if (std.mem.eql(u8, command, "markup")) {
+        try markup_cli.run(allocator, init.io, args[2..]);
     } else if (std.mem.eql(u8, command, "validate")) {
         const path = if (args.len >= 3) args[2] else "app.zon";
         const result = try tooling.manifest.validateFile(allocator, init.io, path);

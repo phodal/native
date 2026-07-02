@@ -166,6 +166,7 @@ pub fn build(b: *std.Build) void {
     const cli_mod = module(b, target, optimize, "tools/zero-native/main.zig");
     cli_mod.addImport("tooling", tooling_mod);
     cli_mod.addImport("automation_protocol", automation_protocol_mod);
+    cli_mod.addImport("ui_markup", module(b, target, optimize, "src/primitives/canvas/ui_markup.zig"));
     const cli_exe = b.addExecutable(.{
         .name = "zero-native",
         .root_module = cli_mod,
@@ -193,6 +194,7 @@ pub fn build(b: *std.Build) void {
     const host_cli_mod = module(b, host_target, optimize, "tools/zero-native/main.zig");
     host_cli_mod.addImport("tooling", host_tooling_mod);
     host_cli_mod.addImport("automation_protocol", host_automation_protocol_mod);
+    host_cli_mod.addImport("ui_markup", module(b, host_target, optimize, "src/primitives/canvas/ui_markup.zig"));
     const host_cli_exe = b.addExecutable(.{
         .name = "zero-native",
         .root_module = host_cli_mod,

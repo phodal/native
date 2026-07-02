@@ -341,3 +341,97 @@ fn isBindingPath(text: []const u8) bool {
     }
     return !segment_start;
 }
+
+// ------------------------------------------------------------ validation
+
+/// Element names the interpreter accepts (kept in sync by a test in
+/// ui_markup_view_tests.zig).
+pub const known_element_names = [_][]const u8{
+    "row",       "column",       "stack",    "panel",  "scroll",   "list",
+    "grid",      "card",         "text",     "button", "checkbox", "radio",
+    "toggle",    "slider",       "progress", "text-field", "search-field",
+    "textarea",  "list-item",    "menu-item", "status-bar", "separator",
+    "badge",     "spacer",
+};
+
+pub const known_option_attrs = [_][]const u8{
+    "placeholder", "value",    "checked", "selected",    "disabled",
+    "variant",     "size",     "width",   "height",      "grow",
+    "gap",         "padding",  "main",    "cross",       "virtualized",
+    "virtual-item-extent",     "key",     "global-key",  "role",
+    "label",
+};
+
+pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
+
+/// Model-agnostic structural validation: unknown elements or attributes,
+/// malformed expressions, and misshapen structure tags. Binding paths and
+/// message tags are checked against the concrete Model/Msg by the
+/// interpreter; this pass is what `zero-native markup check` runs.
+pub fn validate(document: MarkupDocument) ?MarkupErrorInfo {
+    return validateNode(document.root, false);
+}
+
+fn validateNode(node: MarkupNode, parent_is_element: bool) ?MarkupErrorInfo {
+    switch (node.kind) {
+        .text => return null,
+        .element => {
+            if (!nameInList(node.name, &known_element_names)) {
+                return errorAt(node, "unknown element");
+            }
+            for (node.attrs) |attribute| {
+                if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                    if (!nameInList(attribute.name[3..], &known_events)) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = "unknown event attribute" };
+                    }
+                    if (parseMessageExpression(attribute.value) == null) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = "invalid message expression" };
+                    }
+                    continue;
+                }
+                if (!nameInList(attribute.name, &known_option_attrs)) {
+                    return .{ .line = attribute.line, .column = attribute.column, .message = "unknown attribute" };
+                }
+                if (parseAttrExpression(attribute.value) == null) {
+                    return .{ .line = attribute.line, .column = attribute.column, .message = "invalid expression" };
+                }
+            }
+        },
+        .for_block => {
+            if (!parent_is_element) return errorAt(node, "for is only allowed inside an element");
+            if (node.attr("each") == null) return errorAt(node, "for requires an each attribute");
+            if (node.attr("as") == null) return errorAt(node, "for requires an as attribute");
+            if (node.children.len != 1 or node.children[0].kind != .element) {
+                return errorAt(node, "for takes exactly one element child");
+            }
+        },
+        .if_block => {
+            if (!parent_is_element) return errorAt(node, "if is only allowed inside an element");
+            const test_value = node.attr("test") orelse return errorAt(node, "if requires a test attribute");
+            if (parseAttrExpression(test_value) == null) return errorAt(node, "invalid expression");
+        },
+        .else_block => {},
+    }
+    var previous_kind: ?MarkupNodeKind = null;
+    for (node.children) |child| {
+        if (child.kind == .else_block and previous_kind != .if_block) {
+            return errorAt(child, "else must directly follow an if");
+        }
+        if (validateNode(child, node.kind == .element or node.kind == .for_block or node.kind == .if_block or node.kind == .else_block)) |info| {
+            return info;
+        }
+        previous_kind = child.kind;
+    }
+    return null;
+}
+
+fn nameInList(name: []const u8, list: []const []const u8) bool {
+    for (list) |candidate| {
+        if (std.mem.eql(u8, name, candidate)) return true;
+    }
+    return false;
+}
+
+fn errorAt(node: MarkupNode, message: []const u8) MarkupErrorInfo {
+    return .{ .line = node.line, .column = node.column, .message = message };
+}

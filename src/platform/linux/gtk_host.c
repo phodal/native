@@ -4,6 +4,7 @@
 #include <webkit/webkit.h>
 #include <glib/gstdio.h>
 #include <dlfcn.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -89,6 +90,21 @@ typedef struct zero_native_gtk_native_view {
     int enabled;
     int explicit_text;
     gulong action_handler;
+    /* gpu_surface (software canvas) state */
+    unsigned char *gpu_argb;
+    int gpu_buf_width;
+    int gpu_buf_height;
+    int gpu_buf_stride;
+    guint gpu_frame_timer;
+    uint64_t gpu_frame_index;
+    double gpu_emitted_width;
+    double gpu_emitted_height;
+    double gpu_emitted_scale;
+    int gpu_nonblank;
+    uint32_t gpu_sample_color;
+    int gpu_pointer_down;
+    double gpu_pointer_x;
+    double gpu_pointer_y;
 } zero_native_gtk_native_view_t;
 
 typedef struct zero_native_gtk_window {
@@ -109,6 +125,9 @@ typedef struct zero_native_gtk_window {
     int spa_fallback;
     double x;
     double y;
+    double emitted_width;
+    double emitted_height;
+    double emitted_scale;
     zero_native_gtk_webview_t webviews[ZERO_NATIVE_MAX_WEBVIEWS];
     int webview_count;
     zero_native_gtk_native_view_t native_views[ZERO_NATIVE_MAX_NATIVE_VIEWS];
@@ -152,6 +171,7 @@ struct zero_native_gtk_host {
 static void zero_native_emit(zero_native_gtk_host_t *host, zero_native_gtk_event_t event);
 static gboolean zero_native_on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer data);
 static GtkWindow *zero_native_parent_window(zero_native_gtk_host_t *host);
+static const char *zero_native_shortcut_key_for_keyval(guint keyval, char *buffer, size_t buffer_len, int *uses_implicit_shift);
 
 static char *zero_native_strndup(const char *s, size_t len) {
     char *out = malloc(len + 1);
@@ -346,6 +366,7 @@ static int zero_native_is_native_container_kind(int kind) {
 
 static int zero_native_is_supported_native_view_kind(int kind) {
     return zero_native_is_native_container_kind(kind) ||
+        kind == ZERO_NATIVE_GTK_VIEW_GPU_SURFACE ||
         kind == ZERO_NATIVE_GTK_VIEW_BUTTON ||
         kind == ZERO_NATIVE_GTK_VIEW_ICON_BUTTON ||
         kind == ZERO_NATIVE_GTK_VIEW_LIST_ITEM ||
@@ -479,9 +500,293 @@ static GtkWidget *zero_native_make_native_widget(int kind, const char *label, co
             gtk_spinner_start(GTK_SPINNER(spinner));
             return spinner;
         }
+        case ZERO_NATIVE_GTK_VIEW_GPU_SURFACE: {
+            GtkWidget *area = gtk_drawing_area_new();
+            gtk_widget_set_focusable(area, TRUE);
+            return area;
+        }
         default:
             return NULL;
     }
+}
+
+/* ---------------------------------------------------------------- gpu surface
+ *
+ * A gpu_surface view is a GtkDrawingArea driven by the CPU pixel path: the
+ * runtime rasterizes canvas frames with the reference renderer and hands
+ * RGBA8 buffers to zero_native_gtk_present_gpu_surface_pixels, which converts
+ * them into a premultiplied CAIRO_FORMAT_ARGB32 buffer and queues a redraw.
+ * A 16 ms host timer plays the role of the `.timer` present mode: it emits
+ * gpu_surface_frame events (and gpu_surface_resize on size/scale changes),
+ * matching the macOS Metal host's event cadence. Pointer, scroll, and key
+ * input map onto the same gpu_surface_input kinds the AppKit host emits.
+ */
+
+#define ZERO_NATIVE_GTK_GPU_FRAME_INTERVAL_NS 16666667ull
+
+#define ZERO_NATIVE_GTK_GPU_INPUT_POINTER_DOWN 0
+#define ZERO_NATIVE_GTK_GPU_INPUT_POINTER_UP 1
+#define ZERO_NATIVE_GTK_GPU_INPUT_POINTER_MOVE 2
+#define ZERO_NATIVE_GTK_GPU_INPUT_POINTER_DRAG 3
+#define ZERO_NATIVE_GTK_GPU_INPUT_SCROLL 4
+#define ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN 5
+#define ZERO_NATIVE_GTK_GPU_INPUT_KEY_UP 6
+
+static uint64_t zero_native_gpu_timestamp_ns(void) {
+    return (uint64_t)g_get_monotonic_time() * 1000ull;
+}
+
+static uint32_t zero_native_gpu_modifier_flags(GdkModifierType state) {
+    uint32_t flags = 0;
+    if (state & GDK_CONTROL_MASK) flags |= ZERO_NATIVE_SHORTCUT_MODIFIER_PRIMARY | ZERO_NATIVE_SHORTCUT_MODIFIER_CONTROL;
+    if (state & GDK_ALT_MASK) flags |= ZERO_NATIVE_SHORTCUT_MODIFIER_OPTION;
+    if (state & GDK_SHIFT_MASK) flags |= ZERO_NATIVE_SHORTCUT_MODIFIER_SHIFT;
+    if ((state & GDK_META_MASK) || (state & GDK_SUPER_MASK)) flags |= ZERO_NATIVE_SHORTCUT_MODIFIER_COMMAND;
+    return flags;
+}
+
+static void zero_native_emit_gpu_surface_input(zero_native_gtk_native_view_t *view, int input_kind, double x, double y, int button, double delta_x, double delta_y, const char *key, const char *text, uint32_t modifiers) {
+    if (!view || !view->window || !view->window->host || !view->label) return;
+    zero_native_emit(view->window->host, (zero_native_gtk_event_t){
+        .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_INPUT,
+        .window_id = view->window->id,
+        .view_label = view->label,
+        .view_label_len = strlen(view->label),
+        .x = x,
+        .y = y,
+        .timestamp_ns = zero_native_gpu_timestamp_ns(),
+        .input_kind = input_kind,
+        .button = button,
+        .delta_x = delta_x,
+        .delta_y = delta_y,
+        .key_text = key ? key : "",
+        .key_text_len = key ? strlen(key) : 0,
+        .input_text = text ? text : "",
+        .input_text_len = text ? strlen(text) : 0,
+        .shortcut_modifiers = modifiers,
+    });
+}
+
+static double zero_native_gpu_surface_width(zero_native_gtk_native_view_t *view) {
+    int width = view->widget ? gtk_widget_get_width(view->widget) : 0;
+    if (width > 0) return (double)width;
+    if (view->width > 0) return view->width;
+    if (view->window && view->window->stack_root) {
+        width = gtk_widget_get_width(view->window->stack_root);
+        if (width > 0) return (double)width;
+    }
+    return 0;
+}
+
+static double zero_native_gpu_surface_height(zero_native_gtk_native_view_t *view) {
+    int height = view->widget ? gtk_widget_get_height(view->widget) : 0;
+    if (height > 0) return (double)height;
+    if (view->height > 0) return view->height;
+    if (view->window && view->window->stack_root) {
+        height = gtk_widget_get_height(view->window->stack_root);
+        if (height > 0) return (double)height;
+    }
+    return 0;
+}
+
+static gboolean zero_native_gpu_surface_tick(gpointer data) {
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !view->widget || !view->window || !view->window->host) return G_SOURCE_REMOVE;
+
+    const double width = zero_native_gpu_surface_width(view);
+    const double height = zero_native_gpu_surface_height(view);
+    const double scale = view->widget ? (double)gtk_widget_get_scale_factor(view->widget) : 1.0;
+    if (width <= 0 || height <= 0) return G_SOURCE_CONTINUE;
+
+    if (width != view->gpu_emitted_width || height != view->gpu_emitted_height || scale != view->gpu_emitted_scale) {
+        view->gpu_emitted_width = width;
+        view->gpu_emitted_height = height;
+        view->gpu_emitted_scale = scale;
+        zero_native_emit(view->window->host, (zero_native_gtk_event_t){
+            .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_RESIZE,
+            .window_id = view->window->id,
+            .view_label = view->label,
+            .view_label_len = view->label ? strlen(view->label) : 0,
+            .x = view->x,
+            .y = view->y,
+            .width = width,
+            .height = height,
+            .scale = scale,
+            .timestamp_ns = zero_native_gpu_timestamp_ns(),
+        });
+    }
+
+    view->gpu_frame_index += 1;
+    zero_native_emit(view->window->host, (zero_native_gtk_event_t){
+        .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_FRAME,
+        .window_id = view->window->id,
+        .view_label = view->label,
+        .view_label_len = view->label ? strlen(view->label) : 0,
+        .width = width,
+        .height = height,
+        .scale = scale,
+        .frame_index = view->gpu_frame_index,
+        .timestamp_ns = zero_native_gpu_timestamp_ns(),
+        .frame_interval_ns = ZERO_NATIVE_GTK_GPU_FRAME_INTERVAL_NS,
+        .nonblank = view->gpu_nonblank,
+        .sample_color = view->gpu_sample_color,
+    });
+    return G_SOURCE_CONTINUE;
+}
+
+static void zero_native_gpu_surface_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data) {
+    (void)area;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !view->gpu_argb || view->gpu_buf_width <= 0 || view->gpu_buf_height <= 0) return;
+    cairo_surface_t *surface = cairo_image_surface_create_for_data(view->gpu_argb, CAIRO_FORMAT_ARGB32, view->gpu_buf_width, view->gpu_buf_height, view->gpu_buf_stride);
+    if (!surface || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        if (surface) cairo_surface_destroy(surface);
+        return;
+    }
+    cairo_save(cr);
+    if (width > 0 && height > 0) {
+        cairo_scale(cr, (double)width / (double)view->gpu_buf_width, (double)height / (double)view->gpu_buf_height);
+    }
+    cairo_set_source_surface(cr, surface, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    cairo_surface_destroy(surface);
+}
+
+static void zero_native_gpu_pointer_pressed(GtkGestureClick *gesture, int n_press, double x, double y, gpointer data) {
+    (void)n_press;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !view->widget) return;
+    gtk_widget_grab_focus(view->widget);
+    view->gpu_pointer_down = 1;
+    view->gpu_pointer_x = x;
+    view->gpu_pointer_y = y;
+    const int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) - 1;
+    const uint32_t modifiers = zero_native_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+    zero_native_emit_gpu_surface_input(view, ZERO_NATIVE_GTK_GPU_INPUT_POINTER_DOWN, x, y, button < 0 ? 0 : button, 0, 0, "", "", modifiers);
+}
+
+static void zero_native_gpu_pointer_released(GtkGestureClick *gesture, int n_press, double x, double y, gpointer data) {
+    (void)n_press;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view) return;
+    view->gpu_pointer_down = 0;
+    view->gpu_pointer_x = x;
+    view->gpu_pointer_y = y;
+    const int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) - 1;
+    const uint32_t modifiers = zero_native_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+    zero_native_emit_gpu_surface_input(view, ZERO_NATIVE_GTK_GPU_INPUT_POINTER_UP, x, y, button < 0 ? 0 : button, 0, 0, "", "", modifiers);
+}
+
+static void zero_native_gpu_pointer_motion(GtkEventControllerMotion *controller, double x, double y, gpointer data) {
+    zero_native_gtk_native_view_t *view = data;
+    if (!view) return;
+    view->gpu_pointer_x = x;
+    view->gpu_pointer_y = y;
+    const uint32_t modifiers = zero_native_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller)));
+    const int kind = view->gpu_pointer_down ? ZERO_NATIVE_GTK_GPU_INPUT_POINTER_DRAG : ZERO_NATIVE_GTK_GPU_INPUT_POINTER_MOVE;
+    zero_native_emit_gpu_surface_input(view, kind, x, y, 0, 0, 0, "", "", modifiers);
+}
+
+static gboolean zero_native_gpu_scroll(GtkEventControllerScroll *controller, double dx, double dy, gpointer data) {
+    zero_native_gtk_native_view_t *view = data;
+    if (!view) return FALSE;
+    double delta_x = dx;
+    double delta_y = dy;
+#if GTK_CHECK_VERSION(4, 8, 0)
+    if (gtk_event_controller_scroll_get_unit(controller) == GDK_SCROLL_UNIT_WHEEL) {
+        delta_x *= 40.0;
+        delta_y *= 40.0;
+    }
+#else
+    delta_x *= 40.0;
+    delta_y *= 40.0;
+#endif
+    const uint32_t modifiers = zero_native_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller)));
+    zero_native_emit_gpu_surface_input(view, ZERO_NATIVE_GTK_GPU_INPUT_SCROLL, view->gpu_pointer_x, view->gpu_pointer_y, 0, delta_x, delta_y, "", "", modifiers);
+    return TRUE;
+}
+
+static gboolean zero_native_gpu_key_event(zero_native_gtk_native_view_t *view, guint keyval, GdkModifierType state, int input_kind) {
+    char key_buffer[32];
+    int uses_implicit_shift = 0;
+    const char *key = zero_native_shortcut_key_for_keyval(keyval, key_buffer, sizeof(key_buffer), &uses_implicit_shift);
+
+    char text_buffer[8] = {0};
+    if (input_kind == ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN &&
+        (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_META_MASK | GDK_SUPER_MASK)) == 0) {
+        gunichar ch = gdk_keyval_to_unicode(keyval);
+        if (ch >= 0x20 && ch != 0x7f) {
+            int len = g_unichar_to_utf8(ch, text_buffer);
+            text_buffer[len < 0 ? 0 : len] = '\0';
+        }
+    }
+
+    if ((!key || !key[0]) && !text_buffer[0]) return FALSE;
+    const uint32_t modifiers = zero_native_gpu_modifier_flags(state);
+    zero_native_emit_gpu_surface_input(view, input_kind, view->gpu_pointer_x, view->gpu_pointer_y, 0, 0, 0, key, text_buffer, modifiers);
+    return TRUE;
+}
+
+static gboolean zero_native_gpu_key_pressed(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer data) {
+    (void)controller;
+    (void)keycode;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view) return FALSE;
+    return zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN);
+}
+
+static void zero_native_gpu_key_released(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer data) {
+    (void)controller;
+    (void)keycode;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view) return;
+    (void)zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_UP);
+}
+
+static void zero_native_setup_gpu_surface_view(zero_native_gtk_native_view_t *view) {
+    if (!view || !view->widget || view->kind != ZERO_NATIVE_GTK_VIEW_GPU_SURFACE) return;
+
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(view->widget), zero_native_gpu_surface_draw, view, NULL);
+
+    GtkGesture *click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
+    g_signal_connect(click, "pressed", G_CALLBACK(zero_native_gpu_pointer_pressed), view);
+    g_signal_connect(click, "released", G_CALLBACK(zero_native_gpu_pointer_released), view);
+    gtk_widget_add_controller(view->widget, GTK_EVENT_CONTROLLER(click));
+
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "motion", G_CALLBACK(zero_native_gpu_pointer_motion), view);
+    gtk_widget_add_controller(view->widget, motion);
+
+    GtkEventController *scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+    g_signal_connect(scroll, "scroll", G_CALLBACK(zero_native_gpu_scroll), view);
+    gtk_widget_add_controller(view->widget, scroll);
+
+    GtkEventController *keys = gtk_event_controller_key_new();
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(zero_native_gpu_key_pressed), view);
+    g_signal_connect(keys, "key-released", G_CALLBACK(zero_native_gpu_key_released), view);
+    gtk_widget_add_controller(view->widget, keys);
+
+    gtk_widget_grab_focus(view->widget);
+    view->gpu_frame_timer = g_timeout_add(16, zero_native_gpu_surface_tick, view);
+}
+
+static void zero_native_teardown_gpu_surface_view(zero_native_gtk_native_view_t *view) {
+    if (!view) return;
+    if (view->gpu_frame_timer) {
+        g_source_remove(view->gpu_frame_timer);
+        view->gpu_frame_timer = 0;
+    }
+    if (view->widget && view->kind == ZERO_NATIVE_GTK_VIEW_GPU_SURFACE) {
+        gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(view->widget), NULL, NULL, NULL);
+    }
+    free(view->gpu_argb);
+    view->gpu_argb = NULL;
+    view->gpu_buf_width = 0;
+    view->gpu_buf_height = 0;
+    view->gpu_buf_stride = 0;
 }
 
 static void zero_native_apply_native_view_frame(zero_native_gtk_native_view_t *view) {
@@ -568,7 +873,11 @@ static void zero_native_reorder_overlays(zero_native_gtk_window_t *win) {
     if (!win || !win->stack_root) return;
     int placed[ZERO_NATIVE_MAX_WEBVIEWS] = {0};
     int native_placed[ZERO_NATIVE_MAX_NATIVE_VIEWS] = {0};
-    GtkWidget *previous = NULL;
+    /* Keep the overlay's main child (the window WebView) as the first
+     * sibling: GTK picks and paints later siblings on top, so overlays
+     * inserted before it would render below the WebView and never receive
+     * pointer input. */
+    GtkWidget *previous = win->web_view ? GTK_WIDGET(win->web_view) : NULL;
     int total = win->webview_count + win->native_view_count;
     for (int pass = 0; pass < total; pass++) {
         int best_webview = -1;
@@ -627,6 +936,7 @@ static void zero_native_clear_native_view(zero_native_gtk_window_t *win, zero_na
         zero_native_remove_native_children(win, label);
         free(label);
     }
+    zero_native_teardown_gpu_surface_view(view);
     if (view->widget) {
         if (view->action_handler != 0) {
             g_signal_handler_disconnect(view->widget, view->action_handler);
@@ -1316,6 +1626,25 @@ static gboolean on_shortcut_key_pressed(GtkEventControllerKey *controller, guint
 
 static gboolean zero_native_frame_tick(gpointer data) {
     zero_native_gtk_host_t *host = data;
+    /* GTK only reports the window's real allocation after mapping (and never
+     * re-fires notify::default-width for it), so poll for allocation/scale
+     * changes here and re-emit resize + window frame events; shell layout
+     * depends on a non-zero surface size. */
+    for (int i = 0; i < host->window_count; i++) {
+        zero_native_gtk_window_t *win = &host->windows[i];
+        if (!win->gtk_window) continue;
+        const double w = (double)gtk_widget_get_width(GTK_WIDGET(win->gtk_window));
+        const double h = (double)gtk_widget_get_height(GTK_WIDGET(win->gtk_window));
+        GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
+        const double scale = surface ? gdk_surface_get_scale_factor(surface) : 1.0;
+        if (w > 0 && h > 0 && (w != win->emitted_width || h != win->emitted_height || scale != win->emitted_scale)) {
+            win->emitted_width = w;
+            win->emitted_height = h;
+            win->emitted_scale = scale;
+            zero_native_emit_resize(host, win);
+            zero_native_emit_window_frame(host, win, 1);
+        }
+    }
     zero_native_emit(host, (zero_native_gtk_event_t){ .kind = ZERO_NATIVE_GTK_EVENT_FRAME });
     return G_SOURCE_CONTINUE;
 }
@@ -2045,8 +2374,79 @@ int zero_native_gtk_create_view(zero_native_gtk_host_t *host, uint64_t window_id
     zero_native_apply_native_view_frame(view);
     zero_native_apply_native_view_state(view, 1, display_text);
     zero_native_configure_native_view_action(view);
+    if (kind == ZERO_NATIVE_GTK_VIEW_GPU_SURFACE) zero_native_setup_gpu_surface_view(view);
     win->native_view_count++;
     zero_native_reorder_overlays(win);
+    return 1;
+}
+
+int zero_native_gtk_request_gpu_surface_frame(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
+    zero_native_gtk_window_t *win = zero_native_find_window(host, window_id);
+    char *label_copy = label_len > 0 ? zero_native_strndup(label, label_len) : NULL;
+    zero_native_gtk_native_view_t *view = zero_native_find_native_view(win, label_copy);
+    free(label_copy);
+    if (!view || view->kind != ZERO_NATIVE_GTK_VIEW_GPU_SURFACE || !view->widget) return 0;
+    /* The per-view frame timer already drives `.timer` present mode; a
+     * request only needs to guarantee the next tick redraws. */
+    gtk_widget_queue_draw(view->widget);
+    return 1;
+}
+
+int zero_native_gtk_present_gpu_surface_pixels(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
+    (void)scale;
+    (void)has_dirty_rect;
+    (void)dirty_x;
+    (void)dirty_y;
+    (void)dirty_width;
+    (void)dirty_height;
+    zero_native_gtk_window_t *win = zero_native_find_window(host, window_id);
+    char *label_copy = label_len > 0 ? zero_native_strndup(label, label_len) : NULL;
+    zero_native_gtk_native_view_t *view = zero_native_find_native_view(win, label_copy);
+    free(label_copy);
+    if (!view || view->kind != ZERO_NATIVE_GTK_VIEW_GPU_SURFACE || !view->widget) return 0;
+    if (!rgba8 || width == 0 || height == 0) return 0;
+    if (width > INT_MAX || height > INT_MAX) return 0;
+    if (rgba8_len != width * height * 4) return 0;
+
+    const int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, (int)width);
+    if (stride <= 0) return 0;
+    if (view->gpu_buf_width != (int)width || view->gpu_buf_height != (int)height || view->gpu_buf_stride != stride || !view->gpu_argb) {
+        unsigned char *buffer = malloc((size_t)stride * height);
+        if (!buffer) return 0;
+        free(view->gpu_argb);
+        view->gpu_argb = buffer;
+        view->gpu_buf_width = (int)width;
+        view->gpu_buf_height = (int)height;
+        view->gpu_buf_stride = stride;
+    }
+
+    /* Straight RGBA8 -> premultiplied native-endian ARGB32 for cairo. */
+    for (size_t row = 0; row < height; row++) {
+        const uint8_t *src = rgba8 + row * width * 4;
+        uint32_t *dst = (uint32_t *)(view->gpu_argb + (size_t)row * (size_t)stride);
+        for (size_t col = 0; col < width; col++) {
+            const uint32_t r = src[col * 4 + 0];
+            const uint32_t g = src[col * 4 + 1];
+            const uint32_t b = src[col * 4 + 2];
+            const uint32_t a = src[col * 4 + 3];
+            const uint32_t pr = (r * a + 127) / 255;
+            const uint32_t pg = (g * a + 127) / 255;
+            const uint32_t pb = (b * a + 127) / 255;
+            dst[col] = (a << 24) | (pr << 16) | (pg << 8) | pb;
+        }
+    }
+
+    const size_t sample_index = ((height / 2) * width + width / 2) * 4;
+    const uint8_t sr = rgba8[sample_index + 0];
+    const uint8_t sg = rgba8[sample_index + 1];
+    const uint8_t sb = rgba8[sample_index + 2];
+    const uint8_t sa = rgba8[sample_index + 3];
+    if (sr != 0 || sg != 0 || sb != 0) {
+        view->gpu_nonblank = 1;
+        view->gpu_sample_color = ((uint32_t)sa << 24) | ((uint32_t)sr << 16) | ((uint32_t)sg << 8) | (uint32_t)sb;
+    }
+
+    gtk_widget_queue_draw(view->widget);
     return 1;
 }
 

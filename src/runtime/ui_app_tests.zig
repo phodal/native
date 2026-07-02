@@ -128,6 +128,61 @@ test "ui app owns install, dispatch, and rebuild end to end" {
     try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 0"));
 }
 
+test "ui app presents pixels when the packet service is unsupported" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    harness.null_platform.gpu_surface_packets = false;
+
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.testing.allocator, .{}, counterOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // The installing frame falls back from the failing packet presenter to
+    // the CPU pixel path: the widget tree installs and the reference-rendered
+    // surface reaches the platform at device resolution.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 0"));
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(usize, 800), harness.null_platform.gpu_surface_present_width);
+    try std.testing.expectEqual(@as(usize, 600), harness.null_platform.gpu_surface_present_height);
+    try std.testing.expectEqual(@as(f32, 2), harness.null_platform.gpu_surface_present_scale_factor);
+    try std.testing.expectEqual(@as(usize, 800 * 600 * 4), harness.null_platform.gpu_surface_present_byte_len);
+    try std.testing.expectEqualStrings(
+        canvas_label,
+        harness.null_platform.gpu_surface_present_label_storage[0..harness.null_platform.gpu_surface_present_label_len],
+    );
+
+    // Model changes keep presenting through the pixel path.
+    const increment_id = findWidgetIdByText(app_state.tree.?, .button, "Increment").?;
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, increment_id });
+    try harness.runtime.dispatchAutomationCommand(app, click);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 2,
+        .timestamp_ns = 17_000_000,
+    } });
+    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 1"));
+}
+
 const counter_markup =
     \\<column gap="8" padding="12">
     \\  <text>Count {count}</text>

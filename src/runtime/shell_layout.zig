@@ -258,6 +258,7 @@ fn shellGpuSurfaceBackend(value: app_manifest.GpuSurfaceBackend) platform.GpuSur
     return switch (value) {
         .none => .none,
         .metal => .metal,
+        .software => .software,
     };
 }
 

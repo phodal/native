@@ -25,6 +25,7 @@ const canvas = @import("canvas");
 const app_manifest = @import("app_manifest");
 const platform = @import("../platform/root.zig");
 const core = @import("core.zig");
+const canvas_frame = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 
 const Runtime = core.Runtime;
@@ -159,6 +160,16 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         markup_diagnostic: ?canvas.ui_markup.MarkupErrorInfo = null,
         gpu_commands: [canvas_limits.max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined,
         packet_json: [platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
+        /// Allocator backing the arenas and the lazily grown pixel
+        /// presentation buffers below.
+        backing: std.mem.Allocator,
+        /// CPU presentation scratch, used only on platforms without a GPU
+        /// packet presenter (or when packet presentation fails at runtime):
+        /// heap-allocated lazily, sized to the surface in device pixels, and
+        /// grown on resize. Platforms that present packets never allocate
+        /// these.
+        pixel_buffer: []u8 = &.{},
+        pixel_scratch: []u8 = &.{},
 
         pub fn init(backing: std.mem.Allocator, model: ModelT, options: Options) Self {
             std.debug.assert(options.view != null or options.markup != null);
@@ -166,6 +177,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             return .{
                 .model = model,
                 .options = options,
+                .backing = backing,
                 .arenas = .{
                     std.heap.ArenaAllocator.init(backing),
                     std.heap.ArenaAllocator.init(backing),
@@ -182,6 +194,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             self.arenas[1].deinit();
             self.markup_arenas[0].deinit();
             self.markup_arenas[1].deinit();
+            if (self.pixel_buffer.len > 0) self.backing.free(self.pixel_buffer);
+            if (self.pixel_scratch.len > 0) self.backing.free(self.pixel_scratch);
+            self.pixel_buffer = &.{};
+            self.pixel_scratch = &.{};
         }
 
         pub fn app(self: *Self) App {
@@ -446,7 +462,55 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 self.pixel_snap_scale = scale;
                 try self.rebuild(runtime, frame_event.window_id);
             }
-            _ = runtime.presentNextCanvasGpuPacketWithScale(
+            try self.presentFrame(runtime, frame_event);
+            if (installing) return;
+            const on_frame = self.options.on_frame orelse return;
+            const gpu_frame = runtime.gpuSurfaceFrame(frame_event.window_id, self.options.canvas_label) catch return;
+            if (on_frame(&self.model, gpu_frame)) |msg| {
+                try self.dispatch(runtime, frame_event.window_id, msg);
+            }
+        }
+
+        /// Present the planned canvas frame: GPU packet when the platform
+        /// has a packet presenter (macOS/Metal — unchanged), otherwise the
+        /// CPU reference-rendered pixel path (`presentGpuSurfacePixels`,
+        /// e.g. Linux/GTK). A platform whose packet presenter exists but
+        /// reports `UnsupportedService` at present time also falls back to
+        /// pixels; that attempt forces a full repaint because the failed
+        /// packet plan already recorded the frame's presented summary.
+        fn presentFrame(self: *Self, runtime: *Runtime, frame_event: platform.GpuSurfaceFrameEvent) anyerror!void {
+            const services = runtime.options.platform.services;
+            const clear_color = self.effectiveTokens().colors.background;
+            var packet_attempted = false;
+            if (services.present_gpu_surface_packet_fn != null) {
+                packet_attempted = true;
+                const packet_presented = blk: {
+                    _ = runtime.presentNextCanvasGpuPacketWithScale(
+                        frame_event.window_id,
+                        self.options.canvas_label,
+                        .{
+                            .frame_index = frame_event.frame_index,
+                            .timestamp_ns = frame_event.timestamp_ns,
+                            .surface_size = frame_event.size,
+                            .scale = frame_event.scale_factor,
+                            .full_repaint = frame_event.canvas_frame_full_repaint,
+                        },
+                        runtime.canvasFrameScratchStorage(),
+                        clear_color,
+                        &self.gpu_commands,
+                        &self.packet_json,
+                        null,
+                    ) catch |err| switch (err) {
+                        error.UnsupportedService => break :blk false,
+                        else => return err,
+                    };
+                    break :blk true;
+                };
+                if (packet_presented) return;
+            }
+            if (services.present_gpu_surface_pixels_fn == null) return;
+            self.ensurePixelBuffers(frame_event.size, frame_event.scale_factor) catch return;
+            _ = runtime.presentNextCanvasFramePixels(
                 frame_event.window_id,
                 self.options.canvas_label,
                 .{
@@ -454,22 +518,31 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     .timestamp_ns = frame_event.timestamp_ns,
                     .surface_size = frame_event.size,
                     .scale = frame_event.scale_factor,
-                    .full_repaint = frame_event.canvas_frame_full_repaint,
+                    .full_repaint = frame_event.canvas_frame_full_repaint or packet_attempted,
                 },
                 runtime.canvasFrameScratchStorage(),
-                self.effectiveTokens().colors.background,
-                &self.gpu_commands,
-                &self.packet_json,
-                null,
+                self.pixel_buffer,
+                self.pixel_scratch,
+                clear_color,
             ) catch |err| switch (err) {
-                error.UnsupportedService => {},
+                error.UnsupportedService, error.UnsupportedViewKind => {},
                 else => return err,
             };
-            if (installing) return;
-            const on_frame = self.options.on_frame orelse return;
-            const gpu_frame = runtime.gpuSurfaceFrame(frame_event.window_id, self.options.canvas_label) catch return;
-            if (on_frame(&self.model, gpu_frame)) |msg| {
-                try self.dispatch(runtime, frame_event.window_id, msg);
+        }
+
+        /// Grow the heap pixel buffers to hold the surface at the given
+        /// scale. No-op when they are already large enough.
+        fn ensurePixelBuffers(self: *Self, surface_size: geometry.SizeF, scale_factor: f32) anyerror!void {
+            const pixel_size = try canvas_frame.canvasSurfacePixelSize(surface_size, scale_factor);
+            if (self.pixel_buffer.len < pixel_size.byte_len) {
+                if (self.pixel_buffer.len > 0) self.backing.free(self.pixel_buffer);
+                self.pixel_buffer = &.{};
+                self.pixel_buffer = try self.backing.alloc(u8, pixel_size.byte_len);
+            }
+            if (self.pixel_scratch.len < pixel_size.byte_len) {
+                if (self.pixel_scratch.len > 0) self.backing.free(self.pixel_scratch);
+                self.pixel_scratch = &.{};
+                self.pixel_scratch = try self.backing.alloc(u8, pixel_size.byte_len);
             }
         }
 

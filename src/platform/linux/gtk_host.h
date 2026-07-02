@@ -22,6 +22,9 @@ typedef enum {
     ZERO_NATIVE_GTK_EVENT_APP_DEACTIVATED = 8,
     ZERO_NATIVE_GTK_EVENT_MENU_COMMAND = 9,
     ZERO_NATIVE_GTK_EVENT_FILES_DROPPED = 10,
+    ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_FRAME = 11,
+    ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_RESIZE = 12,
+    ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_INPUT = 13,
 } zero_native_gtk_event_kind_t;
 
 typedef struct {
@@ -49,6 +52,21 @@ typedef struct {
     size_t view_label_len;
     const char *drop_paths;
     size_t drop_paths_len;
+    uint64_t frame_index;
+    uint64_t timestamp_ns;
+    uint64_t frame_interval_ns;
+    int nonblank;
+    uint32_t sample_color;
+    int input_kind;
+    int button;
+    double delta_x;
+    double delta_y;
+    const char *key_text;
+    size_t key_text_len;
+    const char *input_text;
+    size_t input_text_len;
+    int has_composition_cursor;
+    size_t composition_cursor;
 } zero_native_gtk_event_t;
 
 typedef void (*zero_native_gtk_event_callback_t)(void *context, const zero_native_gtk_event_t *event);
@@ -120,6 +138,8 @@ int zero_native_gtk_set_view_frame(zero_native_gtk_host_t *host, uint64_t window
 int zero_native_gtk_set_view_visible(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, int visible);
 int zero_native_gtk_focus_view(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len);
 int zero_native_gtk_close_view(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len);
+int zero_native_gtk_request_gpu_surface_frame(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len);
+int zero_native_gtk_present_gpu_surface_pixels(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len);
 int zero_native_gtk_create_webview(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled);
 int zero_native_gtk_set_webview_frame(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height);
 int zero_native_gtk_navigate_webview(zero_native_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len);

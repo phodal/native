@@ -405,6 +405,11 @@ pub const ViewKind = enum {
 pub const GpuSurfaceBackend = enum {
     none,
     metal,
+    /// CPU rasterization (reference renderer) presented through the
+    /// platform's pixel blit path. Platforms without a GPU packet renderer
+    /// (Linux/GTK) report this backend in their frame events; manifests
+    /// declaring another backend fall back to it rather than erroring.
+    software,
 };
 
 pub const GpuSurfacePixelFormat = enum {
@@ -452,7 +457,7 @@ pub const GpuSurfaceOptions = struct {
     vsync: bool = true,
 
     pub fn isSupported(self: GpuSurfaceOptions) bool {
-        return self.backend == .metal and
+        return (self.backend == .metal or self.backend == .software) and
             self.pixel_format == .bgra8_unorm and
             self.present_mode == .timer and
             self.alpha_mode == .@"opaque" and

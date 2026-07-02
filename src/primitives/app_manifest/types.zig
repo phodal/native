@@ -291,6 +291,7 @@ pub const ViewKind = enum {
 pub const GpuSurfaceBackend = enum {
     none,
     metal,
+    software,
 };
 
 pub const GpuSurfacePixelFormat = enum {

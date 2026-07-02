@@ -1033,6 +1033,7 @@ fn parseViewKind(value: []const u8) !app_manifest.ViewKind {
 fn parseGpuSurfaceBackend(value: []const u8) !app_manifest.GpuSurfaceBackend {
     if (std.mem.eql(u8, value, "none")) return .none;
     if (std.mem.eql(u8, value, "metal")) return .metal;
+    if (std.mem.eql(u8, value, "software")) return .software;
     return error.InvalidViewKind;
 }
 

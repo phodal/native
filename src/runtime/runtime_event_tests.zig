@@ -429,7 +429,11 @@ test "runtime dispatches GPU surface events" {
     try std.testing.expectEqual(@as(u64, 150_000_000), app_state.last_first_frame_latency_budget_ns);
     try std.testing.expectEqual(@as(usize, 0), app_state.last_first_frame_latency_budget_exceeded_count);
     try std.testing.expect(app_state.last_first_frame_latency_budget_ok);
-    try std.testing.expect(!harness.runtime.invalidated);
+    // The first nonblank frame is an observable state transition and must
+    // invalidate so automation snapshots republish; steady-state frames do
+    // not (covered by "gpu surface nonblank transition invalidates the
+    // runtime" below).
+    try std.testing.expect(harness.runtime.invalidated);
     const frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expectEqual(created.id, frame.surface_id);
     try std.testing.expectEqual(@as(platform.WindowId, 1), frame.window_id);
@@ -774,4 +778,74 @@ test "runtime starts, fires, and cancels platform timers" {
     try harness.runtime.cancelTimer(11);
     try std.testing.expect(harness.null_platform.fireTimer(11, 78_000) == null);
     try std.testing.expectEqual(@as(usize, 1), app_state.timer_count);
+}
+
+test "gpu surface nonblank transition invalidates the runtime" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-nonblank", .source = platform.WebViewSource.html("<h1>GPU</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = context;
+            _ = runtime;
+            _ = event_value;
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 640, 360),
+    });
+
+    // A blank frame on an idle runtime must not invalidate: the per-frame
+    // tick would otherwise republish observable state 60 times a second.
+    harness.runtime.invalidated = false;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(640, 360),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 16,
+        .nonblank = false,
+    } });
+    try std.testing.expect(!harness.runtime.invalidated);
+
+    // The first nonblank frame is an observable state change with no other
+    // invalidation source on an idle boot (no resize, no input); it must
+    // invalidate so automation snapshots republish gpu_nonblank=true.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(640, 360),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 32,
+        .nonblank = true,
+    } });
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect((try harness.runtime.gpuSurfaceFrame(1, "canvas")).nonblank);
+
+    // Steady-state nonblank frames carry no new fact and stay quiet.
+    harness.runtime.invalidated = false;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(640, 360),
+        .scale_factor = 1,
+        .frame_index = 3,
+        .timestamp_ns = 48,
+        .nonblank = true,
+    } });
+    try std.testing.expect(!harness.runtime.invalidated);
 }

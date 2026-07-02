@@ -28,6 +28,16 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 self.views[index].recordGpuSurfaceFirstFrameLatency(frame_event.timestamp_ns);
                 self.views[index].recordGpuSurfaceInputLatencyForFrame(frame_event.timestamp_ns);
                 try CanvasWidgetDisplayMethods().advanceCanvasWidgetKineticScrollForFrame(self, index, frame_event.frame_interval_ns, had_pending_input);
+                // Observable snapshots (automation, bridge state) only
+                // republish when the runtime is invalidated. The first
+                // nonblank presentation on an idle boot has no other
+                // invalidation source — no resize, no input — so a change
+                // in the host-reported nonblank fact must invalidate here
+                // or the published snapshot stays stale at nonblank=false
+                // until the first input arrives.
+                if (self.views[index].gpu_frame_nonblank != frame_event.nonblank) {
+                    self.invalidateFor(.state, self.views[index].frame);
+                }
                 self.views[index].gpu_frame_nonblank = frame_event.nonblank;
                 self.views[index].gpu_sample_color = frame_event.sample_color;
                 self.views[index].gpu_backend = frame_event.backend;

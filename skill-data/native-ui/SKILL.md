@@ -116,11 +116,12 @@ The model applies every edit event and is the source of truth; the runtime keeps
 ```
 
 ```zig
-.draft_edit => |edit| model.applyDraftEdit(edit),  // canvas.applyTextInputEvent into a fixed buffer + TextSelection
-.add => { model.addTask(model.draft()); model.clearDraft(); },  // clearing the source clears the field
+draft: canvas.TextBuffer(64) = .{},                   // model field: text + selection + composition
+.draft_edit => |edit| model.draft.apply(edit),        // mirror every edit
+.add => { model.addTask(model.draft.text()); model.draft.clear(); },  // clearing the source clears the field
 ```
 
-See `examples/ui-inbox` for the complete pattern (draft_storage/draft_selection fields, `applyDraftEdit`).
+See `examples/ui-inbox` for the complete pattern.
 
 ## Structure tags
 

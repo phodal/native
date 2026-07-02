@@ -92,6 +92,7 @@ pub const TextCaretMove = text_interaction.TextCaretMove;
 pub const TextCompositionUpdate = text_interaction.TextCompositionUpdate;
 pub const TextInputEvent = text_interaction.TextInputEvent;
 pub const TextEditState = text_interaction.TextEditState;
+pub const TextBuffer = text_interaction.TextBuffer;
 pub const applyTextInputEvent = text_interaction.applyTextInputEvent;
 pub const snapTextSelection = text_interaction.snapTextSelection;
 pub const snapTextRange = text_interaction.snapTextRange;

@@ -124,6 +124,7 @@ pub const TextCaretMove = text_model.TextCaretMove;
 pub const TextCompositionUpdate = text_model.TextCompositionUpdate;
 pub const TextInputEvent = text_model.TextInputEvent;
 pub const TextEditState = text_model.TextEditState;
+pub const TextBuffer = text_model.TextBuffer;
 
 pub const CanvasCommand = command_model.CanvasCommand;
 pub const CommandRef = command_model.CommandRef;

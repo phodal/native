@@ -357,3 +357,82 @@ fn textOffsetStartsWord(text: []const u8, offset: usize) bool {
     if ((lead & 0x80) != 0) return true;
     return std.ascii.isAlphanumeric(lead) or lead == '_';
 }
+
+/// Fixed-capacity editor state for elm-style text fields: the model applies
+/// every `TextInputEvent` and stays an exact mirror of the runtime's editor
+/// (text, selection, and composition), so rebuild reconciliation preserves
+/// runtime caret state while the texts match and model-side changes (like
+/// clearing on submit) win.
+pub fn TextBuffer(comptime capacity: usize) type {
+    return struct {
+        const Self = @This();
+
+        storage: [capacity]u8 = undefined,
+        len: usize = 0,
+        selection: TextSelection = .{},
+        composition: ?TextRange = null,
+
+        pub fn init(initial: []const u8) Self {
+            var self = Self{};
+            self.set(initial);
+            return self;
+        }
+
+        pub fn text(self: *const Self) []const u8 {
+            return self.storage[0..self.len];
+        }
+
+        pub fn isEmpty(self: *const Self) bool {
+            return std.mem.trim(u8, self.text(), " \t").len == 0;
+        }
+
+        /// Apply one edit event; edits that would exceed capacity are
+        /// truncated to fit.
+        pub fn apply(self: *Self, event: TextInputEvent) void {
+            var scratch: [capacity]u8 = undefined;
+            const state = TextEditState{
+                .text = self.text(),
+                .selection = self.selection,
+                .composition = self.composition,
+            };
+            const next = applyTextInputEvent(state, event, &scratch) catch return;
+            const next_len = @min(next.text.len, capacity);
+            std.mem.copyForwards(u8, self.storage[0..next_len], next.text[0..next_len]);
+            self.len = next_len;
+            self.selection = next.selection;
+            self.composition = next.composition;
+        }
+
+        pub fn set(self: *Self, new_text: []const u8) void {
+            const next_len = @min(new_text.len, capacity);
+            std.mem.copyForwards(u8, self.storage[0..next_len], new_text[0..next_len]);
+            self.len = next_len;
+            self.selection = TextSelection.collapsed(next_len);
+            self.composition = null;
+        }
+
+        pub fn clear(self: *Self) void {
+            self.len = 0;
+            self.selection = .{};
+            self.composition = null;
+        }
+    };
+}
+
+test "TextBuffer mirrors edits, truncates at capacity, and clears" {
+    var buffer = TextBuffer(8){};
+    buffer.apply(.{ .insert_text = "hi" });
+    buffer.apply(.{ .insert_text = " there" });
+    try @import("std").testing.expectEqualStrings("hi there", buffer.text());
+
+    // Over-capacity edits truncate rather than fail.
+    buffer.apply(.{ .insert_text = "!" });
+    try @import("std").testing.expectEqual(@as(usize, 8), buffer.text().len);
+
+    buffer.apply(.delete_backward);
+    try @import("std").testing.expectEqualStrings("hi ther", buffer.text());
+
+    buffer.clear();
+    try @import("std").testing.expectEqualStrings("", buffer.text());
+    try @import("std").testing.expect(buffer.isEmpty());
+}

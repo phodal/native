@@ -266,6 +266,49 @@ test "keyboard events resolve activation and submit messages" {
     try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(checkbox.id, letter));
 }
 
+test "toggling one of a thousand keyed rows invalidates O(changed), not O(n)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const task_count = 1000;
+    const tasks = try arena.alloc(Task, task_count);
+    for (tasks, 0..) |*task, index| {
+        task.* = .{ .id = @intCast(index + 1), .title = "Benchmark row" };
+    }
+
+    const bounds = geometry.RectF.init(0, 0, 800, 24 * task_count);
+    const before_nodes = try testing.allocator.alloc(canvas.WidgetLayoutNode, 4096);
+    defer testing.allocator.free(before_nodes);
+    const after_nodes = try testing.allocator.alloc(canvas.WidgetLayoutNode, 4096);
+    defer testing.allocator.free(after_nodes);
+
+    var before_ui = InboxUi.init(arena);
+    const before_tree = try before_ui.finalize(benchmarkView(&before_ui, tasks));
+    const before_layout = try canvas.layoutWidgetTree(before_tree.root, bounds, before_nodes);
+
+    tasks[499].done = true;
+    var after_ui = InboxUi.init(arena);
+    const after_tree = try after_ui.finalize(benchmarkView(&after_ui, tasks));
+    const after_layout = try canvas.layoutWidgetTree(after_tree.root, bounds, after_nodes);
+
+    // Structural identity: every widget id is unchanged by the rebuild.
+    try testing.expectEqual(before_layout.nodes.len, after_layout.nodes.len);
+    for (before_layout.nodes, after_layout.nodes) |before_node, after_node| {
+        try testing.expectEqual(before_node.widget.id, after_node.widget.id);
+    }
+
+    // The layout diff must scale with what changed, not with row count.
+    var invalidations: [32]canvas.WidgetInvalidation = undefined;
+    const changed = try canvas.WidgetLayoutTree.diffWithTokens(before_layout, after_layout, .{}, &invalidations);
+    try testing.expect(changed.len >= 1);
+    try testing.expect(changed.len <= 4);
+}
+
+fn benchmarkView(ui: *InboxUi, tasks: []const Task) InboxUi.Node {
+    return ui.column(.{}, ui.each(tasks, Task.key, taskRow));
+}
+
 test "allocation failure latches and surfaces from finalize" {
     var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
     var ui = InboxUi.init(failing.allocator());

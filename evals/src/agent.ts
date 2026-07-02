@@ -4,7 +4,7 @@ import { exec } from "./util.ts";
 import type { AgentRunResult } from "./types.ts";
 
 export const GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
-export const DEFAULT_MODEL = "anthropic/claude-sonnet-4.6";
+export const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
 /** Tools the agent-under-test may use without prompting (permission rule syntax). */
 const ALLOWED_TOOLS = [

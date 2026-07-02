@@ -20,7 +20,8 @@ export type CheckSpec =
   | BuildTestCheck
   | MarkupCheckCheck
   | FileGrepCheck
-  | SnapshotGrepCheck;
+  | SnapshotGrepCheck
+  | LlmJudgeCheck;
 
 /** Run `zig build test <args>` in the workspace. */
 export interface BuildTestCheck {
@@ -58,12 +59,36 @@ export interface SnapshotGrepCheck {
   description: string;
 }
 
+/**
+ * Grade quality dimensions the deterministic checks can't see (idiomatic
+ * Model/Msg design, template factoring, test meaningfulness) with a judge
+ * model called directly through the AI Gateway. Advisory by default: the
+ * score is recorded and printed but never fails the case. Skipped in
+ * --dry-run (no model calls).
+ */
+export interface LlmJudgeCheck {
+  type: "llm_judge";
+  /** Case-specific criteria, each scored 0-10 by the judge. */
+  criteria: string[];
+  /** Workspace files to show the judge (default: src/*.zml, src/main.zig, src/tests.zig). */
+  files?: string[];
+  /** Overall score at or above this counts as pass. Default 6. */
+  minScore?: number;
+  /** When false, an overall score below minScore fails the case. Default true. */
+  advisory?: boolean;
+  description: string;
+}
+
 export interface CheckResult {
   type: CheckSpec["type"];
   description: string;
   status: "pass" | "fail" | "skipped";
   /** Trimmed evidence: failing command output tail, missing pattern, etc. */
   detail?: string;
+  /** llm_judge only: the judge's overall 0-10 score. */
+  score?: number;
+  /** llm_judge only: a failing advisory check does not fail the case. */
+  advisory?: boolean;
   durationMs: number;
 }
 
@@ -94,6 +119,7 @@ export interface RunnerOptions {
   evalsRoot: string;
   caseNames: string[];
   model: string;
+  judgeModel: string;
   dryRun: boolean;
   skipLive: boolean;
   skipPermissions: boolean;

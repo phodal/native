@@ -9,6 +9,7 @@ import {
   runAgent,
 } from "./agent.ts";
 import { buildCli, scaffoldWorkspace } from "./scaffold.ts";
+import { DEFAULT_JUDGE_MODEL } from "./judge.ts";
 import { runChecks } from "./grade.ts";
 import { formatDuration } from "./util.ts";
 import type { AgentRunResult, CaseResult, EvalCase, RunnerOptions } from "./types.ts";
@@ -27,8 +28,10 @@ options:
   --skip-permissions   run claude with --dangerously-skip-permissions instead
                        of acceptEdits + an allowlist (sandbox dirs only)
   --keep-workspaces    do not delete .workspaces/<case> after grading
-  --model <slug>       gateway model slug (default: ${DEFAULT_MODEL};
+  --model <slug>       coder model slug (default: ${DEFAULT_MODEL};
                        also via ZN_EVAL_MODEL)
+  --judge-model <slug> judge model slug for llm_judge checks (default:
+                       ${DEFAULT_JUDGE_MODEL}; also via ZN_EVAL_JUDGE_MODEL)
 
 env:
   AI_GATEWAY_API_KEY   Vercel AI Gateway API key (or VERCEL_AI_GATEWAY_API_KEY)
@@ -113,9 +116,15 @@ async function main(): Promise<void> {
     const checks = await runChecks(evalCase.checks, {
       workspace,
       skipLive: options.skipLive,
+      dryRun: options.dryRun,
+      taskPrompt: evalCase.prompt,
+      judgeModel: options.judgeModel,
+      gatewayKey,
     });
     const agentOk = agent.status === "completed" || agent.status === "dry_run";
-    const passed = agentOk && checks.every((check) => check.status !== "fail");
+    // Advisory judge checks record a score but never fail the case.
+    const passed =
+      agentOk && checks.every((check) => check.status !== "fail" || check.advisory === true);
     const caseResult: CaseResult = {
       case: evalCase.name,
       workspace: workspace.path,
@@ -148,6 +157,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     evalsRoot,
     caseNames: [],
     model: process.env.ZN_EVAL_MODEL ?? DEFAULT_MODEL,
+    judgeModel: process.env.ZN_EVAL_JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL,
     dryRun: false,
     skipLive: false,
     skipPermissions: false,
@@ -184,6 +194,16 @@ function parseArgs(argv: string[]): RunnerOptions {
           process.exit(2);
         }
         options.model = value;
+        index += 1;
+        break;
+      }
+      case "--judge-model": {
+        const value = argv[index + 1];
+        if (!value) {
+          console.error("--judge-model requires a value");
+          process.exit(2);
+        }
+        options.judgeModel = value;
         index += 1;
         break;
       }
@@ -238,21 +258,27 @@ function validateCase(evalCase: EvalCase, name: string, path: string): void {
 }
 
 function printSummary(results: CaseResult[], options: RunnerOptions): void {
-  console.log(`\n=== summary (model: ${options.model}${options.dryRun ? ", DRY RUN" : ""}) ===`);
+  console.log(
+    `\n=== summary (coder: ${options.model}, judge: ${options.judgeModel}${options.dryRun ? ", DRY RUN" : ""}) ===`,
+  );
   const rows = results.map((result) => {
     const checkSummary = result.checks
       .map((check) => (check.status === "pass" ? "P" : check.status === "skipped" ? "s" : "F"))
       .join("");
+    const judgeScores = result.checks
+      .filter((check) => check.type === "llm_judge" && check.score !== undefined)
+      .map((check) => `${check.score!.toFixed(1)}/10`);
     return {
       case: result.case,
       result: result.passed ? "PASS" : "FAIL",
       checks: checkSummary,
+      judge: judgeScores.join(" ") || "-",
       turns: result.agent.numTurns?.toString() ?? "-",
       cost: result.agent.totalCostUsd !== undefined ? `$${result.agent.totalCostUsd.toFixed(4)}` : "-",
       time: formatDuration(result.agent.durationMs + result.checks.reduce((sum, check) => sum + check.durationMs, 0)),
     };
   });
-  const columns = ["case", "result", "checks", "turns", "cost", "time"] as const;
+  const columns = ["case", "result", "checks", "judge", "turns", "cost", "time"] as const;
   const widths = columns.map((column) =>
     Math.max(column.length, ...rows.map((row) => row[column].length)),
   );

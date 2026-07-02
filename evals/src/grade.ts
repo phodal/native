@@ -3,13 +3,20 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs
 import { join, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { exec, resolveFiles, tailLines } from "./util.ts";
-import type { CheckResult, CheckSpec, SnapshotGrepCheck } from "./types.ts";
+import { judgeWorkspace } from "./judge.ts";
+import type { CheckResult, CheckSpec, LlmJudgeCheck, SnapshotGrepCheck } from "./types.ts";
 import type { Workspace } from "./scaffold.ts";
 
 export interface GradeContext {
   workspace: Workspace;
   /** Skip live snapshot checks (report "skipped"). */
   skipLive: boolean;
+  /** Dry runs make no model calls; llm_judge checks report "skipped". */
+  dryRun: boolean;
+  /** The case's task prompt, shown to the judge alongside the code. */
+  taskPrompt: string;
+  judgeModel: string;
+  gatewayKey?: string | undefined;
 }
 
 export async function runChecks(
@@ -23,7 +30,7 @@ export async function runChecks(
     results.push({ ...result, durationMs: Date.now() - started });
     const marker = result.status === "pass" ? "PASS" : result.status === "skipped" ? "SKIP" : "FAIL";
     console.log(`  [check] ${marker} ${result.description}`);
-    if (result.status === "fail" && result.detail) {
+    if (result.detail && (result.status === "fail" || result.type === "llm_judge")) {
       console.log(indent(result.detail, "         | "));
     }
   }
@@ -42,7 +49,49 @@ async function runCheck(check: CheckSpec, context: GradeContext): Promise<Pendin
       return fileGrep(check.files, check.pattern, check.expect, check.description, context);
     case "snapshot_grep":
       return snapshotGrep(check, context);
+    case "llm_judge":
+      return llmJudge(check, context);
   }
+}
+
+async function llmJudge(check: LlmJudgeCheck, context: GradeContext): Promise<PendingResult> {
+  const advisory = check.advisory ?? true;
+  const minScore = check.minScore ?? 6;
+  const description = `judge${advisory ? " (advisory)" : ""}: ${check.description}`;
+  if (context.dryRun) {
+    return { type: "llm_judge", description, status: "skipped", advisory, detail: "--dry-run (no model calls)" };
+  }
+  if (!context.gatewayKey) {
+    return { type: "llm_judge", description, status: "skipped", advisory, detail: "no gateway key" };
+  }
+  let verdict;
+  try {
+    verdict = await judgeWorkspace({
+      gatewayKey: context.gatewayKey,
+      model: context.judgeModel,
+      taskPrompt: context.taskPrompt,
+      criteria: check.criteria,
+      workspacePath: context.workspace.path,
+      fileSelectors: check.files,
+    });
+  } catch (error) {
+    const detail = `judge call failed: ${(error as Error).message}`;
+    return advisory
+      ? { type: "llm_judge", description, status: "skipped", advisory, detail }
+      : { type: "llm_judge", description, status: "fail", advisory, detail };
+  }
+  const lines = verdict.scores.map(
+    (entry) => `${entry.score.toFixed(1).padStart(4)}  ${entry.criterion}${entry.note ? ` — ${entry.note}` : ""}`,
+  );
+  const detail = `overall ${verdict.overall.toFixed(1)}/10 (min ${minScore})\n${lines.join("\n")}${verdict.summary ? `\n${verdict.summary}` : ""}`;
+  return {
+    type: "llm_judge",
+    description,
+    status: verdict.overall >= minScore ? "pass" : "fail",
+    score: verdict.overall,
+    advisory,
+    detail,
+  };
 }
 
 async function buildTest(args: string[], context: GradeContext): Promise<PendingResult> {

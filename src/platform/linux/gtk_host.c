@@ -105,6 +105,8 @@ typedef struct zero_native_gtk_native_view {
     int gpu_pointer_down;
     double gpu_pointer_x;
     double gpu_pointer_y;
+    GtkIMContext *gpu_im_context;
+    char *gpu_preedit_text;
 } zero_native_gtk_native_view_t;
 
 typedef struct zero_native_gtk_window {
@@ -520,6 +522,16 @@ static GtkWidget *zero_native_make_native_widget(int kind, const char *label, co
  * gpu_surface_frame events (and gpu_surface_resize on size/scale changes),
  * matching the macOS Metal host's event cadence. Pointer, scroll, and key
  * input map onto the same gpu_surface_input kinds the AppKit host emits.
+ *
+ * Text input flows through a GtkIMContext (gtk_im_multicontext_new, so ibus /
+ * fcitx / GtkIMContextSimple all work): key presses are offered to the IM
+ * context first, committed text becomes text_input events, and preedit
+ * updates become ime_set_composition / ime_commit_composition /
+ * ime_cancel_composition — the same kinds the AppKit host derives from
+ * insertText / setMarkedText / unmarkText. Keys the IM context consumes are
+ * still surfaced as key_down events with an empty text payload (mirroring
+ * AppKit, whose key_down never carries text), so activation keys like space
+ * and enter keep working without double-inserting text.
  */
 
 #define ZERO_NATIVE_GTK_GPU_FRAME_INTERVAL_NS 16666667ull
@@ -531,6 +543,10 @@ static GtkWidget *zero_native_make_native_widget(int kind, const char *label, co
 #define ZERO_NATIVE_GTK_GPU_INPUT_SCROLL 4
 #define ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN 5
 #define ZERO_NATIVE_GTK_GPU_INPUT_KEY_UP 6
+#define ZERO_NATIVE_GTK_GPU_INPUT_TEXT_INPUT 7
+#define ZERO_NATIVE_GTK_GPU_INPUT_IME_SET_COMPOSITION 8
+#define ZERO_NATIVE_GTK_GPU_INPUT_IME_COMMIT_COMPOSITION 9
+#define ZERO_NATIVE_GTK_GPU_INPUT_IME_CANCEL_COMPOSITION 10
 
 static uint64_t zero_native_gpu_timestamp_ns(void) {
     return (uint64_t)g_get_monotonic_time() * 1000ull;
@@ -567,6 +583,86 @@ static void zero_native_emit_gpu_surface_input(zero_native_gtk_native_view_t *vi
     });
 }
 
+static void zero_native_emit_gpu_surface_text_input(zero_native_gtk_native_view_t *view, int input_kind, const char *text, int has_composition_cursor, size_t composition_cursor) {
+    if (!view || !view->window || !view->window->host || !view->label) return;
+    zero_native_emit(view->window->host, (zero_native_gtk_event_t){
+        .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_INPUT,
+        .window_id = view->window->id,
+        .view_label = view->label,
+        .view_label_len = strlen(view->label),
+        .timestamp_ns = zero_native_gpu_timestamp_ns(),
+        .input_kind = input_kind,
+        .key_text = "",
+        .key_text_len = 0,
+        .input_text = text ? text : "",
+        .input_text_len = text ? strlen(text) : 0,
+        .has_composition_cursor = has_composition_cursor,
+        .composition_cursor = composition_cursor,
+    });
+}
+
+static int zero_native_gpu_surface_has_preedit(const zero_native_gtk_native_view_t *view) {
+    return view && view->gpu_preedit_text && view->gpu_preedit_text[0];
+}
+
+static void zero_native_gpu_surface_clear_preedit(zero_native_gtk_native_view_t *view) {
+    if (!view) return;
+    free(view->gpu_preedit_text);
+    view->gpu_preedit_text = NULL;
+}
+
+/* IM context committed text. Mirrors AppKit's insertText: committing exactly
+ * the marked text becomes ime_commit_composition; committing different text
+ * while a composition is active cancels it first, then inserts. */
+static void zero_native_gpu_im_commit(GtkIMContext *context, const char *text, gpointer data) {
+    (void)context;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !text || !text[0]) return;
+    const int had_preedit = zero_native_gpu_surface_has_preedit(view);
+    if (had_preedit && strcmp(view->gpu_preedit_text, text) == 0) {
+        zero_native_gpu_surface_clear_preedit(view);
+        zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_IME_COMMIT_COMPOSITION, "", 0, 0);
+        return;
+    }
+    if (had_preedit) {
+        zero_native_gpu_surface_clear_preedit(view);
+        zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_IME_CANCEL_COMPOSITION, "", 0, 0);
+    }
+    zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_TEXT_INPUT, text, 0, 0);
+}
+
+/* IM context preedit (composition) changed. Mirrors AppKit's setMarkedText:
+ * non-empty preedit becomes ime_set_composition with a byte cursor into the
+ * preedit text; an emptied preedit cancels the composition. */
+static void zero_native_gpu_im_preedit_changed(GtkIMContext *context, gpointer data) {
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !context) return;
+    char *preedit = NULL;
+    PangoAttrList *attrs = NULL;
+    gint cursor_chars = 0;
+    gtk_im_context_get_preedit_string(context, &preedit, &attrs, &cursor_chars);
+    if (attrs) pango_attr_list_unref(attrs);
+    if (!preedit || !preedit[0]) {
+        g_free(preedit);
+        if (zero_native_gpu_surface_has_preedit(view)) {
+            zero_native_gpu_surface_clear_preedit(view);
+            zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_IME_CANCEL_COMPOSITION, "", 0, 0);
+        }
+        return;
+    }
+
+    const glong preedit_chars = g_utf8_strlen(preedit, -1);
+    glong clamped_cursor = cursor_chars;
+    if (clamped_cursor < 0) clamped_cursor = preedit_chars;
+    if (clamped_cursor > preedit_chars) clamped_cursor = preedit_chars;
+    const size_t cursor_bytes = (size_t)(g_utf8_offset_to_pointer(preedit, clamped_cursor) - preedit);
+
+    free(view->gpu_preedit_text);
+    view->gpu_preedit_text = strdup(preedit);
+    zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_IME_SET_COMPOSITION, preedit, 1, cursor_bytes);
+    g_free(preedit);
+}
+
 static double zero_native_gpu_surface_width(zero_native_gtk_native_view_t *view) {
     int width = view->widget ? gtk_widget_get_width(view->widget) : 0;
     if (width > 0) return (double)width;
@@ -589,32 +685,57 @@ static double zero_native_gpu_surface_height(zero_native_gtk_native_view_t *view
     return 0;
 }
 
+/* Emit a gpu_surface_resize when the widget's logical size or device scale
+ * differ from the last emitted values. Returns 1 when an event was sent. */
+static int zero_native_gpu_surface_sync_geometry(zero_native_gtk_native_view_t *view, double width, double height, double scale) {
+    if (!view || !view->window || !view->window->host) return 0;
+    if (width == view->gpu_emitted_width && height == view->gpu_emitted_height && scale == view->gpu_emitted_scale) return 0;
+    view->gpu_emitted_width = width;
+    view->gpu_emitted_height = height;
+    view->gpu_emitted_scale = scale;
+    zero_native_emit(view->window->host, (zero_native_gtk_event_t){
+        .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_RESIZE,
+        .window_id = view->window->id,
+        .view_label = view->label,
+        .view_label_len = view->label ? strlen(view->label) : 0,
+        .x = view->x,
+        .y = view->y,
+        .width = width,
+        .height = height,
+        .scale = scale,
+        .timestamp_ns = zero_native_gpu_timestamp_ns(),
+    });
+    return 1;
+}
+
+/* notify::scale-factor on the drawing area (e.g. the window moved to a
+ * monitor with a different device scale): report the new scale immediately
+ * instead of waiting for the next frame tick, so the runtime can rebuild its
+ * pixel buffers at the new density. */
+static void zero_native_gpu_surface_scale_changed(GObject *object, GParamSpec *pspec, gpointer data) {
+    (void)object;
+    (void)pspec;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !view->widget) return;
+    const double width = zero_native_gpu_surface_width(view);
+    const double height = zero_native_gpu_surface_height(view);
+    if (width <= 0 || height <= 0) return;
+    const double scale = (double)gtk_widget_get_scale_factor(view->widget);
+    if (zero_native_gpu_surface_sync_geometry(view, width, height, scale)) {
+        gtk_widget_queue_draw(view->widget);
+    }
+}
+
 static gboolean zero_native_gpu_surface_tick(gpointer data) {
     zero_native_gtk_native_view_t *view = data;
     if (!view || !view->widget || !view->window || !view->window->host) return G_SOURCE_REMOVE;
 
     const double width = zero_native_gpu_surface_width(view);
     const double height = zero_native_gpu_surface_height(view);
-    const double scale = view->widget ? (double)gtk_widget_get_scale_factor(view->widget) : 1.0;
+    const double scale = (double)gtk_widget_get_scale_factor(view->widget);
     if (width <= 0 || height <= 0) return G_SOURCE_CONTINUE;
 
-    if (width != view->gpu_emitted_width || height != view->gpu_emitted_height || scale != view->gpu_emitted_scale) {
-        view->gpu_emitted_width = width;
-        view->gpu_emitted_height = height;
-        view->gpu_emitted_scale = scale;
-        zero_native_emit(view->window->host, (zero_native_gtk_event_t){
-            .kind = ZERO_NATIVE_GTK_EVENT_GPU_SURFACE_RESIZE,
-            .window_id = view->window->id,
-            .view_label = view->label,
-            .view_label_len = view->label ? strlen(view->label) : 0,
-            .x = view->x,
-            .y = view->y,
-            .width = width,
-            .height = height,
-            .scale = scale,
-            .timestamp_ns = zero_native_gpu_timestamp_ns(),
-        });
-    }
+    (void)zero_native_gpu_surface_sync_geometry(view, width, height, scale);
 
     view->gpu_frame_index += 1;
     zero_native_emit(view->window->host, (zero_native_gtk_event_t){
@@ -635,7 +756,6 @@ static gboolean zero_native_gpu_surface_tick(gpointer data) {
 }
 
 static void zero_native_gpu_surface_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data) {
-    (void)area;
     zero_native_gtk_native_view_t *view = data;
     if (!view || !view->gpu_argb || view->gpu_buf_width <= 0 || view->gpu_buf_height <= 0) return;
     cairo_surface_t *surface = cairo_image_surface_create_for_data(view->gpu_argb, CAIRO_FORMAT_ARGB32, view->gpu_buf_width, view->gpu_buf_height, view->gpu_buf_stride);
@@ -644,11 +764,24 @@ static void zero_native_gpu_surface_draw(GtkDrawingArea *area, cairo_t *cr, int 
         return;
     }
     cairo_save(cr);
+    /* The buffer is rendered at logical-size x scale-factor. Declare that
+     * density as the surface's device scale so cairo maps one buffer pixel
+     * to one device pixel; when the buffer matches the widget's current
+     * scale exactly (the steady state), use nearest filtering for a
+     * resample-free blit. Mid-resize frames where the buffer is stale
+     * stretch with bilinear filtering until the next presented frame. */
     if (width > 0 && height > 0) {
-        cairo_scale(cr, (double)width / (double)view->gpu_buf_width, (double)height / (double)view->gpu_buf_height);
+        const double device_scale_x = (double)view->gpu_buf_width / (double)width;
+        const double device_scale_y = (double)view->gpu_buf_height / (double)height;
+        cairo_surface_set_device_scale(surface, device_scale_x, device_scale_y);
+        const double widget_scale = (double)gtk_widget_get_scale_factor(GTK_WIDGET(area));
+        const int exact = device_scale_x == widget_scale && device_scale_y == widget_scale;
+        cairo_set_source_surface(cr, surface, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), exact ? CAIRO_FILTER_NEAREST : CAIRO_FILTER_BILINEAR);
+    } else {
+        cairo_set_source_surface(cr, surface, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
     }
-    cairo_set_source_surface(cr, surface, 0, 0);
-    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
     cairo_paint(cr);
     cairo_restore(cr);
     cairo_surface_destroy(surface);
@@ -708,13 +841,13 @@ static gboolean zero_native_gpu_scroll(GtkEventControllerScroll *controller, dou
     return TRUE;
 }
 
-static gboolean zero_native_gpu_key_event(zero_native_gtk_native_view_t *view, guint keyval, GdkModifierType state, int input_kind) {
+static gboolean zero_native_gpu_key_event(zero_native_gtk_native_view_t *view, guint keyval, GdkModifierType state, int input_kind, int include_text) {
     char key_buffer[32];
     int uses_implicit_shift = 0;
     const char *key = zero_native_shortcut_key_for_keyval(keyval, key_buffer, sizeof(key_buffer), &uses_implicit_shift);
 
     char text_buffer[8] = {0};
-    if (input_kind == ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN &&
+    if (include_text && input_kind == ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN &&
         (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_META_MASK | GDK_SUPER_MASK)) == 0) {
         gunichar ch = gdk_keyval_to_unicode(keyval);
         if (ch >= 0x20 && ch != 0x7f) {
@@ -730,19 +863,51 @@ static gboolean zero_native_gpu_key_event(zero_native_gtk_native_view_t *view, g
 }
 
 static gboolean zero_native_gpu_key_pressed(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer data) {
-    (void)controller;
     (void)keycode;
     zero_native_gtk_native_view_t *view = data;
     if (!view) return FALSE;
-    return zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN);
+    GdkEvent *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+    if (view->gpu_im_context && event && gtk_im_context_filter_keypress(view->gpu_im_context, event)) {
+        /* The IM context consumed the key: committed text and preedit updates
+         * already flowed through the commit / preedit-changed handlers as
+         * text_input / ime_* events. Still surface a key_down with an empty
+         * text payload so activation keys (space, enter) and canvas key
+         * handlers keep firing; the runtime only inserts text from key_down
+         * events that carry text, so nothing is inserted twice. */
+        (void)zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN, 0);
+        return TRUE;
+    }
+    return zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_DOWN, 1);
 }
 
 static void zero_native_gpu_key_released(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer data) {
-    (void)controller;
     (void)keycode;
     zero_native_gtk_native_view_t *view = data;
     if (!view) return;
-    (void)zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_UP);
+    GdkEvent *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+    if (view->gpu_im_context && event) (void)gtk_im_context_filter_keypress(view->gpu_im_context, event);
+    (void)zero_native_gpu_key_event(view, keyval, state, ZERO_NATIVE_GTK_GPU_INPUT_KEY_UP, 0);
+}
+
+static void zero_native_gpu_focus_enter(GtkEventControllerFocus *controller, gpointer data) {
+    (void)controller;
+    zero_native_gtk_native_view_t *view = data;
+    if (view && view->gpu_im_context) gtk_im_context_focus_in(view->gpu_im_context);
+}
+
+static void zero_native_gpu_focus_leave(GtkEventControllerFocus *controller, gpointer data) {
+    (void)controller;
+    zero_native_gtk_native_view_t *view = data;
+    if (!view || !view->gpu_im_context) return;
+    /* Losing focus mid-composition cancels it, like AppKit's unmarkText-on-
+     * resign path; reset the IM context so a stale compose state does not
+     * leak into the next focus. */
+    if (zero_native_gpu_surface_has_preedit(view)) {
+        zero_native_gpu_surface_clear_preedit(view);
+        zero_native_emit_gpu_surface_text_input(view, ZERO_NATIVE_GTK_GPU_INPUT_IME_CANCEL_COMPOSITION, "", 0, 0);
+    }
+    gtk_im_context_reset(view->gpu_im_context);
+    gtk_im_context_focus_out(view->gpu_im_context);
 }
 
 static void zero_native_setup_gpu_surface_view(zero_native_gtk_native_view_t *view) {
@@ -769,6 +934,18 @@ static void zero_native_setup_gpu_surface_view(zero_native_gtk_native_view_t *vi
     g_signal_connect(keys, "key-released", G_CALLBACK(zero_native_gpu_key_released), view);
     gtk_widget_add_controller(view->widget, keys);
 
+    view->gpu_im_context = gtk_im_multicontext_new();
+    gtk_im_context_set_client_widget(view->gpu_im_context, view->widget);
+    g_signal_connect(view->gpu_im_context, "commit", G_CALLBACK(zero_native_gpu_im_commit), view);
+    g_signal_connect(view->gpu_im_context, "preedit-changed", G_CALLBACK(zero_native_gpu_im_preedit_changed), view);
+
+    GtkEventController *focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(zero_native_gpu_focus_enter), view);
+    g_signal_connect(focus, "leave", G_CALLBACK(zero_native_gpu_focus_leave), view);
+    gtk_widget_add_controller(view->widget, focus);
+
+    g_signal_connect(view->widget, "notify::scale-factor", G_CALLBACK(zero_native_gpu_surface_scale_changed), view);
+
     gtk_widget_grab_focus(view->widget);
     view->gpu_frame_timer = g_timeout_add(16, zero_native_gpu_surface_tick, view);
 }
@@ -781,7 +958,15 @@ static void zero_native_teardown_gpu_surface_view(zero_native_gtk_native_view_t 
     }
     if (view->widget && view->kind == ZERO_NATIVE_GTK_VIEW_GPU_SURFACE) {
         gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(view->widget), NULL, NULL, NULL);
+        g_signal_handlers_disconnect_by_data(view->widget, view);
     }
+    if (view->gpu_im_context) {
+        g_signal_handlers_disconnect_by_data(view->gpu_im_context, view);
+        gtk_im_context_set_client_widget(view->gpu_im_context, NULL);
+        g_object_unref(view->gpu_im_context);
+        view->gpu_im_context = NULL;
+    }
+    zero_native_gpu_surface_clear_preedit(view);
     free(view->gpu_argb);
     view->gpu_argb = NULL;
     view->gpu_buf_width = 0;

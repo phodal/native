@@ -1112,6 +1112,38 @@ test "linux gpu surface input maps pointer cancel" {
     try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pointer_cancel, gpuSurfaceInputEventFromGtkEvent(&event).kind);
 }
 
+test "linux gpu surface input maps ime text and composition events" {
+    const preedit = "e\xcc\x81"; // "é" as e + combining acute
+    var set_event = std.mem.zeroes(GtkEvent);
+    set_event.input_kind = 8;
+    set_event.input_text = preedit.ptr;
+    set_event.input_text_len = preedit.len;
+    set_event.has_composition_cursor = 1;
+    set_event.composition_cursor = preedit.len;
+    const set_input = gpuSurfaceInputEventFromGtkEvent(&set_event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_set_composition, set_input.kind);
+    try std.testing.expectEqualStrings(preedit, set_input.text);
+    try std.testing.expectEqual(@as(?usize, preedit.len), set_input.composition_cursor);
+
+    var text_event = std.mem.zeroes(GtkEvent);
+    text_event.input_kind = 7;
+    const committed = "é";
+    text_event.input_text = committed.ptr;
+    text_event.input_text_len = committed.len;
+    const text_input = gpuSurfaceInputEventFromGtkEvent(&text_event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.text_input, text_input.kind);
+    try std.testing.expectEqualStrings(committed, text_input.text);
+    try std.testing.expectEqual(@as(?usize, null), text_input.composition_cursor);
+
+    var commit_event = std.mem.zeroes(GtkEvent);
+    commit_event.input_kind = 9;
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_commit_composition, gpuSurfaceInputEventFromGtkEvent(&commit_event).kind);
+
+    var cancel_event = std.mem.zeroes(GtkEvent);
+    cancel_event.input_kind = 10;
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_cancel_composition, gpuSurfaceInputEventFromGtkEvent(&cancel_event).kind);
+}
+
 test "linux chromium reports unsupported desktop features" {
     var system = testPlatformWithEngine(.system);
     try std.testing.expect(LinuxPlatform.supportsFeature(&system, .main_webview));

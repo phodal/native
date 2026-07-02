@@ -235,6 +235,14 @@ int zero_native_app_widget_semantics_by_id(void *app, uint64_t id, zero_native_w
 int zero_native_app_widget_text_geometry(void *app, uint64_t id, zero_native_widget_text_geometry_t *out);
 int zero_native_app_widget_action(void *app, const zero_native_widget_action_t *action);
 int zero_native_app_text_input_state(void *app, zero_native_text_input_state_t *out);
+// Platform text measurement for layout: returns the typographic width of a
+// single-line UTF-8 run at `size` for `font_id` (1 = sans, 2 = mono),
+// measured with the same font resolution presentation draws with. Return a
+// negative value to fall back to the deterministic estimator (e.g. invalid
+// UTF-8). Register before zero_native_app_start; pass NULL to fall back to
+// the estimator on the next layout.
+typedef double (*zero_native_text_measure_fn)(void *context, uint64_t font_id, double size, const char *text, uintptr_t text_len);
+int zero_native_app_set_text_measure(void *app, zero_native_text_measure_fn measure, void *context);
 int zero_native_app_set_automation_dir(void *app, const char *path, uintptr_t len);
 int zero_native_app_render_pixel_size(void *app, float scale, zero_native_canvas_pixels_t *out);
 int zero_native_app_render_pixels(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, zero_native_canvas_pixels_t *out);

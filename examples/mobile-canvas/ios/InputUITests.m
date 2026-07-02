@@ -90,6 +90,22 @@ static CGPoint ZeroNativePointFromEnv(NSString *name) {
     [NSThread sleepForTimeInterval:1.0];
 }
 
+// (M4) Rotate the simulator to landscape / back to portrait through the
+// system orientation path (there is no simctl rotation command); the
+// layout-verification script asserts the relayout against the automation
+// snapshot between calls. ZN_ORIENTATION selects the target orientation.
+- (void)testRotate {
+    XCUIApplication *app = [self foregroundApp];
+    NSString *orientation = ZeroNativeEnv(@"ZN_ORIENTATION");
+    XCUIDevice.sharedDevice.orientation = [orientation isEqualToString:@"landscape"]
+        ? UIDeviceOrientationLandscapeLeft
+        : UIDeviceOrientationPortrait;
+    // Let the rotation animation, safe-area propagation, and the app's
+    // viewport push + relayout settle before the script reads the snapshot.
+    [NSThread sleepForTimeInterval:2.0];
+    XCTAssertTrue(app.exists);
+}
+
 // (c) Grow the list past the viewport with real taps, then drag-scroll it;
 // the script asserts the scroll offset moved in the snapshot.
 - (void)testDragScroll {

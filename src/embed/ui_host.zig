@@ -80,6 +80,7 @@ pub fn UiAppHost(comptime AppDef: type) type {
         automation_dir: [max_mobile_asset_root_bytes]u8 = undefined,
         automation_dir_len: usize = 0,
         automation_io: ?*std.Io.Threaded = null,
+        text_measure: host.MobileTextMeasure = .{},
 
         pub fn create() !*Self {
             const allocator = std.heap.page_allocator;
@@ -106,6 +107,7 @@ pub fn UiAppHost(comptime AppDef: type) type {
             self.automation_dir = undefined;
             self.automation_dir_len = 0;
             self.automation_io = null;
+            self.text_measure = .{};
             self.ui = MobileUi.init(allocator, AppDef.initModel(), options);
             self.inner_app = self.ui.app();
             self.embedded.initInPlace(.{

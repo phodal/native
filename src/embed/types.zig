@@ -174,6 +174,22 @@ pub const MobileViewportState = extern struct {
     content_height: f32 = 0,
 };
 
+/// Platform text-measure callback registered through
+/// `zero_native_app_set_text_measure`: returns the typographic width of a
+/// single-line UTF-8 run at `size` for `font_id` (1 = sans, 2 = mono),
+/// measured with the same font resolution the shim's presentation would
+/// draw with (CoreText on iOS, mirroring the desktop
+/// `zero_native_appkit_measure_text` seam). Return a negative value to
+/// fall back to the deterministic estimator for that run (e.g. invalid
+/// UTF-8).
+pub const MobileTextMeasureFn = *const fn (
+    context: ?*anyopaque,
+    font_id: u64,
+    size: f64,
+    text: ?[*]const u8,
+    text_len: usize,
+) callconv(.c) f64;
+
 /// Dimensions of a canvas render produced by
 /// `zero_native_app_render_pixels` (tightly packed RGBA8).
 pub const MobileCanvasPixels = extern struct {

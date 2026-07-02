@@ -29,6 +29,14 @@
 // text (UITextInput composition, dead keys, CJK) maps onto the same
 // `zero_native_app_ime` set/commit/cancel path the macOS host drives from
 // NSTextInputClient — see appkit_host.m setMarkedText:/insertText:.
+//
+// M5 (text metrics): the shim registers a CoreText-backed measure callback
+// (`zero_native_app_set_text_measure`) before start, mirroring the macOS
+// host's `zero_native_appkit_measure_text` — layout then uses real
+// typographic widths instead of the deterministic estimator. Glyph
+// RENDERING stays the reference renderer's shapes; only measurement
+// changes. Launch with --estimator-text-metrics to keep the estimator
+// (before/after comparisons, deterministic goldens).
 
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
@@ -51,6 +59,67 @@ const struct mach_header *_dyld_get_image_header_containing_address(const void *
         return (const struct mach_header *)info.dli_fbase;
     }
     return NULL;
+}
+
+// ------------------------------------------------------------ text metrics
+
+// Resolves a canvas font id to the UIFont measurement uses — the iOS
+// mirror of appkit_host.m's ZeroNativeFontForFontId (Geist when bundled,
+// system fonts otherwise). Resolved fonts are cached per (font id, size).
+static UIFont *ZeroNativeFontForFontId(uint64_t value, CGFloat size) {
+    static NSCache<NSString *, UIFont *> *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSCache alloc] init];
+        cache.countLimit = 256;
+    });
+    NSString *key = [NSString stringWithFormat:@"%llu/%.3f", (unsigned long long)value, (double)size];
+    UIFont *cached = [cache objectForKey:key];
+    if (cached) return cached;
+    NSArray<NSString *> *candidates = value == 2
+        ? @[ @"Geist Mono", @"GeistMono-Regular", @"Geist Mono Regular" ]
+        : @[ @"Geist", @"Geist-Regular", @"Geist Sans", @"Geist Sans Regular" ];
+    UIFont *font = nil;
+    for (NSString *name in candidates) {
+        font = [UIFont fontWithName:name size:size];
+        if (font) break;
+    }
+    if (!font) {
+        font = value == 2 ? [UIFont monospacedSystemFontOfSize:size weight:UIFontWeightRegular]
+                          : [UIFont systemFontOfSize:size];
+    }
+    if (font) [cache setObject:font forKey:key];
+    return font;
+}
+
+// CoreText-backed measure callback registered over the embed ABI: the
+// typographic width of a single-line run, measured with the same font
+// resolution and string-attribute metrics ([NSString sizeWithAttributes:])
+// the macOS packet renderer draws with. Returns a negative value when the
+// bytes are not valid UTF-8 so layout falls back to its estimator. Shaped
+// widths are memoized shim-side.
+static double ZeroNativeMeasureText(void *context, uint64_t font_id, double size, const char *text, uintptr_t text_len) {
+    (void)context;
+    if (!text || text_len == 0) return 0;
+    CGFloat clamped = MAX(1, size);
+    @autoreleasepool {
+        NSString *value = [[NSString alloc] initWithBytes:text length:text_len encoding:NSUTF8StringEncoding];
+        if (!value) return -1;
+        static NSCache<NSString *, NSNumber *> *widthCache = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            widthCache = [[NSCache alloc] init];
+            widthCache.countLimit = 16384;
+        });
+        NSString *key = [NSString stringWithFormat:@"%llu/%.3f/%@", (unsigned long long)font_id, (double)clamped, value];
+        NSNumber *cached = [widthCache objectForKey:key];
+        if (cached) return cached.doubleValue;
+        UIFont *font = ZeroNativeFontForFontId(font_id, clamped);
+        if (!font) return -1;
+        double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
+        [widthCache setObject:@(width) forKey:key];
+        return width;
+    }
 }
 
 // ---------------------------------------------------------------- UITextInput
@@ -592,6 +661,21 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
         return;
     }
     [self canvasView].nativeApp = self.nativeApp;
+
+    // Real text metrics (M5): register the CoreText measure callback before
+    // start so the installing layout already measures with the fonts
+    // presentation would draw with. The estimator opt-out is a LAUNCH
+    // ARGUMENT (simctl launch <udid> <bundle> --estimator-text-metrics),
+    // not an environment variable: the simulator's launchd replays a
+    // previous launch's SIMCTL_CHILD_* environment, so env toggles are not
+    // deterministic across relaunches; process arguments are.
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--estimator-text-metrics"]) {
+        NSLog(@"zero-native: text measure disabled (estimator metrics)");
+    } else {
+        zero_native_app_set_text_measure(self.nativeApp, ZeroNativeMeasureText, NULL);
+        [self logNativeErrorIfAny:@"text_measure"];
+        NSLog(@"zero-native: CoreText text measure registered");
+    }
 
     // Verification harness: with ZERO_NATIVE_AUTOMATION set (simctl launch
     // exports SIMCTL_CHILD_* into the app) the embedded runtime publishes

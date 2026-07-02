@@ -253,7 +253,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const node = try self.buildViewNode(&ui);
             const tree = try ui.finalizeWithTokens(node, tokens);
 
-            const bounds = geometry.RectF.init(0, 0, self.canvas_size.width, self.canvas_size.height);
+            // Widget layout is inset by the runtime's viewport chrome
+            // (safe areas + keyboard on mobile, zero on desktop); the
+            // canvas itself stays surface-sized so chrome and the clear
+            // color still paint edge to edge under notches and bars.
+            const bounds = geometry.RectF.fromSize(self.canvas_size).deflate(runtime.viewportInsetsForWindow(window_id));
             const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, bounds, tokens, &self.layout_nodes);
 
             if (self.options.chrome) |chrome| {

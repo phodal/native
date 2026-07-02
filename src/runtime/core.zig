@@ -422,6 +422,20 @@ pub const Runtime = struct {
         return next;
     }
 
+    /// Viewport chrome insets for a window's content: the safe-area and
+    /// system-keyboard insets the platform reported for the window's
+    /// surface, combined edge-wise (the same rule shell views lay out
+    /// with). Zero for windows without a matching surface and on desktop
+    /// platforms, which report no insets — canvas layout deflated by this
+    /// is byte-identical there. Mobile shims feed the insets through the
+    /// embed viewport export so notches, status bars, home indicators, and
+    /// the on-screen keyboard inset widget layout at the runtime level
+    /// instead of per-app view math.
+    pub fn viewportInsetsForWindow(self: *const Runtime, window_id: platform.WindowId) geometry.InsetsF {
+        if (self.surface.id != window_id) return .{};
+        return shell_layout.combinedViewportInsets(self.surface);
+    }
+
     pub fn listCommands(self: *const Runtime, output: []Command) []const Command {
         const count = @min(output.len, self.options.commands.len);
         for (self.options.commands[0..count], 0..) |command, index| {

@@ -9,6 +9,7 @@
 #   ./run.sh --example-dir ../../ui-inbox --build-arg -Dmobile=true
 #   ./run.sh --device "iPhone 15 Pro" --shutdown
 #   ./run.sh --build-only                      # stop after the .app bundle
+#   ./run.sh --estimator-text-metrics          # estimator instead of CoreText
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +19,7 @@ BUILD_ONLY=0
 SHUTDOWN=0
 SCREENSHOT=""
 BUILD_ARGS=()
+LAUNCH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +29,9 @@ while [[ $# -gt 0 ]]; do
     --screenshot) SCREENSHOT="$2"; shift 2 ;;
     --build-only) BUILD_ONLY=1; shift ;;
     --shutdown) SHUTDOWN=1; shift ;;
+    # Launch argument (not an env var: the simulator's launchd replays a
+    # previous launch's SIMCTL_CHILD_* environment, launch args are fresh).
+    --estimator-text-metrics) LAUNCH_ARGS+=("--estimator-text-metrics"); shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -74,7 +79,7 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 echo "== install + launch $BUNDLE_ID"
 xcrun simctl install "$DEVICE" "$APP_BUNDLE"
 xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
-xcrun simctl launch "$DEVICE" "$BUNDLE_ID"
+xcrun simctl launch "$DEVICE" "$BUNDLE_ID" "${LAUNCH_ARGS[@]+"${LAUNCH_ARGS[@]}"}"
 
 sleep 4
 SCREENSHOT="${SCREENSHOT:-$BUILD_DIR/$APP_NAME-simulator.png}"

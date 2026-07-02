@@ -151,6 +151,19 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
+        /// Register (or clear, with a null callback) the platform's text
+        /// measurement for layout — the embed counterpart of the desktop
+        /// `measure_text_fn` platform service (CoreText on macOS). Call it
+        /// before `zero_native_app_start` so the installing layout already
+        /// measures with real font metrics; without it layout stays on the
+        /// deterministic estimator.
+        pub fn zero_native_app_set_text_measure(app: ?*anyopaque, measure: ?types.MobileTextMeasureFn, context: ?*anyopaque) callconv(.c) c_int {
+            const self = hostApp(Host, app) orelse return 0;
+            host.setTextMeasure(self, measure, context);
+            self.last_error = null;
+            return 1;
+        }
+
         /// Enable the automation harness inside the embedded runtime,
         /// writing `snapshot.txt` (and consuming `command.txt`) under
         /// `path` — an absolute directory inside the app's data container
@@ -474,6 +487,7 @@ pub const zero_native_app_viewport = FixedShellApi.zero_native_app_viewport;
 pub const zero_native_app_viewport_state = FixedShellApi.zero_native_app_viewport_state;
 pub const zero_native_app_gpu_frame_state = FixedShellApi.zero_native_app_gpu_frame_state;
 pub const zero_native_app_text_input_state = FixedShellApi.zero_native_app_text_input_state;
+pub const zero_native_app_set_text_measure = FixedShellApi.zero_native_app_set_text_measure;
 pub const zero_native_app_set_automation_dir = FixedShellApi.zero_native_app_set_automation_dir;
 pub const zero_native_app_touch = FixedShellApi.zero_native_app_touch;
 pub const zero_native_app_scroll = FixedShellApi.zero_native_app_scroll;

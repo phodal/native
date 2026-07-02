@@ -19,6 +19,49 @@ const mobileModifiersFromMask = conversions.mobileModifiersFromMask;
 const copyInputText = conversions.copyInputText;
 const nowNanoseconds = conversions.nowNanoseconds;
 
+/// Host-owned storage for the shim's registered text-measure callback.
+/// The canvas `TextMeasureProvider` carries a pointer to this struct as
+/// its context, so the field must live on the (heap-allocated) host for
+/// the runtime's lifetime.
+pub const MobileTextMeasure = struct {
+    measure: ?types.MobileTextMeasureFn = null,
+    context: ?*anyopaque = null,
+};
+
+/// Bridges the C-ABI measure callback into the canvas provider seam. A
+/// negative return (including a cleared callback) falls back to the
+/// deterministic estimator inside `TextMeasureProvider.measureWidth`.
+fn mobileMeasureText(context: ?*anyopaque, font_id: canvas.FontId, size: f32, text: []const u8) f32 {
+    const store: *const MobileTextMeasure = @ptrCast(@alignCast(context.?));
+    const measure = store.measure orelse return -1;
+    return @floatCast(measure(store.context, font_id, size, text.ptr, text.len));
+}
+
+/// Install (or clear, with a null callback) the platform text measurement
+/// on the embedded runtime — the mobile counterpart of the desktop
+/// platforms' `measure_text_fn` service, threaded into layout the same
+/// way (`Runtime.tokensWithTextMeasure` stamps it into design tokens on
+/// every rebuild). Register it before `zero_native_app_start` so the
+/// installing layout already uses real metrics; later changes apply on
+/// the next rebuild.
+///
+/// Retained display-list commands carry the provider *pointer*, so once
+/// the runtime's provider is installed it must stay in place for the
+/// runtime's lifetime (the same invariant desktop platforms keep by
+/// capturing it at init). Clearing therefore only nulls the callback
+/// inside the host's bridge storage; the bridge then reports "no
+/// measurement" and every consumer falls back to the deterministic
+/// estimator.
+pub fn setTextMeasure(self: anytype, measure: ?types.MobileTextMeasureFn, context: ?*anyopaque) void {
+    self.text_measure = .{ .measure = measure, .context = context };
+    if (measure != null and self.embedded.runtime.text_measure_provider == null) {
+        self.embedded.runtime.text_measure_provider = .{
+            .context = &self.text_measure,
+            .measure_fn = mobileMeasureText,
+        };
+    }
+}
+
 pub const EmbeddedApp = struct {
     app: runtime.App,
     runtime: runtime.Runtime,
@@ -215,6 +258,7 @@ pub const MobileHostApp = struct {
     automation_dir: [max_mobile_asset_root_bytes]u8 = undefined,
     automation_dir_len: usize = 0,
     automation_io: ?*std.Io.Threaded = null,
+    text_measure: MobileTextMeasure = .{},
     last_command_name: [max_mobile_command_name_bytes + 1]u8 = [_]u8{0} ** (max_mobile_command_name_bytes + 1),
 
     pub fn create() !*MobileHostApp {
@@ -255,6 +299,7 @@ pub const MobileHostApp = struct {
         self.automation_dir = undefined;
         self.automation_dir_len = 0;
         self.automation_io = null;
+        self.text_measure = .{};
         self.last_command_name = [_]u8{0} ** (max_mobile_command_name_bytes + 1);
         self.embedded.initInPlace(.{
             .context = self,

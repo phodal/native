@@ -978,6 +978,182 @@ test "mobile C ABI drives a user UiApp canvas scene end to end" {
     try std.testing.expect(self.null_platform.gpu_surface_present_count >= 2);
 }
 
+test "mobile UiApp host insets widget layout by safe-area and keyboard viewport chrome" {
+    const app = MobileCounterApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileCounterApi.zero_native_app_destroy(app);
+
+    MobileCounterApi.zero_native_app_start(app);
+    try expectNoUiHostError(app);
+
+    // Portrait with a notch and home indicator: widget layout starts below
+    // the top inset and ends above the bottom one while the canvas itself
+    // keeps the full surface size (chrome/clear paint edge to edge).
+    var surface_token: u8 = 0;
+    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 0, 0);
+    MobileCounterApi.zero_native_app_frame(app);
+    try expectNoUiHostError(app);
+
+    var root: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 0), root.x);
+    try std.testing.expectEqual(@as(f32, 59), root.y);
+    try std.testing.expectEqual(@as(f32, 390), root.width);
+    try std.testing.expectEqual(@as(f32, 844 - 59 - 34), root.height);
+    const button = try findMobileSemanticsByRole(app, .button);
+    try std.testing.expect(button.y >= 59);
+
+    // The canvas stays surface-sized and device pixels honor the viewport
+    // scale end to end: 390x844 points at 3x renders 1170x2532 pixels.
+    var frame_state: MobileGpuFrameState = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_gpu_frame_state(app, &frame_state));
+    try std.testing.expectEqual(@as(f32, 390), frame_state.width);
+    try std.testing.expectEqual(@as(f32, 844), frame_state.height);
+    try std.testing.expectEqual(@as(f32, 3), frame_state.scale);
+    var pixel_info: MobileCanvasPixels = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_render_pixel_size(app, 3, &pixel_info));
+    try std.testing.expectEqual(@as(usize, 1170), pixel_info.width);
+    try std.testing.expectEqual(@as(usize, 2532), pixel_info.height);
+
+    // Rotation: landscape swaps the size and moves the notch to the sides;
+    // the viewport resize relayouts against the new insets.
+    MobileCounterApi.zero_native_app_viewport(app, 844, 390, 3, &surface_token, 0, 59, 21, 59, 0, 0, 0, 0);
+    MobileCounterApi.zero_native_app_frame(app);
+    try expectNoUiHostError(app);
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 59), root.x);
+    try std.testing.expectEqual(@as(f32, 0), root.y);
+    try std.testing.expectEqual(@as(f32, 844 - 59 - 59), root.width);
+    try std.testing.expectEqual(@as(f32, 390 - 21), root.height);
+
+    // System keyboard: its inset combines edge-wise with the safe areas so
+    // content is laid out above it.
+    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 336, 0);
+    MobileCounterApi.zero_native_app_frame(app);
+    try expectNoUiHostError(app);
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 59), root.y);
+    try std.testing.expectEqual(@as(f32, 844 - 59 - 336), root.height);
+
+    // Removing the insets restores the desktop-identical full-bounds
+    // layout (desktop surfaces report zero insets, so this is the layout
+    // golden tests cover).
+    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileCounterApi.zero_native_app_frame(app);
+    try expectNoUiHostError(app);
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 0), root.x);
+    try std.testing.expectEqual(@as(f32, 0), root.y);
+    try std.testing.expectEqual(@as(f32, 390), root.width);
+    try std.testing.expectEqual(@as(f32, 844), root.height);
+}
+
+/// Fake shim text measurement: every UTF-8 byte is `size` wide — far wider
+/// than any estimator advance factor (max 0.91), so measured layout
+/// visibly diverges from the estimator baseline. Counts calls through the
+/// context pointer to prove the provider (not the estimator) measured.
+fn fakeMobileMeasureText(context: ?*anyopaque, font_id: u64, size: f64, text: ?[*]const u8, text_len: usize) callconv(.c) f64 {
+    _ = font_id;
+    _ = text;
+    const calls: *usize = @ptrCast(@alignCast(context.?));
+    calls.* += 1;
+    return size * @as(f64, @floatFromInt(text_len));
+}
+
+// Row-based view: a row child's main-axis extent is its intrinsic width,
+// which goes through the tokens' text-measure seam — so a registered
+// provider directly changes the text widget's laid-out bounds.
+const MobileMeasureDef = struct {
+    pub const Model = struct { pressed: u32 = 0 };
+
+    pub const Msg = union(enum) { press };
+
+    const App = runtime.UiApp(Model, Msg);
+
+    pub fn initModel() Model {
+        return .{};
+    }
+
+    pub fn mobileOptions() App.Options {
+        return .{
+            .name = "mobile-measure",
+            .scene = ui_host.mobile_shell_scene,
+            .canvas_label = mobile_gpu_surface_label,
+            .update = update,
+            .view = view,
+        };
+    }
+
+    fn update(model: *Model, msg: Msg) void {
+        switch (msg) {
+            .press => model.pressed += 1,
+        }
+    }
+
+    fn view(ui: *App.Ui, model: *const Model) App.Ui.Node {
+        _ = model;
+        return ui.row(.{ .gap = 8, .padding = 12 }, .{
+            ui.text(.{}, "Measured run"),
+            ui.button(.{ .on_press = .press }, "OK"),
+        });
+    }
+};
+
+const MobileMeasureApi = c_api.MobileCApi(ui_host.UiAppHost(MobileMeasureDef));
+
+fn measureTestTextWidth(app: ?*anyopaque) !f32 {
+    const count = MobileMeasureApi.zero_native_app_widget_semantics_count(app);
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        var node: MobileWidgetSemantics = .{};
+        try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_widget_semantics_at(app, index, &node));
+        if (node.role == @intFromEnum(MobileWidgetRole.text)) return node.width;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "mobile C ABI text measure provider changes embed text layout" {
+    var surface_token: u8 = 0;
+
+    // Baseline: no provider, deterministic estimator metrics.
+    const baseline_app = MobileMeasureApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
+    MobileMeasureApi.zero_native_app_start(baseline_app);
+    MobileMeasureApi.zero_native_app_viewport(baseline_app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.zero_native_app_frame(baseline_app);
+    const baseline_width = try measureTestTextWidth(baseline_app);
+    try std.testing.expect(baseline_width > 0);
+    MobileMeasureApi.zero_native_app_destroy(baseline_app);
+
+    // Registering a measure callback before start makes the installing
+    // layout measure through it: the text widget's bounds change.
+    const app = MobileMeasureApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileMeasureApi.zero_native_app_destroy(app);
+    const self: *ui_host.UiAppHost(MobileMeasureDef) = @ptrCast(@alignCast(app));
+    var measure_calls: usize = 0;
+    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_set_text_measure(app, fakeMobileMeasureText, &measure_calls));
+    try std.testing.expect(self.embedded.runtime.textMeasureProvider() != null);
+    MobileMeasureApi.zero_native_app_start(app);
+    MobileMeasureApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.zero_native_app_frame(app);
+    try std.testing.expect(measure_calls > 0);
+    const measured_width = try measureTestTextWidth(app);
+    try std.testing.expect(measured_width > baseline_width);
+    // "Measured run" is 12 bytes at one `size` per byte; the estimator's
+    // widest advance factor is 0.91, so the fake at least ~10% wider.
+    try std.testing.expect(measured_width >= baseline_width * 1.1);
+
+    // Clearing the callback falls back to the estimator on the next
+    // rebuild (a viewport resize here): baseline layout returns. The
+    // runtime-side provider stays installed — retained display-list
+    // commands carry its pointer for the runtime's lifetime — but the
+    // bridge reports no measurement, which is the estimator path.
+    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_set_text_measure(app, null, null));
+    try std.testing.expect(self.embedded.runtime.textMeasureProvider() != null);
+    MobileMeasureApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.zero_native_app_frame(app);
+    const restored_width = try measureTestTextWidth(app);
+    try std.testing.expectEqual(baseline_width, restored_width);
+}
+
 test "mobile C ABI publishes automation snapshots into a host-set directory" {
     const app = MobileCounterApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
     defer MobileCounterApi.zero_native_app_destroy(app);

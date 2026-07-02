@@ -11,6 +11,7 @@
         "SECURITY.md",
         "app.zon",
         "assets",
+        "build",
         "build.zig",
         "build.zig.zon",
         "docs",

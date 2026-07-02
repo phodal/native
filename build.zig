@@ -35,6 +35,9 @@ const SigningMode = enum {
     identity,
 };
 
+pub const AppOptions = @import("build/app.zig").AppOptions;
+pub const addApp = @import("build/app.zig").addApp;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const host_target = b.graph.host;

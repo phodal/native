@@ -2,6 +2,40 @@
 
 All notable changes to zero-native will be documented in this file.
 
+## Unreleased
+
+### New Features
+
+- **Native-rendered apps by default**: `zero-native init` now scaffolds a native-rendered app — a declarative `.zml` markup view plus Zig logic — with web frontends available via `--frontend next|vite|react|svelte|vue`.
+- **Markup authoring (`.zml`)**: HTML-inspired views with flex layout, `{bindings}` to model fields and functions, typed `on-*` message dispatch, `for`/`if` structure tags, and keyed identity (including `global-key` for items that move between containers). A deliberately closed expression grammar keeps logic in Zig.
+- **Comptime markup compilation**: views compile at build time into direct field access — release binaries carry no parser, and markup or binding mistakes are compile errors with line and column.
+- **Hot reload**: dev builds watch the `.zml` file and update the running window in place, preserving model state, selection, and widget identity — no JS engine involved.
+- **`UiApp` runtime loop**: apps are a `Model`, a `Msg` union, `update`, and a view; the runtime owns install, presentation, resize, typed event dispatch, timers, chrome display lists, and animations. All examples run on it.
+- **Declarative `canvas.Ui` builder**: the programmatic escape hatch under the markup — structural widget identity (no hand-assigned ids), typed message handlers, flex-first layout, payload-carrying constructors for text edits and slider values.
+- **Linux canvas presentation**: native-rendered apps run on Linux through a software path (GTK drawing areas, cairo blits of the deterministic reference renderer), with pointer, keyboard, scroll, IME composition, and HiDPI support.
+- **CoreText-backed text metrics**: layout measures with the same fonts presentation draws on macOS, via a pluggable provider that leaves tests and the reference renderer deterministic.
+- **Platform timers**: `runtime.startTimer`/`cancelTimer` with typed timer events and `UiApp` message mapping — the first way for apps to do time-based updates.
+- **Automation screenshots**: `zero-native automate screenshot` renders a canvas view through the reference renderer to a deterministic PNG, enabling golden-image verification for tests and agents.
+- **`.zml` tooling**: `zero-native markup check` (instant grammar validation with positions), `zero-native markup lsp` (diagnostics, completion, hover), and a TextMate grammar with editor setup under `editors/zml/`.
+- **Framework build helper**: `zero_native.addApp` gives an app a complete build from a five-line build.zig; the shared runner lives in the framework.
+- **`native-ui` agent skill**: the complete markup and UiApp authoring reference, served through the skills CLI.
+
+### Improvements
+
+- **Widget capacity**: per-view limits raised to real-app scale (256 widgets, 1024 display-list commands), with the runtime constructing strictly in place so no embedding can overflow a thread stack.
+- **Engine reconciliation**: container intrinsic sizing measured engine-side; scroll offsets and editable text both survive rebuilds until the source changes (programmatic changes win); accessibility actions derive from typed handlers.
+- **CI**: native example tests against real GTK, macOS GPU smokes, a headless Linux canvas smoke under Xvfb, and native template scaffolding now run in CI.
+
+### Bug Fixes
+
+- **GTK shell**: initial window allocation now reflows shell views, and overlay z-order lets native overlays receive pointer input.
+- **Linux startup**: the runtime is heap-allocated in all runners, fixing a startup crash under default stack limits.
+- **Docs site security**: `next` and `postcss` advisories patched.
+
+### Contributors
+
+- @ctate
+
 ## 0.3.0
 
 <!-- release:start -->

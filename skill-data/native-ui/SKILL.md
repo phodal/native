@@ -63,12 +63,22 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `stack`, `panel`, `card` | overlay containers | children stack on top of each other |
 | `scroll` | scroll_view | wrap multiple children in a `column` inside it |
 | `list`, `grid` | list, grid | vertical stack / cell grid |
-| `text`, `badge` | text leaves | text content, `{}` interpolation allowed |
-| `button`, `list-item`, `menu-item`, `toggle` | text-bearing controls | label is the text content |
+| `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination` | row containers | children flow horizontally (tab buttons, toggle-buttons, radios, ...) |
+| `table` > `table-row` > `table-cell` | table, data_row, data_cell | rows only inside a table, cells only inside a row (for/if wrappers are fine); cells are text leaves, dispatch with `on-press` |
+| `dropdown-menu` | dropdown_menu | vertical menu surface; children are `menu-item`s |
+| `accordion` | accordion | header via `text` attr; children show while `selected`, dispatch `on-toggle` |
+| `alert`, `bubble` | surfaces | `alert` title via `text` attr; children stack inside |
+| `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text` attr, wrap in `<if>` to show conditionally |
+| `resizable` | resizable | engine-managed drag handle; `width` sets the initial width |
+| `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed |
+| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
-| `text-field`, `search-field`, `textarea` | text entry | `placeholder`; edits via `on-input` |
+| `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits via `on-input`, enter via `on-submit` |
 | `status-bar` | status bar | text leaf: content only, no children |
 | `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
+| `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
+
+Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need ImageId asset references), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`).
 
 ## Attributes
 

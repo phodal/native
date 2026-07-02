@@ -6,21 +6,26 @@
     <text grow="1">Habits</text>
     <button variant="primary" on-press="add">New habit</button>
   </row>
-  <row gap="8">
+  <toggle-group gap="8">
     <for each="filters" as="f">
-      <button size="sm" selected="{f == filter}" on-press="set_filter:{f}">{f}</button>
+      <toggle-button size="sm" selected="{f == filter}" on-toggle="set_filter:{f}">{f}</toggle-button>
     </for>
-  </row>
-  <scroll grow="1">
-    <column gap="2">
-      <for each="visible" key="id" as="h">
-        <row global-key="{h.id}" gap="8" padding="6" cross="center" role="listitem" label="{h.name}">
-          <text grow="1">{h.name}</text>
-          <text>{h.streak} days</text>
-          <button size="sm" on-press="done:{h.id}">Done today</button>
-        </row>
-      </for>
-    </column>
-  </scroll>
+  </toggle-group>
+  <if test="{habit_count}">
+    <scroll grow="1">
+      <column gap="2">
+        <for each="visible" key="id" as="h">
+          <row global-key="{h.id}" gap="8" padding="6" cross="center" role="listitem" label="{h.name}">
+            <text grow="1">{h.name}</text>
+            <text>{h.streak} days</text>
+            <button size="sm" on-press="done:{h.id}">Done today</button>
+          </row>
+        </for>
+      </column>
+    </scroll>
+  </if>
+  <else>
+    <alert text="No habits yet - add your first habit." grow="1" />
+  </else>
   <status-bar>{habit_count} habits · {totalDays} total days</status-bar>
 </column>

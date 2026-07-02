@@ -103,9 +103,10 @@ test "a full session: add, done, and filter drive the model through typed dispat
     try testing.expect(!subtreeHasText(meditate_after, "12 days"));
     try testing.expect(findByText(tree.root, .status_bar, "4 habits · 22 total days") != null);
 
-    // Switch to the active filter: zero-streak habits disappear, and the
-    // Meditate row keeps its widget id across the filtering.
-    const active_button = findByText(tree.root, .button, "active").?;
+    // Switch to the active filter (a toggle-button in the toggle-group):
+    // zero-streak habits disappear, and the Meditate row keeps its widget
+    // id across the filtering.
+    const active_button = findByText(tree.root, .toggle_button, "active").?;
     main.update(&model, tree.msgForPointer(active_button.id, .up).?);
     try testing.expectEqual(main.Filter.active, model.filter);
 
@@ -123,11 +124,39 @@ test "a full session: add, done, and filter drive the model through typed dispat
     try testing.expectEqual(@as(u32, 14), model.habitById(1).?.streak);
 
     // Back to "all": every row returns, identities intact.
-    const all_button = findByText(tree.root, .button, "all").?;
+    const all_button = findByText(tree.root, .toggle_button, "all").?;
     main.update(&model, tree.msgForPointer(all_button.id, .up).?);
     tree = try buildTree(arena, &model);
     try testing.expectEqual(@as(usize, 4), countRows(tree.root));
     try testing.expectEqual(meditate_row.id, findRow(tree.root, "Meditate").?.id);
+}
+
+test "an empty model shows the alert empty state instead of the list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    var tree = try buildTree(arena, &model);
+    const alert = findByKind(tree.root, .alert).?;
+    try testing.expectEqualStrings("No habits yet - add your first habit.", alert.text);
+    try testing.expect(findByKind(tree.root, .scroll_view) == null);
+
+    // Adding the first habit swaps the alert for the list.
+    const add_button = findByText(tree.root, .button, "New habit").?;
+    main.update(&model, tree.msgForPointer(add_button.id, .up).?);
+    tree = try buildTree(arena, &model);
+    try testing.expect(findByKind(tree.root, .alert) == null);
+    try testing.expect(findByKind(tree.root, .scroll_view) != null);
+    try testing.expectEqual(@as(usize, 1), countRows(tree.root));
+}
+
+fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
+    if (widget.kind == kind) return widget;
+    for (widget.children) |child| {
+        if (findByKind(child, kind)) |found| return found;
+    }
+    return null;
 }
 
 fn collectIds(widget: canvas.Widget, ids: *std.ArrayListUnmanaged(canvas.ObjectId), allocator: std.mem.Allocator) !void {

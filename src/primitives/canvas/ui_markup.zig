@@ -509,21 +509,43 @@ fn isBindingPath(text: []const u8) bool {
 // ------------------------------------------------------------ validation
 
 /// Element names the interpreter accepts (kept in sync by a test in
-/// ui_markup_view_tests.zig).
-pub const known_element_names = [_][]const u8{
-    "row",       "column",       "stack",    "panel",  "scroll",   "list",
-    "grid",      "card",         "text",     "button", "checkbox", "radio",
-    "toggle",    "slider",       "progress", "text-field", "search-field",
-    "textarea",  "list-item",    "menu-item", "status-bar", "separator",
-    "badge",     "spacer",
+/// ui_markup_view_tests.zig). Covers every built-in component whose shape
+/// fits the closed grammar; the deliberate exclusions (icon, image,
+/// icon-button, data-grid, popover, menu-surface, segmented-control) are
+/// documented next to the widget-kind coverage test in
+/// ui_markup_view_tests.zig — write those as Zig view functions.
+pub const known_element_names =
+    // Flex, overlay, and scrolling containers.
+    [_][]const u8{ "row", "column", "stack", "panel", "scroll", "list", "grid", "card" } ++
+    // Row containers (children flow along the horizontal main axis).
+    [_][]const u8{ "breadcrumb", "button-group", "pagination", "radio-group", "tabs", "toggle-group" } ++
+    // Vertical containers.
+    [_][]const u8{ "table", "table-row", "dropdown-menu" } ++
+    // Overlay/surface containers (title via the text attribute).
+    [_][]const u8{ "accordion", "alert", "bubble", "dialog", "drawer", "sheet", "resizable" } ++
+    // Text-bearing leaves (label is the element content).
+    [_][]const u8{ "text", "badge", "button", "toggle", "list-item", "menu-item", "status-bar" } ++
+    [_][]const u8{ "avatar", "select", "switch", "table-cell", "toggle-button", "tooltip" } ++
+    // Value controls and text entry.
+    [_][]const u8{ "checkbox", "radio", "slider", "progress" } ++
+    [_][]const u8{ "text-field", "search-field", "textarea", "input", "combobox" } ++
+    // Plain leaves.
+    [_][]const u8{ "separator", "spacer", "skeleton", "spinner" };
+
+/// Elements whose content is a single run of text (with `{}`
+/// interpolation) and that take no element children. Kept in sync with the
+/// interpreter's `elementTakesText` by a test in ui_markup_view_tests.zig.
+pub const known_text_leaf_element_names = [_][]const u8{
+    "text",       "badge",         "button",  "toggle", "list-item",
+    "menu-item",  "status-bar",    "avatar",  "select", "switch",
+    "table-cell", "toggle-button", "tooltip",
 };
 
 pub const known_option_attrs = [_][]const u8{
-    "text",     "placeholder", "value",    "checked", "selected",    "disabled",
-    "variant",     "size",     "width",   "height",      "grow",
-    "gap",         "padding",  "main",    "cross",       "virtualized",
-    "virtual-item-extent",     "key",     "global-key",  "role",
-    "label",
+    "text",       "placeholder", "value", "checked",     "selected",            "disabled",
+    "variant",    "size",        "width", "height",      "grow",                "gap",
+    "padding",    "main",        "cross", "virtualized", "virtual-item-extent", "key",
+    "global-key", "role",        "label",
 };
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
@@ -540,9 +562,9 @@ pub const known_color_style_attrs = [_][]const u8{
 /// The field names of `canvas.ColorTokens`, kept in sync by a test in
 /// ui_markup_view_tests.zig (this module stays std-only).
 pub const known_color_token_names = [_][]const u8{
-    "background",  "surface",          "surface_subtle", "surface_pressed",
-    "text",        "text_muted",       "border",         "accent",
-    "accent_text", "destructive",      "destructive_text", "focus_ring",
+    "background",  "surface",     "surface_subtle",   "surface_pressed",
+    "text",        "text_muted",  "border",           "accent",
+    "accent_text", "destructive", "destructive_text", "focus_ring",
     "shadow",      "disabled",
 };
 
@@ -554,6 +576,10 @@ pub const unknown_color_token_message = "unknown color token: color style attrib
 pub const unknown_radius_token_message = "unknown radius token: radius takes a canvas RadiusTokens field name (sm, md, lg, xl)";
 
 pub const invalid_expression_message = "invalid expression: values are a literal, one {binding}, or one {a == b} equality - no other operators or calls (put logic in a model function)";
+pub const text_leaf_children_message = "this element takes text content only - wrap element children in a container (row, column, stack)";
+pub const text_leaf_single_run_message = "text elements take a single run of text";
+pub const table_row_parent_message = "table-row is only allowed inside a table (structure tags in between are fine)";
+pub const table_cell_parent_message = "table-cell is only allowed inside a table-row (structure tags in between are fine)";
 pub const template_top_level_message = "template definitions are only allowed at the top of the file, before the view root";
 pub const template_name_message = "template requires a name attribute";
 pub const template_unique_name_message = "template names must be unique";
@@ -576,7 +602,7 @@ pub fn validate(document: MarkupDocument) ?MarkupErrorInfo {
     for (document.templates, 0..) |template_node, index| {
         if (validateTemplate(document, template_node, index)) |info| return info;
     }
-    return validateNode(document, document.root, false, document.templates.len);
+    return validateNode(document, document.root, null, document.templates.len);
 }
 
 fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?MarkupErrorInfo {
@@ -603,8 +629,10 @@ fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?M
         return errorAt(node, template_one_child_message);
     }
     // The body sees templates defined before this one, which also rules
-    // out recursion.
-    return validateNode(document, node.children[0], false, index);
+    // out recursion. The body root has no known parent element, so
+    // parent-scoped rules (table-row in table) are checked at use sites of
+    // the surrounding markup, not here.
+    return validateNode(document, node.children[0], null, index);
 }
 
 fn validateUse(document: MarkupDocument, node: MarkupNode, template_limit: usize) ?MarkupErrorInfo {
@@ -629,7 +657,10 @@ fn validateUse(document: MarkupDocument, node: MarkupNode, template_limit: usize
     return null;
 }
 
-fn validateNode(document: MarkupDocument, node: MarkupNode, parent_is_element: bool, template_limit: usize) ?MarkupErrorInfo {
+/// `parent_element` is the name of the nearest enclosing element, looking
+/// through structure tags (`for`/`if`/`else`), or null at the view root and
+/// at a template body root.
+fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]const u8, template_limit: usize) ?MarkupErrorInfo {
     switch (node.kind) {
         .text => return null,
         .template_block => return errorAt(node, template_top_level_message),
@@ -637,6 +668,24 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_is_element: b
         .element => {
             if (!nameInList(node.name, &known_element_names)) {
                 return errorAt(node, "unknown element");
+            }
+            if (std.mem.eql(u8, node.name, "table-row")) {
+                if (parent_element) |parent_name| {
+                    if (!std.mem.eql(u8, parent_name, "table")) return errorAt(node, table_row_parent_message);
+                }
+            }
+            if (std.mem.eql(u8, node.name, "table-cell")) {
+                if (parent_element) |parent_name| {
+                    if (!std.mem.eql(u8, parent_name, "table-row")) return errorAt(node, table_cell_parent_message);
+                }
+            }
+            if (nameInList(node.name, &known_text_leaf_element_names)) {
+                var text_runs: usize = 0;
+                for (node.children) |child| {
+                    if (child.kind != .text) return errorAt(child, text_leaf_children_message);
+                    text_runs += 1;
+                    if (text_runs > 1) return errorAt(child, text_leaf_single_run_message);
+                }
             }
             for (node.attrs) |attribute| {
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {
@@ -677,7 +726,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_is_element: b
             }
         },
         .for_block => {
-            if (!parent_is_element) return errorAt(node, "for is only allowed inside an element");
+            if (parent_element == null) return errorAt(node, "for is only allowed inside an element");
             if (node.attr("each") == null) return errorAt(node, "for requires an each attribute");
             if (node.attr("as") == null) return errorAt(node, "for requires an as attribute");
             if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) {
@@ -685,18 +734,25 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_is_element: b
             }
         },
         .if_block => {
-            if (!parent_is_element) return errorAt(node, "if is only allowed inside an element");
+            if (parent_element == null) return errorAt(node, "if is only allowed inside an element");
             const test_value = node.attr("test") orelse return errorAt(node, "if requires a test attribute");
             if (parseAttrExpression(test_value) == null) return errorAt(node, "invalid expression: test takes one {binding} or {a == b} equality");
         },
         .else_block => {},
     }
+    // Structure tags are transparent for parent-scoped rules: their
+    // children still sit inside the enclosing element.
+    const child_parent: ?[]const u8 = switch (node.kind) {
+        .element => node.name,
+        .for_block, .if_block, .else_block => parent_element,
+        else => null,
+    };
     var previous_kind: ?MarkupNodeKind = null;
     for (node.children) |child| {
         if (child.kind == .else_block and previous_kind != .if_block) {
             return errorAt(child, "else must directly follow an if");
         }
-        if (validateNode(document, child, node.kind == .element or node.kind == .for_block or node.kind == .if_block or node.kind == .else_block, template_limit)) |info| {
+        if (validateNode(document, child, child_parent, template_limit)) |info| {
             return info;
         }
         previous_kind = child.kind;

@@ -533,3 +533,398 @@ test "the validator's element list matches the interpreter" {
         try testing.expect(markup_view.elementKind(name) != null);
     }
 }
+
+test "the validator's text-leaf element list matches the interpreter's takes-text set" {
+    for (canvas.ui_markup.known_element_names) |name| {
+        const kind = markup_view.elementKind(name).?;
+        try testing.expectEqual(
+            markup_view.elementTakesText(kind),
+            nameListed(name, &canvas.ui_markup.known_text_leaf_element_names),
+        );
+    }
+    // Every listed text leaf is a known element.
+    for (canvas.ui_markup.known_text_leaf_element_names) |name| {
+        try testing.expect(nameListed(name, &canvas.ui_markup.known_element_names));
+    }
+}
+
+/// Widget kinds deliberately NOT expressible in markup v1 — each needs
+/// something the closed grammar cannot carry, so these are written as Zig
+/// view functions instead of forcing a bad markup shape:
+/// - icon, image, icon_button: reference image/icon assets by ImageId,
+///   which markup's literal/binding attribute values cannot express.
+/// - data_grid: a virtualized data grid needs per-column cell templates
+///   (arbitrary render callbacks).
+/// - popover, menu_surface: floating surfaces anchored to runtime geometry
+///   the static tree cannot express (dropdown-menu covers the declarative
+///   menu case).
+/// - segmented_control: engine kind for shell chrome segments; tabs and
+///   toggle-group cover the component catalog's use cases.
+const markup_excluded_widget_kinds = [_]canvas.WidgetKind{
+    .icon, .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control,
+};
+
+fn kindExpressible(kind: canvas.WidgetKind) bool {
+    for (canvas.ui_markup.known_element_names) |name| {
+        if (markup_view.elementKind(name) == kind) return true;
+    }
+    return false;
+}
+
+test "known_element_names covers every markup-expressible widget kind" {
+    // Exactly the excluded kinds are inexpressible: a new widget kind must
+    // either get a markup element or a documented exclusion above.
+    for (std.enums.values(canvas.WidgetKind)) |kind| {
+        const excluded = std.mem.indexOfScalar(canvas.WidgetKind, &markup_excluded_widget_kinds, kind) != null;
+        try testing.expectEqual(!excluded, kindExpressible(kind));
+    }
+}
+
+test "every built-in component is expressible in markup" {
+    for (canvas.builtin_component_kinds) |component| {
+        const descriptor = canvas.builtinComponentDescriptor(component);
+        try testing.expect(kindExpressible(descriptor.root_widget_kind));
+    }
+}
+
+// -------------------------------------------------- component catalog fixture
+
+pub const CatalogRow = struct {
+    id: u32,
+    name: []const u8,
+    qty: u32,
+
+    pub fn key(row: *const CatalogRow) canvas.UiKey {
+        return canvas.uiKey(row.id);
+    }
+};
+
+pub const CatalogMsg = union(enum) {
+    open_picker,
+    set_tab: u32,
+    toggle_bold,
+    toggle_details,
+    set_page: u32,
+    pick_row: u32,
+    query_edit: canvas.TextInputEvent,
+    submit_query,
+};
+
+pub const CatalogModel = struct {
+    tab: u32 = 0,
+    overview_tab: u32 = 0,
+    data_tab: u32 = 1,
+    bold: bool = false,
+    details_open: bool = true,
+    dialog_open: bool = false,
+    loading: bool = true,
+    page: u32 = 1,
+    choice: []const u8 = "Bananas",
+    query: []const u8 = "",
+    rows: []const CatalogRow = &.{},
+
+    pub fn prevPage(model: *const CatalogModel) u32 {
+        return model.page -| 1;
+    }
+
+    pub fn nextPage(model: *const CatalogModel) u32 {
+        return model.page + 1;
+    }
+};
+
+/// One instance of every element added for built-in component coverage:
+/// row containers (breadcrumb, tabs, toggle-group, button-group,
+/// radio-group, pagination), vertical containers (table + table-row +
+/// table-cell, dropdown-menu), surfaces (accordion, alert, bubble,
+/// resizable, dialog, drawer, sheet), text leaves (avatar, select, switch,
+/// toggle-button, tooltip), text entry (input, combobox), and plain leaves
+/// (skeleton, spinner).
+pub const catalog_markup_source =
+    \\<column gap="8">
+    \\  <breadcrumb gap="4">
+    \\    <text>Home</text>
+    \\    <text>Products</text>
+    \\  </breadcrumb>
+    \\  <tabs gap="4">
+    \\    <button selected="{tab == overview_tab}" on-press="set_tab:{overview_tab}">Overview</button>
+    \\    <button selected="{tab == data_tab}" on-press="set_tab:{data_tab}">Data</button>
+    \\  </tabs>
+    \\  <row gap="8" cross="center">
+    \\    <avatar>CT</avatar>
+    \\    <select placeholder="Pick a fruit" on-press="open_picker">{choice}</select>
+    \\    <switch checked="{bold}" on-toggle="toggle_bold">Bold</switch>
+    \\    <toggle-group gap="4">
+    \\      <toggle-button selected="{bold}" on-toggle="toggle_bold">B</toggle-button>
+    \\    </toggle-group>
+    \\    <button-group gap="4">
+    \\      <button size="sm" on-press="open_picker">Open</button>
+    \\    </button-group>
+    \\  </row>
+    \\  <row gap="8">
+    \\    <input text="{query}" placeholder="Name" on-input="query_edit" on-submit="submit_query" grow="1" />
+    \\    <combobox text="{query}" placeholder="Search fruit" on-input="query_edit" />
+    \\  </row>
+    \\  <radio-group gap="4">
+    \\    <radio checked="{bold}" on-toggle="toggle_bold" />
+    \\  </radio-group>
+    \\  <accordion text="Details" selected="{details_open}" on-toggle="toggle_details" padding="8">
+    \\    <text>More info</text>
+    \\  </accordion>
+    \\  <alert text="Heads up" />
+    \\  <bubble padding="8">
+    \\    <text>Hi!</text>
+    \\  </bubble>
+    \\  <table gap="2">
+    \\    <table-row gap="4">
+    \\      <table-cell>Name</table-cell>
+    \\      <table-cell>Qty</table-cell>
+    \\    </table-row>
+    \\    <for each="rows" key="id" as="r">
+    \\      <table-row gap="4">
+    \\        <table-cell on-press="pick_row:{r.id}">{r.name}</table-cell>
+    \\        <table-cell>{r.qty}</table-cell>
+    \\      </table-row>
+    \\    </for>
+    \\  </table>
+    \\  <pagination gap="4">
+    \\    <button size="sm" on-press="set_page:{prevPage}">Prev</button>
+    \\    <badge>{page}</badge>
+    \\    <button size="sm" on-press="set_page:{nextPage}">Next</button>
+    \\  </pagination>
+    \\  <dropdown-menu gap="2">
+    \\    <menu-item on-press="open_picker">Rename</menu-item>
+    \\  </dropdown-menu>
+    \\  <resizable width="240">
+    \\    <column padding="8">
+    \\      <text>Sidebar</text>
+    \\    </column>
+    \\  </resizable>
+    \\  <if test="{loading}">
+    \\    <row gap="4" cross="center">
+    \\      <spinner />
+    \\      <skeleton width="120" height="16" />
+    \\    </row>
+    \\  </if>
+    \\  <tooltip>Copied!</tooltip>
+    \\  <if test="{dialog_open}">
+    \\    <dialog text="Confirm">
+    \\      <column gap="8" padding="12">
+    \\        <text>Are you sure?</text>
+    \\        <button variant="primary" on-press="submit_query">Yes</button>
+    \\      </column>
+    \\    </dialog>
+    \\  </if>
+    \\  <drawer text="Filters">
+    \\    <column padding="8">
+    \\      <text>Drawer body</text>
+    \\    </column>
+    \\  </drawer>
+    \\  <sheet text="Share">
+    \\    <column padding="8">
+    \\      <text>Sheet body</text>
+    \\    </column>
+    \\  </sheet>
+    \\</column>
+;
+
+pub const CatalogUi = canvas.Ui(CatalogMsg);
+
+fn textLeaf(ui: *CatalogUi, kind: canvas.WidgetKind, options: CatalogUi.ElementOptions, content: []const u8) CatalogUi.Node {
+    var node = ui.el(kind, options, .{});
+    node.widget.text = content;
+    return node;
+}
+
+fn catalogTableRow(ui: *CatalogUi, row: *const CatalogRow) CatalogUi.Node {
+    return ui.el(.data_row, .{ .gap = 4 }, .{
+        textLeaf(ui, .data_cell, .{ .on_press = CatalogMsg{ .pick_row = row.id } }, row.name),
+        textLeaf(ui, .data_cell, .{}, ui.fmt("{d}", .{row.qty})),
+    });
+}
+
+/// The hand-written equivalent of the catalog markup for a model with
+/// `loading` true and `dialog_open` false (the fixture model): parity
+/// means the interpreter and the compiled view both build exactly this.
+pub fn handCatalogView(ui: *CatalogUi, model: *const CatalogModel) CatalogUi.Node {
+    return ui.column(.{ .gap = 8 }, .{
+        ui.el(.breadcrumb, .{ .gap = 4 }, .{
+            ui.text(.{}, "Home"),
+            ui.text(.{}, "Products"),
+        }),
+        ui.el(.tabs, .{ .gap = 4 }, .{
+            ui.button(.{ .selected = model.tab == model.overview_tab, .on_press = CatalogMsg{ .set_tab = model.overview_tab } }, "Overview"),
+            ui.button(.{ .selected = model.tab == model.data_tab, .on_press = CatalogMsg{ .set_tab = model.data_tab } }, "Data"),
+        }),
+        ui.row(.{ .gap = 8, .cross = .center }, .{
+            textLeaf(ui, .avatar, .{}, "CT"),
+            textLeaf(ui, .select, .{ .placeholder = "Pick a fruit", .on_press = .open_picker }, model.choice),
+            textLeaf(ui, .switch_control, .{ .checked = model.bold, .on_toggle = .toggle_bold }, "Bold"),
+            ui.el(.toggle_group, .{ .gap = 4 }, .{
+                textLeaf(ui, .toggle_button, .{ .selected = model.bold, .on_toggle = .toggle_bold }, "B"),
+            }),
+            ui.el(.button_group, .{ .gap = 4 }, .{
+                ui.button(.{ .size = .sm, .on_press = .open_picker }, "Open"),
+            }),
+        }),
+        ui.row(.{ .gap = 8 }, .{
+            ui.el(.input, .{ .text = model.query, .placeholder = "Name", .on_input = CatalogUi.inputMsg(.query_edit), .on_submit = .submit_query, .grow = 1 }, .{}),
+            ui.el(.combobox, .{ .text = model.query, .placeholder = "Search fruit", .on_input = CatalogUi.inputMsg(.query_edit) }, .{}),
+        }),
+        ui.el(.radio_group, .{ .gap = 4 }, .{
+            ui.el(.radio, .{ .checked = model.bold, .on_toggle = .toggle_bold }, .{}),
+        }),
+        ui.el(.accordion, .{ .text = "Details", .selected = model.details_open, .on_toggle = .toggle_details, .padding = 8 }, .{
+            ui.text(.{}, "More info"),
+        }),
+        ui.el(.alert, .{ .text = "Heads up" }, .{}),
+        ui.el(.bubble, .{ .padding = 8 }, .{
+            ui.text(.{}, "Hi!"),
+        }),
+        ui.el(.table, .{ .gap = 2 }, .{
+            ui.el(.data_row, .{ .gap = 4 }, .{
+                textLeaf(ui, .data_cell, .{}, "Name"),
+                textLeaf(ui, .data_cell, .{}, "Qty"),
+            }),
+            ui.each(model.rows, CatalogRow.key, catalogTableRow),
+        }),
+        ui.el(.pagination, .{ .gap = 4 }, .{
+            ui.button(.{ .size = .sm, .on_press = CatalogMsg{ .set_page = model.prevPage() } }, "Prev"),
+            textLeaf(ui, .badge, .{}, ui.fmt("{d}", .{model.page})),
+            ui.button(.{ .size = .sm, .on_press = CatalogMsg{ .set_page = model.nextPage() } }, "Next"),
+        }),
+        ui.el(.dropdown_menu, .{ .gap = 2 }, .{
+            textLeaf(ui, .menu_item, .{ .on_press = .open_picker }, "Rename"),
+        }),
+        ui.el(.resizable, .{ .width = 240 }, .{
+            ui.column(.{ .padding = 8 }, ui.text(.{}, "Sidebar")),
+        }),
+        // The fixture model has loading=true and dialog_open=false; the
+        // interpreter/compiled if blocks flatten to exactly these siblings.
+        ui.row(.{ .gap = 4, .cross = .center }, .{
+            ui.el(.spinner, .{}, .{}),
+            ui.el(.skeleton, .{ .width = 120, .height = 16 }, .{}),
+        }),
+        textLeaf(ui, .tooltip, .{}, "Copied!"),
+        ui.el(.drawer, .{ .text = "Filters" }, .{
+            ui.column(.{ .padding = 8 }, ui.text(.{}, "Drawer body")),
+        }),
+        ui.el(.sheet, .{ .text = "Share" }, .{
+            ui.column(.{ .padding = 8 }, ui.text(.{}, "Sheet body")),
+        }),
+    });
+}
+
+pub fn catalogTestModel() CatalogModel {
+    return .{
+        .rows = &[_]CatalogRow{
+            .{ .id = 1, .name = "Apples", .qty = 4 },
+            .{ .id = 2, .name = "Pears", .qty = 7 },
+        },
+    };
+}
+
+test "the catalog fixture passes structural validation" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var parser = canvas.ui_markup.Parser.init(arena_state.allocator(), catalog_markup_source);
+    try testing.expectEqual(@as(?canvas.ui_markup.MarkupErrorInfo, null), canvas.ui_markup.validate(try parser.parse()));
+}
+
+test "catalog elements build the hand-written tree and dispatch typed messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = catalogTestModel();
+    const CatalogMarkup = markup_view.MarkupView(CatalogModel, CatalogMsg);
+
+    var view = try CatalogMarkup.init(arena, catalog_markup_source);
+    var markup_ui = CatalogUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = CatalogUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handCatalogView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+
+    // Text-bearing leaves carry their content.
+    try testing.expect(findByText(markup_tree.root, .avatar, "CT") != null);
+    try testing.expect(findByText(markup_tree.root, .select, "Bananas") != null);
+    try testing.expect(findByText(markup_tree.root, .tooltip, "Copied!") != null);
+    try testing.expect(findByText(markup_tree.root, .data_cell, "Pears") != null);
+    try testing.expect(findByText(markup_tree.root, .badge, "1") != null);
+
+    // Surface titles flow through the text attribute.
+    try testing.expectEqualStrings("Heads up", findByKind(markup_tree.root, .alert).?.text);
+    try testing.expectEqualStrings("Details", findByKind(markup_tree.root, .accordion).?.text);
+
+    // Typed dispatch through the engine's semantic intents: select presses,
+    // switch/toggle-button/accordion toggle, table cells select-press.
+    const select = findByKind(markup_tree.root, .select).?;
+    try testing.expectEqual(CatalogMsg.open_picker, markup_tree.msgForPointer(select.id, .up).?);
+    const switch_control = findByKind(markup_tree.root, .switch_control).?;
+    try testing.expectEqual(CatalogMsg.toggle_bold, markup_tree.msgForPointer(switch_control.id, .up).?);
+    const toggle_button = findByKind(markup_tree.root, .toggle_button).?;
+    try testing.expectEqual(CatalogMsg.toggle_bold, markup_tree.msgForPointer(toggle_button.id, .up).?);
+    const accordion = findByKind(markup_tree.root, .accordion).?;
+    try testing.expectEqual(CatalogMsg.toggle_details, markup_tree.msgForPointer(accordion.id, .up).?);
+    const pears_cell = findByText(markup_tree.root, .data_cell, "Pears").?;
+    try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(pears_cell.id, .up).?.pick_row);
+    const prev_button = findByText(markup_tree.root, .button, "Prev").?;
+    try testing.expectEqual(@as(u32, 0), markup_tree.msgForPointer(prev_button.id, .up).?.set_page);
+
+    // Text entry: edits and enter-to-submit dispatch on input.
+    const input = findByKind(markup_tree.root, .input).?;
+    const typed = canvas.WidgetKeyboardEvent{ .phase = .text_input, .text = "q" };
+    try testing.expectEqualStrings("q", markup_tree.msgForKeyboard(input.id, typed).?.query_edit.insert_text);
+    const submit = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    try testing.expectEqual(CatalogMsg.submit_query, markup_tree.msgForKeyboard(input.id, submit).?);
+
+    // The whole catalog lays out through the canvas engine.
+    var nodes: [256]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(markup_tree.root, @import("geometry").RectF.init(0, 0, 900, 1400), &nodes);
+    try testing.expect(layout.nodes.len > 0);
+}
+
+test "new element misuse is validated with positions and teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            .source = "<column>\n  <table-row><table-cell>x</table-cell></table-row>\n</column>",
+            .message = canvas.ui_markup.table_row_parent_message,
+        },
+        .{
+            .source = "<table>\n  <table-cell>x</table-cell>\n</table>",
+            .message = canvas.ui_markup.table_cell_parent_message,
+        },
+        .{
+            .source = "<row>\n  <select><button on-press=\"x\">pick</button></select>\n</row>",
+            .message = canvas.ui_markup.text_leaf_children_message,
+        },
+        .{
+            .source = "<row>\n  <avatar><text>CT</text></avatar>\n</row>",
+            .message = canvas.ui_markup.text_leaf_children_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = canvas.ui_markup.Parser.init(arena, case.source);
+        const info = canvas.ui_markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+        try testing.expect(info.column > 0);
+    }
+
+    // Structure tags between a table and its rows are fine.
+    var parser = canvas.ui_markup.Parser.init(arena, "<table><for each=\"rows\" as=\"r\"><table-row><table-cell>{r.name}</table-cell></table-row></for></table>");
+    try testing.expectEqual(@as(?canvas.ui_markup.MarkupErrorInfo, null), canvas.ui_markup.validate(try parser.parse()));
+}

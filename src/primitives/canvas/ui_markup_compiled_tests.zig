@@ -300,6 +300,92 @@ test "the compiled path accepts every element the validator knows" {
     }
 }
 
+// --------------------------------------------- component catalog parity
+
+const CatalogUi = fixture.CatalogUi;
+const CatalogInterpreter = markup_view.MarkupView(fixture.CatalogModel, fixture.CatalogMsg);
+const CatalogCompiled = canvas.CompiledMarkupView(fixture.CatalogModel, fixture.CatalogMsg, fixture.catalog_markup_source);
+
+fn interpretCatalog(arena: std.mem.Allocator, model: *const fixture.CatalogModel) !CatalogUi.Tree {
+    var view = try CatalogInterpreter.init(arena, fixture.catalog_markup_source);
+    var ui = CatalogUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileCatalog(arena: std.mem.Allocator, model: *const fixture.CatalogModel) !CatalogUi.Tree {
+    var ui = CatalogUi.init(arena);
+    return ui.finalize(CatalogCompiled.build(&ui, model));
+}
+
+test "compiled catalog elements match the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.catalogTestModel();
+
+    const interpreted = try interpretCatalog(arena, &model);
+    const compiled = try compileCatalog(arena, &model);
+    var hand_ui = CatalogUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handCatalogView(&hand_ui, &model));
+
+    // All three engines agree on every new element: ids, handlers, texts.
+    try expectSameTree(fixture.CatalogMsg, hand, interpreted);
+    try expectSameTree(fixture.CatalogMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // Dispatch parity across the new control kinds.
+    const select = fixture.findByKind(compiled.root, .select).?;
+    try testing.expectEqual(
+        interpreted.msgForPointer(select.id, .up).?,
+        compiled.msgForPointer(select.id, .up).?,
+    );
+    const switch_control = fixture.findByKind(compiled.root, .switch_control).?;
+    try testing.expectEqual(fixture.CatalogMsg.toggle_bold, compiled.msgForPointer(switch_control.id, .up).?);
+    const pears_cell = fixture.findByText(compiled.root, .data_cell, "Pears").?;
+    try testing.expectEqual(
+        interpreted.msgForPointer(pears_cell.id, .up).?,
+        compiled.msgForPointer(pears_cell.id, .up).?,
+    );
+    try testing.expectEqual(@as(u32, 2), compiled.msgForPointer(pears_cell.id, .up).?.pick_row);
+
+    // Text entry parity on the input element, including on-input.
+    const input = fixture.findByKind(compiled.root, .input).?;
+    const typed = canvas.WidgetKeyboardEvent{ .phase = .text_input, .text = "q" };
+    try testing.expectEqualStrings("q", compiled.msgForKeyboard(input.id, typed).?.query_edit.insert_text);
+    const submit = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    try testing.expectEqual(
+        interpreted.msgForKeyboard(input.id, submit).?,
+        compiled.msgForKeyboard(input.id, submit).?,
+    );
+}
+
+test "compiled catalog stays in parity when conditional surfaces flip" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = fixture.catalogTestModel();
+    model.loading = false;
+    model.dialog_open = true;
+    model.tab = 1;
+    model.bold = true;
+    model.page = 3;
+
+    const interpreted = try interpretCatalog(arena, &model);
+    const compiled = try compileCatalog(arena, &model);
+    try expectSameTree(fixture.CatalogMsg, interpreted, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // The dialog branch renders with its title and dispatching child.
+    const dialog = fixture.findByKind(compiled.root, .dialog).?;
+    try testing.expectEqualStrings("Confirm", dialog.text);
+    try testing.expect(fixture.findByKind(compiled.root, .spinner) == null);
+    const yes_button = fixture.findByText(compiled.root, .button, "Yes").?;
+    try testing.expectEqual(fixture.CatalogMsg.submit_query, compiled.msgForPointer(yes_button.id, .up).?);
+    try testing.expectEqual(@as(u32, 2), compiled.msgForPointer(fixture.findByText(compiled.root, .button, "Prev").?.id, .up).?.set_page);
+}
+
 // ------------------------------------------- template/use + style parity
 
 fn expectSameStyles(expected: canvas.Widget, actual: canvas.Widget) !void {

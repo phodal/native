@@ -907,6 +907,38 @@ pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
         .{ "separator", canvas.WidgetKind.separator },
         .{ "badge", canvas.WidgetKind.badge },
         .{ "spacer", canvas.WidgetKind.stack },
+        // Row containers.
+        .{ "breadcrumb", canvas.WidgetKind.breadcrumb },
+        .{ "button-group", canvas.WidgetKind.button_group },
+        .{ "pagination", canvas.WidgetKind.pagination },
+        .{ "radio-group", canvas.WidgetKind.radio_group },
+        .{ "tabs", canvas.WidgetKind.tabs },
+        .{ "toggle-group", canvas.WidgetKind.toggle_group },
+        // Vertical containers.
+        .{ "table", canvas.WidgetKind.table },
+        .{ "table-row", canvas.WidgetKind.data_row },
+        .{ "dropdown-menu", canvas.WidgetKind.dropdown_menu },
+        // Overlay/surface containers (title via the text attribute).
+        .{ "accordion", canvas.WidgetKind.accordion },
+        .{ "alert", canvas.WidgetKind.alert },
+        .{ "bubble", canvas.WidgetKind.bubble },
+        .{ "dialog", canvas.WidgetKind.dialog },
+        .{ "drawer", canvas.WidgetKind.drawer },
+        .{ "sheet", canvas.WidgetKind.sheet },
+        .{ "resizable", canvas.WidgetKind.resizable },
+        // Text-bearing leaves.
+        .{ "avatar", canvas.WidgetKind.avatar },
+        .{ "select", canvas.WidgetKind.select },
+        .{ "switch", canvas.WidgetKind.switch_control },
+        .{ "table-cell", canvas.WidgetKind.data_cell },
+        .{ "toggle-button", canvas.WidgetKind.toggle_button },
+        .{ "tooltip", canvas.WidgetKind.tooltip },
+        // Text entry leaves.
+        .{ "input", canvas.WidgetKind.input },
+        .{ "combobox", canvas.WidgetKind.combobox },
+        // Plain leaves.
+        .{ "skeleton", canvas.WidgetKind.skeleton },
+        .{ "spinner", canvas.WidgetKind.spinner },
     };
     inline for (map) |entry| {
         if (std.mem.eql(u8, name, entry[0])) return entry[1];
@@ -917,6 +949,7 @@ pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
 pub fn elementTakesText(kind: canvas.WidgetKind) bool {
     return switch (kind) {
         .text, .button, .list_item, .menu_item, .status_bar, .badge, .toggle => true,
+        .avatar, .select, .switch_control, .data_cell, .toggle_button, .tooltip => true,
         else => false,
     };
 }

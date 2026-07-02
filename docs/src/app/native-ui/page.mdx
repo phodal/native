@@ -41,12 +41,40 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `stack`, `panel`, `card` | overlay containers | children layer on top of each other |
 | `scroll` | scroll view | wrap multiple children in a `column` inside it |
 | `list`, `grid` | list, grid | vertical stack / cell grid |
-| `text`, `badge` | text leaves | `{}` interpolation allowed in content |
-| `button`, `list-item`, `menu-item`, `toggle` | text-bearing controls | the label is the element content |
+| `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination` | row containers | children flow horizontally (tab buttons, toggle-buttons, radios, ...) |
+| `table` > `table-row` > `table-cell` | table | rows only inside a table, cells only inside a row (`for`/`if` wrappers are fine); cells are text leaves |
+| `dropdown-menu` | menu surface | vertical; children are `menu-item`s |
+| `accordion` | accordion | header via the `text` attribute; children show while `selected`, dispatch `on-toggle` |
+| `alert`, `bubble` | surfaces | `alert` title via the `text` attribute; children stack inside |
+| `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text`, wrap in `<if>` to show conditionally |
+| `resizable` | resizable panel | engine-managed drag handle; `width` sets the initial width |
+| `text`, `badge`, `tooltip` | text leaves | `{}` interpolation allowed in content |
+| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | the label is the element content; `select` shows its `placeholder` while empty and dispatches `on-press` |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
-| `text-field`, `search-field`, `textarea` | text entry | `placeholder`; edits arrive via `on-input` |
+| `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits arrive via `on-input` |
 | `status-bar` | status bar | content only, no children |
 | `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
+| `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
+
+A tab strip, a select trigger, and a table read the way you would guess:
+
+```html
+<tabs gap="4">
+  <button selected="{tab == overview_tab}" on-press="set_tab:{overview_tab}">Overview</button>
+  <button selected="{tab == data_tab}" on-press="set_tab:{data_tab}">Data</button>
+</tabs>
+<select placeholder="Pick a fruit" on-press="open_picker">{choice}</select>
+<table gap="2">
+  <for each="rows" key="id" as="r">
+    <table-row gap="4">
+      <table-cell on-press="pick_row:{r.id}">{r.name}</table-cell>
+      <table-cell>{r.qty}</table-cell>
+    </table-row>
+  </for>
+</table>
+```
+
+A few widget kinds are deliberately **not** markup elements because their shape does not fit the closed grammar — write these as Zig view functions with `canvas.Ui`: `icon`, `image`, and icon buttons (they reference image assets by `ImageId`, which attribute values cannot carry), `data_grid` (needs per-column cell templates — arbitrary render callbacks), `popover` and `menu_surface` (floating surfaces anchored to runtime geometry; `dropdown-menu` covers the declarative case), and `segmented_control` (a shell-chrome kind; `tabs` and `toggle-group` cover its use cases).
 
 Layout attributes: `gap`, `padding`, `grow`, `width`, `height`, `main`, `cross`, `virtualized`. Appearance: `variant`, `size`, `disabled`, `checked`, `selected`. Semantics: `role`, `label`. Identity: `key` (sibling-scoped) and `global-key` (survives moving between containers — board cards, tab pages).
 

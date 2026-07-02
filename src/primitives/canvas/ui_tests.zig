@@ -163,6 +163,49 @@ test "keyed items keep their ids across reorders and insertions" {
     try testing.expectEqual(before_task_two.id, after_task_two.id);
 }
 
+test "global keys keep ids across reparenting, sibling keys do not" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Board = struct {
+        fn view(ui: *InboxUi, in_first_column: bool) InboxUi.Node {
+            const movable = [_]InboxUi.Node{
+                ui.el(.card, .{ .global_key = ui_model.uiKey(@as(u32, 7)), .gap = 4 }, .{
+                    ui.checkbox(.{ .on_toggle = Msg{ .toggle = 7 } }),
+                }),
+                ui.text(.{ .key = ui_model.uiKey(@as(u32, 8)) }, "Sibling-keyed"),
+            };
+            const empty = [_]InboxUi.Node{};
+            return ui.row(.{}, .{
+                ui.column(.{}, @as([]const InboxUi.Node, if (in_first_column) &movable else &empty)),
+                ui.column(.{}, @as([]const InboxUi.Node, if (in_first_column) &empty else &movable)),
+            });
+        }
+    };
+
+    var first_ui = InboxUi.init(arena);
+    const first = try first_ui.finalize(Board.view(&first_ui, true));
+    var second_ui = InboxUi.init(arena);
+    const second = try second_ui.finalize(Board.view(&second_ui, false));
+
+    // The globally keyed card keeps its id in a different parent, and its
+    // descendants (hashed from the card's id) follow it.
+    const first_card = findByKind(first.root, .card).?;
+    const second_card = findByKind(second.root, .card).?;
+    try testing.expectEqual(first_card.id, second_card.id);
+    try testing.expectEqual(first_card.children[0].id, second_card.children[0].id);
+    try testing.expectEqual(
+        first.msgFor(first_card.children[0].id, .toggle).?,
+        second.msgFor(second_card.children[0].id, .toggle).?,
+    );
+
+    // A sibling-scoped key does not survive the move.
+    const first_keyed = findByKind(first.root.children[0], .text).?;
+    const second_keyed = findByKind(second.root.children[1], .text).?;
+    try testing.expect(first_keyed.id != second_keyed.id);
+}
+
 test "typed handlers dispatch through the elm-style loop" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

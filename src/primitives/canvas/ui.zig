@@ -6,6 +6,10 @@
 //! - Identity is structural: each widget id is derived from its parent id,
 //!   kind, and key (explicit in `each`, sibling index otherwise), so ids stay
 //!   stable across rebuilds and keyed reorders without author bookkeeping.
+//!   Structural identity is parent-scoped: a keyed item that moves to a
+//!   different parent gets a new id. Items that migrate between containers
+//!   (board columns, tab pages) should set `global_key`, which pins identity
+//!   to (kind, key) independent of position in the tree.
 //! - Event handlers are typed `Msg` values collected into a handler table,
 //!   so dispatch is compiler-checked instead of string-matched.
 //! - Flex layout fields are the authoring default; `frame` is the escape
@@ -23,6 +27,7 @@ const Widget = canvas.Widget;
 const WidgetKind = canvas.WidgetKind;
 
 const root_id_seed: u64 = 0x5eed_2e70_a11c_e001;
+const global_id_seed: u64 = 0x5eed_2e70_a11c_e002;
 const zero_id_fallback: ObjectId = 0x9e37_79b9_7f4a_7c15;
 
 pub const UiKey = union(enum) {
@@ -46,7 +51,15 @@ pub fn Ui(comptime Msg: type) type {
         failed: bool = false,
 
         pub const ElementOptions = struct {
+            /// Sibling-scoped identity: the widget id hashes the parent
+            /// chain plus this key, so it survives reorders among siblings
+            /// but NOT moving to a different parent.
             key: ?UiKey = null,
+            /// Parent-independent identity: the widget id hashes only the
+            /// kind and this key, so it survives reparenting (e.g. an item
+            /// moving between board columns). The author guarantees each
+            /// (kind, global_key) pair is unique within the tree.
+            global_key: ?UiKey = null,
             frame: geometry.RectF = .{},
             placeholder: []const u8 = "",
             value: f32 = 0,
@@ -75,6 +88,7 @@ pub fn Ui(comptime Msg: type) type {
         pub const Node = struct {
             widget: Widget = .{ .kind = .stack },
             key: ?UiKey = null,
+            global_key: ?UiKey = null,
             on_press: ?Msg = null,
             on_toggle: ?Msg = null,
             on_change: ?Msg = null,
@@ -150,6 +164,7 @@ pub fn Ui(comptime Msg: type) type {
             return .{
                 .widget = widgetFromOptions(kind, options),
                 .key = options.key,
+                .global_key = options.global_key,
                 .on_press = options.on_press,
                 .on_toggle = options.on_toggle,
                 .on_change = options.on_change,
@@ -289,7 +304,10 @@ pub fn Ui(comptime Msg: type) type {
             handler_len: *usize,
         ) error{OutOfMemory}!Widget {
             var widget = node.widget;
-            widget.id = structuralId(parent_id, widget.kind, key);
+            widget.id = if (node.global_key) |global_key|
+                structuralId(global_id_seed, widget.kind, global_key)
+            else
+                structuralId(parent_id, widget.kind, key);
             if (node.nodes.len > 0) {
                 const child_widgets = try self.arena.alloc(Widget, node.nodes.len);
                 for (node.nodes, 0..) |child, index| {
@@ -332,7 +350,17 @@ pub fn Ui(comptime Msg: type) type {
                 nodes[0] = children;
                 return nodes;
             }
-            if (Children == []const Node or Children == []Node) return children;
+            if (Children == []const Node or Children == []Node) {
+                // Copy rather than alias: callers may pass slices of locals
+                // that would not outlive finalize.
+                if (children.len == 0) return &.{};
+                const nodes = self.arena.alloc(Node, children.len) catch {
+                    self.failed = true;
+                    return &.{};
+                };
+                @memcpy(nodes, children);
+                return nodes;
+            }
             const info = @typeInfo(Children);
             if (info != .@"struct" or !info.@"struct".is_tuple) {
                 @compileError("children must be a Node, a []const Node, or a tuple of those");

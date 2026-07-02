@@ -12,6 +12,8 @@ A native-rendered zero-native app is a markup view plus Zig logic:
 
 The markup compiles to the same widget tree a hand-written `canvas.Ui(Msg)` builder view would produce: identical structural widget ids, identical typed handler table. Markup can never mutate state — it binds values and dispatches messages; all logic lives in Zig.
 
+Editors highlight `.zml` well in HTML mode — projects ship `.vscode/settings.json` with `"files.associations": {"*.zml": "html"}` (add it if missing).
+
 Start a new app by copying `examples/habits/` (smallest) or `examples/ui-inbox/`: change `app_exe_name` in build.zig, the name/id in app.zon, and put `0x0` as the fingerprint in build.zig.zon — the first build error prints the correct value to paste in. `src/runner.zig` and `assets/` copy verbatim.
 
 ## App wiring

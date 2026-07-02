@@ -60,6 +60,7 @@ pub const Msg = union(enum) {
     toggle: u32,
     set_filter: Filter,
     clear_done,
+    draft_edit: canvas.TextInputEvent,
 };
 
 pub const Model = struct {
@@ -67,8 +68,45 @@ pub const Model = struct {
     task_count: usize = 0,
     next_id: u32 = 1,
     filter: Filter = .all,
+    // The draft field's editor state, elm-style: the model applies every
+    // text edit event and is the source of truth. The runtime's reconcile
+    // rule keeps them in lockstep (matching source text preserves runtime
+    // caret/selection; a source-side change like clear-on-submit wins).
+    draft_storage: [max_task_title]u8 = [_]u8{0} ** max_task_title,
+    draft_len: usize = 0,
+    draft_selection: canvas.TextSelection = .{},
+    draft_composition: ?canvas.TextRange = null,
 
     pub const filters = [_]Filter{ .all, .active, .done };
+
+    pub fn draft(model: *const Model) []const u8 {
+        return model.draft_storage[0..model.draft_len];
+    }
+
+    pub fn draftEmpty(model: *const Model) bool {
+        return std.mem.trim(u8, model.draft(), " ").len == 0;
+    }
+
+    fn applyDraftEdit(model: *Model, edit: canvas.TextInputEvent) void {
+        var scratch: [max_task_title]u8 = undefined;
+        const state = canvas.TextEditState{
+            .text = model.draft(),
+            .selection = model.draft_selection,
+            .composition = model.draft_composition,
+        };
+        const next = canvas.applyTextInputEvent(state, edit, &scratch) catch return;
+        const len = @min(next.text.len, model.draft_storage.len);
+        std.mem.copyForwards(u8, model.draft_storage[0..len], next.text[0..len]);
+        model.draft_len = len;
+        model.draft_selection = next.selection;
+        model.draft_composition = next.composition;
+    }
+
+    fn clearDraft(model: *Model) void {
+        model.draft_len = 0;
+        model.draft_selection = .{};
+        model.draft_composition = null;
+    }
 
     pub fn addTask(model: *Model, text: []const u8) void {
         if (model.task_count >= max_tasks) return;
@@ -139,12 +177,20 @@ pub const Model = struct {
 
 pub fn update(model: *Model, msg: Msg) void {
     switch (msg) {
-        .add => model.addGeneratedTask(),
+        .add => {
+            if (model.draftEmpty()) {
+                model.addGeneratedTask();
+            } else {
+                model.addTask(std.mem.trim(u8, model.draft(), " "));
+                model.clearDraft();
+            }
+        },
         .toggle => |id| if (model.taskById(id)) |task| {
             task.done = !task.done;
         },
         .set_filter => |filter| model.filter = filter,
         .clear_done => model.clearDone(),
+        .draft_edit => |edit| model.applyDraftEdit(edit),
     }
 }
 

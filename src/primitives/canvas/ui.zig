@@ -62,6 +62,10 @@ pub fn Ui(comptime Msg: type) type {
             /// (kind, global_key) pair is unique within the tree.
             global_key: ?UiKey = null,
             frame: geometry.RectF = .{},
+            /// Widget text (text-field contents, initial control labels).
+            /// Text-bearing sugar methods (`text`, `button`, ...) override
+            /// this with their content argument.
+            text: []const u8 = "",
             placeholder: []const u8 = "",
             value: f32 = 0,
             checked: bool = false,
@@ -488,6 +492,7 @@ pub fn Ui(comptime Msg: type) type {
             return .{
                 .kind = kind,
                 .frame = options.frame,
+                .text = options.text,
                 .placeholder = options.placeholder,
                 .value = options.value,
                 .variant = options.variant,

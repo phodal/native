@@ -99,3 +99,45 @@ fn firstCheckbox(widget: canvas.Widget) ?canvas.Widget {
     }
     return null;
 }
+
+test "the draft field is an elm-style mirror: edits, submit, clear" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+
+    // Type "Milk" through the typed dispatch path.
+    var tree = try buildTree(arena, &model);
+    const field = findByKind(tree.root, .text_field).?;
+    for ([_][]const u8{ "M", "i", "l", "k" }) |letter| {
+        const typed = canvas.WidgetKeyboardEvent{ .phase = .text_input, .text = letter };
+        main.update(&model, tree.msgForKeyboard(field.id, typed).?);
+        tree = try buildTree(arena, &model);
+    }
+    try testing.expectEqualStrings("Milk", model.draft());
+    try testing.expectEqualStrings("Milk", findByKind(tree.root, .text_field).?.text);
+
+    // Backspace edits through the same path.
+    const backspace = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "backspace" };
+    main.update(&model, tree.msgForKeyboard(field.id, backspace).?);
+    try testing.expectEqualStrings("Mil", model.draft());
+
+    // Enter submits: the task is created from the draft and the field
+    // clears (the source-side change that wins over runtime text).
+    tree = try buildTree(arena, &model);
+    const enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    main.update(&model, tree.msgForKeyboard(field.id, enter).?);
+    try testing.expectEqual(@as(usize, 1), model.task_count);
+    tree = try buildTree(arena, &model);
+    try testing.expect(findByText(tree.root, .text, "Mil") != null);
+    try testing.expectEqualStrings("", findByKind(tree.root, .text_field).?.text);
+}
+
+fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
+    if (widget.kind == kind) return widget;
+    for (widget.children) |child| {
+        if (findByKind(child, kind)) |found| return found;
+    }
+    return null;
+}

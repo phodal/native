@@ -355,7 +355,7 @@ pub const known_element_names = [_][]const u8{
 };
 
 pub const known_option_attrs = [_][]const u8{
-    "placeholder", "value",    "checked", "selected",    "disabled",
+    "text",     "placeholder", "value",    "checked", "selected",    "disabled",
     "variant",     "size",     "width",   "height",      "grow",
     "gap",         "padding",  "main",    "cross",       "virtualized",
     "virtual-item-extent",     "key",     "global-key",  "role",

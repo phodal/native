@@ -289,6 +289,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         const AttrName = struct { markup: []const u8, zig: []const u8 };
 
         const attr_names: []const AttrName = &.{
+                .{ .markup = "text", .zig = "text" },
                 .{ .markup = "placeholder", .zig = "placeholder" },
                 .{ .markup = "value", .zig = "value" },
                 .{ .markup = "checked", .zig = "checked" },

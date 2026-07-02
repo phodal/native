@@ -94,6 +94,21 @@ Bindings are zero-argument. A parameterized query (cards of column X) becomes on
 
 `on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it.
 
+## Text fields: the elm-style mirror pattern
+
+The model applies every edit event and is the source of truth; the runtime keeps caret/selection while your source text matches, and a source-side change (like clearing on submit) wins:
+
+```html
+<text-field text="{draft}" placeholder="New task…" on-input="draft_edit" on-submit="add" grow="1" />
+```
+
+```zig
+.draft_edit => |edit| model.applyDraftEdit(edit),  // canvas.applyTextInputEvent into a fixed buffer + TextSelection
+.add => { model.addTask(model.draft()); model.clearDraft(); },  // clearing the source clears the field
+```
+
+See `examples/ui-inbox` for the complete pattern (draft_storage/draft_selection fields, `applyDraftEdit`).
+
 ## Structure tags
 
 ```html

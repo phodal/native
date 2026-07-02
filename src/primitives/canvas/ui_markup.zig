@@ -276,6 +276,118 @@ fn nodeKindForName(name: []const u8) MarkupNodeKind {
     return .element;
 }
 
+// ------------------------------------------------------- comptime parsing
+
+/// Comptime counterpart of `Parser.parse` for `@embedFile`d sources: the
+/// same `Parser` token-level helpers drive the scan (single source of truth
+/// for the grammar), but attribute/child accumulation uses comptime slice
+/// concatenation instead of an arena, and any syntax error becomes a
+/// compile error carrying the line/column and message that the runtime
+/// diagnostic would carry.
+pub fn parseComptime(comptime source: []const u8) MarkupDocument {
+    comptime {
+        @setEvalBranchQuota(comptime_parse_quota_base + source.len * comptime_parse_quota_per_byte);
+        var parser = Parser.init(undefined, source);
+        parser.skipWhitespaceAndComments();
+        const root = parseElementComptime(&parser);
+        parser.skipWhitespaceAndComments();
+        if (parser.index < parser.source.len) {
+            failComptime(&parser, parser.fail("expected end of file after the root element"));
+        }
+        return .{ .root = root };
+    }
+}
+
+/// Comptime parsing walks every byte through the shared scanner helpers, so
+/// the branch quota scales with the source: a handful of comptime branches
+/// per byte, with generous headroom for nesting.
+const comptime_parse_quota_base = 20_000;
+const comptime_parse_quota_per_byte = 200;
+
+/// Comptime mirror of `Parser.parseElement`: identical control flow, with
+/// `attrs ++`/`children ++` in place of the arena-backed lists.
+fn parseElementComptime(comptime parser: *Parser) MarkupNode {
+    const start_line = parser.line;
+    const start_column = parser.column;
+    if (!parser.consumeByte('<')) failComptime(parser, parser.fail("expected '<' to open an element"));
+    const name = parser.parseName("element name") catch |err| failComptime(parser, err);
+
+    var attrs: []const MarkupAttr = &.{};
+    while (true) {
+        parser.skipWhitespace();
+        const byte = parser.peek() orelse failComptime(parser, parser.fail("unterminated element tag"));
+        if (byte == '/' or byte == '>') break;
+        const attr_line = parser.line;
+        const attr_column = parser.column;
+        const attr_name = parser.parseName("attribute name") catch |err| failComptime(parser, err);
+        var value: []const u8 = "";
+        parser.skipWhitespace();
+        if (parser.consumeByte('=')) {
+            parser.skipWhitespace();
+            value = parser.parseQuotedValue() catch |err| failComptime(parser, err);
+        }
+        attrs = attrs ++ &[_]MarkupAttr{.{
+            .name = attr_name,
+            .value = value,
+            .line = attr_line,
+            .column = attr_column,
+        }};
+    }
+
+    var node = MarkupNode{
+        .kind = nodeKindForName(name),
+        .name = name,
+        .attrs = attrs,
+        .line = start_line,
+        .column = start_column,
+    };
+
+    if (parser.consumeByte('/')) {
+        if (!parser.consumeByte('>')) failComptime(parser, parser.fail("expected '>' after '/' in a self-closing tag"));
+        return node;
+    }
+    if (!parser.consumeByte('>')) failComptime(parser, parser.fail("expected '>' to close the element tag"));
+
+    var children: []const MarkupNode = &.{};
+    while (true) {
+        parser.skipComments();
+        const byte = parser.peek() orelse failComptime(parser, parser.failAt(start_line, start_column, "element was never closed"));
+        if (byte == '<') {
+            if (parser.peekAt(1) == '/') {
+                parser.parseClosingTag(name) catch |err| failComptime(parser, err);
+                break;
+            }
+            children = children ++ &[_]MarkupNode{parseElementComptime(parser)};
+            continue;
+        }
+        const text = parser.takeText();
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len > 0) {
+            children = children ++ &[_]MarkupNode{.{
+                .kind = .text,
+                .text = trimmed,
+                .line = parser.line,
+                .column = parser.column,
+            }};
+        }
+    }
+
+    node.children = children;
+    return node;
+}
+
+/// Surface the parser's diagnostic (already positioned by the shared
+/// helpers) as a compile error. The error value parameter exists so call
+/// sites read like the runtime parser's `try`/`return self.fail(...)`.
+fn failComptime(comptime parser: *const Parser, comptime err: ParseError) noreturn {
+    _ = err;
+    @compileError(std.fmt.comptimePrint("markup error at line {d}, column {d}: {s}", .{
+        parser.diagnostic.line,
+        parser.diagnostic.column,
+        parser.diagnostic.message,
+    }));
+}
+
 // ------------------------------------------------------------ expressions
 
 pub const Expression = union(enum) {

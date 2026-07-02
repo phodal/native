@@ -22,14 +22,16 @@ pub const BuildDiagnostic = struct {
 };
 
 /// A resolved binding value. Enums resolve to their tag name so equality
-/// against enum-typed loop variables and literals works uniformly.
-const Value = union(enum) {
+/// against enum-typed loop variables and literals works uniformly. Shared
+/// with the comptime-compiled path (ui_markup_compiled.zig) so both engines
+/// convert and compare values through the same code.
+pub const Value = union(enum) {
     string: []const u8,
     integer: i64,
     float: f32,
     boolean: bool,
 
-    fn eql(a: Value, b: Value) bool {
+    pub fn eql(a: Value, b: Value) bool {
         return switch (a) {
             .string => |sa| b == .string and std.mem.eql(u8, sa, b.string),
             .integer => |ia| b == .integer and ia == b.integer,
@@ -38,7 +40,7 @@ const Value = union(enum) {
         };
     }
 
-    fn truthy(self: Value) bool {
+    pub fn truthy(self: Value) bool {
         return switch (self) {
             .boolean => |value| value,
             .integer => |value| value != 0,
@@ -286,28 +288,6 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             return false;
         }
 
-        const AttrName = struct { markup: []const u8, zig: []const u8 };
-
-        const attr_names: []const AttrName = &.{
-                .{ .markup = "text", .zig = "text" },
-                .{ .markup = "placeholder", .zig = "placeholder" },
-                .{ .markup = "value", .zig = "value" },
-                .{ .markup = "checked", .zig = "checked" },
-                .{ .markup = "selected", .zig = "selected" },
-                .{ .markup = "disabled", .zig = "disabled" },
-                .{ .markup = "variant", .zig = "variant" },
-                .{ .markup = "size", .zig = "size" },
-                .{ .markup = "width", .zig = "width" },
-                .{ .markup = "height", .zig = "height" },
-                .{ .markup = "grow", .zig = "grow" },
-                .{ .markup = "gap", .zig = "gap" },
-                .{ .markup = "padding", .zig = "padding" },
-                .{ .markup = "main", .zig = "main" },
-                .{ .markup = "cross", .zig = "cross" },
-                .{ .markup = "virtualized", .zig = "virtualized" },
-                .{ .markup = "virtual-item-extent", .zig = "virtual_item_extent" },
-        };
-
         fn setOptionField(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, comptime field: []const u8, raw: []const u8) BuildError!void {
             const FieldType = @TypeOf(@field(options, field));
             const value = try self.evalAttrExpression(scope, node, raw);
@@ -531,6 +511,31 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
 // ----------------------------------------------------------- reflection
 
+/// Markup attribute name → `Ui.ElementOptions` field. Shared with the
+/// comptime-compiled path so both engines accept exactly the same
+/// attributes.
+pub const AttrName = struct { markup: []const u8, zig: []const u8 };
+
+pub const attr_names: []const AttrName = &.{
+    .{ .markup = "text", .zig = "text" },
+    .{ .markup = "placeholder", .zig = "placeholder" },
+    .{ .markup = "value", .zig = "value" },
+    .{ .markup = "checked", .zig = "checked" },
+    .{ .markup = "selected", .zig = "selected" },
+    .{ .markup = "disabled", .zig = "disabled" },
+    .{ .markup = "variant", .zig = "variant" },
+    .{ .markup = "size", .zig = "size" },
+    .{ .markup = "width", .zig = "width" },
+    .{ .markup = "height", .zig = "height" },
+    .{ .markup = "grow", .zig = "grow" },
+    .{ .markup = "gap", .zig = "gap" },
+    .{ .markup = "padding", .zig = "padding" },
+    .{ .markup = "main", .zig = "main" },
+    .{ .markup = "cross", .zig = "cross" },
+    .{ .markup = "virtualized", .zig = "virtualized" },
+    .{ .markup = "virtual-item-extent", .zig = "virtual_item_extent" },
+};
+
 fn collectItemTypes(comptime Model: type) []const type {
     comptime {
         var types: []const type = &.{};
@@ -566,7 +571,7 @@ fn appendUniqueType(comptime types: []const type, comptime T: type) []const type
     return types ++ &[_]type{T};
 }
 
-fn sliceElement(comptime T: type) ?type {
+pub fn sliceElement(comptime T: type) ?type {
     return switch (@typeInfo(T)) {
         .array => |info| info.child,
         .pointer => |info| if (info.size == .slice) info.child else if (info.size == .one) sliceElement(info.child) else null,
@@ -574,7 +579,7 @@ fn sliceElement(comptime T: type) ?type {
     };
 }
 
-fn isItemFn(comptime DeclType: type, comptime Item: type, comptime with_arena: bool) bool {
+pub fn isItemFn(comptime DeclType: type, comptime Item: type, comptime with_arena: bool) bool {
     const info = switch (@typeInfo(DeclType)) {
         .@"fn" => |fn_info| fn_info,
         else => return false,
@@ -592,7 +597,7 @@ fn isItemFn(comptime DeclType: type, comptime Item: type, comptime with_arena: b
     return true;
 }
 
-fn asSlice(comptime Item: type, value: anytype) []const Item {
+pub fn asSlice(comptime Item: type, value: anytype) []const Item {
     const T = @TypeOf(value.*);
     return switch (@typeInfo(T)) {
         .array => value[0..],
@@ -643,7 +648,7 @@ fn resolveNested(comptime T: type, ptr: anytype, path: []const u8) ?Value {
     };
 }
 
-fn valueOf(comptime T: type, value: T) ?Value {
+pub fn valueOf(comptime T: type, value: T) ?Value {
     return switch (@typeInfo(T)) {
         .bool => .{ .boolean = value },
         .int => .{ .integer = @intCast(value) },
@@ -657,7 +662,7 @@ fn valueOf(comptime T: type, value: T) ?Value {
     };
 }
 
-fn literalValue(text: []const u8) Value {
+pub fn literalValue(text: []const u8) Value {
     if (std.mem.eql(u8, text, "true")) return .{ .boolean = true };
     if (std.mem.eql(u8, text, "false")) return .{ .boolean = false };
     if (std.fmt.parseInt(i64, text, 10)) |int| return .{ .integer = int } else |_| {}
@@ -665,7 +670,7 @@ fn literalValue(text: []const u8) Value {
     return .{ .string = text };
 }
 
-fn appendValue(out: *std.ArrayListUnmanaged(u8), arena: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
+pub fn appendValue(out: *std.ArrayListUnmanaged(u8), arena: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
     var buffer: [64]u8 = undefined;
     switch (value) {
         .string => |text| try out.appendSlice(arena, text),
@@ -675,12 +680,12 @@ fn appendValue(out: *std.ArrayListUnmanaged(u8), arena: std.mem.Allocator, value
     }
 }
 
-fn pathHead(path: []const u8) []const u8 {
+pub fn pathHead(path: []const u8) []const u8 {
     const dot = std.mem.indexOfScalar(u8, path, '.') orelse return path;
     return path[0..dot];
 }
 
-fn pathTail(path: []const u8) ?[]const u8 {
+pub fn pathTail(path: []const u8) ?[]const u8 {
     const dot = std.mem.indexOfScalar(u8, path, '.') orelse return null;
     return path[dot + 1 ..];
 }
@@ -720,7 +725,7 @@ pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
     return null;
 }
 
-fn elementTakesText(kind: canvas.WidgetKind) bool {
+pub fn elementTakesText(kind: canvas.WidgetKind) bool {
     return switch (kind) {
         .text, .button, .list_item, .menu_item, .status_bar, .badge, .toggle => true,
         else => false,

@@ -878,6 +878,13 @@ pub fn build(b: *std.Build) void {
         \\case "$line" in *'actions=[focus,press,select]'*) ;; *) echo "dashboard toolbar mode semantics were missing" >&2; exit 1 ;; esac
         \\line="$(widget_line 'role=button name="Refresh dashboard"')"
         \\case "$line" in *'actions=[focus,press]'*) ;; *) echo "dashboard toolbar refresh semantics were missing" >&2; exit 1 ;; esac
+        \\# CoreText-backed layout metrics: the refresh button must be sized by the
+        \\# platform text measure provider, not the deterministic estimator
+        \\# (estimateTextWidthForFont sizes "Refresh" at 14px to 51.842 -> 75.841995 wide).
+        \\case "$line" in *'75.841995x34'*) echo "dashboard refresh button was sized by the estimator; platform text measurement is inactive" >&2; exit 1 ;; esac
+        \\refresh_width="$(printf '%s\n' "$line" | sed -n 's/.*bounds=([0-9.,-]* \([0-9.]*\)x[0-9.]*).*/\1/p')"
+        \\case "$refresh_width" in ''|*[!0-9.]*) echo "dashboard refresh button width was missing" >&2; exit 1 ;; esac
+        \\if [ "$(printf '%s\n' "$refresh_width < 50 || $refresh_width > 110" | bc)" -eq 1 ]; then echo "dashboard refresh button width was implausible: $refresh_width" >&2; exit 1; fi
         \\line="$(widget_line 'role=button name="Live render status"')"
         \\case "$line" in *'actions=[focus,press]'*) ;; *) echo "dashboard live render button semantics were missing" >&2; exit 1 ;; esac
         \\line="$(widget_line 'role=textbox name="Forecast amount"')"

@@ -1,11 +1,19 @@
 //! habits: a small habit tracker authored in markup + Zig.
 //!
-//! The view lives in `habits.zml` (embedded into the binary, and watched
-//! for hot reload in dev); this file is the logic: `Model`, `Msg`, and
-//! `update`. Rows carry a markup `global-key` pinned to the habit id, so a
-//! row keeps its widget identity across rebuilds and filtering.
+//! The view lives in `habits.zml`; this file is the logic: `Model`, `Msg`,
+//! and `update`. Rows carry a markup `global-key` pinned to the habit id,
+//! so a row keeps its widget identity across rebuilds and filtering.
+//!
+//! The markup runs on one of two engines depending on the build mode:
+//! release builds use `canvas.CompiledMarkupView` — the source is parsed
+//! entirely at comptime, so the binary carries no markup parser and a
+//! markup mistake is a compile error — while debug builds additionally
+//! ship the runtime interpreter and watch `src/habits.zml`: the compiled
+//! view renders until the file first changes on disk, then hot reload
+//! takes over without losing streak state.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const runner = @import("runner");
 const zero_native = @import("zero-native");
 
@@ -127,9 +135,18 @@ pub fn update(model: *Model, msg: Msg) void {
 pub const HabitsUi = canvas.Ui(Msg);
 pub const habits_markup = @embedFile("habits.zml");
 
+/// The comptime-compiled engine: same tree, ids, and handlers as the
+/// interpreter, no parser in the binary.
+pub const CompiledHabitsView = canvas.CompiledMarkupView(Model, Msg, habits_markup);
+
 // -------------------------------------------------------------------- app
 
-const HabitsApp = zero_native.UiApp(Model, Msg);
+/// Debug builds keep the runtime markup engine for hot reload; release
+/// builds compile it out entirely (`zig build` produces a release app —
+/// grep it for parser diagnostics to confirm nothing survived).
+const dev_markup_reload = builtin.mode == .Debug;
+
+const HabitsApp = zero_native.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev_markup_reload });
 
 pub fn initialModel() Model {
     var model = Model{};
@@ -147,7 +164,11 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
-        .markup = .{ .source = habits_markup, .watch_path = "src/habits.zml", .io = init.io },
+        .view = CompiledHabitsView.build,
+        .markup = if (dev_markup_reload)
+            .{ .source = habits_markup, .watch_path = "src/habits.zml", .io = init.io }
+        else
+            null,
     });
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{

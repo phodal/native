@@ -4,9 +4,9 @@ const markup_view = @import("ui_markup_view.zig");
 
 const testing = std.testing;
 
-const Filter = enum { all, active, done };
+pub const Filter = enum { all, active, done };
 
-const Task = struct {
+pub const Task = struct {
     id: u32,
     title_storage: [24]u8 = [_]u8{0} ** 24,
     title_len: usize = 0,
@@ -21,14 +21,14 @@ const Task = struct {
     }
 };
 
-const Msg = union(enum) {
+pub const Msg = union(enum) {
     add,
     toggle: u32,
     set_filter: Filter,
     draft: canvas.TextInputEvent,
 };
 
-const Model = struct {
+pub const Model = struct {
     tasks: [8]Task = undefined,
     task_count: usize = 0,
     filter: Filter = .all,
@@ -71,7 +71,7 @@ const Model = struct {
 const InboxUi = canvas.Ui(Msg);
 const InboxMarkup = markup_view.MarkupView(Model, Msg);
 
-const inbox_markup_source =
+pub const inbox_markup_source =
     \\<column gap="12" padding="16">
     \\  <row gap="8" cross="center">
     \\    <text-field placeholder="New task…" on-input="draft" on-submit="add" grow="1" />
@@ -98,7 +98,7 @@ const inbox_markup_source =
 
 /// The hand-written equivalent of the markup above; parity means the
 /// interpreter builds exactly this tree.
-fn handView(ui: *InboxUi, model: *const Model) InboxUi.Node {
+pub fn handView(ui: *InboxUi, model: *const Model) InboxUi.Node {
     return ui.column(.{ .gap = 12, .padding = 16 }, .{
         ui.row(.{ .gap = 8, .cross = .center }, .{
             ui.textField(.{ .placeholder = "New task…", .on_input = InboxUi.inputMsg(.draft), .on_submit = .add, .grow = 1 }),
@@ -134,12 +134,12 @@ fn taskRow(ui: *InboxUi, task: *const Task) InboxUi.Node {
     });
 }
 
-fn collectIds(widget: canvas.Widget, ids: *std.ArrayListUnmanaged(canvas.ObjectId), allocator: std.mem.Allocator) !void {
+pub fn collectIds(widget: canvas.Widget, ids: *std.ArrayListUnmanaged(canvas.ObjectId), allocator: std.mem.Allocator) !void {
     try ids.append(allocator, widget.id);
     for (widget.children) |child| try collectIds(child, ids, allocator);
 }
 
-fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
+pub fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
     if (widget.kind == kind) return widget;
     for (widget.children) |child| {
         if (findByKind(child, kind)) |found| return found;
@@ -147,7 +147,7 @@ fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
     return null;
 }
 
-fn testModel() Model {
+pub fn testModel() Model {
     var model = Model{};
     model.addTask("Ship IR", false);
     model.addTask("Write decisions", true);

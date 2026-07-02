@@ -11,7 +11,14 @@ const Msg = main.Msg;
 
 const HabitsMarkup = canvas.MarkupView(Model, main.Msg);
 
+/// The engine the shipping app uses: the markup compiled at comptime.
 fn buildTree(arena: std.mem.Allocator, model: *const Model) !HabitsUi.Tree {
+    var ui = HabitsUi.init(arena);
+    return ui.finalize(main.CompiledHabitsView.build(&ui, model));
+}
+
+/// The dev hot-reload engine, for parity checks.
+fn interpretTree(arena: std.mem.Allocator, model: *const Model) !HabitsUi.Tree {
     var view = try HabitsMarkup.init(arena, main.habits_markup);
     var ui = HabitsUi.init(arena);
     return ui.finalize(try view.build(&ui, model));
@@ -121,6 +128,40 @@ test "a full session: add, done, and filter drive the model through typed dispat
     tree = try buildTree(arena, &model);
     try testing.expectEqual(@as(usize, 4), countRows(tree.root));
     try testing.expectEqual(meditate_row.id, findRow(tree.root, "Meditate").?.id);
+}
+
+fn collectIds(widget: canvas.Widget, ids: *std.ArrayListUnmanaged(canvas.ObjectId), allocator: std.mem.Allocator) !void {
+    try ids.append(allocator, widget.id);
+    for (widget.children) |child| try collectIds(child, ids, allocator);
+}
+
+test "the compiled view and the hot-reload interpreter build the same tree" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = main.initialModel();
+    model.filter = .active;
+
+    const compiled = try buildTree(arena, &model);
+    const interpreted = try interpretTree(arena, &model);
+
+    var compiled_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer compiled_ids.deinit(testing.allocator);
+    var interpreted_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer interpreted_ids.deinit(testing.allocator);
+    try collectIds(compiled.root, &compiled_ids, testing.allocator);
+    try collectIds(interpreted.root, &interpreted_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, interpreted_ids.items, compiled_ids.items);
+    try testing.expectEqual(interpreted.handlers.len, compiled.handlers.len);
+
+    const compiled_done = findButtonIn(findRow(compiled.root, "Meditate").?, "Done today").?;
+    const interpreted_done = findButtonIn(findRow(interpreted.root, "Meditate").?, "Done today").?;
+    try testing.expectEqual(interpreted_done.id, compiled_done.id);
+    try testing.expectEqual(
+        interpreted.msgForPointer(interpreted_done.id, .up).?,
+        compiled.msgForPointer(compiled_done.id, .up).?,
+    );
 }
 
 test "the habits view lays out through the canvas engine" {

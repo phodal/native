@@ -10,6 +10,14 @@
 //! An app becomes: declare `Model` and `Msg`, write `update` and `view`,
 //! and hand them to `UiApp` with a shell scene containing one `gpu_surface`
 //! view. Shell command events can map into messages through `on_command`.
+//!
+//! Markup apps choose an engine per build: `Options.markup` runs the
+//! runtime parser/interpreter (dev, hot reload), while
+//! `canvas.CompiledMarkupView(Model, Msg, source).build` handed to
+//! `Options.view` compiles the same source at comptime (release, no parser
+//! in the binary — pair with `UiAppWithFeatures(..., .{ .runtime_markup =
+//! false })` so the watch machinery compiles out too). Setting both keeps
+//! the compiled view until the watched file first changes on disk.
 
 const std = @import("std");
 const geometry = @import("geometry");
@@ -23,7 +31,21 @@ const Runtime = core.Runtime;
 const App = core.App;
 const Event = core.Event;
 
+/// Comptime feature selection for `UiAppWithFeatures`.
+pub const UiAppFeatures = struct {
+    /// Ship the runtime markup engine (parser + interpreter) in the app.
+    /// Required for `Options.markup` — runtime-parsed embedded sources and
+    /// watch-based hot reload. Disable it in builds whose view comes from
+    /// `canvas.CompiledMarkupView` so no parser code (or its diagnostics)
+    /// ships in the binary; the markup machinery then compiles to nothing.
+    runtime_markup: bool = true,
+};
+
 pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
+    return UiAppWithFeatures(ModelT, MsgT, .{});
+}
+
+pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime features: UiAppFeatures) type {
     return struct {
         const Self = @This();
 
@@ -45,8 +67,11 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         };
 
         pub const MarkupOptions = struct {
-            /// Markup source compiled into the binary (release, and the
-            /// fallback until the watch path parses).
+            /// Markup source embedded into the binary: parsed on the first
+            /// build when no `view` is set, and otherwise the baseline the
+            /// watched file is compared against. (Release builds should
+            /// prefer `canvas.CompiledMarkupView(...).build` on `view`,
+            /// which parses at comptime instead.)
             source: []const u8,
             /// Optional file to poll in dev: when its content changes the
             /// file is re-parsed and the next rebuild uses the new view,
@@ -81,10 +106,16 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
             /// `out`.
             animations: ?*const fn (model: *const ModelT, tree: *const Ui.Tree, start_ns: u64, out: []canvas.CanvasRenderAnimation) usize = null,
             update: *const fn (model: *ModelT, msg: MsgT) void,
-            /// Hand-written view. Exactly one of `view` and `markup` must be
-            /// set.
+            /// Hand-written or comptime-compiled view
+            /// (`canvas.CompiledMarkupView(Model, Msg, source).build` slots
+            /// in directly). At least one of `view` and `markup` must be
+            /// set. When both are set, this view renders until the watched
+            /// markup file first diverges from the embedded source, at
+            /// which point the interpreter takes over (compiled view for
+            /// release, hot reload in dev).
             view: ?*const fn (ui: *Ui, model: *const ModelT) Ui.Node = null,
-            /// Markup view. Exactly one of `view` and `markup` must be set.
+            /// Runtime-parsed markup view. Requires
+            /// `UiAppFeatures.runtime_markup` (the default).
             markup: ?MarkupOptions = null,
             /// Optional mapping from shell command events (menus, shortcuts,
             /// native controls) into messages.
@@ -130,7 +161,8 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         packet_json: [platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
 
         pub fn init(backing: std.mem.Allocator, model: ModelT, options: Options) Self {
-            std.debug.assert((options.view == null) != (options.markup == null));
+            std.debug.assert(options.view != null or options.markup != null);
+            if (comptime !features.runtime_markup) std.debug.assert(options.markup == null);
             return .{
                 .model = model,
                 .options = options,
@@ -261,27 +293,35 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildViewNode(self: *Self, ui: *Ui) anyerror!Ui.Node {
-            if (self.options.view) |view| return view(ui, &self.model);
-            const view = &(self.markup_view orelse blk: {
-                try self.reloadMarkup(self.options.markup.?.source);
-                break :blk self.markup_view.?;
-            });
-            return view.build(ui, &self.model) catch |err| {
-                if (err == error.MarkupBuild) {
-                    self.markup_diagnostic = .{
-                        .line = view.diagnostic.line,
-                        .column = view.diagnostic.column,
-                        .message = view.diagnostic.message,
+            if (comptime features.runtime_markup) {
+                // A markup-only app parses its embedded source on the first
+                // build; with both `view` and `markup` set, the compiled
+                // view renders until the watch loads a changed source.
+                if (self.markup_view == null and self.options.view == null) {
+                    try self.reloadMarkup(self.options.markup.?.source);
+                }
+                if (self.markup_view) |*view| {
+                    return view.build(ui, &self.model) catch |err| {
+                        if (err == error.MarkupBuild) {
+                            self.markup_diagnostic = .{
+                                .line = view.diagnostic.line,
+                                .column = view.diagnostic.column,
+                                .message = view.diagnostic.message,
+                            };
+                        }
+                        return err;
                     };
                 }
-                return err;
-            };
+            }
+            const view = self.options.view.?;
+            return view(ui, &self.model);
         }
 
         /// Parse and activate a markup source (the reload seam: hot reload
         /// and tests go through this). Failures keep the previous view and
         /// set `markup_diagnostic`.
         pub fn reloadMarkup(self: *Self, source: []const u8) anyerror!void {
+            if (comptime !features.runtime_markup) return error.MarkupEngineDisabled;
             const next_index = self.markup_arena_index ^ 1;
             _ = self.markup_arenas[next_index].reset(.retain_capacity);
             const arena = self.markup_arenas[next_index].allocator();
@@ -301,8 +341,15 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         /// the watched markup file. Runs once, on first install, and only
         /// when a watch path and io are configured.
         fn startMarkupWatch(self: *Self, runtime: *Runtime) void {
+            if (comptime !features.runtime_markup) return;
             const markup_options = self.options.markup orelse return;
             if (markup_options.watch_path == null or markup_options.io == null) return;
+            // With a compiled `view` also set, the embedded source is the
+            // baseline: the interpreter only takes over once the watched
+            // file diverges from it.
+            if (self.options.view != null and self.markup_source_hash == 0) {
+                self.markup_source_hash = std.hash.Wyhash.hash(0, markup_options.source);
+            }
             runtime.startTimer(markup_watch_timer_id, markup_watch_interval_ns, true) catch {};
         }
 
@@ -311,6 +358,7 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
         /// and records the diagnostic. A successful reload rebuilds, which
         /// invalidates the canvas and schedules the presenting frame.
         fn pollMarkupWatch(self: *Self, runtime: *Runtime, window_id: platform.WindowId) void {
+            if (comptime !features.runtime_markup) return;
             const markup_options = self.options.markup orelse return;
             const watch_path = markup_options.watch_path orelse return;
             const io = markup_options.io orelse return;

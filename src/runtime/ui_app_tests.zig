@@ -540,3 +540,108 @@ test "markup watch polls from the reserved runtime timer" {
     try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
     try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 1"));
 }
+
+const CompiledCounterView = canvas.CompiledMarkupView(CounterModel, CounterMsg, counter_markup);
+
+test "a compiled markup view drives the ui app with the runtime markup engine compiled out" {
+    const LeanApp = ui_app_model.UiAppWithFeatures(CounterModel, CounterMsg, .{ .runtime_markup = false });
+
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(LeanApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = LeanApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-compiled-counter",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = counterUpdate,
+        .view = CompiledCounterView.build,
+        .on_command = counterCommand,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 0"));
+
+    // Compiled-markup handlers dispatch through the same typed loop.
+    const increment_id = findWidgetIdByText(app_state.tree.?, .button, "Increment").?;
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, increment_id });
+    try harness.runtime.dispatchAutomationCommand(app, click);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 1"));
+    try std.testing.expectEqual(increment_id, findWidgetIdByText(app_state.tree.?, .button, "Increment").?);
+
+    // The runtime engine is compiled out: no watch timer, no reload path.
+    try std.testing.expect(harness.null_platform.startedTimer(LeanApp.markup_watch_timer_id) == null);
+    try std.testing.expectError(error.MarkupEngineDisabled, app_state.reloadMarkup(counter_markup_v2));
+}
+
+test "with view and markup both set the compiled view renders until the watched file changes" {
+    const io = std.testing.io;
+    const watch_path = ".zig-cache/ui-app-compiled-watch-test.zml";
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = watch_path, .data = counter_markup });
+    defer cwd.deleteFile(io, watch_path) catch {};
+
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    var options = markupCounterOptions();
+    options.view = CompiledCounterView.build;
+    options.markup = .{ .source = counter_markup, .watch_path = watch_path, .io = io };
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 0"));
+
+    // The compiled view rendered: the interpreter never parsed anything.
+    try std.testing.expect(app_state.markup_view == null);
+
+    // An idle poll (file matches the embedded source) keeps it that way.
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 1_500_000).?);
+    try std.testing.expect(app_state.markup_view == null);
+
+    // Advance model state, then edit the file: the interpreter takes over
+    // with the new source, keeping model state and structural ids.
+    const increment_id = findWidgetIdByText(app_state.tree.?, .button, "Increment").?;
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, increment_id });
+    try harness.runtime.dispatchAutomationCommand(app, click);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+
+    try cwd.writeFile(io, .{ .sub_path = watch_path, .data = counter_markup_v2 });
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 2_000_000).?);
+
+    try std.testing.expect(app_state.markup_view != null);
+    try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Start over") != null);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 1"));
+    try std.testing.expectEqual(increment_id, findWidgetIdByText(app_state.tree.?, .button, "Increment").?);
+}

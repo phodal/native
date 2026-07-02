@@ -42,6 +42,19 @@ pub fn main(init: std.process.Init) !void {
 
 The runtime owns the loop: install on first GPU frame, presentation, resize, pointer/keyboard dispatch into `update` + rebuild. With `watch_path` set, editing the `.zml` while the app runs hot-reloads the view within ~2s, preserving model state and widget ids; parse failures keep the last good view and set `app_state.markup_diagnostic` (line/column/message).
 
+**Release: compile the markup at comptime.** `canvas.CompiledMarkupView(Model, Msg, source).build` parses the `.zml` entirely at compile time and produces the identical tree (same ids, handlers, dispatch) with no parser in the binary; markup or binding mistakes become compile errors with line/column. Hand it to `.view`, and gate the runtime engine per build mode:
+
+```zig
+const dev = @import("builtin").mode == .Debug;
+const App = zero_native.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev });
+const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("habits.zml"));
+// options:
+.view = CompiledView.build,
+.markup = if (dev) .{ .source = ..., .watch_path = "src/habits.zml", .io = init.io } else null,
+```
+
+With both set (dev), the compiled view renders until the watched file first changes, then the interpreter hot-reloads it. See `examples/habits` for the full pattern.
+
 ## Elements
 
 | Markup | Widget | Notes |

@@ -8,6 +8,8 @@ pub const Frontend = enum {
     react,
     svelte,
     vue,
+    /// Native-rendered markup app (.zml + Zig): no WebView, no npm frontend.
+    native,
 
     pub fn parse(value: []const u8) ?Frontend {
         if (std.mem.eql(u8, value, "next")) return .next;
@@ -15,6 +17,7 @@ pub const Frontend = enum {
         if (std.mem.eql(u8, value, "react")) return .react;
         if (std.mem.eql(u8, value, "svelte")) return .svelte;
         if (std.mem.eql(u8, value, "vue")) return .vue;
+        if (std.mem.eql(u8, value, "native")) return .native;
         return null;
     }
 
@@ -22,20 +25,21 @@ pub const Frontend = enum {
         return switch (self) {
             .next => "frontend/out",
             .vite, .react, .svelte, .vue => "frontend/dist",
+            .native => "assets",
         };
     }
 
     pub fn devPort(self: Frontend) []const u8 {
         return switch (self) {
             .next => "3000",
-            .vite, .react, .svelte, .vue => "5173",
+            .vite, .react, .svelte, .vue, .native => "5173",
         };
     }
 
     pub fn devUrl(self: Frontend) []const u8 {
         return switch (self) {
             .next => "http://127.0.0.1:3000/",
-            .vite, .react, .svelte, .vue => "http://127.0.0.1:5173/",
+            .vite, .react, .svelte, .vue, .native => "http://127.0.0.1:5173/",
         };
     }
 };
@@ -60,6 +64,13 @@ pub fn writeDefaultApp(allocator: std.mem.Allocator, io: std.Io, destination: []
     try app_dir.createDirPath(io, "src");
     try app_dir.createDirPath(io, "assets");
 
+    if (options.frontend == .native) {
+        // build.zig.zon path dependencies must be relative to the app root.
+        const dependency_path = try nativeDependencyPath(allocator, io, destination, framework_path);
+        defer allocator.free(dependency_path);
+        return writeNativeApp(allocator, io, app_dir, names, dependency_path);
+    }
+
     const build_zig = try buildZig(allocator, names, framework_path, options.frontend);
     defer allocator.free(build_zig);
     const build_zon = try buildZon(allocator, names);
@@ -82,6 +93,454 @@ pub fn writeDefaultApp(allocator: std.mem.Allocator, io: std.Io, destination: []
     try writeFile(app_dir, io, "README.md", readme_md);
 
     try writeFrontendFiles(allocator, io, app_dir, names, options.frontend);
+}
+
+fn writeNativeApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir, names: TemplateNames, framework_path: []const u8) !void {
+    try app_dir.createDirPath(io, ".vscode");
+
+    const build_zig = try nativeBuildZig(allocator, names);
+    defer allocator.free(build_zig);
+    const build_zon = try nativeBuildZon(allocator, names, framework_path);
+    defer allocator.free(build_zon);
+    const main_zig = try nativeMainZig(allocator, names);
+    defer allocator.free(main_zig);
+    const tests_zig = try nativeTestsZig(allocator, names);
+    defer allocator.free(tests_zig);
+    const app_zon = try nativeAppZon(allocator, names);
+    defer allocator.free(app_zon);
+    const readme_md = try nativeReadme(allocator, names, framework_path);
+    defer allocator.free(readme_md);
+
+    try writeFile(app_dir, io, "build.zig", build_zig);
+    try writeFile(app_dir, io, "build.zig.zon", build_zon);
+    try writeFile(app_dir, io, "src/main.zig", main_zig);
+    try writeFile(app_dir, io, "src/app.zml", nativeAppZml());
+    try writeFile(app_dir, io, "src/tests.zig", tests_zig);
+    try writeFile(app_dir, io, "app.zon", app_zon);
+    const icon_bytes = readFile(allocator, io, "assets/icon.icns") catch fallback_icon_icns;
+    defer if (icon_bytes.ptr != fallback_icon_icns.ptr) allocator.free(icon_bytes);
+    try writeFile(app_dir, io, "assets/icon.icns", icon_bytes);
+    try writeFile(app_dir, io, ".vscode/settings.json", nativeVscodeSettings());
+    try writeFile(app_dir, io, ".gitignore", nativeGitignore());
+    try writeFile(app_dir, io, "README.md", readme_md);
+}
+
+fn nativeBuildZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\const std = @import("std");
+        \\const zero_native = @import("zero_native");
+        \\
+        \\pub fn build(b: *std.Build) void {
+        \\    zero_native.addApp(b, b.dependency("zero_native", .{}), .{ .name =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.package_name);
+    try out.appendSlice(allocator,
+        \\ });
+        \\}
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn nativeBuildZon(allocator: std.mem.Allocator, names: TemplateNames, framework_path: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\.{
+        \\    .name = .
+    );
+    try out.appendSlice(allocator, names.module_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .fingerprint = 0x
+    );
+    var fingerprint_buffer: [16]u8 = undefined;
+    const fingerprint = try std.fmt.bufPrint(&fingerprint_buffer, "{x}", .{fingerprintForName(names.module_name)});
+    try out.appendSlice(allocator, fingerprint);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .version = "0.1.0",
+        \\    .minimum_zig_version = "0.16.0",
+        \\    .dependencies = .{ .zero_native = .{ .path =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, framework_path);
+    try out.appendSlice(allocator,
+        \\ } },
+        \\    .paths = .{ "build.zig", "build.zig.zon", "src", "assets", "app.zon", "README.md" },
+        \\}
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\//! A minimal native-rendered zero-native app: the view lives in
+        \\//! `app.zml` (embedded into the binary, and watched for hot reload in
+        \\//! dev); this file is the logic: `Model`, `Msg`, and `update`.
+        \\
+        \\const std = @import("std");
+        \\const runner = @import("runner");
+        \\const zero_native = @import("zero-native");
+        \\
+        \\pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+        \\
+        \\const canvas = zero_native.canvas;
+        \\const geometry = zero_native.geometry;
+        \\
+        \\const canvas_label = "main-canvas";
+        \\const window_width: f32 = 480;
+        \\const window_height: f32 = 320;
+        \\
+        \\const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
+        \\const shell_views = [_]zero_native.ShellView{
+        \\    .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Counter canvas", .accessibility_label = "Counter", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
+        \\};
+        \\const shell_windows = [_]zero_native.ShellWindow{.{
+        \\    .label = "main",
+        \\    .title =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.display_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .width = window_width,
+        \\    .height = window_height,
+        \\    .restore_state = false,
+        \\    .views = &shell_views,
+        \\}};
+        \\const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+        \\
+        \\// ------------------------------------------------------------------ model
+        \\
+        \\pub const Msg = union(enum) {
+        \\    increment,
+        \\    decrement,
+        \\    reset,
+        \\};
+        \\
+        \\pub const Model = struct {
+        \\    count: i64 = 0,
+        \\};
+        \\
+        \\pub fn update(model: *Model, msg: Msg) void {
+        \\    switch (msg) {
+        \\        .increment => model.count += 1,
+        \\        .decrement => model.count -= 1,
+        \\        .reset => model.count = 0,
+        \\    }
+        \\}
+        \\
+        \\// ------------------------------------------------------------------- view
+        \\
+        \\pub const AppUi = canvas.Ui(Msg);
+        \\pub const app_markup = @embedFile("app.zml");
+        \\
+        \\// -------------------------------------------------------------------- app
+        \\
+        \\const CounterApp = zero_native.UiApp(Model, Msg);
+        \\
+        \\pub fn initialModel() Model {
+        \\    return .{};
+        \\}
+        \\
+        \\pub fn main(init: std.process.Init) !void {
+        \\    // The app struct is multi-MB: heap-allocate it, never on the stack.
+        \\    const app_state = try std.heap.page_allocator.create(CounterApp);
+        \\    defer std.heap.page_allocator.destroy(app_state);
+        \\    app_state.* = CounterApp.init(std.heap.page_allocator, initialModel(), .{
+        \\        .name =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.package_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\        .scene = shell_scene,
+        \\        .canvas_label = canvas_label,
+        \\        .update = update,
+        \\        .markup = .{ .source = app_markup, .watch_path = "src/app.zml", .io = init.io },
+        \\    });
+        \\    defer app_state.deinit();
+        \\    try runner.runWithOptions(app_state.app(), .{
+        \\        .app_name =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.package_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\        .window_title =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.display_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\        .bundle_id =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.app_id);
+    try out.appendSlice(allocator,
+        \\,
+        \\        .icon_path = "assets/icon.icns",
+        \\        .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
+        \\        .restore_state = false,
+        \\        .js_window_api = false,
+        \\        .security = .{
+        \\            .permissions = &app_permissions,
+        \\            .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app" } },
+        \\        },
+        \\    }, init);
+        \\}
+        \\
+        \\test {
+        \\    _ = @import("tests.zig");
+        \\}
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn nativeAppZml() []const u8 {
+    return
+    \\<!-- The whole view. Embedded into the binary and hot-reloaded in dev:
+    \\     edit this file while the app runs and the window updates without
+    \\     losing the count. Validate with: zero-native markup check src/app.zml -->
+    \\<column gap="12" padding="16">
+    \\  <row gap="8" cross="center">
+    \\    <text grow="1">Counter</text>
+    \\    <button size="sm" variant="ghost" on-press="reset">Reset</button>
+    \\  </row>
+    \\  <row gap="8" main="center" cross="center" grow="1">
+    \\    <button variant="secondary" on-press="decrement">-</button>
+    \\    <text>{count}</text>
+    \\    <button variant="primary" on-press="increment">+</button>
+    \\  </row>
+    \\  <status-bar>count: {count}</status-bar>
+    \\</column>
+    \\
+    ;
+}
+
+fn nativeTestsZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 {
+    _ = names;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\const std = @import("std");
+        \\const zero_native = @import("zero-native");
+        \\const main = @import("main.zig");
+        \\
+        \\const canvas = zero_native.canvas;
+        \\const testing = std.testing;
+        \\
+        \\const AppUi = main.AppUi;
+        \\const Model = main.Model;
+        \\const Msg = main.Msg;
+        \\
+        \\const AppMarkup = canvas.MarkupView(Model, Msg);
+        \\
+        \\fn buildTree(arena: std.mem.Allocator, model: *const Model) !AppUi.Tree {
+        \\    var view = try AppMarkup.init(arena, main.app_markup);
+        \\    var ui = AppUi.init(arena);
+        \\    return ui.finalize(try view.build(&ui, model));
+        \\}
+        \\
+        \\fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) ?canvas.Widget {
+        \\    if (widget.kind == kind and std.mem.eql(u8, widget.text, text)) return widget;
+        \\    for (widget.children) |child| {
+        \\        if (findByText(child, kind, text)) |found| return found;
+        \\    }
+        \\    return null;
+        \\}
+        \\
+        \\test "clicking the buttons drives the model through typed dispatch" {
+        \\    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        \\    defer arena_state.deinit();
+        \\    const arena = arena_state.allocator();
+        \\
+        \\    var model = main.initialModel();
+        \\
+        \\    var tree = try buildTree(arena, &model);
+        \\    try testing.expect(findByText(tree.root, .text, "0") != null);
+        \\    try testing.expect(findByText(tree.root, .status_bar, "count: 0") != null);
+        \\
+        \\    // Click "+": the count increments and the view rebuilds with the
+        \\    // new value, keeping widget ids stable.
+        \\    const plus = findByText(tree.root, .button, "+").?;
+        \\    main.update(&model, tree.msgForPointer(plus.id, .up).?);
+        \\    try testing.expectEqual(@as(i64, 1), model.count);
+        \\
+        \\    tree = try buildTree(arena, &model);
+        \\    try testing.expect(findByText(tree.root, .text, "1") != null);
+        \\    try testing.expect(findByText(tree.root, .status_bar, "count: 1") != null);
+        \\    try testing.expectEqual(plus.id, findByText(tree.root, .button, "+").?.id);
+        \\
+        \\    // Click "-" twice: the count goes negative.
+        \\    const minus = findByText(tree.root, .button, "-").?;
+        \\    main.update(&model, tree.msgForPointer(minus.id, .up).?);
+        \\    main.update(&model, tree.msgForPointer(minus.id, .up).?);
+        \\    try testing.expectEqual(@as(i64, -1), model.count);
+        \\
+        \\    // Click "Reset": back to zero.
+        \\    tree = try buildTree(arena, &model);
+        \\    const reset = findByText(tree.root, .button, "Reset").?;
+        \\    main.update(&model, tree.msgForPointer(reset.id, .up).?);
+        \\    try testing.expectEqual(@as(i64, 0), model.count);
+        \\
+        \\    tree = try buildTree(arena, &model);
+        \\    try testing.expect(findByText(tree.root, .status_bar, "count: 0") != null);
+        \\}
+        \\
+        \\test "the view lays out through the canvas engine" {
+        \\    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        \\    defer arena_state.deinit();
+        \\
+        \\    var model = main.initialModel();
+        \\    const tree = try buildTree(arena_state.allocator(), &model);
+        \\
+        \\    var nodes: [64]canvas.WidgetLayoutNode = undefined;
+        \\    const layout = try canvas.layoutWidgetTree(tree.root, zero_native.geometry.RectF.init(0, 0, 480, 320), &nodes);
+        \\    try testing.expect(layout.nodes.len > 0);
+        \\
+        \\    const plus = findByText(tree.root, .button, "+").?;
+        \\    var saw_button = false;
+        \\    for (layout.nodes) |node| {
+        \\        if (node.widget.id == plus.id) saw_button = true;
+        \\    }
+        \\    try testing.expect(saw_button);
+        \\}
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn nativeAppZon(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator,
+        \\.{
+        \\    .id =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.app_id);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .name =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.package_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .display_name =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.display_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\    .version = "0.1.0",
+        \\    .icons = .{"assets/icon.icns"},
+        \\    .platforms = .{"macos"},
+        \\    .permissions = .{ "view", "command" },
+        \\    .capabilities = .{ "native_views", "gpu_surfaces" },
+        \\    .shell = .{
+        \\        .windows = .{
+        \\            .{
+        \\                .label = "main",
+        \\                .title =
+    );
+    try out.appendSlice(allocator, " ");
+    try appendZigString(&out, allocator, names.display_name);
+    try out.appendSlice(allocator,
+        \\,
+        \\                .width = 480,
+        \\                .height = 320,
+        \\                .restore_state = false,
+        \\                .restore_policy = "center_on_primary",
+        \\                .views = .{
+        \\                    .{ .label = "main-canvas", .kind = "gpu_surface", .fill = true, .role = "Counter canvas", .accessibility_label = "Counter", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
+        \\                },
+        \\            },
+        \\        },
+        \\    },
+        \\    .security = .{
+        \\        .navigation = .{
+        \\            .allowed_origins = .{ "zero://app", "zero://inline" },
+        \\            .external_links = .{ .action = "deny" },
+        \\        },
+        \\    },
+        \\    .web_engine = "system",
+        \\    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+        \\}
+        \\
+    );
+    return out.toOwnedSlice(allocator);
+}
+
+fn nativeVscodeSettings() []const u8 {
+    return
+    \\{
+    \\  "files.associations": { "*.zml": "html" }
+    \\}
+    \\
+    ;
+}
+
+fn nativeGitignore() []const u8 {
+    return
+    \\zig-out/
+    \\.zig-cache/
+    \\
+    ;
+}
+
+fn nativeReadme(allocator: std.mem.Allocator, names: TemplateNames, framework_path: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "# ");
+    try out.appendSlice(allocator, names.display_name);
+    try out.appendSlice(allocator,
+        \\
+        \\
+        \\A native-rendered zero-native app: the view lives in `src/app.zml`
+        \\(declarative markup) and the logic in `src/main.zig` (`Model`, `Msg`,
+        \\`update`). No WebView, no npm — the UI renders on a GPU surface.
+        \\
+        \\## Commands
+        \\
+        \\```sh
+        \\zig build run                          # build and launch the app
+        \\zig build test                         # run the full-loop UI tests
+        \\zero-native markup check src/app.zml   # validate the markup without building
+        \\```
+        \\
+        \\## Hot reload
+        \\
+        \\`src/app.zml` is embedded into the binary and watched during development:
+        \\edit it while the app runs and the window updates within ~2s without
+        \\losing model state. Parse failures keep the last good view.
+        \\
+        \\## Framework path
+        \\
+        \\`build.zig.zon` points the `zero_native` dependency at:
+        \\
+        \\```text
+        \\
+    );
+    try out.appendSlice(allocator, framework_path);
+    try out.appendSlice(allocator,
+        \\
+        \\```
+        \\
+        \\Edit `.dependencies.zero_native.path` in `build.zig.zon` if you move
+        \\this app or the framework checkout.
+        \\
+    );
+    return out.toOwnedSlice(allocator);
 }
 
 fn writeFile(dir: std.Io.Dir, io: std.Io, path: []const u8, bytes: []const u8) !void {
@@ -1282,6 +1741,9 @@ fn writeFrontendFiles(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.
         .react => try writeReactFrontend(allocator, io, app_dir, names),
         .svelte => try writeSvelteFrontend(allocator, io, app_dir, names),
         .vue => try writeVueFrontend(allocator, io, app_dir, names),
+        // Native apps never reach here: writeDefaultApp dispatches to
+        // writeNativeApp before any frontend files are written.
+        .native => unreachable,
     }
 }
 
@@ -2145,6 +2607,52 @@ test "writeDefaultApp emits frontend-specific Next paths" {
     try std.testing.expect(std.mem.indexOf(u8, tsconfig_text, "\"@/*\": [\"./app/*\"]") != null);
 }
 
+test "writeDefaultApp emits native project files" {
+    const destination = ".zig-cache/test-native-init-template";
+    try writeDefaultApp(std.testing.allocator, std.testing.io, destination, .{ .app_name = "My App", .framework_path = ".", .frontend = .native });
+
+    const app_zon_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "app.zon");
+    defer std.testing.allocator.free(app_zon_text);
+    const build_zig_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "build.zig");
+    defer std.testing.allocator.free(build_zig_text);
+    const build_zon_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "build.zig.zon");
+    defer std.testing.allocator.free(build_zon_text);
+    const main_zig_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/main.zig");
+    defer std.testing.allocator.free(main_zig_text);
+    const app_zml_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/app.zml");
+    defer std.testing.allocator.free(app_zml_text);
+    const tests_zig_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/tests.zig");
+    defer std.testing.allocator.free(tests_zig_text);
+    const vscode_text = try readTestFile(std.testing.allocator, std.testing.io, destination, ".vscode/settings.json");
+    defer std.testing.allocator.free(vscode_text);
+    const gitignore_text = try readTestFile(std.testing.allocator, std.testing.io, destination, ".gitignore");
+    defer std.testing.allocator.free(gitignore_text);
+    const readme_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "README.md");
+    defer std.testing.allocator.free(readme_text);
+
+    // No WebView frontend files.
+    try std.testing.expectError(error.FileNotFound, readTestFile(std.testing.allocator, std.testing.io, destination, "frontend/package.json"));
+    try std.testing.expectError(error.FileNotFound, readTestFile(std.testing.allocator, std.testing.io, destination, "src/runner.zig"));
+
+    try std.testing.expect(std.mem.indexOf(u8, app_zon_text, "gpu_surface") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_zon_text, "\"native_views\", \"gpu_surfaces\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_zon_text, "dev.zero_native.my-app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_zon_text, ".frontend") == null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "zero_native.addApp(b, b.dependency(\"zero_native\", .{}), .{ .name = \"my-app\" })") != null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zon_text, ".zero_native = .{ .path = ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zon_text, ".name = .my_app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "zero_native.UiApp(Model, Msg)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "@embedFile(\"app.zml\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, ".watch_path = \"src/app.zml\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_zml_text, "on-press=\"increment\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tests_zig_text, "msgForPointer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tests_zig_text, "canvas.MarkupView(Model, Msg)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, vscode_text, "\"*.zml\": \"html\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gitignore_text, "zig-out/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, readme_text, "zero-native markup check src/app.zml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, readme_text, "hot") != null or std.mem.indexOf(u8, readme_text, "Hot") != null);
+}
+
 fn normalizePackageName(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -2244,6 +2752,32 @@ fn defaultFrameworkPath(allocator: std.mem.Allocator, io: std.Io, destination: [
 
     if (out.items.len == 0) try out.append(allocator, '.');
     return out.toOwnedSlice(allocator);
+}
+
+/// The zero_native dependency path for build.zig.zon: always relative to the
+/// generated app root, since Zig rejects absolute paths in path dependencies.
+/// `framework_path` comes from defaultFrameworkPath, so it is either already
+/// destination-relative or absolute.
+fn nativeDependencyPath(allocator: std.mem.Allocator, io: std.Io, destination: []const u8, framework_path: []const u8) ![]const u8 {
+    if (!std.fs.path.isAbsolute(framework_path)) {
+        return allocator.dupe(u8, framework_path);
+    }
+
+    // Resolve symlinks (e.g. /tmp -> /private/tmp on macOS) before computing
+    // the relative path, so `..` segments traverse the real directory tree.
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+    const destination_real = try std.Io.Dir.cwd().realPathFileAlloc(io, destination, allocator);
+    defer allocator.free(destination_real);
+    const framework_real = try std.Io.Dir.realPathFileAbsoluteAlloc(io, framework_path, allocator);
+    defer allocator.free(framework_real);
+
+    const relative = try std.fs.path.relative(allocator, cwd, null, destination_real, framework_real);
+    if (relative.len == 0) {
+        allocator.free(relative);
+        return allocator.dupe(u8, ".");
+    }
+    return relative;
 }
 
 fn appendZigString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {

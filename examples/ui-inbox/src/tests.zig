@@ -24,9 +24,12 @@ fn countKind(widget: canvas.Widget, kind: canvas.WidgetKind) usize {
     return total;
 }
 
+const InboxMarkup = canvas.MarkupView(Model, main.Msg);
+
 fn buildTree(arena: std.mem.Allocator, model: *const Model) !InboxUi.Tree {
+    var view = try InboxMarkup.init(arena, main.inbox_markup);
     var ui = InboxUi.init(arena);
-    return ui.finalize(main.view(&ui, model));
+    return ui.finalize(try view.build(&ui, model));
 }
 
 test "a full user session drives the model through typed dispatch" {

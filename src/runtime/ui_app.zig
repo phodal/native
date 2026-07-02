@@ -38,7 +38,9 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
             /// Optional file to poll in dev: when its content changes the
             /// file is re-parsed and the next rebuild uses the new view,
             /// keeping model state. Parse failures keep the last good view
-            /// and set `markup_diagnostic`. Requires `io`.
+            /// and set `markup_diagnostic`. Requires `io`. Watching keeps a
+            /// low-cost frame loop alive, so leave it unset in release
+            /// builds.
             watch_path: ?[]const u8 = null,
             io: ?std.Io = null,
         };
@@ -179,6 +181,12 @@ pub fn UiApp(comptime ModelT: type, comptime MsgT: type) type {
             const markup_options = self.options.markup orelse return;
             const watch_path = markup_options.watch_path orelse return;
             const io = markup_options.io orelse return;
+
+            // Frame callbacks stop when nothing is dirty, which would starve
+            // the poll exactly when a developer edits the file. While
+            // watching, keep the frame chain alive; idle frames are cheap
+            // (nothing dirty means presentation is skipped). Dev-mode cost.
+            runtime.options.platform.services.requestGpuSurfaceFrame(window_id, self.options.canvas_label) catch {};
 
             self.markup_poll_countdown -|= 1;
             if (self.markup_poll_countdown > 0) return;

@@ -1,10 +1,10 @@
-//! ui-inbox: a native-rendered task inbox written entirely with the
-//! experimental `canvas.Ui` declarative builder.
+//! ui-inbox: a native-rendered task inbox authored in markup + Zig.
 //!
-//! The app is one elm-style loop: `Model` -> `Msg` -> `update` -> `view`.
-//! There are no hand-assigned widget ids, no absolute frames, and no string
-//! command dispatch — widget identity is structural, layout is flex, and
-//! events resolve to typed `Msg` values through the tree's handler table.
+//! The view lives in `inbox.zml` (embedded into the binary, and watched for
+//! hot reload in dev); this file is the logic: `Model`, `Msg`, and `update`.
+//! The markup compiles to the same builder tree a hand-written `view()`
+//! would produce — structural identity, flex layout, and typed message
+//! dispatch all come from the same `canvas.Ui(Msg)` layer.
 
 const std = @import("std");
 const runner = @import("runner");
@@ -39,7 +39,6 @@ const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
 // ------------------------------------------------------------------ model
 
 pub const Filter = enum { all, active, done };
-const filter_values = [_]Filter{ .all, .active, .done };
 
 pub const Task = struct {
     id: u32,
@@ -47,7 +46,7 @@ pub const Task = struct {
     title_len: usize = 0,
     done: bool = false,
 
-    fn title(task: *const Task) []const u8 {
+    pub fn title(task: *const Task) []const u8 {
         return task.title_storage[0..task.title_len];
     }
 
@@ -68,6 +67,8 @@ pub const Model = struct {
     task_count: usize = 0,
     next_id: u32 = 1,
     filter: Filter = .all,
+
+    pub const filters = [_]Filter{ .all, .active, .done };
 
     pub fn addTask(model: *Model, text: []const u8) void {
         if (model.task_count >= max_tasks) return;
@@ -114,7 +115,11 @@ pub const Model = struct {
         return model.task_count - model.openCount();
     }
 
-    fn visible(model: *const Model, arena: std.mem.Allocator) []const Task {
+    pub fn doneEmpty(model: *const Model) bool {
+        return model.doneCount() == 0;
+    }
+
+    pub fn visible(model: *const Model, arena: std.mem.Allocator) []const Task {
         const out = arena.alloc(Task, model.task_count) catch return &.{};
         var count: usize = 0;
         for (model.tasks[0..model.task_count]) |task| {
@@ -146,39 +151,7 @@ pub fn update(model: *Model, msg: Msg) void {
 // ------------------------------------------------------------------- view
 
 pub const InboxUi = canvas.Ui(Msg);
-
-pub fn view(ui: *InboxUi, model: *const Model) InboxUi.Node {
-    return ui.column(.{ .gap = 12, .padding = 16 }, .{
-        ui.row(.{ .gap = 8, .cross = .center }, .{
-            ui.text(.{ .grow = 1 }, "Inbox"),
-            ui.button(.{ .variant = .primary, .on_press = .add }, "Add task"),
-            ui.button(.{ .variant = .ghost, .on_press = .clear_done, .disabled = model.doneCount() == 0 }, "Clear done"),
-        }),
-        ui.row(.{ .gap = 8 }, ui.eachCtx(model.filter, &filter_values, filterKey, filterButton)),
-        ui.scroll(.{ .grow = 1 }, ui.column(.{ .gap = 2 }, ui.each(model.visible(ui.arena), Task.key, taskRow))),
-        ui.statusBar(.{}, ui.fmt("{d} open · {d} done", .{ model.openCount(), model.doneCount() })),
-    });
-}
-
-fn filterKey(filter: *const Filter) canvas.UiKey {
-    return canvas.uiKey(@as(u32, @intFromEnum(filter.*)));
-}
-
-fn filterButton(ui: *InboxUi, selected: Filter, filter: *const Filter) InboxUi.Node {
-    return ui.button(.{
-        .variant = if (filter.* == selected) .secondary else .outline,
-        .size = .sm,
-        .selected = filter.* == selected,
-        .on_press = Msg{ .set_filter = filter.* },
-    }, @tagName(filter.*));
-}
-
-fn taskRow(ui: *InboxUi, task: *const Task) InboxUi.Node {
-    return ui.row(.{ .gap = 8, .padding = 6, .cross = .center }, .{
-        ui.checkbox(.{ .checked = task.done, .on_toggle = Msg{ .toggle = task.id } }),
-        ui.text(.{ .grow = 1 }, task.title()),
-    });
-}
+pub const inbox_markup = @embedFile("inbox.zml");
 
 // -------------------------------------------------------------------- app
 //
@@ -203,7 +176,7 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
-        .view = view,
+        .markup = .{ .source = inbox_markup, .watch_path = "src/inbox.zml", .io = init.io },
     });
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{

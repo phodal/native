@@ -1,0 +1,26 @@
+<!-- The inbox view. Compiled into the binary and, in dev, watched and
+     hot-reloaded: edit this file while `zig build run` is running and the
+     window updates without losing task state. -->
+<column gap="12" padding="16">
+  <row gap="8" cross="center">
+    <text grow="1">Inbox</text>
+    <button variant="primary" on-press="add">Add task</button>
+    <button variant="ghost" disabled="{doneEmpty}" on-press="clear_done">Clear done</button>
+  </row>
+  <row gap="8">
+    <for each="filters" as="f">
+      <button size="sm" selected="{f == filter}" on-press="set_filter:{f}">{f}</button>
+    </for>
+  </row>
+  <scroll grow="1">
+    <column gap="2">
+      <for each="visible" key="id" as="t">
+        <row gap="8" padding="6" cross="center">
+          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" />
+          <text grow="1">{t.title}</text>
+        </row>
+      </for>
+    </column>
+  </scroll>
+  <status-bar>{openCount} open · {doneCount} done</status-bar>
+</column>

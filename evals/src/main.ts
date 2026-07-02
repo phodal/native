@@ -8,8 +8,9 @@ import {
   findGatewayKey,
   runAgent,
 } from "./agent.ts";
-import { buildCli, scaffoldWorkspace } from "./scaffold.ts";
+import { buildCli, prewarmWorkspace, scaffoldWorkspace } from "./scaffold.ts";
 import { DEFAULT_JUDGE_MODEL } from "./judge.ts";
+import { ensureSandboxAuth, packRepo, runCaseInSandbox } from "./sandbox.ts";
 import { runChecks } from "./grade.ts";
 import { formatDuration } from "./util.ts";
 import type { AgentRunResult, CaseResult, EvalCase, RunnerOptions } from "./types.ts";
@@ -28,6 +29,11 @@ options:
   --skip-permissions   run claude with --dangerously-skip-permissions instead
                        of acceptEdits + an allowlist (sandbox dirs only)
   --keep-workspaces    do not delete .workspaces/<case> after grading
+  --concurrency <n>    run up to n cases in parallel (default: 2 locally,
+                       all cases with --sandbox)
+  --sandbox            run each case in its own Vercel Sandbox microVM
+                       (needs VERCEL_OIDC_TOKEN via vercel link + env pull)
+  --sandbox-vcpus <n>  vCPUs per sandbox (default 4; 2048 MB RAM per vCPU)
   --model <slug>       coder model slug (default: ${DEFAULT_MODEL};
                        also via ZN_EVAL_MODEL)
   --judge-model <slug> judge model slug for llm_judge checks (default:
@@ -45,6 +51,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  if (options.sandbox && options.dryRun) {
+    console.error("--sandbox and --dry-run are mutually exclusive (dry runs are local by definition)");
+    process.exit(2);
+  }
   const gatewayKey = findGatewayKey(process.env);
   if (!gatewayKey && !options.dryRun) {
     console.error(
@@ -54,92 +64,74 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const cliPath = await buildCli(options.repoRoot);
   const runStamp = new Date().toISOString().replace(/[:.]/g, "-");
   const runResultsDir = join(options.evalsRoot, "results", runStamp);
   const workspacesDir = join(options.evalsRoot, ".workspaces");
   mkdirSync(runResultsDir, { recursive: true });
 
-  const results: CaseResult[] = [];
-  for (const evalCase of cases) {
-    console.log(`\n=== case: ${evalCase.name} ===`);
-    const caseResultsDir = join(runResultsDir, evalCase.name);
-    mkdirSync(caseResultsDir, { recursive: true });
-    const startedAt = new Date().toISOString();
-
-    const workspace = await scaffoldWorkspace(
-      options.repoRoot,
-      cliPath,
-      workspacesDir,
-      evalCase.name,
-      evalCase.frontend,
-    );
-    console.log(`  [scaffold] workspace ready: ${workspace.path}`);
-    console.log(`  [scaffold] skill delivered: .claude/skills/native-ui/SKILL.md`);
-
-    const configDir = join(caseResultsDir, "claude-config");
-    mkdirSync(configDir, { recursive: true });
-    const invocation = buildInvocation({
-      prompt: evalCase.prompt,
-      model: options.model,
-      maxTurns: evalCase.maxTurns,
-      workspace: workspace.path,
-      skipPermissions: options.skipPermissions,
-    });
-
-    let agent: AgentRunResult;
-    if (options.dryRun) {
-      const agentEnv = assembleAgentEnv(gatewayKey ?? "<AI_GATEWAY_API_KEY>", options.repoRoot, configDir);
-      console.log("  [dry-run] env overrides for the claude subprocess:");
-      for (const [key, value] of Object.entries(agentEnv.redacted)) {
-        console.log(`    ${key}=${value}`);
-      }
-      console.log(`  [dry-run] claude ${formatArgv(invocation.argv)}`);
-      console.log(`  [dry-run] cwd: ${invocation.cwd}`);
-      agent = { status: "dry_run", model: options.model, durationMs: 0 };
-    } else {
-      const agentEnv = assembleAgentEnv(gatewayKey!, options.repoRoot, configDir);
-      console.log(`  [agent] claude -p (model ${options.model}, max ${evalCase.maxTurns} turns, timeout ${formatDuration(evalCase.timeoutMs)})...`);
-      agent = await runAgent({
-        invocation,
-        agentEnv,
-        model: options.model,
-        timeoutMs: evalCase.timeoutMs,
-        resultsDir: caseResultsDir,
-      });
-      const cost = agent.totalCostUsd !== undefined ? ` $${agent.totalCostUsd.toFixed(4)}` : "";
-      const turns = agent.numTurns !== undefined ? ` ${agent.numTurns} turns` : "";
-      console.log(`  [agent] ${agent.status} in ${formatDuration(agent.durationMs)}${turns}${cost}`);
-      if (agent.errorDetail) console.log(`  [agent] ${agent.errorDetail}`);
-    }
-
-    const checks = await runChecks(evalCase.checks, {
-      workspace,
-      skipLive: options.skipLive,
-      dryRun: options.dryRun,
-      taskPrompt: evalCase.prompt,
-      judgeModel: options.judgeModel,
-      gatewayKey,
-    });
-    const agentOk = agent.status === "completed" || agent.status === "dry_run";
-    // Advisory judge checks record a score but never fail the case.
-    const passed =
-      agentOk && checks.every((check) => check.status !== "fail" || check.advisory === true);
-    const caseResult: CaseResult = {
-      case: evalCase.name,
-      workspace: workspace.path,
-      startedAt,
-      dryRun: options.dryRun,
-      agent,
-      checks,
-      passed,
-    };
-    writeFileSync(join(caseResultsDir, "result.json"), `${JSON.stringify(caseResult, null, 2)}\n`);
-    results.push(caseResult);
-
-    if (!options.keepWorkspaces) rmSync(workspace.path, { recursive: true, force: true });
+  let cliPath: string | undefined;
+  let tarballPath: string | undefined;
+  if (options.sandbox) {
+    ensureSandboxAuth(options.evalsRoot);
+    console.log("[sandbox] packing repo working tree for upload...");
+    tarballPath = await packRepo(options.repoRoot);
+  } else {
+    cliPath = await buildCli(options.repoRoot);
   }
 
+  const concurrency = Math.max(
+    1,
+    Math.min(options.concurrency ?? (options.sandbox ? cases.length : 2), cases.length),
+  );
+  if (cases.length > 1) {
+    console.log(`running ${cases.length} cases, ${concurrency} at a time${options.sandbox ? " (vercel sandbox)" : ""}`);
+  }
+  const results = await runPool(cases, concurrency, async (evalCase) => {
+    const log = (line: string): void => console.log(`[${evalCase.name}] ${line}`);
+    const caseResultsDir = join(runResultsDir, evalCase.name);
+    mkdirSync(caseResultsDir, { recursive: true });
+    try {
+      if (options.sandbox) {
+        return await runCaseInSandbox({
+          evalCase,
+          tarballPath: tarballPath!,
+          gatewayKey: gatewayKey!,
+          model: options.model,
+          judgeModel: options.judgeModel,
+          vcpus: options.sandboxVcpus,
+          localResultsDir: caseResultsDir,
+          log,
+        });
+      }
+      return await runCaseLocal(evalCase, options, {
+        cliPath: cliPath!,
+        workspacesDir,
+        caseResultsDir,
+        gatewayKey,
+        log,
+      });
+    } catch (error) {
+      // One crashed case (sandbox provisioning, scaffold failure, ...) should
+      // not kill the rest of the suite.
+      log(`FAILED: ${(error as Error).message}`);
+      return {
+        case: evalCase.name,
+        workspace: "-",
+        startedAt: new Date().toISOString(),
+        dryRun: options.dryRun,
+        agent: {
+          status: "error" as const,
+          model: options.model,
+          durationMs: 0,
+          errorDetail: (error as Error).message,
+        },
+        checks: [],
+        passed: false,
+      };
+    }
+  });
+
+  if (tarballPath) rmSync(tarballPath, { force: true });
   writeFileSync(join(runResultsDir, "summary.json"), `${JSON.stringify(results, null, 2)}\n`);
   printSummary(results, options);
   console.log(`\nresults: ${runResultsDir}`);
@@ -147,6 +139,115 @@ async function main(): Promise<void> {
   // In --dry-run, grader failures against the untouched scaffold are expected
   // (they prove the graders detect a missing solution) — exit 0.
   process.exit(failed.length > 0 && !options.dryRun ? 1 : 0);
+}
+
+interface LocalCaseContext {
+  cliPath: string;
+  workspacesDir: string;
+  caseResultsDir: string;
+  gatewayKey: string | undefined;
+  log: (line: string) => void;
+}
+
+async function runCaseLocal(
+  evalCase: EvalCase,
+  options: RunnerOptions,
+  context: LocalCaseContext,
+): Promise<CaseResult> {
+  const { log } = context;
+  const startedAt = new Date().toISOString();
+
+  const workspace = await scaffoldWorkspace(
+    options.repoRoot,
+    context.cliPath,
+    context.workspacesDir,
+    evalCase.name,
+    evalCase.frontend,
+  );
+  log(`[scaffold] workspace ready: ${workspace.path}`);
+  log(`[scaffold] skill delivered: .claude/skills/native-ui/SKILL.md`);
+  if (!options.dryRun) await prewarmWorkspace(workspace, log);
+
+  const configDir = join(context.caseResultsDir, "claude-config");
+  mkdirSync(configDir, { recursive: true });
+  const invocation = buildInvocation({
+    prompt: evalCase.prompt,
+    model: options.model,
+    maxTurns: evalCase.maxTurns,
+    workspace: workspace.path,
+    skipPermissions: options.skipPermissions,
+  });
+
+  let agent: AgentRunResult;
+  if (options.dryRun) {
+    const agentEnv = assembleAgentEnv(context.gatewayKey ?? "<AI_GATEWAY_API_KEY>", options.repoRoot, configDir);
+    log("[dry-run] env overrides for the claude subprocess:");
+    for (const [key, value] of Object.entries(agentEnv.redacted)) {
+      log(`  ${key}=${value}`);
+    }
+    log(`[dry-run] claude ${formatArgv(invocation.argv)}`);
+    log(`[dry-run] cwd: ${invocation.cwd}`);
+    agent = { status: "dry_run", model: options.model, durationMs: 0 };
+  } else {
+    const agentEnv = assembleAgentEnv(context.gatewayKey!, options.repoRoot, configDir);
+    log(`[agent] claude -p (model ${options.model}, max ${evalCase.maxTurns} turns, timeout ${formatDuration(evalCase.timeoutMs)})...`);
+    agent = await runAgent({
+      invocation,
+      agentEnv,
+      model: options.model,
+      timeoutMs: evalCase.timeoutMs,
+      resultsDir: context.caseResultsDir,
+    });
+    const cost = agent.totalCostUsd !== undefined ? ` $${agent.totalCostUsd.toFixed(4)}` : "";
+    const turns = agent.numTurns !== undefined ? ` ${agent.numTurns} turns` : "";
+    log(`[agent] ${agent.status} in ${formatDuration(agent.durationMs)}${turns}${cost}`);
+    if (agent.errorDetail) log(`[agent] ${agent.errorDetail}`);
+  }
+
+  const checks = await runChecks(evalCase.checks, {
+    workspace,
+    log,
+    skipLive: options.skipLive,
+    dryRun: options.dryRun,
+    taskPrompt: evalCase.prompt,
+    judgeModel: options.judgeModel,
+    gatewayKey: context.gatewayKey,
+  });
+  const agentOk = agent.status === "completed" || agent.status === "dry_run";
+  // Advisory judge checks record a score but never fail the case.
+  const passed =
+    agentOk && checks.every((check) => check.status !== "fail" || check.advisory === true);
+  const caseResult: CaseResult = {
+    case: evalCase.name,
+    workspace: workspace.path,
+    startedAt,
+    dryRun: options.dryRun,
+    agent,
+    checks,
+    passed,
+  };
+  writeFileSync(join(context.caseResultsDir, "result.json"), `${JSON.stringify(caseResult, null, 2)}\n`);
+  if (!options.keepWorkspaces) rmSync(workspace.path, { recursive: true, force: true });
+  return caseResult;
+}
+
+/** Run `worker` over `items` with at most `limit` in flight; results keep item order. */
+async function runPool<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const lanes = Array.from({ length: limit }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await worker(items[index]!);
+    }
+  });
+  await Promise.all(lanes);
+  return results;
 }
 
 function parseArgs(argv: string[]): RunnerOptions {
@@ -162,6 +263,9 @@ function parseArgs(argv: string[]): RunnerOptions {
     skipLive: false,
     skipPermissions: false,
     keepWorkspaces: false,
+    concurrency: undefined,
+    sandbox: false,
+    sandboxVcpus: 4,
   };
   let listOnly = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -204,6 +308,21 @@ function parseArgs(argv: string[]): RunnerOptions {
           process.exit(2);
         }
         options.judgeModel = value;
+        index += 1;
+        break;
+      }
+      case "--sandbox":
+        options.sandbox = true;
+        break;
+      case "--concurrency":
+      case "--sandbox-vcpus": {
+        const value = Number(argv[index + 1]);
+        if (!Number.isInteger(value) || value <= 0) {
+          console.error(`${arg} requires a positive integer`);
+          process.exit(2);
+        }
+        if (arg === "--concurrency") options.concurrency = value;
+        else options.sandboxVcpus = value;
         index += 1;
         break;
       }

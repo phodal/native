@@ -124,4 +124,9 @@ export interface RunnerOptions {
   skipLive: boolean;
   skipPermissions: boolean;
   keepWorkspaces: boolean;
+  /** Cases run concurrently up to this limit (default 2 local, all in sandbox mode). */
+  concurrency: number | undefined;
+  /** Run each case in its own Vercel Sandbox microVM instead of locally. */
+  sandbox: boolean;
+  sandboxVcpus: number;
 }

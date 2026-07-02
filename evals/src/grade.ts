@@ -9,6 +9,8 @@ import type { Workspace } from "./scaffold.ts";
 
 export interface GradeContext {
   workspace: Workspace;
+  /** Per-case logger (prefixes the case name when cases run in parallel). */
+  log: (line: string) => void;
   /** Skip live snapshot checks (report "skipped"). */
   skipLive: boolean;
   /** Dry runs make no model calls; llm_judge checks report "skipped". */
@@ -29,9 +31,9 @@ export async function runChecks(
     const result = await runCheck(check, context);
     results.push({ ...result, durationMs: Date.now() - started });
     const marker = result.status === "pass" ? "PASS" : result.status === "skipped" ? "SKIP" : "FAIL";
-    console.log(`  [check] ${marker} ${result.description}`);
+    context.log(`[check] ${marker} ${result.description}`);
     if (result.detail && (result.status === "fail" || result.type === "llm_judge")) {
-      console.log(indent(result.detail, "         | "));
+      context.log(indent(result.detail, "        | "));
     }
   }
   return results;

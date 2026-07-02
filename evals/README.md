@@ -4,7 +4,7 @@ An eval harness for AI-agent authoring of zero-native apps. It formalizes the "c
 
 Per case the runner:
 
-1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/zero-native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `zero-native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills).
+1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/zero-native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `zero-native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills). The workspace is then **pre-warmed** (`zig build test` once) so the agent's own builds are incremental and its wall-clock isn't spent compiling the framework.
 2. **Runs the agent-under-test**: `claude -p "<task prompt>"` headless in the workspace, routed through the Vercel AI Gateway, with a per-run `CLAUDE_CONFIG_DIR` so no user-level memory/plugins/hooks leak in, `--max-turns`, a wall-clock timeout, and the full `stream-json` transcript captured to `results/`.
 3. **Grades** with deterministic checks: `zig build test` in the workspace, `zero-native markup check` on the `.zml` files, per-case file greps (e.g. "the board uses `<template>`"), and live automation-snapshot greps (build with `-Dautomation=true`, launch, `zero-native automate wait`, grep `snapshot.txt` for expected roles/names).
 4. **Judges** quality the deterministic checks can't see — idiomatic Model/Msg design, template factoring, test meaningfulness — with an `llm_judge` check: a judge model called directly through the gateway scores case-specific criteria 0–10 against the task prompt and the agent's code. Advisory by default (the score is recorded and printed but never fails the case); set `"advisory": false` on a case to make `minScore` a gate. Skipped in `--dry-run`.
@@ -47,8 +47,26 @@ pnpm eval --model anthropic/claude-opus-4.8 templates-settings-app
 pnpm eval --judge-model anthropic/claude-fable-5 templates-settings-app
 pnpm eval --skip-live                 # skip snapshot checks (no app launch / non-macOS)
 pnpm eval --keep-workspaces           # keep .workspaces/<case> around for inspection
+pnpm eval --concurrency 3             # run up to 3 cases in parallel (default 2 locally)
+pnpm eval --sandbox                   # run each case in its own Vercel Sandbox microVM
+pnpm eval --sandbox --sandbox-vcpus 8 # bigger sandboxes (2048 MB RAM per vCPU)
 pnpm typecheck
 ```
+
+Cases run in parallel (log lines are prefixed `[case-name]`); `--concurrency` caps how many at once — locally the default is 2 to keep zig builds from thrashing, with `--sandbox` all cases run at once since each has its own VM.
+
+### Vercel Sandbox mode
+
+`--sandbox` runs each case in an isolated [Vercel Sandbox](https://vercel.com/docs/sandbox) (Amazon Linux microVM, `node24` runtime): the runner packs the repo **working tree** into a tarball, uploads it, installs zig + pnpm + the Claude Code CLI in the VM, and re-invokes this same harness inside (`pnpm eval --skip-permissions <case>`), then pulls `result.json` and the transcript back into the local `results/` dir. Snapshot checks self-skip (no display); everything else — build+test, markup check, greps, judge — runs as usual. `--dangerously-skip-permissions` is safe there because the whole VM is the throwaway.
+
+Auth: the SDK needs `VERCEL_OIDC_TOKEN`. One-time setup in `evals/`:
+
+```sh
+vercel link --scope vercel-labs --project zero-native
+vercel env pull .env.local   # the runner auto-loads VERCEL_OIDC_TOKEN from .env.local
+```
+
+The OIDC token expires (~12h); re-run `vercel env pull .env.local` when sandbox auth fails.
 
 Real runs exit non-zero if any case fails. Workspaces live in `.workspaces/` and results in `results/<timestamp>/<case>/` (`result.json`, `transcript.jsonl`, the isolated `claude-config/`); both directories are gitignored.
 

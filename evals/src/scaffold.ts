@@ -64,3 +64,25 @@ export async function scaffoldWorkspace(
 
   return { path: workspace, cliPath };
 }
+
+/**
+ * Pre-warm the workspace's zig cache before the agent starts: the first
+ * `zig build test` in a fresh workspace compiles the whole framework
+ * (minutes); doing it up front makes the agent's own builds incremental and
+ * stops billing agent wall-clock for compilation. Also proves the scaffold
+ * is healthy before spending model tokens.
+ */
+export async function prewarmWorkspace(
+  workspace: Workspace,
+  log: (line: string) => void,
+): Promise<void> {
+  log("[prewarm] zig build test -Dplatform=null (cold framework build)...");
+  const result = await exec("zig", ["build", "test", "-Dplatform=null"], {
+    cwd: workspace.path,
+    timeoutMs: 15 * 60 * 1000,
+  });
+  if (result.code !== 0) {
+    throw new Error(`pre-warm build failed — scaffold is broken:\n${tailLines(result)}`);
+  }
+  log(`[prewarm] done in ${(result.durationMs / 1000).toFixed(0)}s`);
+}

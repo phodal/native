@@ -128,6 +128,65 @@ A path like `{h.streak}` resolves left to right, starting from the model or a `f
 
 Bindings are zero-argument. A parameterized query (cards of column X) becomes one model function per case.
 
+## Derive, don't store
+
+The model stores source-of-truth state ONLY: the raw items, the current filter, the draft text. Anything the view shows that is computable from those — counts, sums, filtered views, formatted strings — is a pub method the markup binds to, never a model field. A cached derivable must be re-maintained in every `update` arm and goes stale the moment one is missed; a derived method cannot.
+
+```zig
+// WRONG: derived state cached in the model, maintained by hand in update()
+visible_count: usize,
+summary_storage: [64]u8,   // preformatted display string
+
+// RIGHT: the model keeps integers + the filter; methods derive per rebuild
+pub fn visibleCount(model: *const Model) usize { ... }
+pub fn visibleCents(model: *const Model) u64 { ... }
+```
+
+Derived numbers need no allocation: bind the methods and let text interpolation compose the line — this is exactly how the examples' status bars work (`examples/habits`):
+
+```html
+<status-bar>{habit_count} habits · {totalDays} total days</status-bar>
+```
+
+Computed strings (money, dates, percentages) are formatted into the BUILD ARENA inside the `for each` allocator fn — derive display rows whose string fields are `allocPrint`ed there. The arena lives for exactly one view build, so nothing is stored and nothing goes stale. Store amounts as integer cents; format at view time:
+
+```zig
+pub const VisibleExpense = struct { id: u32, date: []const u8, amount: []const u8 };
+
+pub fn visible(model: *const Model, arena: std.mem.Allocator) []const VisibleExpense {
+    const out = arena.alloc(VisibleExpense, model.expense_count) catch return &.{};
+    var count: usize = 0;
+    for (model.expenses[0..model.expense_count]) |*e| {
+        if (!model.matches(e.*)) continue;
+        out[count] = .{
+            .id = e.id,
+            .date = e.date(),
+            .amount = std.fmt.allocPrint(arena, "${d}.{d:0>2}", .{ e.amount_cents / 100, e.amount_cents % 100 }) catch "",
+        };
+        count += 1;
+    }
+    return out[0..count];
+}
+```
+
+A one-off formatted line that plain interpolation can't express (e.g. a currency total in a summary) is the same pattern with a single-element slice:
+
+```zig
+pub const SummaryLine = struct { text: []const u8 };
+pub fn summary(model: *const Model, arena: std.mem.Allocator) []const SummaryLine {
+    const text = std.fmt.allocPrint(arena, "{d} expenses · {s} total", .{
+        model.visibleCount(), formatCents(arena, model.visibleCents()),
+    }) catch return &.{};
+    const out = arena.alloc(SummaryLine, 1) catch return &.{};
+    out[0] = .{ .text = text };
+    return out;
+}
+```
+
+```html
+<for each="summary" as="s"><status-bar>{s.text}</status-bar></for>
+```
+
 ## Messages
 
 `on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it.

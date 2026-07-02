@@ -47,13 +47,32 @@ pnpm eval --model anthropic/claude-opus-4.8 templates-settings-app
 pnpm eval --judge-model anthropic/claude-fable-5 templates-settings-app
 pnpm eval --skip-live                 # skip snapshot checks (no app launch / non-macOS)
 pnpm eval --keep-workspaces           # keep .workspaces/<case> around for inspection
-pnpm eval --concurrency 3             # run up to 3 cases in parallel (default 2 locally)
+pnpm eval --trials 5 expenses-table   # 5 independent trials per case; report pass rates
+pnpm eval --concurrency 3             # run up to 3 case trials in parallel (default 2 locally)
 pnpm eval --sandbox                   # run each case in its own Vercel Sandbox microVM
 pnpm eval --sandbox --sandbox-vcpus 8 # bigger sandboxes (2048 MB RAM per vCPU)
 pnpm typecheck
 ```
 
-Cases run in parallel (log lines are prefixed `[case-name]`); `--concurrency` caps how many at once — locally the default is 2 to keep zig builds from thrashing, with `--sandbox` all cases run at once since each has its own VM.
+Cases run in parallel (log lines are prefixed `[case-name]`); `--concurrency` caps how many at once — locally the default is 2 to keep zig builds from thrashing, with `--sandbox` everything runs at once since each has its own VM.
+
+### Trials
+
+Model runs are stochastic; a single pass or fail is weak evidence. `--trials <n>` runs each case n times, each trial **fully independent** — its own scaffolded workspace (`.workspaces/<case>-trial-<n>`), its own agent run, its own checks and judge call — and reports per-case pass **rates** (e.g. `3/5`), per-check pass counts, and the mean judge score. Trials share the `--concurrency` pool (log lines are prefixed `[case-name#trial]`), and with `--sandbox` each trial gets its own microVM.
+
+With `--trials 1` (the default) the behavior and file layout are exactly the single-run layout described above. With `--trials > 1` each case directory nests per-trial results plus an aggregate:
+
+```
+results/<stamp>/
+  summary.json                      # array of per-case aggregates
+  <case>/
+    aggregate.json                  # pass rate, per-check pass counts, mean judge score, per-trial results
+    trial-1/result.json             # exactly a single-run result.json (plus a "trial" field)
+    trial-1/transcript.jsonl
+    trial-2/...
+```
+
+The summary table swaps the PASS/FAIL column for a `pass rate` column, the `checks` column shows per-check pass counts (`3/3 2/3 ...`, `s` = skipped in every trial), `judge` is the mean score, `cost`/`time` are totals across trials, and a per-check breakdown is printed under the table. A real run exits non-zero if any trial failed.
 
 ### Vercel Sandbox mode
 
@@ -79,6 +98,7 @@ By default the agent runs with `--permission-mode acceptEdits` plus an allowlist
 - `templates-settings-app` — validates the new grammar: repeated grouped toggle sections where `<template>`/`<use>` is the natural shape, plus token style attributes (muted headers, surface cards). Checks: build+tests, markup check, `<template>`/`<use>` greps, token-attribute greps, snapshot roles.
 - `kanban-board` — port of the manual builder trial; card identity must survive moving between columns (`global-key`).
 - `habits-tracker` — port of the manual markup trial; text entry (elm-style mirror), derived/filtered lists, enum filters.
+- `expenses-table` — exercises the newest grammar (every built-in component markup-expressible): an expense ledger whose natural shape is `table` > `table-row` > `table-cell` with `<for>` rows, an exclusive category filter, and an alert-shaped empty state. The prompt describes only requirements (rows-and-columns of data, a callout, pinned display strings); the greps assert the agent reached the table grammar from the skill alone.
 
 Add a case by creating `cases/<name>/eval.json` (see `src/types.ts` for the schema). Prompts describe app **requirements**, never the solution — the point is to see whether a fresh agent reaches the intended grammar from the skill alone.
 

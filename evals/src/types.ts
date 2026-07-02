@@ -106,12 +106,45 @@ export interface AgentRunResult {
 
 export interface CaseResult {
   case: string;
+  /** 1-based trial number; only present when the run had --trials > 1. */
+  trial?: number;
   workspace: string;
   startedAt: string;
   dryRun: boolean;
   agent: AgentRunResult;
   checks: CheckResult[];
   passed: boolean;
+}
+
+/** Per-check aggregation across the trials of one case (--trials > 1). */
+export interface CheckAggregate {
+  type: CheckSpec["type"];
+  description: string;
+  pass: number;
+  fail: number;
+  skipped: number;
+  /** llm_judge only: mean of the recorded overall scores. */
+  meanScore?: number;
+}
+
+/**
+ * Aggregated result for one case across N independent trials, written to
+ * results/<stamp>/<case>/aggregate.json (per-trial result.json files live in
+ * results/<stamp>/<case>/trial-<n>/). Only produced when --trials > 1.
+ */
+export interface CaseAggregate {
+  case: string;
+  trials: number;
+  /** Trials where every non-advisory check passed and the agent completed. */
+  passedTrials: number;
+  checks: CheckAggregate[];
+  /** Mean of all recorded llm_judge overall scores across trials. */
+  meanJudgeScore?: number;
+  meanTurns?: number;
+  totalCostUsd?: number;
+  /** Sum of per-trial durations (agent + checks); trials may overlap in wall-clock. */
+  totalDurationMs: number;
+  results: CaseResult[];
 }
 
 export interface RunnerOptions {
@@ -124,6 +157,8 @@ export interface RunnerOptions {
   skipLive: boolean;
   skipPermissions: boolean;
   keepWorkspaces: boolean;
+  /** Independent trials per case (own workspace, agent run, checks, judge). Default 1. */
+  trials: number;
   /** Cases run concurrently up to this limit (default 2 local, all in sandbox mode). */
   concurrency: number | undefined;
   /** Run each case in its own Vercel Sandbox microVM instead of locally. */

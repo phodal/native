@@ -13,7 +13,14 @@ import { DEFAULT_JUDGE_MODEL } from "./judge.ts";
 import { ensureSandboxAuth, packRepo, runCaseInSandbox } from "./sandbox.ts";
 import { runChecks } from "./grade.ts";
 import { formatDuration } from "./util.ts";
-import type { AgentRunResult, CaseResult, EvalCase, RunnerOptions } from "./types.ts";
+import type {
+  AgentRunResult,
+  CaseAggregate,
+  CaseResult,
+  CheckAggregate,
+  EvalCase,
+  RunnerOptions,
+} from "./types.ts";
 
 const USAGE = `usage: pnpm eval [options] [case ...]
 
@@ -29,8 +36,11 @@ options:
   --skip-permissions   run claude with --dangerously-skip-permissions instead
                        of acceptEdits + an allowlist (sandbox dirs only)
   --keep-workspaces    do not delete .workspaces/<case> after grading
-  --concurrency <n>    run up to n cases in parallel (default: 2 locally,
-                       all cases with --sandbox)
+  --trials <n>         run each case n times (each trial fully independent:
+                       own workspace, agent run, checks, judge) and report
+                       per-case pass rates; default 1
+  --concurrency <n>    run up to n case trials in parallel (default: 2 locally,
+                       everything at once with --sandbox)
   --sandbox            run each case in its own Vercel Sandbox microVM
                        (needs VERCEL_OIDC_TOKEN via vercel link + env pull)
   --sandbox-vcpus <n>  vCPUs per sandbox (default 4; 2048 MB RAM per vCPU)
@@ -79,20 +89,38 @@ async function main(): Promise<void> {
     cliPath = await buildCli(options.repoRoot);
   }
 
+  // With --trials n each case becomes n fully independent trial tasks (own
+  // workspace, own agent run, own checks + judge) that share the concurrency
+  // pool with everything else. trials=1 keeps today's layout exactly.
+  const trials = options.trials;
+  const tasks = cases.flatMap((evalCase) =>
+    Array.from({ length: trials }, (_, index) => ({ evalCase, trial: index + 1 })),
+  );
   const concurrency = Math.max(
     1,
-    Math.min(options.concurrency ?? (options.sandbox ? cases.length : 2), cases.length),
+    Math.min(options.concurrency ?? (options.sandbox ? tasks.length : 2), tasks.length),
   );
-  if (cases.length > 1) {
-    console.log(`running ${cases.length} cases, ${concurrency} at a time${options.sandbox ? " (vercel sandbox)" : ""}`);
+  if (tasks.length > 1) {
+    const trialNote = trials > 1 ? ` x ${trials} trials` : "";
+    console.log(
+      `running ${cases.length} case${cases.length > 1 ? "s" : ""}${trialNote} (${tasks.length} runs), ${concurrency} at a time${options.sandbox ? " (vercel sandbox)" : ""}`,
+    );
   }
-  const results = await runPool(cases, concurrency, async (evalCase) => {
-    const log = (line: string): void => console.log(`[${evalCase.name}] ${line}`);
-    const caseResultsDir = join(runResultsDir, evalCase.name);
+  const trialResults = await runPool(tasks, concurrency, async ({ evalCase, trial }) => {
+    const label = trials > 1 ? `${evalCase.name}#${trial}` : evalCase.name;
+    const log = (line: string): void => console.log(`[${label}] ${line}`);
+    const caseResultsDir =
+      trials > 1
+        ? join(runResultsDir, evalCase.name, `trial-${trial}`)
+        : join(runResultsDir, evalCase.name);
+    // Trials of the same case can run concurrently: each needs its own
+    // workspace directory or the scaffolds would clobber each other.
+    const workspaceName = trials > 1 ? `${evalCase.name}-trial-${trial}` : evalCase.name;
     mkdirSync(caseResultsDir, { recursive: true });
     try {
+      let result: CaseResult;
       if (options.sandbox) {
-        return await runCaseInSandbox({
+        result = await runCaseInSandbox({
           evalCase,
           tarballPath: tarballPath!,
           gatewayKey: gatewayKey!,
@@ -102,19 +130,28 @@ async function main(): Promise<void> {
           localResultsDir: caseResultsDir,
           log,
         });
+      } else {
+        result = await runCaseLocal(evalCase, options, {
+          cliPath: cliPath!,
+          workspacesDir,
+          workspaceName,
+          caseResultsDir,
+          gatewayKey,
+          log,
+        });
       }
-      return await runCaseLocal(evalCase, options, {
-        cliPath: cliPath!,
-        workspacesDir,
-        caseResultsDir,
-        gatewayKey,
-        log,
-      });
+      if (trials > 1) {
+        result.trial = trial;
+        // The local runner already wrote result.json before we stamped the
+        // trial number; rewrite so the on-disk file carries it too.
+        writeFileSync(join(caseResultsDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+      }
+      return result;
     } catch (error) {
-      // One crashed case (sandbox provisioning, scaffold failure, ...) should
+      // One crashed trial (sandbox provisioning, scaffold failure, ...) should
       // not kill the rest of the suite.
       log(`FAILED: ${(error as Error).message}`);
-      return {
+      const result: CaseResult = {
         case: evalCase.name,
         workspace: "-",
         startedAt: new Date().toISOString(),
@@ -128,22 +165,45 @@ async function main(): Promise<void> {
         checks: [],
         passed: false,
       };
+      if (trials > 1) result.trial = trial;
+      return result;
     }
   });
 
   if (tarballPath) rmSync(tarballPath, { force: true });
-  writeFileSync(join(runResultsDir, "summary.json"), `${JSON.stringify(results, null, 2)}\n`);
-  printSummary(results, options);
+  let anyFailed: boolean;
+  if (trials === 1) {
+    writeFileSync(join(runResultsDir, "summary.json"), `${JSON.stringify(trialResults, null, 2)}\n`);
+    printSummary(trialResults, options);
+    anyFailed = trialResults.some((result) => !result.passed);
+  } else {
+    const aggregates = cases.map((evalCase, caseIndex) =>
+      aggregateCase(
+        evalCase.name,
+        trialResults.slice(caseIndex * trials, (caseIndex + 1) * trials),
+      ),
+    );
+    for (const aggregate of aggregates) {
+      writeFileSync(
+        join(runResultsDir, aggregate.case, "aggregate.json"),
+        `${JSON.stringify(aggregate, null, 2)}\n`,
+      );
+    }
+    writeFileSync(join(runResultsDir, "summary.json"), `${JSON.stringify(aggregates, null, 2)}\n`);
+    printTrialSummary(aggregates, options);
+    anyFailed = aggregates.some((aggregate) => aggregate.passedTrials < aggregate.trials);
+  }
   console.log(`\nresults: ${runResultsDir}`);
-  const failed = results.filter((result) => !result.passed);
   // In --dry-run, grader failures against the untouched scaffold are expected
   // (they prove the graders detect a missing solution) — exit 0.
-  process.exit(failed.length > 0 && !options.dryRun ? 1 : 0);
+  process.exit(anyFailed && !options.dryRun ? 1 : 0);
 }
 
 interface LocalCaseContext {
   cliPath: string;
   workspacesDir: string;
+  /** Workspace directory name under .workspaces/ (per-trial when trials > 1). */
+  workspaceName: string;
   caseResultsDir: string;
   gatewayKey: string | undefined;
   log: (line: string) => void;
@@ -161,7 +221,7 @@ async function runCaseLocal(
     options.repoRoot,
     context.cliPath,
     context.workspacesDir,
-    evalCase.name,
+    context.workspaceName,
     evalCase.frontend,
   );
   log(`[scaffold] workspace ready: ${workspace.path}`);
@@ -263,6 +323,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     skipLive: false,
     skipPermissions: false,
     keepWorkspaces: false,
+    trials: 1,
     concurrency: undefined,
     sandbox: false,
     sandboxVcpus: 4,
@@ -314,6 +375,7 @@ function parseArgs(argv: string[]): RunnerOptions {
       case "--sandbox":
         options.sandbox = true;
         break;
+      case "--trials":
       case "--concurrency":
       case "--sandbox-vcpus": {
         const value = Number(argv[index + 1]);
@@ -321,7 +383,8 @@ function parseArgs(argv: string[]): RunnerOptions {
           console.error(`${arg} requires a positive integer`);
           process.exit(2);
         }
-        if (arg === "--concurrency") options.concurrency = value;
+        if (arg === "--trials") options.trials = value;
+        else if (arg === "--concurrency") options.concurrency = value;
         else options.sandboxVcpus = value;
         index += 1;
         break;
@@ -373,6 +436,116 @@ function validateCase(evalCase: EvalCase, name: string, path: string): void {
   if (problems.length > 0) {
     console.error(`invalid case config ${path}:\n  ${problems.join("\n  ")}`);
     process.exit(2);
+  }
+}
+
+/**
+ * Fold one case's independent trials into pass rates: per-trial pass/fail,
+ * per-check pass counts (keyed by check type + description, so a crashed
+ * trial with no checks simply contributes to no counters), and mean judge
+ * score across every recorded llm_judge overall.
+ */
+function aggregateCase(name: string, results: CaseResult[]): CaseAggregate {
+  const checkOrder: string[] = [];
+  const checkStats = new Map<string, CheckAggregate>();
+  const judgeScores: number[] = [];
+  const turns: number[] = [];
+  let totalCostUsd: number | undefined;
+  let totalDurationMs = 0;
+  for (const result of results) {
+    for (const check of result.checks) {
+      const key = `${check.type} ${check.description}`;
+      let stat = checkStats.get(key);
+      if (!stat) {
+        stat = { type: check.type, description: check.description, pass: 0, fail: 0, skipped: 0 };
+        checkStats.set(key, stat);
+        checkOrder.push(key);
+      }
+      if (check.status === "pass") stat.pass += 1;
+      else if (check.status === "fail") stat.fail += 1;
+      else stat.skipped += 1;
+      if (check.type === "llm_judge" && check.score !== undefined) judgeScores.push(check.score);
+      totalDurationMs += check.durationMs;
+    }
+    if (result.agent.numTurns !== undefined) turns.push(result.agent.numTurns);
+    if (result.agent.totalCostUsd !== undefined) {
+      totalCostUsd = (totalCostUsd ?? 0) + result.agent.totalCostUsd;
+    }
+    totalDurationMs += result.agent.durationMs;
+  }
+  // Per-check mean judge score, from every trial that recorded one.
+  for (const key of checkOrder) {
+    const stat = checkStats.get(key)!;
+    if (stat.type !== "llm_judge") continue;
+    const scores = results.flatMap((result) =>
+      result.checks
+        .filter(
+          (check) =>
+            check.type === stat.type &&
+            check.description === stat.description &&
+            check.score !== undefined,
+        )
+        .map((check) => check.score!),
+    );
+    if (scores.length > 0) stat.meanScore = mean(scores);
+  }
+  const aggregate: CaseAggregate = {
+    case: name,
+    trials: results.length,
+    passedTrials: results.filter((result) => result.passed).length,
+    checks: checkOrder.map((key) => checkStats.get(key)!),
+    totalDurationMs,
+    results,
+  };
+  if (judgeScores.length > 0) aggregate.meanJudgeScore = mean(judgeScores);
+  if (turns.length > 0) aggregate.meanTurns = mean(turns);
+  if (totalCostUsd !== undefined) aggregate.totalCostUsd = totalCostUsd;
+  return aggregate;
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** Summary for --trials > 1: pass-rate column plus per-check pass counts. */
+function printTrialSummary(aggregates: CaseAggregate[], options: RunnerOptions): void {
+  console.log(
+    `\n=== summary (coder: ${options.model}, judge: ${options.judgeModel}, trials: ${options.trials}${options.dryRun ? ", DRY RUN" : ""}) ===`,
+  );
+  const rows = aggregates.map((aggregate) => ({
+    case: aggregate.case,
+    "pass rate": `${aggregate.passedTrials}/${aggregate.trials}`,
+    checks: aggregate.checks
+      .map((check) =>
+        check.pass + check.fail === 0 ? "s" : `${check.pass}/${check.pass + check.fail}`,
+      )
+      .join(" "),
+    judge:
+      aggregate.meanJudgeScore !== undefined ? `${aggregate.meanJudgeScore.toFixed(1)}/10` : "-",
+    turns: aggregate.meanTurns !== undefined ? aggregate.meanTurns.toFixed(1) : "-",
+    cost: aggregate.totalCostUsd !== undefined ? `$${aggregate.totalCostUsd.toFixed(4)}` : "-",
+    time: formatDuration(aggregate.totalDurationMs),
+  }));
+  const columns = ["case", "pass rate", "checks", "judge", "turns", "cost", "time"] as const;
+  const widths = columns.map((column) =>
+    Math.max(column.length, ...rows.map((row) => row[column].length)),
+  );
+  const line = (cells: string[]): string =>
+    cells.map((cell, index) => cell.padEnd(widths[index]!)).join("  ");
+  console.log(line([...columns]));
+  console.log(line(widths.map((width) => "-".repeat(width))));
+  for (const row of rows) console.log(line(columns.map((column) => row[column])));
+  console.log("\nper-check pass counts (pass/graded; s = skipped in every trial):");
+  for (const aggregate of aggregates) {
+    console.log(`  ${aggregate.case} (${aggregate.passedTrials}/${aggregate.trials} trials passed)`);
+    for (const check of aggregate.checks) {
+      const rate =
+        check.pass + check.fail === 0
+          ? `s(${check.skipped})`
+          : `${check.pass}/${check.pass + check.fail}`;
+      const judgeNote = check.meanScore !== undefined ? ` — mean ${check.meanScore.toFixed(1)}/10` : "";
+      console.log(`    ${rate.padStart(6)}  ${check.description}${judgeNote}`);
+    }
   }
 }
 

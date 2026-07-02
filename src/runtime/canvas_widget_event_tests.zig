@@ -72,9 +72,8 @@ test "runtime tracks retained canvas widget cursor intent" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -216,9 +215,8 @@ test "runtime dispatches routed canvas widget pointer events" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -413,9 +411,8 @@ test "runtime routes captured canvas pointer drags without outside release activ
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -531,9 +528,8 @@ test "runtime cancels captured canvas widget pointers without activation" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -669,9 +665,8 @@ test "runtime applies GPU text and IME input to focused canvas text fields" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -788,9 +783,8 @@ test "runtime dispatches opted-in canvas widget drag events" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -869,9 +863,8 @@ test "runtime resizes retained canvas resizable widgets from pointer drag" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -998,9 +991,8 @@ test "runtime dispatches automation canvas widget actions" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -1188,9 +1180,8 @@ test "runtime rejects automation canvas widget actions for scroll clipped target
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -1286,9 +1277,8 @@ test "runtime rejects automation canvas widget actions for clip content clipped 
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -1335,9 +1325,8 @@ test "runtime automation protocol refreshes widget-owned canvas display lists" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -1438,9 +1427,8 @@ test "runtime preserves canvas chrome when widget-owned display lists refresh" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -1521,9 +1509,8 @@ test "runtime reserves widget-owned canvas display list command headroom" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());

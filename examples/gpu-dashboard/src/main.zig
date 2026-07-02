@@ -1611,9 +1611,8 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
 test "gpu dashboard scheduled animations render without display list rebuild" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try std.testing.allocator.create(zero_native.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app = try std.testing.allocator.create(GpuDashboardApp);
@@ -1669,9 +1668,8 @@ test "gpu dashboard scheduled animations render without display list rebuild" {
 test "gpu dashboard app registers canvas display list on first gpu frame" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try std.testing.allocator.create(zero_native.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app = try std.testing.allocator.create(GpuDashboardApp);
@@ -1958,9 +1956,8 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
 test "gpu dashboard shell commands map to typed messages" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try std.testing.allocator.create(zero_native.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app = try std.testing.allocator.create(GpuDashboardApp);
@@ -1994,9 +1991,8 @@ test "gpu dashboard shell commands map to typed messages" {
 test "gpu dashboard follows system appearance tokens" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try std.testing.allocator.create(zero_native.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app = try std.testing.allocator.create(GpuDashboardApp);
@@ -2034,9 +2030,8 @@ test "gpu dashboard follows system appearance tokens" {
 test "gpu dashboard app rebuilds retained scene for resized gpu surfaces" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try std.testing.allocator.create(zero_native.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app = try std.testing.allocator.create(GpuDashboardApp);

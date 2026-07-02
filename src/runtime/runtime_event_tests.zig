@@ -75,9 +75,8 @@ test "runtime configures platform keyboard shortcuts" {
     const shortcuts = [_]platform.Shortcut{
         .{ .id = "command.palette", .key = "p", .modifiers = .{ .primary = true, .shift = true } },
     };
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.shortcuts = &shortcuts;
     var app_state: TestApp = .{};
     try harness.runtime.run(app_state.app());
@@ -108,9 +107,8 @@ test "runtime dispatches app activation lifecycle events" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);
@@ -153,9 +151,8 @@ test "runtime stores and dispatches appearance preferences" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);
@@ -300,9 +297,8 @@ test "runtime dispatches GPU surface events" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -758,9 +754,8 @@ test "runtime starts, fires, and cancels platform timers" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);

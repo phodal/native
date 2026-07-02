@@ -502,6 +502,18 @@ pub fn TestHarness() type {
         trace_sink: trace.BufferSink = undefined,
         runtime: Runtime = undefined,
 
+        /// The harness embeds the multi-megabyte Runtime, so stack
+        /// instances overflow test threads; create on the heap.
+        pub fn create(gpa: std.mem.Allocator, surface: platform.Surface) !*Self {
+            const self = try gpa.create(Self);
+            self.init(surface);
+            return self;
+        }
+
+        pub fn destroy(self: *Self, gpa: std.mem.Allocator) void {
+            gpa.destroy(self);
+        }
+
         pub fn init(self: *Self, surface: platform.Surface) void {
             self.null_platform = platform.NullPlatform.init(surface);
             self.trace_sink = trace.BufferSink.init(&self.trace_records);

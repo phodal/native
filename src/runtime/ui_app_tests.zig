@@ -84,9 +84,8 @@ fn retainedTextExists(runtime: *core.Runtime, text: []const u8) !bool {
 test "ui app owns install, dispatch, and rebuild end to end" {
     // The runtime and the app are both large structs; keep them off the
     // test thread's stack.
-    const harness = try std.testing.allocator.create(core.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(400, 300) });
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app_state = try std.testing.allocator.create(CounterApp);
@@ -157,9 +156,8 @@ fn markupCounterOptions() CounterApp.Options {
 }
 
 test "markup views drive the ui app loop and hot reload preserves state" {
-    const harness = try std.testing.allocator.create(core.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(400, 300) });
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     const app_state = try std.testing.allocator.create(CounterApp);
@@ -212,9 +210,8 @@ fn counterTimer(id: u64, timestamp_ns: u64) ?CounterMsg {
 }
 
 test "ui app maps timer events into messages and rebuilds" {
-    const harness = try std.testing.allocator.create(core.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(400, 300) });
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     var options = counterOptions();
@@ -256,9 +253,8 @@ test "markup watch polls from the reserved runtime timer" {
     try cwd.writeFile(io, .{ .sub_path = watch_path, .data = counter_markup });
     defer cwd.deleteFile(io, watch_path) catch {};
 
-    const harness = try std.testing.allocator.create(core.TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{ .size = geometry.SizeF.init(400, 300) });
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
     var options = markupCounterOptions();

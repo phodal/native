@@ -72,9 +72,8 @@ test "runtime retains canvas widget layout for automation semantics" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
@@ -141,9 +140,8 @@ test "runtime automation snapshot exposes canvas widget text ranges" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
@@ -192,9 +190,8 @@ test "runtime emits canvas display list from focused widget layout" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -347,9 +344,8 @@ test "runtime shows canvas widget focus rings only for keyboard-visible focus" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -492,9 +488,8 @@ test "runtime ignores stale canvas widget keyboard focus when canvas view loses 
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     const app = app_state.app();
@@ -581,9 +576,8 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());

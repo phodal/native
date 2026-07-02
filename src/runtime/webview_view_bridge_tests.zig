@@ -72,9 +72,8 @@ test "runtime handles built-in JavaScript webview bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com", "https://example.org" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;
@@ -200,9 +199,8 @@ test "runtime handles built-in JavaScript view bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const view_origins = [_][]const u8{ "zero://inline", "zero://app" };
     harness.runtime.options.security.navigation.allowed_origins = &view_origins;
@@ -319,9 +317,8 @@ test "runtime handles GPU surface options in JavaScript view bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     harness.runtime.options.js_window_api = true;
     const view_origins = [_][]const u8{ "zero://inline", "zero://app" };
@@ -353,9 +350,8 @@ test "runtime gates JavaScript view API with view permission" {
     };
 
     const view_permission = [_][]const u8{security.permission_view};
-    const allowed = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(allowed);
-    allowed.init(.{});
+    const allowed = try TestHarness().create(std.testing.allocator, .{});
+    defer allowed.destroy(std.testing.allocator);
     allowed.runtime.options.js_window_api = true;
     allowed.runtime.options.security.permissions = &view_permission;
     var app_state: TestApp = .{};
@@ -368,9 +364,8 @@ test "runtime gates JavaScript view API with view permission" {
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
 
     const command_permission = [_][]const u8{security.permission_command};
-    const denied = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(denied);
-    denied.init(.{});
+    const denied = try TestHarness().create(std.testing.allocator, .{});
+    defer denied.destroy(std.testing.allocator);
     denied.runtime.options.js_window_api = true;
     denied.runtime.options.security.permissions = &command_permission;
     try denied.start(app_state.app());
@@ -389,9 +384,8 @@ test "runtime returns closed webview info before compacting storage" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;
@@ -428,9 +422,8 @@ test "runtime defaults webview commands to source window" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;
@@ -465,9 +458,8 @@ test "runtime validates webview bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com", "https://example.org" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;

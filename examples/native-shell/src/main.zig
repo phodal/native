@@ -259,8 +259,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "native shell starts with native chrome views" {
-    var harness: zero_native.TestHarness() = undefined;
-    harness.init(.{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     var app = NativeShellApp{};
     try harness.start(app.app());
 

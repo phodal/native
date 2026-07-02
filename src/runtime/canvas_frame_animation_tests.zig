@@ -72,9 +72,8 @@ test "runtime next canvas frame applies render override dirty regions" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
@@ -148,9 +147,8 @@ test "runtime schedules canvas render animations without display list rebuild" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     var app_state: TestApp = .{};
     try harness.start(app_state.app());

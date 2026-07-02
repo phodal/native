@@ -203,8 +203,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "native panels compose split sidebar controls and web content" {
-    var harness: zero_native.TestHarness() = undefined;
-    harness.init(.{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &builtin_policies };
     harness.runtime.options.js_window_api = true;
     harness.runtime.options.security = .{

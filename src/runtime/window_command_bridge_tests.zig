@@ -72,9 +72,8 @@ test "runtime creates lists focuses and closes windows" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
 
@@ -97,9 +96,8 @@ test "runtime handles built-in JavaScript window bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com", "https://example.org" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;
@@ -191,9 +189,8 @@ test "runtime handles built-in JavaScript command bridge commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     const command_origins = [_][]const u8{"zero://inline"};
     harness.runtime.options.security.navigation.allowed_origins = &command_origins;
@@ -237,9 +234,8 @@ test "runtime lists command catalog through built-in JavaScript command API" {
         .{ .id = "app.save", .title = "Save" },
         .{ .id = "app.sidebar.toggle", .title = "Sidebar", .enabled = false, .checked = true },
     };
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     harness.runtime.options.commands = &commands;
     const command_origins = [_][]const u8{"zero://inline"};
@@ -283,9 +279,8 @@ test "runtime gates JavaScript command API with command permission" {
     };
 
     const command_permission = [_][]const u8{security.permission_command};
-    const allowed = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(allowed);
-    allowed.init(.{});
+    const allowed = try TestHarness().create(std.testing.allocator, .{});
+    defer allowed.destroy(std.testing.allocator);
     allowed.runtime.options.js_window_api = true;
     allowed.runtime.options.security.permissions = &command_permission;
     var app_state: TestApp = .{};
@@ -308,9 +303,8 @@ test "runtime gates JavaScript command API with command permission" {
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"id\":\"app.save\"") != null);
 
     const filesystem_only = [_][]const u8{security.permission_filesystem};
-    const denied = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(denied);
-    denied.init(.{});
+    const denied = try TestHarness().create(std.testing.allocator, .{});
+    defer denied.destroy(std.testing.allocator);
     denied.runtime.options.js_window_api = true;
     denied.runtime.options.security.permissions = &filesystem_only;
     try denied.start(app_state.app());
@@ -336,9 +330,8 @@ test "runtime handles built-in JavaScript platform support commands" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.js_window_api = true;
     harness.runtime.options.security.navigation.allowed_origins = &.{"zero://inline"};
     var app_state: TestApp = .{};

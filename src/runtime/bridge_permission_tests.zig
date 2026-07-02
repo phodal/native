@@ -167,9 +167,8 @@ test "runtime gates built-in bridge commands through explicit policy" {
         .{ .name = "zero-native.webview.create", .permissions = &window_permissions, .origins = &.{"zero://inline"} },
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.security.permissions = &window_permissions;
     const webview_origins = [_][]const u8{ "zero://inline", "https://example.com" };
     harness.runtime.options.security.navigation.allowed_origins = &webview_origins;
@@ -201,9 +200,8 @@ test "runtime gates built-in bridge commands through explicit policy" {
 }
 
 test "runtime denies built-in dialog bridge commands by default" {
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     const app = App{ .context = harness, .name = "dialog-denied", .source = platform.WebViewSource.html("<p>Dialogs</p>") };
     try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
         .bytes = "{\"id\":\"1\",\"command\":\"zero-native.dialog.showMessage\",\"payload\":{\"message\":\"Hello\"}}",
@@ -214,9 +212,8 @@ test "runtime denies built-in dialog bridge commands by default" {
 }
 
 test "runtime reports dialog bridge validation errors as invalid requests" {
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     const app = App{ .context = harness, .name = "dialog-invalid", .source = platform.WebViewSource.html("<p>Dialogs</p>") };
     const dialog_permission = [_][]const u8{security.permission_dialog};
     const dialog_policy = [_]bridge.CommandPolicy{.{
@@ -238,9 +235,8 @@ test "runtime reports dialog bridge validation errors as invalid requests" {
 }
 
 test "runtime validates native OS actions before platform dispatch" {
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
 
     var dialog_paths: [platform.max_dialog_paths_bytes]u8 = undefined;
     try std.testing.expectError(error.InvalidDialogOptions, harness.runtime.showOpenDialog(.{}, dialog_paths[0..0]));
@@ -351,9 +347,8 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     var app_state: u8 = 0;
     const app = App{ .context = &app_state, .name = "os-bridge", .source = platform.WebViewSource.html("<p>OS</p>") };
 
-    const denied = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(denied);
-    denied.init(.{});
+    const denied = try TestHarness().create(std.testing.allocator, .{});
+    defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
         .bytes = "{\"id\":\"open\",\"command\":\"zero-native.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs\"}}",
         .origin = "zero://inline",
@@ -375,9 +370,8 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     };
     const allowed_urls = [_][]const u8{"https://example.com/*"};
 
-    const allowed = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(allowed);
-    allowed.init(.{});
+    const allowed = try TestHarness().create(std.testing.allocator, .{});
+    defer allowed.destroy(std.testing.allocator);
     allowed.runtime.options.security.permissions = &grants;
     allowed.runtime.options.security.navigation.external_links = .{
         .action = .open_system_browser,
@@ -426,9 +420,8 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
     var app_state: u8 = 0;
     const app = App{ .context = &app_state, .name = "clipboard-bridge", .source = platform.WebViewSource.html("<p>Clipboard</p>") };
 
-    const denied = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(denied);
-    denied.init(.{});
+    const denied = try TestHarness().create(std.testing.allocator, .{});
+    defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
         .bytes = "{\"id\":\"write\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
         .origin = "zero://inline",
@@ -446,9 +439,8 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
         .{ .name = "zero-native.clipboard.write", .permissions = &clipboard_permission, .origins = &origins },
     };
 
-    const allowed = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(allowed);
-    allowed.init(.{});
+    const allowed = try TestHarness().create(std.testing.allocator, .{});
+    defer allowed.destroy(std.testing.allocator);
     allowed.runtime.options.security.permissions = &grants;
     allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
 
@@ -485,9 +477,8 @@ test "runtime gates built-in credential bridge commands through explicit policy"
     var app_state: u8 = 0;
     const app = App{ .context = &app_state, .name = "credential-bridge", .source = platform.WebViewSource.html("<p>Credentials</p>") };
 
-    const denied = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(denied);
-    denied.init(.{});
+    const denied = try TestHarness().create(std.testing.allocator, .{});
+    defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
         .bytes = "{\"id\":\"set\",\"command\":\"zero-native.credentials.set\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\",\"secret\":\"secret-token\"}}",
         .origin = "zero://inline",
@@ -504,9 +495,8 @@ test "runtime gates built-in credential bridge commands through explicit policy"
         .{ .name = "zero-native.credentials.delete", .permissions = &credential_permission, .origins = &origins },
     };
 
-    const allowed = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(allowed);
-    allowed.init(.{});
+    const allowed = try TestHarness().create(std.testing.allocator, .{});
+    defer allowed.destroy(std.testing.allocator);
     allowed.runtime.options.security.permissions = &grants;
     allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
 
@@ -549,9 +539,8 @@ test "runtime builtin JSON field reader only reads top-level fields" {
 }
 
 test "runtime returns bridge permission errors through platform response service" {
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     const app = App{ .context = harness, .name = "bridge-denied", .source = platform.WebViewSource.html("<p>Bridge</p>") };
     try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
         .bytes = "{\"id\":\"1\",\"command\":\"native.ping\",\"payload\":null}",

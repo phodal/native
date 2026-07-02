@@ -95,9 +95,8 @@ test "runtime dispatches shortcut command events" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
 
@@ -126,9 +125,8 @@ test "runtime configures platform menus" {
         .{ .label = "Refresh", .command = "app.refresh", .key = "r", .modifiers = .{ .primary = true } },
     };
     const menus = [_]platform.Menu{.{ .title = "View", .items = &items }};
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.menus = &menus;
     var app_state: TestApp = .{};
     try harness.runtime.run(app_state.app());
@@ -149,9 +147,8 @@ test "runtime rejects invalid platform menu shortcuts" {
         .{ .label = "Refresh", .command = "app.refresh", .key = "r" },
     };
     const menus = [_]platform.Menu{.{ .title = "View", .items = &items }};
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.menus = &menus;
     var app_state: TestApp = .{};
 
@@ -167,9 +164,8 @@ test "runtime rejects invalid keyboard shortcuts" {
 
     const long_id = [_]u8{'x'} ** (platform.max_shortcut_id_bytes + 1);
     const shortcuts = [_]platform.Shortcut{.{ .id = long_id[0..], .key = "p" }};
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.shortcuts = &shortcuts;
     var app_state: TestApp = .{};
 
@@ -187,9 +183,8 @@ test "runtime rejects invalid command catalog" {
         .{ .id = "app.refresh", .title = "Refresh" },
         .{ .id = "app.refresh", .title = "Duplicate Refresh" },
     };
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.commands = &commands;
     var app_state: TestApp = .{};
 
@@ -205,9 +200,8 @@ test "runtime rejects oversized webview source" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
 
     try std.testing.expectError(error.WindowSourceTooLarge, harness.start(app_state.app()));
@@ -238,9 +232,8 @@ test "runtime refreshes app source and keeps reload fields owned" {
         }
     };
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     var app_state: TestApp = .{};
     try harness.start(app_state.app());
     const secondary = try harness.runtime.createWindow(.{
@@ -304,9 +297,8 @@ test "extension registry receives runtime lifecycle and command hooks" {
         .hooks = .{ .start_fn = ModuleState.start, .stop_fn = ModuleState.stop, .command_fn = ModuleState.command },
     }};
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.extensions = .{ .modules = &modules };
 
     const app = App{ .context = &module_state, .name = "extensions", .source = platform.WebViewSource.html("<p>Extensions</p>") };

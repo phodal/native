@@ -138,8 +138,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "capabilities bridge gates native services and dispatches file drops" {
-    var harness: zero_native.TestHarness() = undefined;
-    harness.init(.{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = zero_native.geometry.SizeF.init(window_width, window_height) });
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &builtin_policies };
     harness.runtime.options.security = .{
         .permissions = &app_permissions,
@@ -156,42 +156,42 @@ test "capabilities bridge gates native services and dispatches file drops" {
     const app = app_state.app();
     try harness.start(app);
 
-    try dispatchBridge(&harness, app, "{\"id\":\"notify\",\"command\":\"zero-native.os.showNotification\",\"payload\":{\"title\":\"Capabilities\",\"subtitle\":\"zero-native\",\"body\":\"Done\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"notify\",\"command\":\"zero-native.os.showNotification\",\"payload\":{\"title\":\"Capabilities\",\"subtitle\":\"zero-native\",\"body\":\"Done\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.notificationCount());
     try std.testing.expectEqualStrings("Capabilities", harness.null_platform.lastNotificationTitle());
 
-    try dispatchBridge(&harness, app, "{\"id\":\"support\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"notifications\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"support\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"notifications\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
-    try dispatchBridge(&harness, app, "{\"id\":\"support-recent\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"recentDocuments\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"support-recent\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"recentDocuments\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
-    try dispatchBridge(&harness, app, "{\"id\":\"open\",\"command\":\"zero-native.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs/start\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"open\",\"command\":\"zero-native.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs/start\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("https://example.com/docs/start", harness.null_platform.lastExternalUrl());
 
-    try dispatchBridge(&harness, app, "{\"id\":\"reveal\",\"command\":\"zero-native.os.revealPath\",\"payload\":{\"path\":\"/tmp/zero-native-example.txt\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"reveal\",\"command\":\"zero-native.os.revealPath\",\"payload\":{\"path\":\"/tmp/zero-native-example.txt\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("/tmp/zero-native-example.txt", harness.null_platform.lastRevealedPath());
 
-    try dispatchBridge(&harness, app, "{\"id\":\"recent\",\"command\":\"zero-native.os.addRecentDocument\",\"payload\":{\"path\":\"/tmp/recent-zero-native-example.txt\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"recent\",\"command\":\"zero-native.os.addRecentDocument\",\"payload\":{\"path\":\"/tmp/recent-zero-native-example.txt\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("/tmp/recent-zero-native-example.txt", harness.null_platform.lastRecentDocumentPath());
-    try dispatchBridge(&harness, app, "{\"id\":\"clear-recent\",\"command\":\"zero-native.os.clearRecentDocuments\",\"payload\":{}}");
+    try dispatchBridge(harness, app, "{\"id\":\"clear-recent\",\"command\":\"zero-native.os.clearRecentDocuments\",\"payload\":{}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.recentDocumentsClearedCount());
 
-    try dispatchBridge(&harness, app, "{\"id\":\"write\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"write\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("plain text", harness.null_platform.lastClipboardData());
-    try dispatchBridge(&harness, app, "{\"id\":\"read\",\"command\":\"zero-native.clipboard.readText\",\"payload\":{}}");
+    try dispatchBridge(harness, app, "{\"id\":\"read\",\"command\":\"zero-native.clipboard.readText\",\"payload\":{}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":\"plain text\"") != null);
 
-    try dispatchBridge(&harness, app, "{\"id\":\"set\",\"command\":\"zero-native.credentials.set\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\",\"secret\":\"demo-token\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"set\",\"command\":\"zero-native.credentials.set\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\",\"secret\":\"demo-token\"}}");
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.credentialSetCount());
-    try dispatchBridge(&harness, app, "{\"id\":\"get\",\"command\":\"zero-native.credentials.get\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"get\",\"command\":\"zero-native.credentials.get\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":\"demo-token\"") != null);
-    try dispatchBridge(&harness, app, "{\"id\":\"delete\",\"command\":\"zero-native.credentials.delete\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\"}}");
+    try dispatchBridge(harness, app, "{\"id\":\"delete\",\"command\":\"zero-native.credentials.delete\",\"payload\":{\"service\":\"dev.zero-native.capabilities\",\"account\":\"demo\"}}");
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     const dropped_paths = [_][]const u8{ "/tmp/one\nname.txt", "/tmp/two.txt" };

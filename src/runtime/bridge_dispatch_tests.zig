@@ -84,9 +84,8 @@ test "runtime dispatches bridge messages through policy and handler registry" {
     const policies = [_]bridge.CommandPolicy{.{ .name = "native.ping", .origins = &.{"zero://inline"} }};
     const handlers = [_]bridge.Handler{.{ .name = "native.ping", .context = &bridge_state, .invoke_fn = BridgeState.ping }};
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.bridge = .{
         .policy = .{ .enabled = true, .commands = &policies },
         .registry = .{ .handlers = &handlers },
@@ -121,9 +120,8 @@ test "runtime keeps async bridge response source labels stable" {
     const policies = [_]bridge.CommandPolicy{.{ .name = "native.later", .origins = &.{"https://example.com"} }};
     const handlers = [_]bridge.AsyncHandler{.{ .name = "native.later", .context = &async_state, .invoke_fn = AsyncState.later }};
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.bridge = .{
         .policy = .{ .enabled = true, .commands = &policies },
         .async_registry = .{ .handlers = &handlers },
@@ -162,9 +160,8 @@ test "runtime maps bridge dispatch failures to response errors" {
     };
     const handlers = [_]bridge.Handler{.{ .name = "native.fail", .context = &failing_state, .invoke_fn = FailingState.fail }};
 
-    const harness = try std.testing.allocator.create(TestHarness());
-    defer std.testing.allocator.destroy(harness);
-    harness.init(.{});
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
     harness.runtime.options.bridge = .{
         .policy = .{ .enabled = true, .commands = &policies },
         .registry = .{ .handlers = &handlers },

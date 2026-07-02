@@ -352,6 +352,7 @@ pub const WidgetSemanticsNode = event_model.WidgetSemanticsNode;
 pub const WidgetInvalidationKind = event_model.WidgetInvalidationKind;
 pub const WidgetInvalidation = event_model.WidgetInvalidation;
 pub const widgetKeyboardControlIntent = event_model.widgetKeyboardControlIntent;
+pub const semanticActions = event_model.semanticActions;
 pub const widgetSemanticControlIntent = event_model.widgetSemanticControlIntent;
 pub const widgetSemanticControlIntentWithActions = event_model.widgetSemanticControlIntentWithActions;
 pub const isWidgetActivationKey = event_model.isWidgetActivationKey;

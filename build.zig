@@ -869,7 +869,7 @@ pub fn build(b: *std.Build) void {
         \\  printf '%s\n' "$snapshot" | grep -F "$1" | head -1
         \\}
         \\line="$(widget_line 'role=tab name="Dashboard mode"')"
-        \\case "$line" in *'actions=[focus,select]'*) ;; *) echo "dashboard toolbar mode semantics were missing" >&2; exit 1 ;; esac
+        \\case "$line" in *'actions=[focus,press,select]'*) ;; *) echo "dashboard toolbar mode semantics were missing" >&2; exit 1 ;; esac
         \\line="$(widget_line 'role=button name="Refresh dashboard"')"
         \\case "$line" in *'actions=[focus,press]'*) ;; *) echo "dashboard toolbar refresh semantics were missing" >&2; exit 1 ;; esac
         \\line="$(widget_line 'role=button name="Live render status"')"

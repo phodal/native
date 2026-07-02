@@ -385,6 +385,15 @@ pub fn Ui(comptime Msg: type) type {
                 structuralId(global_id_seed, widget.kind, global_key)
             else
                 structuralId(parent_id, widget.kind, key);
+            // Typed handlers imply the matching accessibility actions, the
+            // same way a stringly `command` does for engine-owned dispatch.
+            if (node.on_press != null) widget.semantics.actions.press = true;
+            if (node.on_toggle != null) widget.semantics.actions.toggle = true;
+            if (node.on_input != null) widget.semantics.actions.set_text = true;
+            if (widget.kind == .slider and (node.on_value != null or node.on_change != null)) {
+                widget.semantics.actions.increment = true;
+                widget.semantics.actions.decrement = true;
+            }
             if (node.nodes.len > 0) {
                 const child_widgets = try self.arena.alloc(Widget, node.nodes.len);
                 for (node.nodes, 0..) |child, index| {

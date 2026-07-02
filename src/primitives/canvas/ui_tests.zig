@@ -311,6 +311,25 @@ test "keyboard events resolve activation and submit messages" {
     try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(checkbox.id, letter));
 }
 
+test "typed handlers imply accessibility actions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.column(.{}, .{
+        ui.el(.segmented_control, .{ .on_press = .add }, .{}),
+        ui.el(.segmented_control, .{}, .{}),
+    }));
+
+    // A command-less segmented control with a typed press handler exposes
+    // the press action; without one it only exposes select.
+    const with_handler = tree.root.children[0];
+    const without_handler = tree.root.children[1];
+    try testing.expect(canvas.semanticActions(with_handler).press);
+    try testing.expect(!canvas.semanticActions(without_handler).press);
+    try testing.expect(canvas.semanticActions(without_handler).select);
+}
+
 test "payload-carrying handlers build messages from edits and values" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

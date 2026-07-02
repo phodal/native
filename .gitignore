@@ -18,3 +18,4 @@ third_party/cef/linux/
 
 # TypeScript build info (generated)
 docs/tsconfig.tsbuildinfo
+.claude/

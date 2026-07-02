@@ -1,0 +1,26 @@
+<!-- The habit tracker view. Embedded into the binary and hot-reloaded in
+     dev: edit this file while the app runs and the window updates without
+     losing streak state. -->
+<column gap="12" padding="16">
+  <row gap="8" cross="center">
+    <text grow="1">Habits</text>
+    <button variant="primary" on-press="add">New habit</button>
+  </row>
+  <row gap="8">
+    <for each="filters" as="f">
+      <button size="sm" selected="{f == filter}" on-press="set_filter:{f}">{f}</button>
+    </for>
+  </row>
+  <scroll grow="1">
+    <column gap="2">
+      <for each="visible" key="id" as="h">
+        <row global-key="{h.id}" gap="8" padding="6" cross="center" role="listitem" label="{h.name}">
+          <text grow="1">{h.name}</text>
+          <text>{h.streak} days</text>
+          <button size="sm" on-press="done:{h.id}">Done today</button>
+        </row>
+      </for>
+    </column>
+  </scroll>
+  <status-bar>{habit_count} habits · {totalDays} total days</status-bar>
+</column>

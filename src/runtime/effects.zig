@@ -148,6 +148,24 @@ pub const max_effect_file_bytes: usize = 1024 * 1024;
 /// The exit `code` reported for every non-`.exited` reason.
 pub const effect_error_exit_code: i32 = -1;
 
+/// Type-erased handle to the runtime's canvas image registry, bound onto
+/// the effects channel (`bindImages`) so `update` can turn fetched bytes
+/// into drawable ImageIds without reaching for the runtime. Constructed
+/// by `Runtime.canvasImageRegistryBinding()`.
+pub const ImageRegistryBinding = struct {
+    context: *anyopaque,
+    register_fn: *const fn (context: *anyopaque, id: u64, width: usize, height: usize, rgba8: []const u8) anyerror!void,
+    register_bytes_fn: *const fn (context: *anyopaque, id: u64, bytes: []const u8) anyerror!RegisteredImage,
+    unregister_fn: *const fn (context: *anyopaque, id: u64) bool,
+};
+
+/// Dimensions of a successfully registered image (what the platform
+/// codec decoded).
+pub const RegisteredImage = struct {
+    width: usize = 0,
+    height: usize = 0,
+};
+
 /// How a spawn's stdout comes back. `.lines` streams each line as an
 /// `on_line` Msg as it arrives (the default; long-running streams).
 /// `.collect` accumulates whole stdout — single-line JSON far beyond the
@@ -789,6 +807,10 @@ pub fn Effects(comptime Msg: type) type {
         /// workers call `services.wake()` through it (the one
         /// thread-safe PlatformServices entry).
         services: ?*const platform.PlatformServices = null,
+        /// The runtime's canvas image registry, bound by `UiApp`
+        /// alongside the services so `update` can register fetched
+        /// pixels synchronously (loop-thread only, not an effect).
+        images: ?ImageRegistryBinding = null,
         /// The environment spawned children inherit and fetch honors
         /// (PATH for `spawnPath`-style lookups, proxy variables).
         /// Bound once from the loop thread before the first real
@@ -931,7 +953,49 @@ pub fn Effects(comptime Msg: type) type {
             if (self.environ == null) self.environ = environ;
         }
 
+        /// Point image registration at the runtime's canvas image
+        /// registry (`Runtime.canvasImageRegistryBinding()`). Loop-thread
+        /// only; the first bind sticks.
+        pub fn bindImages(self: *Self, binding: ImageRegistryBinding) void {
+            if (self.images == null) self.images = binding;
+        }
+
         // ------------------------------------------------------------- API
+
+        /// Register (or replace) decoded straight-alpha RGBA8 pixels
+        /// under the caller-chosen ImageId `id`, so image/icon/avatar
+        /// widgets referencing it draw them. Synchronous (the pixels are
+        /// copied before this returns), not an effect: no Msg follows.
+        /// Errors are the registry's (`error.InvalidImageId`,
+        /// `error.InvalidImageDimensions`, `error.ImageTooLarge`,
+        /// `error.ImageRegistryFull`) plus `error.UnsupportedService`
+        /// when no registry is bound.
+        pub fn registerImage(self: *Self, id: u64, width: usize, height: usize, rgba8: []const u8) anyerror!void {
+            const binding = self.images orelse return error.UnsupportedService;
+            return binding.register_fn(binding.context, id, width, height, rgba8);
+        }
+
+        /// Decode encoded image bytes (PNG, JPEG, ... — whatever the
+        /// platform codec supports) and register the pixels under `id` in
+        /// one step: the fetch-avatar path. Call it from `update` on the
+        /// `on_response` Msg with the delivered body; store `id` in the
+        /// model only on success, so views fall back (avatar initials)
+        /// while the image is loading or after it failed. On top of
+        /// `registerImage`'s errors: `error.ImageDecodeFailed`
+        /// (undecodable bytes) and `error.UnsupportedService` (platform
+        /// without a codec or no registry bound).
+        pub fn registerImageBytes(self: *Self, id: u64, bytes: []const u8) anyerror!RegisteredImage {
+            const binding = self.images orelse return error.UnsupportedService;
+            return binding.register_bytes_fn(binding.context, id, bytes);
+        }
+
+        /// Remove `id` from the registry, freeing its slot. Returns
+        /// whether the id was registered; widgets still referencing it
+        /// draw their fallback (avatar initials) on the next frame.
+        pub fn unregisterImage(self: *Self, id: u64) bool {
+            const binding = self.images orelse return false;
+            return binding.unregister_fn(binding.context, id);
+        }
 
         /// Run a subprocess and stream its stdout back as Msgs. Never
         /// fails from the caller's view: requests that cannot run are

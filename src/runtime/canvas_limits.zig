@@ -21,6 +21,17 @@ pub const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_vi
 pub const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
 pub const max_canvas_text_layouts_per_view: usize = 512;
 
+// Runtime-registered canvas images: decoded RGBA pixel buffers apps
+// register under a caller-chosen ImageId and reference from image/icon/
+// avatar widgets. Slots are runtime-wide (all views share the registry;
+// the frame planner threads it into every view's `image_resources`), and
+// the runtime owns the pixel copies — the app's source buffer is free the
+// moment registration returns. The per-image ceiling is avatar/icon
+// scale (512x512 RGBA8), not photo scale; oversized registrations and
+// decodes fail loudly with `error.ImageTooLarge`.
+pub const max_registered_canvas_images: usize = 16;
+pub const max_registered_canvas_image_pixel_bytes: usize = 1024 * 1024;
+
 pub const max_canvas_widget_nodes_per_view: usize = 256;
 pub const max_canvas_widget_semantics_per_view: usize = 256;
 // Raised from 2048 with the inline-span/markdown work: a rendered document

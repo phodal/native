@@ -659,6 +659,10 @@ fn emitAvatarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
             .opacity = widget.image_opacity,
             .fit = widget.image_fit,
             .sampling = widget.image_sampling,
+            // The render plan flattens the clip stack to rects, so the
+            // pill clip above only crops the bounds; the draw's own
+            // radius mask is what actually rounds the image.
+            .radius = radius,
         });
         try builder.popClip();
     } else if (widget.text.len > 0) {

@@ -410,6 +410,13 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             if (frame_options.surface_size.isEmpty()) {
                 frame_options.surface_size = if (self.views[index].gpu_size.isEmpty()) self.views[index].frame.size() else self.views[index].gpu_size;
             }
+            // Runtime-registered images feed every view unless the caller
+            // supplied its own resource set: the CPU pixel paths
+            // (presentation, screenshots) and the GPU packet plan both
+            // read `image_resources` from the planned frame.
+            if (frame_options.image_resources.len == 0) {
+                frame_options.image_resources = self.registeredCanvasImages();
+            }
             if (canvasFrameBudgetIsUnset(frame_options.budget)) {
                 frame_options.budget = self.views[index].canvas_frame_budget;
             }

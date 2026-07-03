@@ -134,6 +134,7 @@ extern fn zero_native_appkit_set_webview_layer(host: *AppKitHost, window_id: u64
 extern fn zero_native_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn zero_native_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
 extern fn zero_native_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
+extern fn zero_native_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn zero_native_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
 extern fn zero_native_appkit_clipboard_read_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
 extern fn zero_native_appkit_clipboard_write_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, bytes: [*]const u8, bytes_len: usize) c_int;
@@ -360,6 +361,7 @@ pub const MacPlatform = struct {
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
                 .measure_text_fn = measureText,
+                .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
         };
@@ -582,6 +584,19 @@ fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
 fn measureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
     _ = context;
     return @floatCast(zero_native_appkit_measure_text(font_id, size, text.ptr, text.len));
+}
+
+/// CGImageSource-backed image decoding (PNG, JPEG, ... — every codec
+/// ImageIO ships) into straight-alpha RGBA8.
+fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!platform_mod.DecodedImage {
+    _ = context;
+    var width: usize = 0;
+    var height: usize = 0;
+    return switch (zero_native_appkit_decode_image(bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
+        1 => .{ .width = width, .height = height, .rgba8 = buffer[0 .. width * height * 4] },
+        -1 => error.ImageTooLarge,
+        else => error.ImageDecodeFailed,
+    };
 }
 
 fn writeClipboard(context: ?*anyopaque, text: []const u8) anyerror!void {

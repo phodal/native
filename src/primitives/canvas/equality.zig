@@ -129,7 +129,8 @@ pub fn drawImagesEqual(a: DrawImage, b: DrawImage) bool {
         rectsEqual(a.dst, b.dst) and
         a.opacity == b.opacity and
         a.fit == b.fit and
-        a.sampling == b.sampling;
+        a.sampling == b.sampling and
+        radiiEqual(a.radius, b.radius);
 }
 
 pub fn drawTextsEqual(a: DrawText, b: DrawText) bool {

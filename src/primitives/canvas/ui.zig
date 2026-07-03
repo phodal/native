@@ -135,6 +135,13 @@ pub fn Ui(comptime Msg: type) type {
             checked: bool = false,
             selected: bool = false,
             disabled: bool = false,
+            /// Image resource reference for image-bearing widgets
+            /// (`image`, `icon_button`, `avatar`): a `canvas.ImageId` the
+            /// app registered at runtime (`Runtime.registerCanvasImage`,
+            /// `fx.registerImageBytes`). 0 — the "no image" sentinel —
+            /// keeps the widget on its non-image rendering (an avatar
+            /// falls back to initials).
+            image: canvas.ImageId = 0,
             variant: canvas.WidgetVariant = .default,
             size: canvas.WidgetSize = .default,
             /// Definite width: the widget is exactly this wide (the value
@@ -462,6 +469,27 @@ pub fn Ui(comptime Msg: type) type {
 
         pub fn checkbox(self: *Self, options: ElementOptions) Node {
             return self.el(.checkbox, options, .{});
+        }
+
+        /// shadcn-style avatar: a pill-clipped image with an initials
+        /// fallback. With `options.image` set to a registered ImageId the
+        /// engine clips the image to the avatar circle (`cover` fit);
+        /// with no image (0) it renders `initials` centered — so an app
+        /// shows initials while the image is loading and keeps them when
+        /// the fetch or decode failed, by only writing the id into its
+        /// model on successful registration (`fx.registerImageBytes`).
+        pub fn avatar(self: *Self, options: ElementOptions, initials: []const u8) Node {
+            var node = self.el(.avatar, options, .{});
+            node.widget.text = initials;
+            node.widget.image_fit = .cover;
+            return node;
+        }
+
+        /// An image leaf drawing the registered ImageId in
+        /// `options.image` (nothing renders while the id is 0 or
+        /// unregistered).
+        pub fn image(self: *Self, options: ElementOptions) Node {
+            return self.el(.image, options, .{});
         }
 
         pub fn textField(self: *Self, options: ElementOptions) Node {
@@ -941,6 +969,7 @@ pub fn Ui(comptime Msg: type) type {
                 .frame = options.frame,
                 .text = options.text,
                 .placeholder = options.placeholder,
+                .image_id = options.image,
                 .value = options.value,
                 .variant = options.variant,
                 .size = options.size,

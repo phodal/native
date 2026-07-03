@@ -1296,7 +1296,7 @@ test "reference renderer filters scaled image alpha premultiplied" {
     try expectPixelRgba8(.{ 0, 0, 0, 0 }, surface, 3, 0);
 }
 
-test "reference renderer rejects unsupported images" {
+test "reference renderer skips absent images and rejects corrupt ones" {
     const commands = [_]CanvasCommand{.{ .draw_image = .{
         .id = 1,
         .image_id = 42,
@@ -1322,7 +1322,19 @@ test "reference renderer rejects unsupported images" {
         .changes = &changes,
     });
 
+    // An id with no matching resource is a legitimate transient state
+    // (runtime-registered image mid-fetch or just unregistered): the draw
+    // skips, presentation succeeds, the clear color shows through.
     var pixels: [2 * 2 * 4]u8 = undefined;
     const surface = try ReferenceRenderSurface.init(2, 2, &pixels);
-    try std.testing.expectError(error.ReferenceRenderUnsupportedCommand, surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0)));
+    try surface.renderPass(frame.renderPass(), Color.rgb8(7, 8, 9));
+    try expectPixelRgba8(.{ 7, 8, 9, 255 }, surface, 0, 0);
+    try expectPixelRgba8(.{ 7, 8, 9, 255 }, surface, 1, 1);
+
+    // A PRESENT resource with an undersized pixel buffer is corrupt, not
+    // transient: still a loud error.
+    const corrupt_pixels = [_]u8{ 255, 0, 0, 255 };
+    const corrupt = [_]ReferenceImage{.{ .id = 42, .width = 2, .height = 2, .pixels = &corrupt_pixels }};
+    const corrupt_surface = (try ReferenceRenderSurface.init(2, 2, &pixels)).withImages(&corrupt);
+    try std.testing.expectError(error.ReferenceRenderUnsupportedCommand, corrupt_surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0)));
 }

@@ -277,6 +277,14 @@ void zero_native_appkit_wake(zero_native_appkit_host_t *host);
 int zero_native_appkit_update_widget_accessibility(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const zero_native_appkit_widget_accessibility_node_t *nodes, size_t node_count);
 size_t zero_native_appkit_clipboard_read(zero_native_appkit_host_t *host, char *buffer, size_t buffer_len);
 double zero_native_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len);
+/* Decode encoded image bytes (PNG, JPEG, ... — whatever ImageIO supports)
+ * through CGImageSource into tightly packed, row-major, straight-alpha
+ * (non-premultiplied) RGBA8 written into `pixels`. Returns 1 on success
+ * (with `out_width`/`out_height` set), 0 when the bytes cannot be decoded,
+ * and -1 when the decoded pixels do not fit `pixels_len` (`out_width`/
+ * `out_height` still report the decoded dimensions). Pure CoreGraphics —
+ * no AppKit state — so it needs no host and is main-thread independent. */
+int zero_native_appkit_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height);
 void zero_native_appkit_clipboard_write(zero_native_appkit_host_t *host, const char *text, size_t text_len);
 size_t zero_native_appkit_clipboard_read_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len);
 int zero_native_appkit_clipboard_write_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len);

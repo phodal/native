@@ -1376,6 +1376,11 @@ test "built-in component primitive widgets render distinct shadcn chrome" {
         .draw_image => |image| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(30, 3)), image.id);
             try std.testing.expectEqual(@as(ImageId, 42), image.image_id);
+            // The draw carries the pill radius itself: the render plan
+            // flattens clip stacks to rects, so this mask is what rounds
+            // the avatar image in every renderer.
+            try std.testing.expectEqual(@as(f32, 20), image.radius.top_left);
+            try std.testing.expectEqual(@as(f32, 20), image.radius.bottom_right);
         },
         else => return error.TestUnexpectedResult,
     }

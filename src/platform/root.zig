@@ -120,6 +120,7 @@ pub const GpuSurfaceInputKind = types.GpuSurfaceInputKind;
 pub const GpuSurfaceInputEvent = types.GpuSurfaceInputEvent;
 pub const GpuSurfacePixels = types.GpuSurfacePixels;
 pub const GpuSurfacePacket = types.GpuSurfacePacket;
+pub const DecodedImage = types.DecodedImage;
 pub const WidgetAccessibilityRole = types.WidgetAccessibilityRole;
 pub const WidgetAccessibilityActions = types.WidgetAccessibilityActions;
 pub const WidgetAccessibilityTextRange = types.WidgetAccessibilityTextRange;

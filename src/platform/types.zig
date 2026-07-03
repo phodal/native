@@ -1413,6 +1413,19 @@ pub const PlatformServices = struct {
     /// real font metrics (the null platform), which keeps layout on the
     /// deterministic estimator.
     measure_text_fn: ?*const fn (context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 = null,
+    /// Decode encoded image bytes (PNG, JPEG, ... — whatever the platform
+    /// codec supports) into tightly packed, row-major, straight-alpha
+    /// (non-premultiplied) RGBA8 written into `buffer`, returning the
+    /// dimensions plus the pixel slice (a prefix of `buffer`). The
+    /// framework bundles no image decoders: macOS decodes through
+    /// CGImageSource (ImageIO), GTK through gdk-pixbuf, Win32 through WIC.
+    /// Implementations may use `buffer` as decode scratch, so callers size
+    /// it for their pixel bound, not the exact image. Errors:
+    /// `error.ImageDecodeFailed` for undecodable bytes,
+    /// `error.ImageTooLarge` when the decoded pixels do not fit `buffer`.
+    /// Null on platforms without a codec (the null platform by default),
+    /// which surfaces as `error.UnsupportedService`.
+    decode_image_fn: ?*const fn (context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!DecodedImage = null,
 
     pub fn readClipboard(self: PlatformServices, buffer: []u8) anyerror![]const u8 {
         const read_fn = self.read_clipboard_fn orelse return error.UnsupportedService;
@@ -1701,6 +1714,23 @@ pub const PlatformServices = struct {
         const update_fn = self.update_widget_accessibility_fn orelse return;
         return update_fn(self.context, snapshot);
     }
+
+    /// Decode encoded image bytes through the platform codec into
+    /// straight-alpha RGBA8 (see `decode_image_fn`). Loop-thread only.
+    pub fn decodeImage(self: PlatformServices, bytes: []const u8, buffer: []u8) anyerror!DecodedImage {
+        if (bytes.len == 0) return error.ImageDecodeFailed;
+        const decode_fn = self.decode_image_fn orelse return error.UnsupportedService;
+        return decode_fn(self.context, bytes, buffer);
+    }
+};
+
+/// A platform-decoded image: tightly packed, row-major, straight-alpha
+/// RGBA8 pixels (`width * height * 4` bytes) sliced from the caller's
+/// decode buffer.
+pub const DecodedImage = struct {
+    width: usize,
+    height: usize,
+    rgba8: []const u8,
 };
 
 pub const Platform = struct {

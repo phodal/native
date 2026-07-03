@@ -81,7 +81,7 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `stepper` > `step` | composite stage track | `active="{index}"` (required) derives each step's completed/active/pending state; steps are text leaves (no attributes) joined by connectors; stepper also takes `key`, `global-key`, `label` |
 | `timeline` > `timeline-item` | composite ledger list | items only inside a timeline (for/if fine); items are leaves — `title` (required), `description`, `meta`, `indicator`, `variant`, `connector="false"` on the last item, `selected`; `on-press` makes the whole item pressable with a trailing chevron |
 
-Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need ImageId asset references), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`).
+Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need `ImageId` pixel references, runtime-registered — see the Images section), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`). An `avatar` with an image is likewise Zig-only (`ui.avatar(.{ .image = id }, "ZN")`); the markup element renders initials.
 
 ## Attributes
 
@@ -416,6 +416,35 @@ test_clock.setWallMs(1_700_000_000_000);  // NTP-style wall jump, monotonic unto
 ```
 
 Wall answers "what time is it?" (jumps with OS clock adjustments); monotonic answers "how long did it take?". Don't subtract wall timestamps for durations.
+## Images: runtime-registered pixels + the avatar pattern
+
+Image pixels are runtime-registered resources keyed by a caller-chosen `ImageId` (`u64` in the model, effect-key style; 0 = no image). The framework bundles NO codecs — encoded bytes decode through the platform (CGImageSource / gdk-pixbuf / WIC) via `PlatformServices.decode_image_fn`. Registration lives on the effects channel (synchronous calls, not effects — no Msg follows):
+
+```zig
+// The fetch-avatar path, one update arm; id reaches the model ONLY on success,
+// so the avatar shows initials while loading and after failure.
+.fetched => |response| {
+    if (response.outcome == .ok and response.status == 200) {
+        _ = fx.registerImageBytes(avatar_image_id, response.body) catch return;
+        model.avatar_image = avatar_image_id;
+    }
+},
+```
+
+```zig
+// Zig views (image content is markup-excluded):
+ui.avatar(.{ .image = model.avatar_image, .semantics = .{ .label = "Octocat" } }, "OC"),
+ui.image(.{ .image = model.chart_image, .width = 120, .height = 80, .semantics = .{ .label = "Chart" } }),
+```
+
+Rules:
+
+- `fx.registerImage(id, w, h, rgba8)` takes already-decoded straight-alpha RGBA8 (exactly `w*h*4` bytes; the runtime copies — your buffer is free on return). `fx.registerImageBytes(id, bytes)` decodes first. `fx.unregisterImage(id)` frees the slot. Outside UiApp: `Runtime.registerCanvasImage` / `registerCanvasImageBytes` / `unregisterCanvasImage`.
+- Re-registering an id replaces the pixels; every view repaints and GPU caches re-upload off the changed content fingerprint — no invalidation calls.
+- Bounded and loud (`canvas_limits`): 16 slots (`max_registered_canvas_images`), 1 MiB per image (`max_registered_canvas_image_pixel_bytes`, 512×512 RGBA8 — avatar/icon scale). Errors: `error.ImageRegistryFull`, `error.ImageTooLarge`, `error.ImageDecodeFailed`, `error.InvalidImageId`/`InvalidImageDimensions`, `error.UnsupportedService` (codec-less platform).
+- A draw referencing an unregistered id skips — a transient loading state can never fail presentation. `ui.avatar` clips a set image to the circle (`cover` fit) and renders the initials argument otherwise.
+- Registered images render in live presentation AND `renderCanvasScreenshot`/automation screenshots, so goldens can assert on them.
+- Deterministic tests: `harness.null_platform.image_decode = true` enables a strict decoder for the exact PNG subset `canvas.png.writeRgba8` emits — encode a raw RGBA fixture with the canvas PNG writer and drive the full decode→register→draw path with no bundled codec (`src/runtime/canvas_image_tests.zig` is the reference).
 
 ## Structure tags
 

@@ -6,6 +6,7 @@
 #import <WebKit/WebKit.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreText/CoreText.h>
+#import <ImageIO/ImageIO.h>
 #import <dispatch/dispatch.h>
 #import <Security/Security.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -1221,6 +1222,72 @@ double zero_native_appkit_measure_text(uint64_t font_id, double size, const char
     }
 }
 
+// Platform image decoder: CGImageSource (ImageIO) handles PNG, JPEG, and
+// every other codec the OS ships — the framework bundles none. The image
+// draws into a premultiplied RGBA8 bitmap context (the only RGBA layout
+// CGBitmapContext can render into) and is un-premultiplied in place,
+// because the canvas image pipeline — the reference renderer and the
+// packet host's kCGImageAlphaLast upload — expects straight alpha.
+int zero_native_appkit_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
+    if (out_width) *out_width = 0;
+    if (out_height) *out_height = 0;
+    if (!bytes || bytes_len == 0 || !pixels) return 0;
+    @autoreleasepool {
+        NSData *data = [NSData dataWithBytesNoCopy:(void *)bytes length:bytes_len freeWhenDone:NO];
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+        if (!source) return 0;
+        CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+        CFRelease(source);
+        if (!image) return 0;
+
+        size_t width = CGImageGetWidth(image);
+        size_t height = CGImageGetHeight(image);
+        if (width == 0 || height == 0 || width > 8192 || height > 8192) {
+            CGImageRelease(image);
+            return 0;
+        }
+        if (out_width) *out_width = width;
+        if (out_height) *out_height = height;
+        size_t byte_len = width * height * 4;
+        if (byte_len / 4 / height != width || pixels_len < byte_len) {
+            CGImageRelease(image);
+            return -1;
+        }
+
+        CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+        if (!color_space) {
+            CGImageRelease(image);
+            return 0;
+        }
+        CGContextRef context = CGBitmapContextCreate(pixels, width, height, 8, width * 4, color_space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(color_space);
+        if (!context) {
+            CGImageRelease(image);
+            return 0;
+        }
+        memset(pixels, 0, byte_len);
+        CGContextSetBlendMode(context, kCGBlendModeCopy);
+        CGContextDrawImage(context, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height), image);
+        CGContextRelease(context);
+        CGImageRelease(image);
+
+        // Un-premultiply: round to nearest so opaque pixels survive exactly.
+        for (size_t offset = 0; offset < byte_len; offset += 4) {
+            uint8_t alpha = pixels[offset + 3];
+            if (alpha == 0) {
+                pixels[offset + 0] = 0;
+                pixels[offset + 1] = 0;
+                pixels[offset + 2] = 0;
+            } else if (alpha != 255) {
+                pixels[offset + 0] = (uint8_t)MIN(255, ((size_t)pixels[offset + 0] * 255 + alpha / 2) / alpha);
+                pixels[offset + 1] = (uint8_t)MIN(255, ((size_t)pixels[offset + 1] * 255 + alpha / 2) / alpha);
+                pixels[offset + 2] = (uint8_t)MIN(255, ((size_t)pixels[offset + 2] * 255 + alpha / 2) / alpha);
+            }
+        }
+        return 1;
+    }
+}
+
 static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     if (!text) return NO;
     NSString *value = [text[@"text"] isKindOfClass:[NSString class]] ? text[@"text"] : @"";
@@ -1444,6 +1511,19 @@ static BOOL ZeroNativePacketDrawImage(NSDictionary *packetImage, NSDictionary<NS
     CGFloat imageOpacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(packetImage[@"opacity"], 1)));
     NSString *sampling = [packetImage[@"sampling"] isKindOfClass:[NSString class]] ? packetImage[@"sampling"] : @"linear";
     [NSGraphicsContext saveGraphicsState];
+    /* Rounded-corner mask over the REQUESTED destination (the widget
+     * frame) — the avatar circle clip; a `cover` fit expands `dst`, so
+     * the mask uses the packet's original dst rect. */
+    NSArray *radius = ZeroNativePacketArray(packetImage[@"radius"], 4);
+    if (radius) {
+        CGFloat maxCorner = 0;
+        for (NSUInteger index = 0; index < 4; index += 1) {
+            maxCorner = fmax(maxCorner, ZeroNativePacketNumber(radius[index], 0));
+        }
+        if (maxCorner > 0) {
+            [ZeroNativePacketRoundedRectPath(ZeroNativePacketRect(ZeroNativePacketArray(packetImage[@"dst"], 4)), packetImage[@"radius"]) addClip];
+        }
+    }
     [NSGraphicsContext.currentContext setImageInterpolation:[sampling isEqualToString:@"nearest"] ? NSImageInterpolationNone : NSImageInterpolationHigh];
     [image drawInRect:dst fromRect:src operation:NSCompositingOperationSourceOver fraction:(opacity * imageOpacity) respectFlipped:YES hints:nil];
     [NSGraphicsContext restoreGraphicsState];

@@ -191,6 +191,7 @@ fn resourceHashCanvasCommand(hash: u64, command: anytype) u64 {
             next = resourceHashU64(next, drawImageFingerprint(value));
             next = resourceHashRect(next, value.dst);
             next = resourceHashF32(next, value.opacity);
+            next = resourceHashRadius(next, value.radius);
         },
         .draw_text => |value| {
             next = resourceHashOptionalObjectId(next, nonZeroObjectId(value.id));

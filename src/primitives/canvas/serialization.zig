@@ -137,6 +137,10 @@ pub fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
             try json.writeString(writer, @tagName(value.fit));
             try writer.writeAll(",\"sampling\":");
             try json.writeString(writer, @tagName(value.sampling));
+            if (radiusIsSet(value.radius)) {
+                try writer.writeAll(",\"radius\":");
+                try writeRadiusJson(value.radius, writer);
+            }
         },
         .draw_text => |value| {
             try writer.print(",\"id\":{d},\"font\":{d},\"size\":{d},\"origin\":", .{ value.id, value.font_id, value.size });
@@ -434,7 +438,18 @@ fn writeCanvasGpuImageJson(image: ?CanvasGpuImage, writer: anytype) !void {
     try json.writeString(writer, @tagName(value.fit));
     try writer.writeAll(",\"sampling\":");
     try json.writeString(writer, @tagName(value.sampling));
+    // Zero radius is omitted so image payloads without the rounded mask
+    // stay byte-identical to the pre-radius wire format.
+    if (radiusIsSet(value.radius)) {
+        try writer.writeAll(",\"radius\":");
+        try writeRadiusJson(value.radius, writer);
+    }
     try writer.writeByte('}');
+}
+
+fn radiusIsSet(radius: Radius) bool {
+    return radius.top_left > 0 or radius.top_right > 0 or
+        radius.bottom_right > 0 or radius.bottom_left > 0;
 }
 
 fn writeCanvasGpuTextJson(text: ?CanvasGpuText, writer: anytype) !void {

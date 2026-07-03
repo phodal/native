@@ -252,7 +252,14 @@ pub const ReferenceRenderSurface = struct {
     }
 
     fn drawImage(self: ReferenceRenderSurface, command: RenderCommand, value: DrawImage, draw_bounds: geometry.RectF) Error!void {
-        const image = self.findImage(value.image_id) orelse return error.ReferenceRenderUnsupportedCommand;
+        // A draw whose image is absent from the resource set skips: with
+        // runtime-registered images, "not registered (yet/anymore)" is a
+        // legitimate transient state (an avatar mid-fetch, an id
+        // unregistered while a stale tree still references it), and a
+        // pure view must not be able to fail presentation with it. A
+        // PRESENT image whose pixel buffer is undersized stays a loud
+        // error — that is a corrupt resource, not a lifecycle state.
+        const image = self.findImage(value.image_id) orelse return;
         if (referenceImagePixelLen(image.width, image.height)) |image_len| {
             if (image.pixels.len < image_len) return error.ReferenceRenderUnsupportedCommand;
         } else return error.ReferenceRenderUnsupportedCommand;
@@ -260,6 +267,12 @@ pub const ReferenceRenderSurface = struct {
         const src_rect = referenceImageSourceRect(image, value.src) orelse return;
         const local_dst = referenceImageDestinationRect(value.dst, src_rect, value.fit) orelse return;
         const dst_rect = command.transform.transformRect(local_dst).normalized();
+        // The rounded mask applies over the REQUESTED destination (the
+        // widget frame), not the fit-expanded rect a `.cover` draw fills.
+        const mask_rect = command.transform.transformRect(value.dst).normalized();
+        const mask_radius = referenceScaleRadius(value.radius, command.transform);
+        const has_mask = mask_radius.top_left > 0 or mask_radius.top_right > 0 or
+            mask_radius.bottom_right > 0 or mask_radius.bottom_left > 0;
         const clipped = geometry.RectF.intersection(dst_rect, draw_bounds.normalized());
         const pixel_rect = referencePixelRect(clipped, self.width, self.height) orelse return;
         const image_opacity = std.math.clamp(value.opacity, 0, 1);
@@ -269,6 +282,7 @@ pub const ReferenceRenderSurface = struct {
             while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
                 const point = referencePixelCenter(x, y);
                 if (!dst_rect.containsPoint(point)) continue;
+                if (has_mask and !referencePointInRoundedRect(point, mask_rect, mask_radius)) continue;
                 const u = std.math.clamp((point.x - dst_rect.x) / dst_rect.width, 0, 1);
                 const v = std.math.clamp((point.y - dst_rect.y) / dst_rect.height, 0, 1);
                 const sample = referenceSampleImage(image, src_rect, u, v, value.sampling);

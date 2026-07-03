@@ -123,6 +123,13 @@ void zero_native_gtk_stop(zero_native_gtk_host_t *host);
 /* Thread-safe: schedules a WAKE event on the GLib main loop via
  * g_idle_add. May be called from any thread (effect worker threads). */
 void zero_native_gtk_wake(zero_native_gtk_host_t *host);
+/* Decode encoded image bytes (PNG, JPEG, ... — whatever gdk-pixbuf
+ * loaders are installed) into tightly packed, row-major, straight-alpha
+ * RGBA8 written into `pixels`. Returns 1 on success (with `out_width`/
+ * `out_height` set), 0 when the bytes cannot be decoded, and -1 when the
+ * decoded pixels do not fit `pixels_len` (`out_width`/`out_height` still
+ * report the decoded dimensions). */
+int zero_native_gtk_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height);
 void zero_native_gtk_load_webview(zero_native_gtk_host_t *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback);
 void zero_native_gtk_load_window_webview(zero_native_gtk_host_t *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback);
 void zero_native_gtk_set_bridge_callback(zero_native_gtk_host_t *host, zero_native_gtk_bridge_callback_t callback, void *context);

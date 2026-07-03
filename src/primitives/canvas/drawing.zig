@@ -204,6 +204,12 @@ pub const DrawImage = struct {
     opacity: f32 = 1,
     fit: ImageFit = .stretch,
     sampling: ImageSampling = .linear,
+    /// Rounded-corner mask in destination space: pixels outside the
+    /// rounded `dst` rect are not drawn (the avatar circle clip). Zero —
+    /// the default — keeps the plain rectangular draw. Carried on the
+    /// draw itself because the render plan flattens clip stacks to
+    /// rectangles, which would drop a rounded clip's corners.
+    radius: Radius = .{},
 };
 
 pub const Shadow = struct {

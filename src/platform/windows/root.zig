@@ -89,6 +89,7 @@ extern fn zero_native_windows_destroy(host: *WindowsHost) void;
 extern fn zero_native_windows_run(host: *WindowsHost, callback: WindowsCallback, context: ?*anyopaque) void;
 extern fn zero_native_windows_stop(host: *WindowsHost) void;
 extern fn zero_native_windows_wake(host: *WindowsHost) void;
+extern fn zero_native_windows_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn zero_native_windows_load_webview(host: *WindowsHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn zero_native_windows_load_window_webview(host: *WindowsHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn zero_native_windows_set_bridge_callback(host: *WindowsHost, callback: WindowsBridgeCallback, context: ?*anyopaque) void;
@@ -268,6 +269,7 @@ pub const WindowsPlatform = struct {
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
                 .wake_fn = wake,
+                .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
         };
@@ -546,6 +548,19 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *WindowsPlatform = @ptrCast(@alignCast(context.?));
     zero_native_windows_wake(self.host);
+}
+
+/// WIC-backed image decoding (PNG, JPEG, ... — every codec the OS
+/// ships) into straight-alpha RGBA8.
+fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!platform_mod.DecodedImage {
+    _ = context;
+    var width: usize = 0;
+    var height: usize = 0;
+    return switch (zero_native_windows_decode_image(bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
+        1 => .{ .width = width, .height = height, .rgba8 = buffer[0 .. width * height * 4] },
+        -1 => error.ImageTooLarge,
+        else => error.ImageDecodeFailed,
+    };
 }
 
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {

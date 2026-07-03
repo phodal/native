@@ -81,6 +81,13 @@ pub const nowMs = runtime_clock.nowMs;
 pub const nowNanoseconds = runtime_clock.nowNanoseconds;
 pub const monotonicMs = runtime_clock.monotonicMs;
 pub const monotonicNanoseconds = runtime_clock.monotonicNanoseconds;
+pub const ImageRegistryBinding = runtime_effects.ImageRegistryBinding;
+pub const RegisteredImage = runtime_effects.RegisteredImage;
+
+const runtime_canvas_images = @import("canvas_images.zig");
+pub const RegisteredCanvasImage = runtime_canvas_images.RegisteredCanvasImage;
+pub const max_registered_canvas_images = runtime_canvas_images.max_registered_canvas_images;
+pub const max_registered_canvas_image_pixel_bytes = runtime_canvas_images.max_registered_canvas_image_pixel_bytes;
 pub const testing = core.testing;
 pub const canvasSurfacePixelSize = core.canvasSurfacePixelSize;
 pub const canvasFramePixelSize = core.canvasFramePixelSize;

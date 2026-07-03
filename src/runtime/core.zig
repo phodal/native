@@ -14,6 +14,7 @@ const runtime_clock = @import("clock.zig");
 const shell_layout = @import("shell_layout.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
+const runtime_canvas_images = @import("canvas_images.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
 const runtime_canvas_widget_state = @import("canvas_widget_state.zig");
@@ -221,6 +222,13 @@ pub const Runtime = struct {
     canvas_frame_changes: [max_canvas_diff_changes_per_view]canvas.DiffChange = undefined,
     canvas_frame_render_override_samples: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
     canvas_frame_render_override_combined: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
+    /// Runtime-registered canvas images (see canvas_images.zig): entry
+    /// metadata, the per-slot pixel pool, and the `ReferenceImage` scratch
+    /// the frame planner hands to renderers each plan.
+    canvas_image_entries: [canvas_limits.max_registered_canvas_images]runtime_canvas_images.CanvasImageEntry = [_]runtime_canvas_images.CanvasImageEntry{.{}} ** canvas_limits.max_registered_canvas_images,
+    canvas_image_count: usize = 0,
+    canvas_image_pixels: [canvas_limits.max_registered_canvas_images][canvas_limits.max_registered_canvas_image_pixel_bytes]u8 = undefined,
+    canvas_image_resources_scratch: [canvas_limits.max_registered_canvas_images]canvas.ReferenceImage = undefined,
     /// Platform text measurement captured at init and owned by the
     /// runtime so pointers stamped into design tokens stay valid for the
     /// runtime's lifetime. Null when the platform has no `measure_text_fn`
@@ -499,6 +507,15 @@ pub const Runtime = struct {
     pub const setGpuSurfaceInputLatencyBudget = CanvasFrameMethods.setGpuSurfaceInputLatencyBudget;
     const requestCanvasFrameForView = CanvasFrameMethods.requestCanvasFrameForView;
     const invalidateForCanvasChanges = CanvasFrameMethods.invalidateForCanvasChanges;
+
+    const CanvasImageMethods = runtime_canvas_images.RuntimeCanvasImages(Runtime);
+    pub const registerCanvasImage = CanvasImageMethods.registerCanvasImage;
+    pub const registerCanvasImageBytes = CanvasImageMethods.registerCanvasImageBytes;
+    pub const unregisterCanvasImage = CanvasImageMethods.unregisterCanvasImage;
+    pub const registeredCanvasImages = CanvasImageMethods.registeredCanvasImages;
+    pub const registeredCanvasImage = CanvasImageMethods.registeredCanvasImage;
+    pub const registeredCanvasImageCount = CanvasImageMethods.registeredCanvasImageCount;
+    pub const canvasImageRegistryBinding = CanvasImageMethods.canvasImageRegistryBinding;
 
     const CanvasWidgetStateMethods = runtime_canvas_widget_state.RuntimeCanvasWidgetState(Runtime);
     pub const setCanvasWidgetLayout = CanvasWidgetStateMethods.setCanvasWidgetLayout;

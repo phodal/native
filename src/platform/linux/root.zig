@@ -87,6 +87,7 @@ extern fn zero_native_gtk_destroy(host: *GtkHost) void;
 extern fn zero_native_gtk_run(host: *GtkHost, callback: GtkCallback, context: ?*anyopaque) void;
 extern fn zero_native_gtk_stop(host: *GtkHost) void;
 extern fn zero_native_gtk_wake(host: *GtkHost) void;
+extern fn zero_native_gtk_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn zero_native_gtk_load_webview(host: *GtkHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn zero_native_gtk_load_window_webview(host: *GtkHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn zero_native_gtk_set_bridge_callback(host: *GtkHost, callback: GtkBridgeCallback, context: ?*anyopaque) void;
@@ -265,6 +266,7 @@ pub const LinuxPlatform = struct {
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
                 .wake_fn = wake,
+                .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
         };
@@ -547,6 +549,19 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     zero_native_gtk_wake(self.host);
+}
+
+/// gdk-pixbuf-backed image decoding (PNG, JPEG, ... — whatever loaders
+/// the system ships) into straight-alpha RGBA8.
+fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!platform_mod.DecodedImage {
+    _ = context;
+    var width: usize = 0;
+    var height: usize = 0;
+    return switch (zero_native_gtk_decode_image(bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
+        1 => .{ .width = width, .height = height, .rgba8 = buffer[0 .. width * height * 4] },
+        -1 => error.ImageTooLarge,
+        else => error.ImageDecodeFailed,
+    };
 }
 
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {

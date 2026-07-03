@@ -1,4 +1,5 @@
 const std = @import("std");
+const canvas = @import("canvas");
 const geometry = @import("geometry");
 const platform_info = @import("platform_info");
 const security = @import("../security/root.zig");
@@ -153,6 +154,13 @@ pub const NullPlatform = struct {
     app_info: AppInfo = .{},
     gpu_surfaces: bool = false,
     gpu_surface_packets: bool = true,
+    /// Enable the deterministic test image decoder: strict PNGs in the
+    /// exact subset `canvas.png.writeRgba8` emits decode through the seam
+    /// real platforms serve with CGImageSource/gdk-pixbuf/WIC. Tests
+    /// encode raw RGBA fixtures with the canvas PNG writer and exercise
+    /// the full decode→register→draw path without bundling a codec.
+    image_decode: bool = false,
+    image_decode_count: usize = 0,
     requested_frames: u32 = 1,
     loaded_source: ?WebViewSource = null,
     security_policy: security.Policy = .{},
@@ -334,6 +342,7 @@ pub const NullPlatform = struct {
                 .request_gpu_surface_frame_fn = requestGpuSurfaceFrame,
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
+                .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
         };
@@ -858,6 +867,20 @@ pub const NullPlatform = struct {
     fn wakeService(context: ?*anyopaque) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         _ = self.wake_count.fetchAdd(1, .release);
+    }
+
+    /// Deterministic decode seam for tests (see `image_decode`): parses
+    /// the strict PNG subset the canvas writer emits. Off by default so
+    /// the null platform models codec-less hosts.
+    fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!types.DecodedImage {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (!self.image_decode) return error.UnsupportedService;
+        self.image_decode_count += 1;
+        const decoded = canvas.png.decodeRgba8(bytes, buffer) catch |err| return switch (err) {
+            error.PngPixelBufferTooSmall => error.ImageTooLarge,
+            else => error.ImageDecodeFailed,
+        };
+        return .{ .width = decoded.width, .height = decoded.height, .rgba8 = decoded.rgba8 };
     }
 
     /// Consume one pending wake request, returning the `.wake` platform

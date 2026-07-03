@@ -2191,6 +2191,64 @@ void zero_native_gtk_wake(zero_native_gtk_host_t *host) {
     g_idle_add(zero_native_emit_wake_idle, host);
 }
 
+/* Platform image decoder: gdk-pixbuf handles PNG, JPEG, and every other
+ * codec its loaders ship — the framework bundles none. Decoded rows are
+ * repacked tightly (gdk-pixbuf rowstride may pad) as straight-alpha RGBA8,
+ * the layout the canvas image pipeline expects. */
+int zero_native_gtk_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
+    if (out_width) *out_width = 0;
+    if (out_height) *out_height = 0;
+    if (!bytes || bytes_len == 0 || !pixels) return 0;
+
+    GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
+    if (!loader) return 0;
+    gboolean ok = gdk_pixbuf_loader_write(loader, bytes, bytes_len, NULL);
+    ok = gdk_pixbuf_loader_close(loader, NULL) && ok;
+    GdkPixbuf *decoded = ok ? gdk_pixbuf_loader_get_pixbuf(loader) : NULL;
+    if (!decoded) {
+        g_object_unref(loader);
+        return 0;
+    }
+
+    /* Normalize to 8-bit RGBA (palette/grayscale decode as RGB(A)); the
+     * added alpha channel is opaque, gdk-pixbuf alpha is already straight. */
+    GdkPixbuf *rgba = gdk_pixbuf_get_has_alpha(decoded)
+        ? g_object_ref(decoded)
+        : gdk_pixbuf_add_alpha(decoded, FALSE, 0, 0, 0);
+    if (!rgba || gdk_pixbuf_get_bits_per_sample(rgba) != 8 || gdk_pixbuf_get_n_channels(rgba) != 4) {
+        if (rgba) g_object_unref(rgba);
+        g_object_unref(loader);
+        return 0;
+    }
+
+    int width_px = gdk_pixbuf_get_width(rgba);
+    int height_px = gdk_pixbuf_get_height(rgba);
+    if (width_px <= 0 || height_px <= 0 || width_px > 8192 || height_px > 8192) {
+        g_object_unref(rgba);
+        g_object_unref(loader);
+        return 0;
+    }
+    size_t width = (size_t)width_px;
+    size_t height = (size_t)height_px;
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+    size_t byte_len = width * height * 4;
+    if (pixels_len < byte_len) {
+        g_object_unref(rgba);
+        g_object_unref(loader);
+        return -1;
+    }
+
+    const guchar *source = gdk_pixbuf_read_pixels(rgba);
+    size_t rowstride = (size_t)gdk_pixbuf_get_rowstride(rgba);
+    for (size_t row = 0; row < height; row += 1) {
+        memcpy(pixels + row * width * 4, source + row * rowstride, width * 4);
+    }
+    g_object_unref(rgba);
+    g_object_unref(loader);
+    return 1;
+}
+
 void zero_native_gtk_load_webview(zero_native_gtk_host_t *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
     zero_native_gtk_load_window_webview(host, 1, source, source_len, source_kind, asset_root, asset_root_len, asset_entry, asset_entry_len, asset_origin, asset_origin_len, spa_fallback);
 }

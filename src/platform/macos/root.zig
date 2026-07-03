@@ -261,7 +261,7 @@ const AppKitTrayCallback = *const fn (context: ?*anyopaque, item_id: u32) callco
 extern fn zero_native_appkit_show_open_dialog(host: *AppKitHost, opts: *const AppKitOpenDialogOpts, buffer: [*]u8, buffer_len: usize) AppKitOpenDialogResult;
 extern fn zero_native_appkit_show_save_dialog(host: *AppKitHost, opts: *const AppKitSaveDialogOpts, buffer: [*]u8, buffer_len: usize) usize;
 extern fn zero_native_appkit_show_message_dialog(host: *AppKitHost, opts: *const AppKitMessageDialogOpts) c_int;
-extern fn zero_native_appkit_create_tray(host: *AppKitHost, icon_path: [*]const u8, icon_path_len: usize, tooltip: [*]const u8, tooltip_len: usize) void;
+extern fn zero_native_appkit_create_tray(host: *AppKitHost, icon_path: [*]const u8, icon_path_len: usize, title: [*]const u8, title_len: usize, tooltip: [*]const u8, tooltip_len: usize) void;
 extern fn zero_native_appkit_update_tray_menu(host: *AppKitHost, item_ids: [*]const u32, labels: [*]const [*]const u8, label_lens: [*]const usize, separators: [*]const c_int, enabled_flags: [*]const c_int, count: usize) void;
 extern fn zero_native_appkit_remove_tray(host: *AppKitHost) void;
 extern fn zero_native_appkit_set_tray_callback(host: *AppKitHost, callback: AppKitTrayCallback, context: ?*anyopaque) void;
@@ -1412,7 +1412,7 @@ const max_tray_items: usize = 32;
 
 fn createTray(context: ?*anyopaque, options: platform_mod.TrayOptions) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_create_tray(self.host, options.icon_path.ptr, options.icon_path.len, options.tooltip.ptr, options.tooltip.len);
+    zero_native_appkit_create_tray(self.host, options.icon_path.ptr, options.icon_path.len, options.title.ptr, options.title.len, options.tooltip.ptr, options.tooltip.len);
     if (options.items.len > 0) {
         try updateTrayMenu(context, options.items);
     }

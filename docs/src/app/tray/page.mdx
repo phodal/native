@@ -4,6 +4,8 @@ zero-native supports system tray icons with menus. Tray menu items can dispatch 
 
 Tray support is currently implemented on macOS and Windows system WebView hosts. Linux returns `UnsupportedService` until a portable status notifier implementation is selected.
 
+On macOS, `title` renders the tray as a menu-bar extra: a titled `NSStatusItem` with variable width. When both `icon_path` and `title` are empty, the button falls back to the app name's first letter.
+
 ## TrayOptions
 
 <table>
@@ -17,6 +19,11 @@ Tray support is currently implemented on macOS and Windows system WebView hosts.
   <tbody>
     <tr>
       <td><code>icon_path</code></td>
+      <td><code>[]const u8</code></td>
+      <td><code>""</code></td>
+    </tr>
+    <tr>
+      <td><code>title</code></td>
       <td><code>[]const u8</code></td>
       <td><code>""</code></td>
     </tr>
@@ -111,3 +118,25 @@ fn event(context: *anyopaque, runtime: *Runtime, ev: Event) anyerror!void {
     }
 }
 ```
+
+## Menu-bar extras in `UiApp`
+
+Canvas-first apps declare the status item once, with `UiApp.Options.status_item` (installed on the installing frame). Selecting a menu item dispatches its `command` through the ordinary `on_command` mapping with source `.tray`:
+
+```zig
+app.* = PreviewApp.init(allocator, .{}, .{
+    // ...
+    .on_command = command,
+    .status_item = .{
+        .title = "ZN",
+        .tooltip = "zero-native Canvas Preview",
+        .items = &.{
+            .{ .id = 1, .label = "Show Docs", .command = "app.docs" },
+            .{ .separator = true },
+            .{ .id = 2, .label = "Reload Preview", .command = "app.reload" },
+        },
+    },
+});
+```
+
+macOS (`NSStatusItem`) is the proven host; platforms without a status-bar service log a warning and continue. See `examples/canvas-preview` for the live composition.

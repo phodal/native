@@ -118,6 +118,7 @@ fn validateCredentialField(value: []const u8, max_len: usize) !void {
 
 pub fn validateTrayOptions(options: platform.TrayOptions) !void {
     try validateTrayField(options.icon_path, platform.max_tray_icon_path_bytes);
+    try validateTrayField(options.title, platform.max_tray_title_bytes);
     try validateTrayField(options.tooltip, platform.max_tray_tooltip_bytes);
     try validateTrayMenuItems(options.items);
 }

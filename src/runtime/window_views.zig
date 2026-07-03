@@ -64,6 +64,7 @@ pub fn RuntimeWindowViews(comptime Runtime: type) type {
         pub const writeWebViewListJson = WindowViewRuntimeMethods.writeWebViewListJson;
         pub const reserveWebView = WindowViewRuntimeMethods.reserveWebView;
         pub const findWebViewIndex = WindowViewRuntimeMethods.findWebViewIndex;
+        pub const webViewLocalFrame = WindowViewRuntimeMethods.webViewLocalFrame;
         pub const removeWebViewAt = WindowViewRuntimeMethods.removeWebViewAt;
         pub const removeWebViewsForWindow = WindowViewRuntimeMethods.removeWebViewsForWindow;
         pub const mainWebViewInfo = WindowViewRuntimeMethods.mainWebViewInfo;

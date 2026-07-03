@@ -211,10 +211,18 @@ pub fn shellRestorePolicy(policy: app_manifest.WindowRestorePolicy) platform.Win
     };
 }
 
+/// Whether loading this scene must materialize the app's webview source
+/// into a window's main webview. Only a `main`-labeled webview view needs
+/// that; child webviews (a preview pane next to a gpu_surface canvas, an
+/// inspector split) are standalone platform webviews created from their
+/// own `url`, so a canvas-first app with the default empty source never
+/// grows an implicit full-window main webview behind its canvas. Apps
+/// that provide a real source keep loading it regardless (their child
+/// webviews may reference `zero://` origins served from it).
 pub fn sceneNeedsMainWebView(scene: app_manifest.ShellConfig) bool {
     for (scene.windows) |window| {
         for (window.views) |view| {
-            if (view.kind == .webview) return true;
+            if (view.kind == .webview and validation.isMainWebViewLabel(view.label)) return true;
         }
     }
     return false;

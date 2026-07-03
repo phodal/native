@@ -229,6 +229,16 @@ pub fn RuntimeWindowViewRuntime(comptime Runtime: type) type {
             return null;
         }
 
+        /// The current parent-local frame of a child webview, as last
+        /// applied by the runtime (shell relayout or view patches). Null
+        /// when no such webview exists. Lets frame owners above the
+        /// runtime (`UiApp` webview panes) reconcile against the actual
+        /// state instead of a cache a shell relayout can silently stomp.
+        pub fn webViewLocalFrame(self: *const Runtime, window_id: platform.WindowId, label: []const u8) ?geometry.RectF {
+            const index = Self.findWebViewIndex(self, window_id, label) orelse return null;
+            return self.webviews[index].local_frame;
+        }
+
         pub fn removeWebViewAt(self: *Runtime, index: usize) void {
             if (index >= self.webview_count) return;
             var cursor = index;

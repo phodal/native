@@ -55,6 +55,37 @@ const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("habits.zm
 
 With both set (dev), the compiled view renders until the watched file first changes, then the interpreter hot-reloads it. See `examples/habits` for the full pattern.
 
+### Webview panes: canvas + live web content in one window
+
+Declare the webview in the scene next to the gpu_surface (parent it to the canvas view), reserve its region with an empty panel carrying a semantics label, and let `Options.web_panes` snap the webview to that widget's layout frame while the model drives navigation:
+
+```zig
+const shell_views = [_]zero_native.ShellView{
+    .{ .label = "app-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+    .{ .label = "preview", .kind = .webview, .parent = "app-canvas", .url = "https://example.com/", .x = 240, .y = 76, .width = 704, .height = 548 },
+};
+// view: ui.panel(.{ .grow = 1, .semantics = .{ .label = "preview-pane" } }, .{})
+fn panes(model: *const Model, out: []App.WebViewPane) usize {
+    out[0] = .{ .label = "preview", .anchor = "preview-pane", .url = model.url(), .reload_token = model.reload_token };
+    return 1;
+}
+// options: .web_panes = panes,
+```
+
+URL changes navigate; bumping `reload_token` reloads the same URL (the CenterPane/Preview-tab shape). Pane URLs must pass `security.navigation.allowed_origins`. Panes reconcile against the runtime's live webview state on every rebuild and presented frame, so shell relayouts cannot detach them. `examples/canvas-preview` is the live reference; `zig build test-canvas-preview-smoke` verifies it.
+
+### Menu-bar extra (status item)
+
+`Options.status_item` installs a macOS `NSStatusItem` once, on the installing frame; its menu items dispatch commands through the same `on_command` mapping the toolbar and menus use (source `.tray`):
+
+```zig
+.status_item = .{ .title = "ZN", .tooltip = "My App", .items = &.{
+    .{ .id = 1, .label = "Refresh", .command = "app.refresh" },
+    .{ .separator = true },
+    .{ .id = 2, .label = "Quit", .command = "app.quit" },
+} },
+```
+
 ## Elements
 
 | Markup | Widget | Notes |

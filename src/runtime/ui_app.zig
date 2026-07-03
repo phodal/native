@@ -35,6 +35,9 @@ const Event = core.Event;
 
 const ui_app_log = std.log.scoped(.zero_ui_app);
 
+/// Maximum number of webview panes a `UiApp` can drive (`Options.web_panes`).
+pub const max_web_panes: usize = 4;
+
 /// Comptime feature selection for `UiAppWithFeatures`.
 pub const UiAppFeatures = struct {
     /// Ship the runtime markup engine (parser + interpreter) in the app.
@@ -74,6 +77,50 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// `prefix_commands` commands followed by `suffix_commands`
             /// commands.
             build: *const fn (model: *const ModelT, builder: *canvas.Builder, size: geometry.SizeF, tokens: canvas.DesignTokens) anyerror!void,
+        };
+
+        /// A live webview region hosted alongside the canvas — the "both
+        /// per window" seam. The scene declares the webview shell view
+        /// (kind `.webview`, ideally with `.parent` set to the canvas
+        /// view's label so pane frames share the canvas coordinate
+        /// space); the pane then keeps that webview snapped to a canvas
+        /// widget's layout frame and drives navigation from the model.
+        pub const WebViewPane = struct {
+            /// Shell view label of the scene-declared webview this pane
+            /// drives.
+            label: []const u8,
+            /// Semantics label of the canvas widget whose layout frame
+            /// becomes the webview's bounds — typically an empty panel
+            /// that reserves the region in the view
+            /// (`.semantics = .{ .label = "preview-pane" }`). When null,
+            /// `frame` positions the webview directly.
+            anchor: ?[]const u8 = null,
+            /// Explicit frame used when no `anchor` is set. Canvas-local
+            /// when the webview is parented to the canvas view.
+            frame: geometry.RectF = geometry.RectF.init(0, 0, 0, 0),
+            /// Current URL. Changing it navigates the webview, subject to
+            /// the app's `security.navigation.allowed_origins` policy.
+            url: []const u8,
+            /// Bump to reload the current URL without changing it (the
+            /// `reloadToken` consumer shape).
+            reload_token: u64 = 0,
+        };
+
+        /// Menu-bar extra: a status-bar item with a command menu
+        /// (macOS `NSStatusItem`; the system tray elsewhere, where
+        /// supported). Selecting a menu item dispatches its `command`
+        /// through `on_command` with source `.tray`.
+        pub const StatusItemOptions = struct {
+            /// Menu-bar button title (used when no icon resolves; macOS
+            /// falls back to the app name's first letter when both are
+            /// empty).
+            title: []const u8 = "",
+            /// Template-image path for the status button icon.
+            icon_path: []const u8 = "",
+            tooltip: []const u8 = "",
+            /// Menu items: `label` is the visible title, `command` the
+            /// name handed to `on_command`, `id` a unique non-zero id.
+            items: []const platform.TrayMenuItem = &.{},
         };
 
         pub const MarkupOptions = struct {
@@ -170,6 +217,40 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// offsets) back into the model before update and rebuild so
             /// the next source tree does not stomp it.
             sync: ?*const fn (model: *ModelT, layout: canvas.WidgetLayoutTree) void = null,
+            /// Model-derived webview panes, re-applied after every rebuild
+            /// (so also on resize and every dispatched Msg): each pane
+            /// snaps its scene-declared webview to a canvas widget's
+            /// layout frame, navigates when its URL changes, and reloads
+            /// when its `reload_token` changes. Returns the number of
+            /// panes written to `out` (at most `max_web_panes`).
+            /// Engine-agnostic: the webview backend is whatever the build
+            /// selected (`-Dweb-engine=system|cef`); platforms without
+            /// child webviews log a warning and continue.
+            web_panes: ?*const fn (model: *const ModelT, out: []WebViewPane) usize = null,
+            /// Menu-bar extra installed once, on the installing frame.
+            /// macOS-proven (`NSStatusItem`); platforms without a
+            /// status-bar service log a warning and continue.
+            status_item: ?StatusItemOptions = null,
+        };
+
+        /// Last-navigated webview pane state, tracked per shell label so
+        /// rebuilds only navigate when the URL or reload token actually
+        /// changed. Frames are deliberately not cached: they reconcile
+        /// against the runtime's live webview state every apply.
+        const WebPaneState = struct {
+            label_storage: [app_manifest.max_view_label_bytes]u8 = undefined,
+            label_len: usize = 0,
+            url_storage: [platform.max_webview_url_bytes]u8 = undefined,
+            url_len: usize = 0,
+            reload_token: u64 = 0,
+
+            fn label(self: *const WebPaneState) []const u8 {
+                return self.label_storage[0..self.label_len];
+            }
+
+            fn url(self: *const WebPaneState) []const u8 {
+                return self.url_storage[0..self.url_len];
+            }
         };
 
         model: ModelT,
@@ -209,6 +290,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// effect system. Fixed-capacity; lives with the app struct
         /// (heap-allocated like the rest of it).
         effects: Effects,
+        /// Applied webview-pane state (`Options.web_panes`), keyed by
+        /// shell label.
+        web_pane_states: [max_web_panes]WebPaneState = [_]WebPaneState{.{}} ** max_web_panes,
+        web_pane_state_count: usize = 0,
+        /// Exactly-once guard for `Options.status_item`.
+        status_item_installed: bool = false,
 
         pub fn init(backing: std.mem.Allocator, model: ModelT, options: Options) Self {
             std.debug.assert(options.view != null or options.markup != null);
@@ -357,6 +444,106 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             self.tree = tree;
             self.arena_index = next_index;
             try self.scheduleAnimations(runtime, window_id);
+            self.applyWebPanes(runtime, window_id, layout);
+        }
+
+        /// Re-apply the model-derived webview panes against the freshly
+        /// computed widget layout: resolve each pane's anchor widget to a
+        /// frame, then patch the scene's webview shell view when the
+        /// frame, URL, or reload token changed. Failures degrade to a
+        /// logged warning so a missing webview or a denied origin never
+        /// takes the render loop down.
+        fn applyWebPanes(self: *Self, runtime: *Runtime, window_id: platform.WindowId, layout: canvas.WidgetLayoutTree) void {
+            const panes_fn = self.options.web_panes orelse return;
+            var panes: [max_web_panes]WebViewPane = undefined;
+            const count = @min(panes_fn(&self.model, &panes), max_web_panes);
+            for (panes[0..count]) |pane| self.applyWebPane(runtime, window_id, layout, pane);
+        }
+
+        fn applyWebPane(self: *Self, runtime: *Runtime, window_id: platform.WindowId, layout: canvas.WidgetLayoutTree, pane: WebViewPane) void {
+            var frame = pane.frame;
+            if (pane.anchor) |anchor| {
+                frame = webPaneAnchorFrame(layout, anchor) orelse {
+                    ui_app_log.warn(
+                        "webview pane '{s}': no canvas widget carries semantics label '{s}' - mark the region's widget with .semantics = .{{ .label = \"{s}\" }}",
+                        .{ pane.label, anchor, anchor },
+                    );
+                    return;
+                };
+            }
+            // Platform webview frames require a positive size and a
+            // non-negative origin; a collapsed or clipped anchor keeps
+            // the last applied frame instead of erroring every rebuild.
+            if (frame.width < 1 or frame.height < 1) return;
+            frame.x = @max(frame.x, 0);
+            frame.y = @max(frame.y, 0);
+
+            const state = self.webPaneState(pane.label) orelse {
+                ui_app_log.warn("webview pane '{s}' ignored: more than {d} distinct pane labels", .{ pane.label, max_web_panes });
+                return;
+            };
+            // Reconcile the frame against the runtime's actual webview
+            // state rather than a cache: shell relayouts (window moves,
+            // startup restores) reset scene webviews to their declared
+            // frames behind the app's back, and each such reset
+            // invalidates the canvas, so the next frame flows back
+            // through here and re-snaps the pane.
+            const actual_frame = runtime.webViewLocalFrame(window_id, pane.label) orelse {
+                ui_app_log.warn(
+                    "webview pane '{s}': the scene declares no .webview shell view with this label",
+                    .{pane.label},
+                );
+                return;
+            };
+            var patch: platform.ViewPatch = .{};
+            if (!rectsAlmostEqual(actual_frame, frame)) patch.frame = frame;
+            const first_apply = state.url_len == 0;
+            if (pane.url.len > 0 and (first_apply or !std.mem.eql(u8, state.url(), pane.url) or state.reload_token != pane.reload_token)) patch.url = pane.url;
+            if (patch.frame == null and patch.url == null) return;
+
+            _ = runtime.updateView(window_id, pane.label, patch) catch |err| {
+                ui_app_log.warn(
+                    "webview pane '{s}' update failed: {s} - the scene must declare a .webview shell view with this label and the URL's origin must be in security.navigation.allowed_origins",
+                    .{ pane.label, @errorName(err) },
+                );
+                return;
+            };
+            state.reload_token = pane.reload_token;
+            const url_len = @min(pane.url.len, state.url_storage.len);
+            @memcpy(state.url_storage[0..url_len], pane.url[0..url_len]);
+            state.url_len = url_len;
+        }
+
+        /// Find or insert the applied-state slot for a pane label.
+        fn webPaneState(self: *Self, label: []const u8) ?*WebPaneState {
+            for (self.web_pane_states[0..self.web_pane_state_count]) |*state| {
+                if (std.mem.eql(u8, state.label(), label)) return state;
+            }
+            if (self.web_pane_state_count >= max_web_panes) return null;
+            const state = &self.web_pane_states[self.web_pane_state_count];
+            state.* = .{};
+            const label_len = @min(label.len, state.label_storage.len);
+            @memcpy(state.label_storage[0..label_len], label[0..label_len]);
+            state.label_len = label_len;
+            self.web_pane_state_count += 1;
+            return state;
+        }
+
+        /// The layout frame of the first widget whose semantics label
+        /// matches `anchor`.
+        fn webPaneAnchorFrame(layout: canvas.WidgetLayoutTree, anchor: []const u8) ?geometry.RectF {
+            for (layout.nodes) |node| {
+                if (std.mem.eql(u8, node.widget.semantics.label, anchor)) return node.frame;
+            }
+            return null;
+        }
+
+        fn rectsAlmostEqual(a: geometry.RectF, b: geometry.RectF) bool {
+            const epsilon: f32 = 0.25;
+            return @abs(a.x - b.x) < epsilon and
+                @abs(a.y - b.y) < epsilon and
+                @abs(a.width - b.width) < epsilon and
+                @abs(a.height - b.height) < epsilon;
         }
 
         /// Rebuild the retained display list around the reconciled widget
@@ -490,6 +677,24 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             return buffer[0..try file.readPositionalAll(io, buffer, 0)];
         }
 
+        /// Install the menu-bar extra once, on the installing frame.
+        /// Selecting one of its items dispatches the item's `command`
+        /// through the ordinary `on_command` path (source `.tray`).
+        /// Unsupported platforms degrade to a logged warning.
+        fn installStatusItem(self: *Self, runtime: *Runtime) void {
+            const status_item = self.options.status_item orelse return;
+            if (self.status_item_installed) return;
+            self.status_item_installed = true;
+            runtime.createTray(.{
+                .title = status_item.title,
+                .icon_path = status_item.icon_path,
+                .tooltip = status_item.tooltip,
+                .items = status_item.items,
+            }) catch |err| {
+                ui_app_log.warn("status item install failed: {s}", .{@errorName(err)});
+            };
+        }
+
         fn sceneFn(context: *anyopaque) anyerror!app_manifest.ShellConfig {
             const self: *Self = @ptrCast(@alignCast(context));
             return self.options.scene;
@@ -501,7 +706,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .command => |command| {
                     const map = self.options.on_command orelse return;
                     if (map(command.name)) |msg| {
-                        try self.dispatch(runtime, command.window_id, msg);
+                        // Window-less command sources (status items, app
+                        // menus before any window focus) carry window id 0;
+                        // dispatch those against the canvas window.
+                        const window_id = if (command.window_id == 0) self.canvas_window_id else command.window_id;
+                        try self.dispatch(runtime, window_id, msg);
                     }
                 },
                 .appearance_changed => |appearance| {
@@ -567,9 +776,18 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 }
                 self.installed = true;
                 self.startMarkupWatch(runtime);
+                self.installStatusItem(runtime);
             } else if (self.options.tokens_fn != null and @abs(self.pixel_snap_scale - scale) > 0.001) {
                 self.pixel_snap_scale = scale;
                 try self.rebuild(runtime, frame_event.window_id);
+            } else if (self.options.web_panes != null) {
+                // Re-snap the webview panes each presented frame: a shell
+                // relayout that stomped a pane frame also invalidated the
+                // canvas, so the reconciliation ride-along here converges
+                // without a dedicated event.
+                if (runtime.canvasWidgetLayout(frame_event.window_id, self.options.canvas_label)) |layout| {
+                    self.applyWebPanes(runtime, frame_event.window_id, layout);
+                } else |_| {}
             }
             try self.presentFrame(runtime, frame_event, installing);
             if (installing) return;

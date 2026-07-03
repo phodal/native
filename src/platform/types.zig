@@ -145,6 +145,7 @@ pub const max_credential_account_bytes: usize = 256;
 pub const max_credential_secret_bytes: usize = 4096;
 pub const max_tray_items: usize = 32;
 pub const max_tray_icon_path_bytes: usize = 4096;
+pub const max_tray_title_bytes: usize = 64;
 pub const max_tray_tooltip_bytes: usize = 256;
 pub const max_tray_item_label_bytes: usize = 256;
 pub const max_tray_item_command_bytes: usize = 128;
@@ -871,6 +872,9 @@ pub const TrayItemId = u32;
 
 pub const TrayOptions = struct {
     icon_path: []const u8 = "",
+    /// Status-bar button title, shown when no icon resolves (macOS
+    /// `NSStatusItem` menu-bar extras render it directly in the menu bar).
+    title: []const u8 = "",
     tooltip: []const u8 = "",
     items: []const TrayMenuItem = &.{},
 };

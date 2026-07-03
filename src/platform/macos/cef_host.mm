@@ -2203,13 +2203,16 @@ int zero_native_appkit_show_message_dialog(zero_native_appkit_host_t *host, cons
     }
 }
 
-void zero_native_appkit_create_tray(zero_native_appkit_host_t *host, const char *icon_path, size_t icon_path_len, const char *tooltip, size_t tooltip_len) {
+void zero_native_appkit_create_tray(zero_native_appkit_host_t *host, const char *icon_path, size_t icon_path_len, const char *title, size_t title_len, const char *tooltip, size_t tooltip_len) {
     ZeroNativeChromiumHost *object = (__bridge ZeroNativeChromiumHost *)host;
     @autoreleasepool {
         if (object.statusItem) {
             [[NSStatusBar systemStatusBar] removeStatusItem:object.statusItem];
         }
-        object.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
+        // A titled menu-bar extra needs variable width; icon-only status
+        // items keep the classic square well.
+        BOOL hasTitle = title != NULL && title_len > 0;
+        object.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:hasTitle ? NSVariableStatusItemLength : NSSquareStatusItemLength];
 
         if (icon_path && icon_path_len > 0) {
             NSString *path = [[NSString alloc] initWithBytes:icon_path length:icon_path_len encoding:NSUTF8StringEncoding];
@@ -2220,7 +2223,10 @@ void zero_native_appkit_create_tray(zero_native_appkit_host_t *host, const char 
                 object.statusItem.button.image = image;
             }
         }
-        if (!object.statusItem.button.image) {
+        if (hasTitle) {
+            object.statusItem.button.title = [[NSString alloc] initWithBytes:title length:title_len encoding:NSUTF8StringEncoding] ?: @"";
+        }
+        if (!object.statusItem.button.image && object.statusItem.button.title.length == 0) {
             object.statusItem.button.title = object.appName.length > 0 ? [object.appName substringToIndex:MIN(1, object.appName.length)] : @"Z";
         }
         if (tooltip && tooltip_len > 0) {

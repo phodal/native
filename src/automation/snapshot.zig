@@ -298,6 +298,9 @@ pub fn writeText(input: Input, writer: anytype) !void {
             });
             try writer.print(" widget_cursor={s}", .{@tagName(view.cursor)});
         }
+        if (view.kind == .webview) {
+            try writer.print(" url=\"{s}\"", .{view.url});
+        }
         try writer.writeByte('\n');
     }
     for (input.widgets) |widget| {

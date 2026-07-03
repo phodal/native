@@ -66,6 +66,38 @@ const shell_windows = [_]zero_native.ShellWindow{.{
 
 This creates native chrome and controls in the platform host while the `main` WebView owns the workspace content.
 
+## Canvas + WebView In One Window
+
+A canvas-first `UiApp` can host a live webview next to its native-rendered widgets — the "native, web, or both per window" composition. The scene declares the webview shell view (parent it to the canvas view so frames share the canvas coordinate space), and `UiApp.Options.web_panes` keeps it snapped to a canvas widget's layout frame and drives navigation from the model:
+
+```zig
+const shell_views = [_]zero_native.ShellView{
+    .{ .label = "preview-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+    .{ .label = "preview", .kind = .webview, .parent = "preview-canvas", .url = "https://example.com/", .x = 240, .y = 76, .width = 704, .height = 548 },
+};
+
+fn view(ui: *Ui, model: *const Model) Ui.Node {
+    return ui.row(.{ .grow = 1 }, .{
+        sidebar(ui, model),
+        // An empty panel reserves the webview region; its semantics label
+        // is the pane anchor.
+        ui.panel(.{ .grow = 1, .semantics = .{ .label = "preview-pane" } }, .{}),
+    });
+}
+
+fn panes(model: *const Model, out: []PreviewApp.WebViewPane) usize {
+    out[0] = .{
+        .label = "preview",
+        .anchor = "preview-pane",
+        .url = model.url(),          // changing it navigates
+        .reload_token = model.reload_token, // bumping it reloads
+    };
+    return 1;
+}
+```
+
+Panes re-apply after every rebuild and presented frame, reconciling against the runtime's actual webview state, so shell relayouts (window restores, resizes) cannot leave the webview detached from its anchor. Pane URLs are subject to `security.navigation.allowed_origins`. A scene whose only webviews are children like this never grows an implicit `main` webview — the window stays canvas-first. The seam is engine-agnostic (it rides the same `PlatformServices` webview surface both the system and Chromium hosts implement), though `gpu_surface` canvases currently require the system engine on macOS. `examples/canvas-preview` is the live proof, with a smoke test at `zig build test-canvas-preview-smoke`.
+
 ## Imperative View API
 
 For dynamic surfaces, create and update views at runtime:

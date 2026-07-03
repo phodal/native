@@ -32,6 +32,7 @@ pub const max_credential_account_bytes = types.max_credential_account_bytes;
 pub const max_credential_secret_bytes = types.max_credential_secret_bytes;
 pub const max_tray_items = types.max_tray_items;
 pub const max_tray_icon_path_bytes = types.max_tray_icon_path_bytes;
+pub const max_tray_title_bytes = types.max_tray_title_bytes;
 pub const max_tray_tooltip_bytes = types.max_tray_tooltip_bytes;
 pub const max_tray_item_label_bytes = types.max_tray_item_label_bytes;
 pub const max_tray_item_command_bytes = types.max_tray_item_command_bytes;

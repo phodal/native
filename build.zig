@@ -509,6 +509,7 @@ pub fn build(b: *std.Build) void {
     addExampleTestStep(b, native_examples_step, "test-example-kanban", "Run ui builder kanban example tests", "examples/kanban");
     addExampleTestStep(b, native_examples_step, "test-example-habits", "Run markup habits example tests", "examples/habits");
     addExampleTestStep(b, native_examples_step, "test-example-effects-probe", "Run effects probe example tests", "examples/effects-probe");
+    addExampleTestStep(b, native_examples_step, "test-example-canvas-preview", "Run canvas preview example tests", "examples/canvas-preview");
     addExampleTestStep(b, native_examples_step, "test-example-capabilities", "Run capabilities example tests", "examples/capabilities");
     addFileContainsCheckStep(b, file_contains_checker, native_examples_step, "test-example-capabilities-events", "Verify capabilities example event bridge names", &.{
         .{ .path = "examples/capabilities/src/main.zig", .pattern = "zero-native:drop:files" },
@@ -1001,6 +1002,54 @@ pub fn build(b: *std.Build) void {
     gpu_dashboard_smoke_run.step.dependOn(&gpu_dashboard_smoke_build.step);
     gpu_dashboard_smoke_run.step.dependOn(&cli_exe.step);
     gpu_dashboard_smoke_step.dependOn(&gpu_dashboard_smoke_run.step);
+
+    const canvas_preview_smoke_step = b.step("test-canvas-preview-smoke", "Run macOS canvas + webview (both-in-one-window) automation smoke test");
+    const canvas_preview_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
+    canvas_preview_smoke_build.setCwd(b.path("examples/canvas-preview"));
+    const canvas_preview_smoke_run = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -eu
+        \\cd examples/canvas-preview
+        \\app="zig-out/bin/canvas-preview"
+        \\cli="$1"
+        \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
+        \\automation_dir=".zig-cache/zero-native-automation"
+        \\mkdir -p "$automation_dir"
+        \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt" "$automation_dir/screenshot-preview-canvas.png"
+        \\"$app" > .zig-cache/zero-native-canvas-preview-smoke.log 2>&1 &
+        \\pid=$!
+        \\trap 'kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true' EXIT
+        \\ready="$("$cli" automate wait 2>&1)"
+        \\case "$ready" in *"ready=true"*) ;; *) echo "canvas-preview automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\# Both architectures live in window 1: a presenting Metal canvas and
+        \\# a live WKWebView on a real https URL — with no implicit main webview.
+        \\"$cli" automate assert 'view @w1/preview-canvas kind=gpu_surface.*gpu_nonblank=true' 'view @w1/preview kind=webview.*url="https://example.com/"'
+        \\"$cli" automate assert --absent 'view @w1/main kind=webview' 'source kind=html bytes=0'
+        \\# The webview pane is snapped to the canvas anchor widget: right of
+        \\# the 224pt sidebar, below the 56pt toolbar.
+        \\preview_line="$(grep 'view @w1/preview kind=webview' "$automation_dir/snapshot.txt" | head -1)"
+        \\preview_x="$(printf '%s\n' "$preview_line" | sed -n 's/.*bounds=(\([0-9.]*\),.*/\1/p')"
+        \\case "$preview_x" in ''|*[!0-9.]*) echo "canvas-preview webview x was missing" >&2; exit 1 ;; esac
+        \\if [ "$(printf '%s\n' "$preview_x < 224" | bc)" -eq 1 ]; then echo "canvas-preview webview was not snapped right of the sidebar: x=$preview_x" >&2; exit 1; fi
+        \\# Navigation from a Msg: the app command switches the model URL and
+        \\# the runtime navigates the platform webview.
+        \\"$cli" automate native-command app.docs >/dev/null 2>&1
+        \\"$cli" automate assert 'view @w1/preview kind=webview.*url="https://zero-native.dev/"' 'name="URL: https://zero-native.dev/"'
+        \\# Resize keeps the pane snapped to the anchor widget's new frame:
+        \\# the panel right of the 224pt sidebar and below the 56pt toolbar.
+        \\"$cli" automate resize 1200 800 >/dev/null 2>&1
+        \\"$cli" automate assert 'window @w1 "zero-native Canvas Preview" bounds=.*1200x800' 'view @w1/preview kind=webview.*bounds=.224,56 976x744'
+        \\# Canvas screenshot evidence (reference-rendered PNG of the chrome).
+        \\"$cli" automate screenshot preview-canvas >/dev/null 2>&1
+        \\test -s "$automation_dir/screenshot-preview-canvas.png" || { echo "canvas-preview screenshot was empty" >&2; exit 1; }
+        \\echo "canvas-preview smoke ok"
+        ,
+        "sh",
+    });
+    canvas_preview_smoke_run.addFileArg(cli_exe.getEmittedBin());
+    canvas_preview_smoke_run.step.dependOn(&canvas_preview_smoke_build.step);
+    canvas_preview_smoke_run.step.dependOn(&cli_exe.step);
+    canvas_preview_smoke_step.dependOn(&canvas_preview_smoke_run.step);
 
     const gpu_components_smoke_step = b.step("test-gpu-components-smoke", "Run macOS GPU components automation smoke test");
     const gpu_components_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });

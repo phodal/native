@@ -35,6 +35,7 @@ const max_credential_account_bytes = types.max_credential_account_bytes;
 const max_credential_secret_bytes = types.max_credential_secret_bytes;
 const max_tray_items = types.max_tray_items;
 const max_tray_icon_path_bytes = types.max_tray_icon_path_bytes;
+const max_tray_title_bytes = types.max_tray_title_bytes;
 const max_tray_tooltip_bytes = types.max_tray_tooltip_bytes;
 const max_tray_item_label_bytes = types.max_tray_item_label_bytes;
 const max_tray_item_command_bytes = types.max_tray_item_command_bytes;
@@ -225,8 +226,11 @@ pub const NullPlatform = struct {
     credential_secret_len: usize = 0,
     credential_set_count: usize = 0,
     credential_delete_count: usize = 0,
+    webview_navigate_count: usize = 0,
     tray_icon_path: [max_tray_icon_path_bytes]u8 = undefined,
     tray_icon_path_len: usize = 0,
+    tray_title: [max_tray_title_bytes]u8 = undefined,
+    tray_title_len: usize = 0,
     tray_tooltip: [max_tray_tooltip_bytes]u8 = undefined,
     tray_tooltip_len: usize = 0,
     tray_items: [max_tray_items]TrayMenuItem = undefined,
@@ -699,6 +703,7 @@ pub const NullPlatform = struct {
         var webview = &self.webviews[index];
         @memcpy(webview.url_storage[0..url.len], url);
         webview.url = webview.url_storage[0..url.len];
+        self.webview_navigate_count += 1;
     }
 
     fn setWebViewZoom(context: ?*anyopaque, window_id: WindowId, label: []const u8, zoom: f64) anyerror!void {
@@ -793,8 +798,10 @@ pub const NullPlatform = struct {
     fn createTray(context: ?*anyopaque, options: TrayOptions) anyerror!void {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         self.tray_icon_path = undefined;
+        self.tray_title = undefined;
         self.tray_tooltip = undefined;
         self.tray_icon_path_len = (try copyInto(&self.tray_icon_path, options.icon_path)).len;
+        self.tray_title_len = (try copyInto(&self.tray_title, options.title)).len;
         self.tray_tooltip_len = (try copyInto(&self.tray_tooltip, options.tooltip)).len;
         try updateTrayMenu(context, options.items);
         self.tray_create_count += 1;
@@ -1323,6 +1330,10 @@ pub const NullPlatform = struct {
 
     pub fn lastTrayIconPath(self: *const NullPlatform) []const u8 {
         return self.tray_icon_path[0..self.tray_icon_path_len];
+    }
+
+    pub fn lastTrayTitle(self: *const NullPlatform) []const u8 {
+        return self.tray_title[0..self.tray_title_len];
     }
 
     pub fn lastTrayTooltip(self: *const NullPlatform) []const u8 {

@@ -376,6 +376,7 @@ pub const Runtime = struct {
     const writeWebViewListJson = WindowViewMethods.writeWebViewListJson;
     const reserveWebView = WindowViewMethods.reserveWebView;
     const findWebViewIndex = WindowViewMethods.findWebViewIndex;
+    pub const webViewLocalFrame = WindowViewMethods.webViewLocalFrame;
     const removeWebViewAt = WindowViewMethods.removeWebViewAt;
     const removeWebViewsForWindow = WindowViewMethods.removeWebViewsForWindow;
     const mainWebViewInfo = WindowViewMethods.mainWebViewInfo;

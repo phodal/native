@@ -777,3 +777,144 @@ test "widget trees beyond the old 64-node cap install and reconcile" {
     try app_state.rebuild(&harness.runtime, 1);
     try std.testing.expectEqual(@as(usize, 211), (try harness.runtime.canvasWidgetLayout(1, canvas_label)).nodes.len);
 }
+
+// ---------------------------------------------------------------- set_text
+
+const mirror_canvas_label = "mirror-canvas";
+
+const MirrorModel = struct {
+    draft: canvas.TextBuffer(64) = .{},
+    edit_count: u32 = 0,
+    submit_count: u32 = 0,
+};
+
+const MirrorMsg = union(enum) {
+    draft_edit: canvas.TextInputEvent,
+    submit,
+};
+
+const MirrorApp = ui_app_model.UiApp(MirrorModel, MirrorMsg);
+
+fn mirrorUpdate(model: *MirrorModel, msg: MirrorMsg) void {
+    switch (msg) {
+        .draft_edit => |edit| {
+            model.draft.apply(edit);
+            model.edit_count += 1;
+        },
+        .submit => model.submit_count += 1,
+    }
+}
+
+fn mirrorView(ui: *MirrorApp.Ui, model: *const MirrorModel) MirrorApp.Ui.Node {
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.textField(.{
+            .text = model.draft.text(),
+            .placeholder = "Message",
+            .on_input = MirrorApp.Ui.inputMsg(.draft_edit),
+            .on_submit = .submit,
+        }),
+        ui.text(.{}, if (model.draft.isEmpty()) "Send disabled" else "Send enabled"),
+    });
+}
+
+const mirror_views = [_]app_manifest.ShellView{
+    .{ .label = mirror_canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const mirror_windows = [_]app_manifest.ShellWindow{.{
+    .label = "main",
+    .title = "Mirror",
+    .width = 400,
+    .height = 300,
+    .views = &mirror_views,
+}};
+const mirror_scene: app_manifest.ShellConfig = .{ .windows = &mirror_windows };
+
+fn findWidgetIdByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.ObjectId {
+    if (widget.kind == kind) return widget.id;
+    for (widget.children) |child| {
+        if (findWidgetIdByKind(child, kind)) |id| return id;
+    }
+    return null;
+}
+
+test "automation set_text routes through the input path so the elm mirror stays consistent" {
+    // Friction #39: `widget-action <id> set_text` used to write the
+    // runtime editor state directly and never dispatch `on_input`, so a
+    // TEA app's model still saw an empty buffer (Send stayed disabled
+    // while the field visibly held text — a state no real user can
+    // produce).
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(MirrorApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = MirrorApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-mirror",
+        .scene = mirror_scene,
+        .canvas_label = mirror_canvas_label,
+        .update = mirrorUpdate,
+        .view = mirrorView,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = mirror_canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    const field_id = findWidgetIdByKind(app_state.tree.?.root, .text_field).?;
+
+    // set_text lands in the runtime editor AND the model mirror.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = mirror_canvas_label,
+        .id = field_id,
+        .action = .set_text,
+        .value = "ship the fix",
+    });
+    try std.testing.expectEqualStrings("ship the fix", app_state.model.draft.text());
+    try std.testing.expect(app_state.model.edit_count > 0);
+    const layout = try harness.runtime.canvasWidgetLayout(1, mirror_canvas_label);
+    try std.testing.expectEqualStrings("ship the fix", layout.findById(field_id).?.widget.text);
+
+    // The dependent view state follows the model, not just the editor.
+    var found_enabled = false;
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .text and std.mem.eql(u8, node.widget.text, "Send enabled")) found_enabled = true;
+    }
+    try std.testing.expect(found_enabled);
+
+    // Replacing existing text keeps model and editor in lockstep.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = mirror_canvas_label,
+        .id = field_id,
+        .action = .set_text,
+        .value = "second draft",
+    });
+    try std.testing.expectEqualStrings("second draft", app_state.model.draft.text());
+    const replaced_layout = try harness.runtime.canvasWidgetLayout(1, mirror_canvas_label);
+    try std.testing.expectEqualStrings("second draft", replaced_layout.findById(field_id).?.widget.text);
+
+    // Clearing through set_text "" also flows through the input path.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = mirror_canvas_label,
+        .id = field_id,
+        .action = .set_text,
+        .value = "",
+    });
+    try std.testing.expectEqualStrings("", app_state.model.draft.text());
+    const cleared_layout = try harness.runtime.canvasWidgetLayout(1, mirror_canvas_label);
+    try std.testing.expectEqualStrings("", cleared_layout.findById(field_id).?.widget.text);
+
+    // The automation snapshot agrees with both.
+    const snapshot = harness.runtime.automationSnapshot("Mirror");
+    for (snapshot.widgets) |widget| {
+        if (widget.id == field_id) try std.testing.expectEqualStrings("", widget.text_value);
+    }
+}

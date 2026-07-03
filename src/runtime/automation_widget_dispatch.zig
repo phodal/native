@@ -34,7 +34,7 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 .toggle => try dispatchAutomationWidgetKey(self, app, view_index, action.id, "space"),
                 .increment => try dispatchAutomationWidgetKey(self, app, view_index, action.id, self.views[view_index].canvasWidgetStepKey(action.id, .increment)),
                 .decrement => try dispatchAutomationWidgetKey(self, app, view_index, action.id, self.views[view_index].canvasWidgetStepKey(action.id, .decrement)),
-                .set_text => try setAutomationCanvasWidgetText(self, view_index, action.id, action.value),
+                .set_text => try setAutomationCanvasWidgetText(self, app, view_index, action.id, action.value),
                 .set_selection => try editAutomationCanvasWidgetText(self, view_index, action.id, .{ .set_selection = try parseAutomationTextSelection(action.value) }),
                 .set_composition => try editAutomationCanvasWidgetText(self, view_index, action.id, .{ .set_composition = .{ .text = action.value } }),
                 .commit_composition => try editAutomationCanvasWidgetText(self, view_index, action.id, .commit_composition),
@@ -254,10 +254,49 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             try CanvasWidgetEventMethods().invalidateForCanvasWidgetDirty(self, view_index, dirty);
         }
 
-        pub fn setAutomationCanvasWidgetText(self: *Runtime, view_index: usize, id: canvas.ObjectId, text: []const u8) anyerror!void {
+        /// Replace an editable widget's text through the SAME input-event
+        /// path real typing uses (#39): focus, a select-all key, then the
+        /// replacement text as a text-input event. Each step routes
+        /// through `dispatchGpuSurfaceInput`, so the app receives the
+        /// matching `.canvas_widget_keyboard` events and an elm-style
+        /// model's `on_input` mirror stays consistent with the runtime
+        /// editor — writing the editor state directly produced on-screen
+        /// state no real user could reach.
+        pub fn setAutomationCanvasWidgetText(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize, id: canvas.ObjectId, text: []const u8) anyerror!void {
             try focusAutomationCanvasWidget(self, view_index, id);
-            const dirty = try self.views[view_index].setCanvasWidgetTextValue(id, text) orelse return;
-            try CanvasWidgetEventMethods().invalidateForCanvasWidgetDirty(self, view_index, dirty);
+            if (!self.views[view_index].canEditCanvasWidgetText(id)) return error.InvalidCommand;
+            const window_id = self.views[view_index].window_id;
+            const label = self.views[view_index].label;
+            const timestamp_ns = automationInputTimestampNs();
+
+            // Select all (the platform primary shortcut), exactly like a
+            // user pressing cmd/ctrl+a in the focused field.
+            try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+                .window_id = window_id,
+                .label = label,
+                .kind = .key_down,
+                .timestamp_ns = timestamp_ns,
+                .key = "a",
+                .modifiers = .{ .primary = true },
+            } });
+            if (text.len == 0) {
+                // Empty replacement: delete the selection.
+                try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+                    .window_id = window_id,
+                    .label = label,
+                    .kind = .key_down,
+                    .timestamp_ns = timestamp_ns,
+                    .key = "backspace",
+                } });
+                return;
+            }
+            try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+                .window_id = window_id,
+                .label = label,
+                .kind = .text_input,
+                .timestamp_ns = timestamp_ns,
+                .text = text,
+            } });
         }
 
         pub fn editAutomationCanvasWidgetText(self: *Runtime, view_index: usize, id: canvas.ObjectId, edit: canvas.TextInputEvent) anyerror!void {

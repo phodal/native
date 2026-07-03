@@ -141,6 +141,13 @@ pub const Event = runtime_api.Event;
 pub const App = runtime_api.App(Runtime);
 pub const Options = runtime_api.Options;
 
+/// Bounded ring of degraded dispatch errors kept for snapshots and
+/// queries (#38): handler/update errors are caught, recorded here, and
+/// the app continues. The oldest record is dropped when full; the
+/// lifetime total keeps counting.
+pub const max_dispatch_errors: usize = 16;
+pub const DispatchError = automation.snapshot.DispatchError;
+
 pub const Runtime = struct {
     options: Options,
     surface: platform.Surface,
@@ -168,6 +175,15 @@ pub const Runtime = struct {
     last_diagnostics: FrameDiagnostics = .{},
     loaded_source: ?platform.WebViewSource = null,
     loaded_source_storage: RuntimeSourceStorage = .{},
+    /// Degraded dispatch errors, oldest first (see `max_dispatch_errors`).
+    dispatch_errors: [max_dispatch_errors]DispatchError = [_]DispatchError{.{}} ** max_dispatch_errors,
+    dispatch_error_len: usize = 0,
+    /// Lifetime count of degraded dispatch errors (including ones the
+    /// bounded ring has since dropped).
+    dispatch_error_total: u64 = 0,
+    /// Trace records dropped because a sink was full or failing; a
+    /// logging failure never fails dispatch.
+    dropped_trace_records: u64 = 0,
     async_bridge_responses: [max_async_bridge_responses]AsyncBridgeResponseSlot = [_]AsyncBridgeResponseSlot{.{}} ** max_async_bridge_responses,
     automation_windows: [automation.snapshot.max_windows]automation.snapshot.Window = undefined,
     automation_views: [automation.snapshot.max_views]platform.ViewInfo = undefined,
@@ -259,6 +275,20 @@ pub const Runtime = struct {
 
     pub fn pendingDirtyRegions(self: *const Runtime) []const geometry.RectF {
         return self.dirty_regions[0..self.dirty_region_count];
+    }
+
+    /// The most recent handler/update errors dispatch caught and
+    /// degraded instead of terminating the app (#38), oldest first.
+    /// Also published in automation snapshots (`error event=... name=...`
+    /// lines) and traced as `dispatch.error` records.
+    pub fn dispatchErrors(self: *const Runtime) []const DispatchError {
+        return self.dispatch_errors[0..self.dispatch_error_len];
+    }
+
+    /// Lifetime count of degraded dispatch errors, including records the
+    /// bounded ring has since dropped.
+    pub fn dispatchErrorTotal(self: *const Runtime) u64 {
+        return self.dispatch_error_total;
     }
 
     const FlowMethods = runtime_flow.RuntimeFlow(Runtime);

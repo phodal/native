@@ -29,6 +29,10 @@ const StreamModel = struct {
     line_lens: [max_recorded_lines]usize = [_]usize{0} ** max_recorded_lines,
     line_count: usize = 0,
     truncated_count: usize = 0,
+    // Full-length proof for lines beyond the recording prefix (raised
+    // per-spawn line bounds deliver lines the 96-byte storage cannot).
+    last_line_len: usize = 0,
+    last_line_hash: u64 = 0,
     dropped_before_total: u32 = 0,
     exit_count: usize = 0,
     exit_code: i32 = 0,
@@ -51,6 +55,8 @@ const StreamModel = struct {
     fn recordLine(model: *StreamModel, line: effects_mod.EffectLine) void {
         model.dropped_before_total += line.dropped_before;
         if (line.truncated) model.truncated_count += 1;
+        model.last_line_len = line.line.len;
+        model.last_line_hash = std.hash.Wyhash.hash(0, line.line);
         if (model.line_count >= max_recorded_lines) return;
         const len = @min(line.line.len, max_recorded_line_bytes);
         @memcpy(model.line_storage[model.line_count][0..len], line.line[0..len]);
@@ -104,6 +110,7 @@ const stream_key: u64 = 42;
 // keep the update function closure-free.
 var test_argv: []const []const u8 = &.{};
 var test_stdin: ?[]const u8 = null;
+var test_max_line_bytes: usize = effects_mod.max_effect_line_bytes;
 
 fn streamUpdate(model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void {
     switch (msg) {
@@ -111,6 +118,7 @@ fn streamUpdate(model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void {
             .key = stream_key,
             .argv = test_argv,
             .stdin = test_stdin,
+            .max_line_bytes = test_max_line_bytes,
             .on_line = StreamEffects.lineMsg(.line),
             .on_exit = StreamEffects.exitMsg(.done),
         }),
@@ -384,6 +392,78 @@ test "queue overflow drops lines loudly and truncates over-long lines" {
     try fx.feedExit(stream_key, 0);
     try h.drainWakes();
     try std.testing.expectEqual(@as(u32, 3), h.app_state.model.exit_dropped_lines);
+}
+
+test "a raised per-spawn line bound delivers long lines intact and truncates at the override" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_argv = &.{ "claude", "-p", "--output-format", "stream-json" };
+    test_stdin = null;
+    test_max_line_bytes = 16 * 1024;
+    defer test_max_line_bytes = effects_mod.max_effect_line_bytes;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    const request = h.app_state.effects.pendingSpawnAt(0).?;
+    try std.testing.expectEqual(@as(usize, 16 * 1024), request.max_line_bytes);
+
+    // A 6000-byte NDJSON-style event: 1.5x the default cap, intact under
+    // the raised bound (this exact shape was destroyed in ovation #36).
+    const long_line = try std.testing.allocator.alloc(u8, 6000);
+    defer std.testing.allocator.free(long_line);
+    @memset(long_line, 'x');
+    long_line[0] = '{';
+    long_line[5999] = '}';
+    try fx.feedLine(stream_key, long_line);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.truncated_count);
+    try std.testing.expectEqual(@as(usize, 6000), h.app_state.model.last_line_len);
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, long_line), h.app_state.model.last_line_hash);
+
+    // Beyond even the raised bound: cut at the override, flagged.
+    const huge_line = try std.testing.allocator.alloc(u8, 16 * 1024 + 500);
+    defer std.testing.allocator.free(huge_line);
+    @memset(huge_line, 'y');
+    try fx.feedLine(stream_key, huge_line);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 2), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.truncated_count);
+    try std.testing.expectEqual(@as(usize, 16 * 1024), h.app_state.model.last_line_len);
+
+    try fx.feedExit(stream_key, 0);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.exit_count);
+}
+
+test "per-spawn line bounds above the ceiling (or zero) are rejected loudly" {
+    var h = try Harness.create();
+    defer h.destroy();
+    h.app_state.effects.executor = .fake;
+
+    test_argv = &.{"firehose"};
+    test_stdin = null;
+    test_max_line_bytes = effects_mod.max_effect_line_bytes_ceiling + 1;
+    defer test_max_line_bytes = effects_mod.max_effect_line_bytes;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.exit_count);
+    try std.testing.expectEqual(effects_mod.EffectExitReason.rejected, h.app_state.model.exit_reason.?);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.effects.activeCount());
+
+    test_max_line_bytes = 0;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 2), h.app_state.model.exit_count);
+    try std.testing.expectEqual(effects_mod.EffectExitReason.rejected, h.app_state.model.exit_reason.?);
+
+    // The ceiling itself is accepted.
+    test_max_line_bytes = effects_mod.max_effect_line_bytes_ceiling;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.effects.pendingSpawnCount());
+    try h.app_state.effects.feedExit(stream_key, 0);
+    try h.drainWakes();
 }
 
 test "fake executor collect mode accumulates output and delivers it on the exit" {
@@ -806,6 +886,36 @@ test "real executor children inherit the parent environment" {
     try std.testing.expect(std.mem.startsWith(u8, h.app_state.model.lineAt(0), "HOME="));
     try std.testing.expect(h.app_state.model.lineAt(1).len > "PATH=".len);
     try std.testing.expect(std.mem.startsWith(u8, h.app_state.model.lineAt(1), "PATH="));
+}
+
+test "real executor streams a single line beyond the default cap intact with a raised bound" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var h = try Harness.create();
+    defer h.destroy();
+
+    // One 6000-byte line — 1.5x the default 4 KiB cap that truncated
+    // long stream-json events — followed by a short line, both intact
+    // under a raised per-spawn bound. POSIX-portable across the macOS
+    // and ubuntu runners.
+    test_argv = &.{ "/bin/sh", "-c", "printf 'short\\n'; dd if=/dev/zero bs=6000 count=1 2>/dev/null | tr '\\0' 'x'; printf '\\n'" };
+    test_stdin = null;
+    test_max_line_bytes = 16 * 1024;
+    defer test_max_line_bytes = effects_mod.max_effect_line_bytes;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForRealCompletion(&h, sawExit);
+
+    try std.testing.expectEqual(@as(i32, 0), h.app_state.model.exit_code);
+    try std.testing.expectEqual(effects_mod.EffectExitReason.exited, h.app_state.model.exit_reason.?);
+    try std.testing.expectEqual(@as(usize, 2), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.truncated_count);
+    try std.testing.expectEqual(@as(u32, 0), h.app_state.model.exit_dropped_lines);
+    try std.testing.expectEqualStrings("short", h.app_state.model.lineAt(0));
+    // The long line (the last delivered) arrived byte-exact.
+    const expected = try std.testing.allocator.alloc(u8, 6000);
+    defer std.testing.allocator.free(expected);
+    @memset(expected, 'x');
+    try std.testing.expectEqual(@as(usize, 6000), h.app_state.model.last_line_len);
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, expected), h.app_state.model.last_line_hash);
 }
 
 test "real executor collect mode delivers a giant single-line stdout intact" {

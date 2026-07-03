@@ -121,7 +121,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 .toggle => try AutomationWidgetMethods(Runtime).dispatchAutomationWidgetKey(self, app, index, action.id, "space"),
                 .increment => try AutomationWidgetMethods(Runtime).dispatchAutomationWidgetKey(self, app, index, action.id, self.views[index].canvasWidgetStepKey(action.id, .increment)),
                 .decrement => try AutomationWidgetMethods(Runtime).dispatchAutomationWidgetKey(self, app, index, action.id, self.views[index].canvasWidgetStepKey(action.id, .decrement)),
-                .set_text => try AutomationWidgetMethods(Runtime).setAutomationCanvasWidgetText(self, index, action.id, action.text),
+                .set_text => try AutomationWidgetMethods(Runtime).setAutomationCanvasWidgetText(self, app, index, action.id, action.text),
                 .set_selection => try AutomationWidgetMethods(Runtime).editAutomationCanvasWidgetText(self, index, action.id, .{ .set_selection = action.selection orelse return error.InvalidCommand }),
                 .set_composition => try AutomationWidgetMethods(Runtime).editAutomationCanvasWidgetText(self, index, action.id, .{ .set_composition = .{ .text = action.text } }),
                 .commit_composition => try AutomationWidgetMethods(Runtime).editAutomationCanvasWidgetText(self, index, action.id, .commit_composition),

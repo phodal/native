@@ -195,6 +195,8 @@ For `<if test>`, prefer an explicit boolean predicate method over numeric truthi
 
 `on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it.
 
+A handler or update error DEGRADES, it does not exit the app: dispatch catches it, records it in a bounded ring (`runtime.dispatchErrors()`, the `error event=... name=...` lines and `dispatch_errors=` count in automation snapshots, and a `dispatch.error` trace record at error level), and the app keeps running. Trace-sink capacity failures likewise never fail dispatch — dropped records are counted (`dropped_trace_records=`), not fatal. Design for it: an arm that can fail should still surface its own status in the model; the error ring is the safety net, not the UX.
+
 Handlers only work on HIT-TARGET elements. Layout containers (`row`, `column`, `stack`, `spacer`, `grid`, `list`, `table`, `table-row`, `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination`) and decoration leaves (`badge`, `avatar`, `tooltip`, `separator`, `skeleton`, `spinner`) are never hit-tested — the engine routes pointer events through them to what they contain, so an `on-*` there could never fire. Both engines and `markup check` reject it with a teaching error instead of accepting a dead handler: put the handler on a leaf like `list-item` or `text`, or on a control inside the container. (A whole-row press target is a `list-item`; surfaces like `card`, `panel`, `scroll`, and the modal kinds ARE hit targets.)
 
 ## Text fields: the elm-style mirror pattern
@@ -269,7 +271,8 @@ Rules that keep this honest:
 - Effects are update-side ONLY. The view never spawns anything — a button dispatches a Msg, and that Msg's update arm spawns. Markup stays declarative.
 - One `on_exit` Msg per spawn, always. A spawn that cannot run (all `max_effects = 16` slots busy, duplicate active key, argv over capacity) still delivers it, with reason `.rejected`. Reasons: `exited` (code is real), `signaled`, `cancelled`, `rejected`, `spawn_failed`.
 - After `fx.cancel(key)` returns, no further `on_line` Msgs for that spawn arrive; exactly one `.cancelled` exit follows. The process is killed and reaped — no zombies. Streaming a chat agent's stdout for minutes and cancelling mid-stream is the designed-for case.
-- Overflow is never silent: a full completion queue drops lines but the next delivered line's `dropped_before` and the exit's `dropped_lines` carry the count; over-long lines arrive truncated with `truncated = true`. Capacities: 16 in-flight effects, 4 KiB per line, 64 queued completions.
+- Overflow is never silent: a full completion queue drops lines but the next delivered line's `dropped_before` and the exit's `dropped_lines` carry the count; over-long lines arrive truncated with `truncated = true`. Capacities: 16 in-flight effects, 4 KiB per line by default, 64 queued completions.
+- Agent CLIs emit whole events as single NDJSON lines far beyond 4 KiB (`claude -p --output-format stream-json` repeats the entire answer on one line). Raise the bound per spawn with `.max_line_bytes = 64 * 1024` — anything up to `max_effect_line_bytes_ceiling` (64 KiB); requests above the ceiling (or zero) are rejected through `on_exit`, never silently clamped. Lines beyond the granted bound still arrive truncated and flagged.
 - JSON-over-stdout (`gh --json`, `jq -c`, `curl`) emits one giant line the 4 KiB line cap would destroy. Spawn with `.output = .collect` instead of the default `.lines`: whole stdout (up to 512 KiB) arrives ONCE on the exit Msg as `exit.output`, plus the child's stderr tail (last 4 KiB) in `exit.stderr_tail` — check it when `exit.code != 0` (auth errors, usage messages). No `on_line` Msgs fire for a collect spawn; overflow arrives cut with `output_truncated`/`stderr_truncated` set, never silently. COPY `exit.output`/`exit.stderr_tail` in update — drain scratch like `line.line`; the scalar exit fields stay plain data, safe to store. (`.lines` mode still ignores stderr entirely; use `.collect`, or an sh `2>&1` re-route if you truly need interleaved streaming.)
 
 `fx.fetch` runs one HTTP(S) request on a worker thread and delivers its terminal outcome — response, classified failure, timeout, or cancel — as exactly ONE Msg:
@@ -300,6 +303,27 @@ Fetch rules:
 - Exactly one `on_response` Msg per fetch, always terminal. `response.outcome` says what happened: `.ok` (real HTTP status in `.status` — non-2xx included; an HTTP-level error is still a delivered response), `.rejected` (never started: slots busy, duplicate active key, malformed URL or non-http(s) scheme, over-capacity URL/headers/payload), `.connect_failed` (DNS or TCP), `.tls_failed`, `.protocol_failed` (mid-exchange), `.timed_out`, `.cancelled`.
 - `response.body` is binary-safe bytes (zeros and high bits round-trip). Bodies over 256 KiB arrive cut at that bound with `truncated = true` — never silently. Capacities: 2 KiB URLs, 8 extra headers (1 KiB of names+values total), 64 KiB request payloads.
 - `fx.cancel(key)` keeps the spawn promise: exactly one `.cancelled` response Msg, nothing for that fetch after it.
+
+Streaming responses (`.response = .stream`) frame the body into `on_line` Msgs as lines arrive — the spawn `.lines` contract over HTTP. This is THE mode for NDJSON/SSE endpoints that hold the connection open for a command's whole lifetime (Vercel Sandbox `POST .../cmd` with wait+logs, agent event streams):
+
+```zig
+.run => fx.fetch(.{
+    .key = exec_key,
+    .method = .POST,
+    .url = sandbox_cmd_url,
+    .headers = &.{.{ .name = "authorization", .value = token }},
+    .body = cmd_json,
+    .timeout_ms = 600_000,                 // covers the STREAM's whole lifetime
+    .response = .stream,                   // body arrives as on_line Msgs
+    .max_line_bytes = 64 * 1024,           // agent events exceed the 4 KiB default
+    .on_line = Effects.lineMsg(.exec_event),
+    .on_response = Effects.responseMsg(.exec_done),
+}),
+.exec_event => |line| model.recordEvent(line),  // COPY line.line — drain scratch
+.exec_done => |response| model.finish(response), // status set, body always empty
+```
+
+Stream rules: each body line is one `on_line` Msg (same payload type and copy rule as spawn lines; `max_line_bytes` mirrors the spawn override with the same 64 KiB ceiling); the terminal `on_response` Msg carries the real HTTP status with an empty body; `fx.cancel(key)` mid-stream stops the lines and delivers exactly one `.cancelled` terminal; the whole-exchange `timeout_ms` covers the stream's full lifetime, so raise it for long-running commands; lines dropped on a full queue that no later line reported ride the terminal's `response.dropped_before`. In the fake executor, `feedLine` feeds a stream fetch's lines and `feedResponse(key, status, "")` delivers its terminal.
 
 Test effects with the fake executor — deterministic, no processes, no network:
 

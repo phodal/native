@@ -5,7 +5,10 @@
 //! `Msg` values (or, in `.collect` mode, accumulates whole stdout plus a
 //! stderr tail and delivers both on the exit Msg), reports process exits
 //! the same way, and delivers each fetch's terminal outcome as exactly
-//! one `Msg`. The model is never touched off-thread: workers post
+//! one `Msg` — with `.response = .stream` framing the response body into
+//! `on_line` Msgs first (the spawn `.lines` contract over HTTP, for
+//! NDJSON/SSE endpoints that hold the connection open). The model is
+//! never touched off-thread: workers post
 //! fixed-size completion records into a bounded MPSC queue, nudge the
 //! platform loop through `PlatformServices.wake_fn`, and the loop thread
 //! drains the queue and dispatches Msgs through the app's `update`.
@@ -61,10 +64,20 @@ pub const max_effect_argv: usize = 16;
 pub const max_effect_argv_bytes: usize = 2048;
 /// Maximum stdin payload per spawn (written once, then closed).
 pub const max_effect_stdin_bytes: usize = 4096;
-/// Maximum bytes per delivered stdout line; longer lines are truncated
-/// (delivered with `truncated = true`, the remainder discarded). Applies
-/// to `.lines` spawns only — `.collect` spawns have no line framing.
+/// Default maximum bytes per delivered stdout line; longer lines are
+/// truncated (delivered with `truncated = true`, the remainder
+/// discarded). Applies to `.lines` spawns and `.stream` fetches only —
+/// `.collect` spawns have no line framing. Override per effect with
+/// `SpawnOptions.max_line_bytes` / `FetchOptions.max_line_bytes` (agent
+/// CLIs emit whole NDJSON events as single lines far beyond 4 KiB).
 pub const max_effect_line_bytes: usize = 4096;
+/// Hard ceiling for per-effect `max_line_bytes` overrides. A request
+/// above it is rejected (reason `.rejected` / outcome `.rejected`) —
+/// never silently clamped. Lines beyond the granted bound still arrive
+/// truncated and flagged. Overrides above the default heap-allocate one
+/// line buffer per accepted effect plus one transfer buffer per
+/// oversized line in flight.
+pub const max_effect_line_bytes_ceiling: usize = 64 * 1024;
 /// Maximum collected stdout bytes per `.collect` spawn (whole-stdout
 /// delivery for tools like `gh --json` that emit one giant line); the
 /// overflow is discarded and the exit arrives with
@@ -119,6 +132,19 @@ pub const effect_error_exit_code: i32 = -1;
 /// neither is ever silent.
 pub const EffectOutputMode = enum { lines, collect };
 
+/// How a fetch's response body comes back. `.buffered` (the default)
+/// delivers the whole body once, on the terminal `on_response` Msg.
+/// `.stream` frames the body into lines as they arrive — each line is
+/// an `on_line` Msg (the spawn `.lines` contract over HTTP; NDJSON and
+/// SSE endpoints that hold the connection open for a command's whole
+/// lifetime are the driver) — and the terminal `on_response` Msg then
+/// carries the status with an empty body. The fetch promise holds:
+/// exactly one terminal Msg per fetch, and after `cancel(key)` no
+/// further line Msgs are dispatched. The whole-exchange timeout applies
+/// to the stream's full lifetime — long-lived streams should raise
+/// `timeout_ms` accordingly.
+pub const FetchResponseMode = enum { buffered, stream };
+
 pub const EffectExitReason = enum {
     /// The process exited on its own; `code` is its exit code.
     exited,
@@ -139,8 +165,10 @@ pub const EffectExitReason = enum {
 pub const EffectLine = struct {
     key: u64,
     line: []const u8,
-    /// The source line exceeded `max_effect_line_bytes`; this is its
-    /// first `max_effect_line_bytes` bytes and the rest was discarded.
+    /// The source line exceeded the effect's line bound (the
+    /// `max_effect_line_bytes` default or its per-effect
+    /// `max_line_bytes` override); this is its first bound bytes and
+    /// the rest was discarded.
     truncated: bool = false,
     /// Whole lines dropped on a full completion queue immediately before
     /// this one. Never silently zero when drops happened: undelivered
@@ -218,8 +246,10 @@ pub const EffectResponse = struct {
     /// first `max_effect_body_bytes` bytes and the rest was discarded.
     truncated: bool = false,
     /// Loop-side terminal notices evicted from the pending ring to make
-    /// room before this one (only under extreme rejection bursts).
-    /// Never silently zero when a notice was lost.
+    /// room before this one (only under extreme rejection bursts). For
+    /// `.stream` fetches this additionally carries stream lines dropped
+    /// on a full completion queue that no later line reported. Never
+    /// silently zero when something was lost.
     dropped_before: u32 = 0,
 };
 
@@ -357,6 +387,16 @@ pub fn Effects(comptime Msg: type) type {
             /// delivers both on the exit Msg — `on_line` is never called
             /// for a collect spawn.
             output: EffectOutputMode = .lines,
+            /// Per-spawn delivered-line bound for `.lines` output.
+            /// Line-oriented agent CLIs (`claude -p --output-format
+            /// stream-json`) emit whole events as single NDJSON lines
+            /// far beyond the 4 KiB default; raise this up to
+            /// `max_effect_line_bytes_ceiling` (64 KiB) to receive them
+            /// intact. Requests above the ceiling (or zero) are
+            /// rejected through `on_exit`, never silently clamped.
+            /// Bounds above the default heap-allocate the spawn's line
+            /// buffer. Ignored by `.collect` spawns.
+            max_line_bytes: usize = max_effect_line_bytes,
             on_line: ?LineMsgFn = null,
             on_exit: ?ExitMsgFn = null,
         };
@@ -369,6 +409,7 @@ pub fn Effects(comptime Msg: type) type {
             argv: []const []const u8,
             stdin: []const u8,
             output: EffectOutputMode = .lines,
+            max_line_bytes: usize = max_effect_line_bytes,
         };
 
         pub const FetchOptions = struct {
@@ -386,8 +427,24 @@ pub fn Effects(comptime Msg: type) type {
             /// sends no body.
             body: ?[]const u8 = null,
             /// Whole-exchange timeout in milliseconds; expiry delivers
-            /// the terminal Msg with outcome `.timed_out`.
+            /// the terminal Msg with outcome `.timed_out`. For
+            /// `.stream` fetches this covers the stream's entire
+            /// lifetime — raise it for endpoints that hold the
+            /// connection open (sandbox exec, agent event streams).
             timeout_ms: u32 = default_effect_fetch_timeout_ms,
+            /// `.buffered` (default) delivers the whole body on the
+            /// terminal Msg; `.stream` frames the body into `on_line`
+            /// Msgs as lines arrive (the spawn `.lines` contract over
+            /// HTTP) with the terminal Msg carrying only the status.
+            response: FetchResponseMode = .buffered,
+            /// Line Msg constructor for `.stream` fetches; unused (and
+            /// never called) in `.buffered` mode.
+            on_line: ?LineMsgFn = null,
+            /// Per-fetch delivered-line bound for `.stream` responses,
+            /// mirroring `SpawnOptions.max_line_bytes` (same ceiling,
+            /// same rejection of over-ceiling or zero requests).
+            /// Ignored by `.buffered` fetches.
+            max_line_bytes: usize = max_effect_line_bytes,
             on_response: ?ResponseMsgFn = null,
         };
 
@@ -400,6 +457,8 @@ pub fn Effects(comptime Msg: type) type {
             url: []const u8,
             headers: []const std.http.Header,
             body: []const u8,
+            response: FetchResponseMode = .buffered,
+            max_line_bytes: usize = max_effect_line_bytes,
         };
 
         /// `draining`: the worker is done and the terminal entry is
@@ -439,6 +498,12 @@ pub fn Effects(comptime Msg: type) type {
             line_fn: ?LineMsgFn = null,
             exit_fn: ?ExitMsgFn = null,
             response_fn: ?ResponseMsgFn = null,
+            /// `.line` entries whose payload exceeds the inline buffer
+            /// (a raised `max_line_bytes` bound): the bytes ride in this
+            /// heap allocation instead of `line_bytes`. Owned by the
+            /// entry once enqueued — the drain takes it (freed when the
+            /// next line drains) and every queue-clearing path frees it.
+            heap_line: ?[]u8 = null,
             line_bytes: [max_effect_line_bytes]u8 = undefined,
         };
 
@@ -497,6 +562,15 @@ pub fn Effects(comptime Msg: type) type {
             argv_storage: [max_effect_argv_bytes]u8 = undefined,
             stdin_storage: [max_effect_stdin_bytes]u8 = undefined,
             stdin_len: usize = 0,
+            // ---- line-framing fields (.lines spawns, .stream fetches) ----
+            /// Effective per-line bound: the default or the accepted
+            /// `max_line_bytes` override.
+            line_limit: usize = max_effect_line_bytes,
+            /// Heap line-accumulation buffer, allocated per accepted
+            /// effect whose `max_line_bytes` exceeds the default (the
+            /// worker frames lines into it instead of its stack
+            /// buffer). Owned by the slot; freed on reuse and deinit.
+            line_buffer: ?[]u8 = null,
             // ---- collect-mode fields (kind == .spawn, output == .collect) ----
             output_mode: EffectOutputMode = .lines,
             /// Heap buffer per accepted `.collect` spawn
@@ -514,6 +588,9 @@ pub fn Effects(comptime Msg: type) type {
             /// the tail is truncated.
             stderr_total: usize = 0,
             // ---- fetch-only fields (kind == .fetch) ----
+            /// `.stream` frames the response body into line entries;
+            /// `.buffered` delivers it whole on the terminal entry.
+            fetch_response_mode: FetchResponseMode = .buffered,
             method: std.http.Method = .GET,
             url_storage: [max_effect_url_bytes]u8 = undefined,
             url_len: usize = 0,
@@ -591,6 +668,11 @@ pub fn Effects(comptime Msg: type) type {
         /// Scratch the drained entry is copied into so its line slice
         /// stays valid while `update` runs (recycled per drained Msg).
         drain_scratch: Entry = .{},
+        /// The heap payload of the most recently drained oversized line
+        /// (raised `max_line_bytes`), keeping `EffectLine.line` valid
+        /// while `update` runs (freed when the next line drains, or at
+        /// `deinit`).
+        drain_heap_line: ?[]u8 = null,
         /// The fetch buffer of the most recently delivered response,
         /// keeping `EffectResponse.body` valid while `update` runs
         /// (freed when the next response drains, or at `deinit`).
@@ -627,11 +709,7 @@ pub fn Effects(comptime Msg: type) type {
                     }
                     if (!running) break;
                     // Keep the queue drained so exit-post retries finish.
-                    self.queue_mutex.lock();
-                    self.queue_head = 0;
-                    self.queue_len = 0;
-                    self.queue_count.store(0, .release);
-                    self.queue_mutex.unlock();
+                    self.clearQueue();
                     std.Io.sleep(io, std.Io.Duration.fromMilliseconds(1), .awake) catch break;
                 }
             }
@@ -640,6 +718,7 @@ pub fn Effects(comptime Msg: type) type {
                 self.allocator.destroy(threaded);
                 self.io_threaded = null;
             }
+            self.clearQueue();
             for (&self.slots) |*slot| {
                 if (slot.fetch_buffer) |buffer| {
                     self.allocator.free(buffer);
@@ -648,6 +727,10 @@ pub fn Effects(comptime Msg: type) type {
                 if (slot.collect_buffer) |buffer| {
                     self.allocator.free(buffer);
                     slot.collect_buffer = null;
+                }
+                if (slot.line_buffer) |buffer| {
+                    self.allocator.free(buffer);
+                    slot.line_buffer = null;
                 }
             }
             if (self.drain_fetch_body) |buffer| {
@@ -658,6 +741,29 @@ pub fn Effects(comptime Msg: type) type {
                 self.allocator.free(buffer);
                 self.drain_collect_output = null;
             }
+            if (self.drain_heap_line) |buffer| {
+                self.allocator.free(buffer);
+                self.drain_heap_line = null;
+            }
+        }
+
+        /// Discard every queued completion, freeing heap line payloads
+        /// (raised `max_line_bytes` lines own an allocation each).
+        /// Shutdown-only; the drain path retires entries one by one.
+        fn clearQueue(self: *Self) void {
+            self.queue_mutex.lock();
+            defer self.queue_mutex.unlock();
+            while (self.queue_len > 0) {
+                const entry = &self.queue[self.queue_head];
+                if (entry.heap_line) |heap| {
+                    self.allocator.free(heap);
+                    entry.heap_line = null;
+                }
+                self.queue_head = (self.queue_head + 1) % max_effect_queue_entries;
+                self.queue_len -= 1;
+            }
+            self.queue_head = 0;
+            self.queue_count.store(0, .release);
         }
 
         /// Point workers at the platform's wake service. Loop-thread
@@ -693,6 +799,9 @@ pub fn Effects(comptime Msg: type) type {
             if (total_bytes > max_effect_argv_bytes) return self.reject(options);
             const stdin_bytes = options.stdin orelse "";
             if (stdin_bytes.len > max_effect_stdin_bytes) return self.reject(options);
+            if (options.max_line_bytes == 0 or options.max_line_bytes > max_effect_line_bytes_ceiling) {
+                return self.reject(options);
+            }
             if (self.findActiveSlot(options.key) != null) return self.reject(options);
             const slot_index = self.findIdleSlot() orelse return self.reject(options);
 
@@ -731,8 +840,17 @@ pub fn Effects(comptime Msg: type) type {
                 self.allocator.free(old);
                 slot.collect_buffer = null;
             }
+            if (slot.line_buffer) |old| {
+                self.allocator.free(old);
+                slot.line_buffer = null;
+            }
+            slot.line_limit = options.max_line_bytes;
             if (options.output == .collect) {
                 slot.collect_buffer = self.allocator.alloc(u8, max_effect_collect_bytes) catch {
+                    return self.reject(options);
+                };
+            } else if (options.max_line_bytes > max_effect_line_bytes) {
+                slot.line_buffer = self.allocator.alloc(u8, options.max_line_bytes) catch {
                     return self.reject(options);
                 };
             }
@@ -782,11 +900,17 @@ pub fn Effects(comptime Msg: type) type {
             if (header_bytes > max_effect_fetch_header_bytes) return self.rejectFetch(options);
             const payload = options.body orelse "";
             if (payload.len > max_effect_fetch_payload_bytes) return self.rejectFetch(options);
+            if (options.max_line_bytes == 0 or options.max_line_bytes > max_effect_line_bytes_ceiling) {
+                return self.rejectFetch(options);
+            }
             if (self.findActiveSlot(options.key) != null) return self.rejectFetch(options);
             const slot_index = self.findIdleSlot() orelse return self.rejectFetch(options);
 
             const slot = &self.slots[slot_index];
-            const buffer = self.allocator.alloc(u8, payload.len + max_effect_body_bytes) catch {
+            // Stream fetches never buffer a body: the buffer holds only
+            // the request payload copy.
+            const body_space: usize = if (options.response == .stream) 0 else max_effect_body_bytes;
+            const buffer = self.allocator.alloc(u8, payload.len + body_space) catch {
                 return self.rejectFetch(options);
             };
             slot.generation = self.next_generation;
@@ -794,11 +918,23 @@ pub fn Effects(comptime Msg: type) type {
             if (self.next_generation == 0) self.next_generation = 1;
             slot.key = options.key;
             slot.kind = .fetch;
-            slot.on_line = null;
+            slot.on_line = if (options.response == .stream) options.on_line else null;
             slot.on_exit = null;
             slot.on_response = options.on_response;
+            slot.fetch_response_mode = options.response;
             slot.method = options.method;
             slot.timeout_ms = options.timeout_ms;
+            slot.line_limit = options.max_line_bytes;
+            if (slot.line_buffer) |old| {
+                self.allocator.free(old);
+                slot.line_buffer = null;
+            }
+            if (options.response == .stream and options.max_line_bytes > max_effect_line_bytes) {
+                slot.line_buffer = self.allocator.alloc(u8, options.max_line_bytes) catch {
+                    self.allocator.free(buffer);
+                    return self.rejectFetch(options);
+                };
+            }
             slot.cancel_requested.store(false, .release);
             slot.fetch_done.store(false, .release);
             // `cancelled_generation` stays sticky, exactly as in `spawn`.
@@ -929,11 +1065,27 @@ pub fn Effects(comptime Msg: type) type {
                 const cancelled = slot.cancelled_generation == entry.generation and entry.generation != 0;
                 switch (entry.kind) {
                     .line => {
+                        // Oversized lines (raised `max_line_bytes`) own a
+                        // heap payload: take it before any early-out so
+                        // skipped entries still free (retired when the
+                        // next line drains, like `drain_fetch_body`).
+                        if (self.drain_heap_line) |old| {
+                            self.allocator.free(old);
+                            self.drain_heap_line = null;
+                        }
+                        if (entry.heap_line) |heap| {
+                            self.drain_heap_line = heap;
+                            entry.heap_line = null;
+                        }
                         if (cancelled) continue;
                         const line_fn = entry.line_fn orelse continue;
+                        const line_bytes: []const u8 = if (self.drain_heap_line) |heap|
+                            heap[0..entry.line_len]
+                        else
+                            entry.line_bytes[0..entry.line_len];
                         return line_fn(.{
                             .key = entry.key,
-                            .line = entry.line_bytes[0..entry.line_len],
+                            .line = line_bytes,
                             .truncated = entry.truncated,
                             .dropped_before = entry.dropped_before,
                         });
@@ -1001,6 +1153,7 @@ pub fn Effects(comptime Msg: type) type {
                             .status = entry.status,
                             .body = body,
                             .truncated = entry.truncated,
+                            .dropped_before = entry.dropped_before,
                         });
                     },
                 }
@@ -1024,7 +1177,13 @@ pub fn Effects(comptime Msg: type) type {
             for (&self.slots) |*slot| {
                 if (!(slot.fake and slot.kind == .spawn and slot.state.load(.acquire) == .running)) continue;
                 if (seen == index) {
-                    return .{ .key = slot.key, .argv = slot.argv(), .stdin = slot.stdinBytes(), .output = slot.output_mode };
+                    return .{
+                        .key = slot.key,
+                        .argv = slot.argv(),
+                        .stdin = slot.stdinBytes(),
+                        .output = slot.output_mode,
+                        .max_line_bytes = slot.line_limit,
+                    };
                 }
                 seen += 1;
             }
@@ -1052,6 +1211,8 @@ pub fn Effects(comptime Msg: type) type {
                         .url = slot.fetchUrl(),
                         .headers = slot.fetchHeaders(),
                         .body = slot.fetchPayload(),
+                        .response = slot.fetch_response_mode,
+                        .max_line_bytes = slot.line_limit,
                     };
                 }
                 seen += 1;
@@ -1061,20 +1222,24 @@ pub fn Effects(comptime Msg: type) type {
 
         /// Feed one synthetic stdout line to the fake effect with `key`.
         /// Mirrors the real executor per output mode: a `.lines` spawn
-        /// queues one `on_line` Msg (a full queue counts a drop instead
-        /// of delivering); a `.collect` spawn accumulates the bytes plus
-        /// their newline into the collected output (truncating over the
-        /// collect bound with the flag set, exactly like a real child
-        /// that printed that line).
+        /// (or `.stream` fetch) queues one `on_line` Msg (a full queue
+        /// counts a drop instead of delivering); a `.collect` spawn
+        /// accumulates the bytes plus their newline into the collected
+        /// output (truncating over the collect bound with the flag set,
+        /// exactly like a real child that printed that line).
         pub fn feedLine(self: *Self, key: u64, bytes: []const u8) error{EffectNotFound}!void {
-            const slot_index = self.findActiveFakeSlot(key, .spawn) orelse return error.EffectNotFound;
+            const slot_index = self.findActiveFakeSlot(key, .spawn) orelse blk: {
+                const fetch_index = self.findActiveFakeSlot(key, .fetch) orelse return error.EffectNotFound;
+                if (self.slots[fetch_index].fetch_response_mode != .stream) return error.EffectNotFound;
+                break :blk fetch_index;
+            };
             const slot = &self.slots[slot_index];
-            if (slot.output_mode == .collect) {
+            if (slot.kind == .spawn and slot.output_mode == .collect) {
                 appendCollected(slot, bytes);
                 appendCollected(slot, "\n");
                 return;
             }
-            self.produceLine(slot, @intCast(slot_index), slot.generation, bytes, bytes.len > max_effect_line_bytes);
+            self.produceLine(slot, @intCast(slot_index), slot.generation, bytes, false);
         }
 
         /// Feed synthetic stderr bytes to the fake `.collect` effect with
@@ -1141,19 +1306,27 @@ pub fn Effects(comptime Msg: type) type {
 
         /// Feed the synthetic response for the fake fetch with `key`,
         /// retiring its slot. Mirrors real truncation: bodies over
-        /// `max_effect_body_bytes` are cut with `truncated = true`. If
-        /// the completion queue is somehow full, the terminal still
-        /// lands through the pending ring — with an empty body and
+        /// `max_effect_body_bytes` are cut with `truncated = true`. A
+        /// `.stream` fetch's terminal carries no body (feed its lines
+        /// through `feedLine` first); any body bytes passed here are
+        /// ignored, exactly like the real stream terminal. If the
+        /// completion queue is somehow full, the terminal still lands
+        /// through the pending ring — with an empty body and
         /// `truncated = true`, never silently.
         pub fn feedResponse(self: *Self, key: u64, status: u16, body: []const u8) error{EffectNotFound}!void {
             const slot_index = self.findActiveFakeSlot(key, .fetch) orelse return error.EffectNotFound;
             const slot = &self.slots[slot_index];
             const buffer = slot.fetch_buffer orelse return error.EffectNotFound;
-            const capacity = buffer.len - slot.payload_len;
-            const len = @min(body.len, capacity);
-            @memcpy(buffer[slot.payload_len..][0..len], body[0..len]);
-            slot.body_len = len;
-            slot.fetch_truncated = body.len > capacity;
+            if (slot.fetch_response_mode == .stream) {
+                slot.body_len = 0;
+                slot.fetch_truncated = false;
+            } else {
+                const capacity = buffer.len - slot.payload_len;
+                const len = @min(body.len, capacity);
+                @memcpy(buffer[slot.payload_len..][0..len], body[0..len]);
+                slot.body_len = len;
+                slot.fetch_truncated = body.len > capacity;
+            }
             slot.fetch_status = status;
             slot.fetch_outcome = .ok;
             var entry: Entry = .{
@@ -1161,8 +1334,9 @@ pub fn Effects(comptime Msg: type) type {
                 .slot_index = @intCast(slot_index),
                 .generation = slot.generation,
                 .key = slot.key,
-                .line_len = @intCast(len),
+                .line_len = @intCast(slot.body_len),
                 .truncated = slot.fetch_truncated,
+                .dropped_before = slot.dropped_pending,
                 .status = status,
                 .outcome = .ok,
                 .response_fn = slot.on_response,
@@ -1217,23 +1391,32 @@ pub fn Effects(comptime Msg: type) type {
             }, options.on_response);
         }
 
-        /// Free a fetch slot's body buffer and return it to `.idle`
-        /// (spawn-time failures and fake cancels). Loop-thread only.
+        /// Free a fetch slot's body and line buffers and return it to
+        /// `.idle` (spawn-time failures and fake cancels). Loop-thread
+        /// only.
         fn releaseFetchSlot(self: *Self, slot: *Slot) void {
             if (slot.fetch_buffer) |buffer| {
                 self.allocator.free(buffer);
                 slot.fetch_buffer = null;
             }
+            if (slot.line_buffer) |buffer| {
+                self.allocator.free(buffer);
+                slot.line_buffer = null;
+            }
             slot.state.store(.idle, .release);
         }
 
-        /// Free a spawn slot's collect buffer (if any) and return it to
-        /// `.idle` (spawn-time failures, fake cancels, and feed
-        /// fallbacks). Loop-thread only.
+        /// Free a spawn slot's collect and line buffers (if any) and
+        /// return it to `.idle` (spawn-time failures, fake cancels, and
+        /// feed fallbacks). Loop-thread only.
         fn releaseSpawnSlot(self: *Self, slot: *Slot) void {
             if (slot.collect_buffer) |buffer| {
                 self.allocator.free(buffer);
                 slot.collect_buffer = null;
+            }
+            if (slot.line_buffer) |buffer| {
+                self.allocator.free(buffer);
+                slot.line_buffer = null;
             }
             slot.state.store(.idle, .release);
         }
@@ -1394,24 +1577,37 @@ pub fn Effects(comptime Msg: type) type {
             entry.line_len = @intCast(tail_len);
         }
 
-        /// Producer-side line delivery with drop accounting. `truncated`
-        /// callers pass at most `max_effect_line_bytes` in `bytes`.
+        /// Producer-side line delivery with drop accounting, bounded by
+        /// the slot's `line_limit`. Lines beyond the inline entry buffer
+        /// (a raised `max_line_bytes`) ride a per-line heap allocation
+        /// the drain retires; if that allocation fails the line degrades
+        /// to the inline bound, truncated and flagged — never silent.
         fn produceLine(self: *Self, slot: *Slot, slot_index: u16, generation: u32, bytes: []const u8, truncated: bool) void {
-            const len = @min(bytes.len, max_effect_line_bytes);
+            var len = @min(bytes.len, slot.line_limit);
             var entry: Entry = .{
                 .kind = .line,
                 .slot_index = slot_index,
                 .generation = generation,
                 .key = slot.key,
-                .line_len = @intCast(len),
-                .truncated = truncated or bytes.len > max_effect_line_bytes,
+                .truncated = truncated or bytes.len > slot.line_limit,
                 .dropped_before = slot.dropped_pending,
                 .line_fn = slot.on_line,
             };
-            @memcpy(entry.line_bytes[0..len], bytes[0..len]);
+            if (len <= max_effect_line_bytes) {
+                @memcpy(entry.line_bytes[0..len], bytes[0..len]);
+            } else if (self.allocator.alloc(u8, len)) |heap| {
+                @memcpy(heap, bytes[0..len]);
+                entry.heap_line = heap;
+            } else |_| {
+                len = max_effect_line_bytes;
+                entry.truncated = true;
+                @memcpy(entry.line_bytes[0..len], bytes[0..len]);
+            }
+            entry.line_len = @intCast(len);
             if (self.enqueue(&entry)) {
                 slot.dropped_pending = 0;
             } else {
+                if (entry.heap_line) |heap| self.allocator.free(heap);
                 slot.dropped_pending +|= 1;
                 slot.dropped_total +|= 1;
             }
@@ -1518,7 +1714,11 @@ pub fn Effects(comptime Msg: type) type {
 
         fn streamLines(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io, stdout_file: std.Io.File) void {
             var read_buffer: [1024]u8 = undefined;
-            var line_buffer: [max_effect_line_bytes]u8 = undefined;
+            // Spawns with a raised `max_line_bytes` frame into their
+            // slot's heap buffer; everyone else uses the stack.
+            var stack_buffer: [max_effect_line_bytes]u8 = undefined;
+            const line_buffer: []u8 = slot.line_buffer orelse &stack_buffer;
+            const limit = @min(slot.line_limit, line_buffer.len);
             var line_len: usize = 0;
             var truncated = false;
             while (true) {
@@ -1529,7 +1729,7 @@ pub fn Effects(comptime Msg: type) type {
                         self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
                         line_len = 0;
                         truncated = false;
-                    } else if (line_len < max_effect_line_bytes) {
+                    } else if (line_len < limit) {
                         line_buffer[line_len] = byte;
                         line_len += 1;
                     } else {
@@ -1580,12 +1780,12 @@ pub fn Effects(comptime Msg: type) type {
         fn fetchWorkerMain(self: *Self, slot_index: usize, generation: u32, io: std.Io) void {
             const slot = &self.slots[slot_index];
             supervise: {
-                var future = std.Io.concurrent(io, fetchTask, .{ self, slot, io }) catch {
+                var future = std.Io.concurrent(io, fetchTask, .{ self, slot, @as(u16, @intCast(slot_index)), generation, io }) catch {
                     // No concurrent capacity: run the exchange inline.
                     // Cancels can no longer interrupt mid-transfer and
                     // the timeout is not enforced, but the terminal Msg
                     // still lands (a raced cancel is rewritten at drain).
-                    fetchTask(self, slot, io);
+                    fetchTask(self, slot, @intCast(slot_index), generation, io);
                     break :supervise;
                 };
                 const poll_ms: u64 = 5;
@@ -1634,9 +1834,9 @@ pub fn Effects(comptime Msg: type) type {
 
         /// The blocking exchange, run as a cancelable task. Always
         /// records a terminal state in the slot before `fetch_done`.
-        fn fetchTask(self: *Self, slot: *Slot, io: std.Io) void {
+        fn fetchTask(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io) void {
             defer slot.fetch_done.store(true, .release);
-            self.runFetch(slot, io) catch |err| {
+            self.runFetch(slot, slot_index, generation, io) catch |err| {
                 slot.fetch_status = 0;
                 slot.body_len = 0;
                 slot.fetch_truncated = false;
@@ -1644,7 +1844,7 @@ pub fn Effects(comptime Msg: type) type {
             };
         }
 
-        fn runFetch(self: *Self, slot: *Slot, io: std.Io) !void {
+        fn runFetch(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io) !void {
             const uri = try std.Uri.parse(slot.fetchUrl());
             var client: std.http.Client = .{ .allocator = self.allocator, .io = io };
             defer client.deinit();
@@ -1669,8 +1869,6 @@ pub fn Effects(comptime Msg: type) type {
             var response = try request.receiveHead(&redirect_buffer);
             slot.fetch_status = @intFromEnum(response.head.status);
 
-            const buffer = slot.fetch_buffer.?;
-            var body_writer = std.Io.Writer.fixed(buffer[slot.payload_len..]);
             const decompress_buffer: []u8 = switch (response.head.content_encoding) {
                 .identity => &.{},
                 .zstd => try self.allocator.alloc(u8, std.compress.zstd.default_window_len),
@@ -1678,9 +1876,24 @@ pub fn Effects(comptime Msg: type) type {
                 .compress => return error.UnsupportedCompressionMethod,
             };
             defer if (decompress_buffer.len > 0) self.allocator.free(decompress_buffer);
-            var transfer_buffer: [64]u8 = undefined;
+            var transfer_buffer: [4096]u8 = undefined;
             var decompress: std.http.Decompress = undefined;
             const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
+
+            if (slot.fetch_response_mode == .stream) {
+                // Frame the body into on_line entries as bytes arrive —
+                // the spawn `.lines` contract over HTTP. A broken stream
+                // surfaces through the terminal outcome; lines delivered
+                // before the break stand.
+                try self.streamFetchLines(slot, slot_index, generation, reader, &response);
+                slot.body_len = 0;
+                slot.fetch_truncated = false;
+                slot.fetch_outcome = .ok;
+                return;
+            }
+
+            const buffer = slot.fetch_buffer.?;
+            var body_writer = std.Io.Writer.fixed(buffer[slot.payload_len..]);
             _ = reader.streamRemaining(&body_writer) catch |err| switch (err) {
                 // The bounded body space filled: deliver the first
                 // `max_effect_body_bytes` bytes with the flag set.
@@ -1689,6 +1902,47 @@ pub fn Effects(comptime Msg: type) type {
             };
             slot.body_len = body_writer.end;
             slot.fetch_outcome = .ok;
+        }
+
+        /// Line-frame a streaming fetch's body, mirroring `streamLines`:
+        /// every '\n'-terminated line becomes one queued `on_line`
+        /// entry, bounded by the slot's `line_limit` with truncation
+        /// flagged; a trailing unterminated line is delivered at end of
+        /// stream. Read failures propagate so the terminal outcome
+        /// reports the break (cancel interruptions included — the drain
+        /// rewrites those to `.cancelled` and filters queued lines).
+        fn streamFetchLines(
+            self: *Self,
+            slot: *Slot,
+            slot_index: u16,
+            generation: u32,
+            reader: *std.Io.Reader,
+            response: *std.http.Client.Response,
+        ) !void {
+            var stack_buffer: [max_effect_line_bytes]u8 = undefined;
+            const line_buffer: []u8 = slot.line_buffer orelse &stack_buffer;
+            const limit = @min(slot.line_limit, line_buffer.len);
+            var line_len: usize = 0;
+            var truncated = false;
+            while (true) {
+                const byte = reader.takeByte() catch |err| switch (err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return response.bodyErr() orelse error.ReadFailed,
+                };
+                if (byte == '\n') {
+                    self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
+                    line_len = 0;
+                    truncated = false;
+                } else if (line_len < limit) {
+                    line_buffer[line_len] = byte;
+                    line_len += 1;
+                } else {
+                    truncated = true;
+                }
+            }
+            if (line_len > 0 or truncated) {
+                self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
+            }
         }
 
         /// The terminal response must never be dropped: retry until the
@@ -1701,6 +1955,9 @@ pub fn Effects(comptime Msg: type) type {
                 .key = slot.key,
                 .line_len = @intCast(slot.body_len),
                 .truncated = slot.fetch_truncated,
+                // Stream-mode lines dropped on a full queue that no
+                // later line reported land on the terminal instead.
+                .dropped_before = slot.dropped_pending,
                 .status = slot.fetch_status,
                 .outcome = slot.fetch_outcome,
                 .response_fn = slot.on_response,

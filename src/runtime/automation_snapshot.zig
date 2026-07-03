@@ -27,6 +27,7 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                     .views = &.{},
                     .widgets = &.{},
                     .diagnostics = automationDiagnostics(self),
+                    .errors = self.dispatchErrors(),
                     .source = self.loaded_source,
                 };
             }
@@ -50,6 +51,7 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .views = self.automation_views[0..view_count],
                 .widgets = self.automation_widgets[0..widget_count],
                 .diagnostics = automationDiagnostics(self),
+                .errors = self.dispatchErrors(),
                 .source = self.loaded_source,
             };
         }
@@ -61,6 +63,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .frame_index = self.last_diagnostics.frame_index,
                 .command_count = self.last_diagnostics.command_count,
                 .runtime_uptime_ns = uptime_ns,
+                .dispatch_error_count = self.dispatch_error_total,
+                .dropped_trace_records = self.dropped_trace_records,
             };
         }
 

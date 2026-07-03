@@ -75,7 +75,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 init_fields[init_field_count] = trace.string("log_path", log_path);
                 init_field_count += 1;
             }
-            try log(self, "runtime.init", "runtime initialized", init_fields[0..init_field_count]);
+            log(self, "runtime.init", "runtime initialized", init_fields[0..init_field_count]);
             try app_manifest.validateCommands(self.options.commands);
             try self.options.platform.services.configureSecurityPolicy(self.options.security);
             try self.options.platform.services.configureMenus(self.options.menus);
@@ -90,7 +90,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             var context: RunContext = .{ .runtime = self, .app = app };
             try self.options.platform.run(handlePlatformEvent, &context);
 
-            try log(self, "runtime.done", "runtime finished", &.{});
+            log(self, "runtime.done", "runtime finished", &.{});
         }
 
         fn reservePrimaryStartupWindow(self: *Runtime) anyerror!void {
@@ -117,7 +117,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
         pub fn dispatchPlatformEvent(self: *Runtime, app: App, event_value: platform.Event) anyerror!void {
             if ((event_value != .frame_requested and event_value != .gpu_surface_frame) or self.invalidated) {
                 const event_fields = [_]trace.Field{trace.string("event", event_value.name())};
-                try log(self, "platform.event", null, &event_fields);
+                log(self, "platform.event", null, &event_fields);
             }
 
             switch (event_value) {
@@ -132,15 +132,15 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         try loadStartupWindows(self, app);
                     }
                     self.invalidateFor(.startup, null);
-                    try log(self, "app.start", "app started", &.{trace.string("app", app.name)});
+                    log(self, "app.start", "app started", &.{trace.string("app", app.name)});
                 },
                 .app_activated => {
                     try dispatchEvent(self, app, .{ .lifecycle = .activate });
-                    emitAppLifecycleEvent(self, "app:activate") catch |err| try log(self, "app.activate.emit_failed", @errorName(err), &.{});
+                    emitAppLifecycleEvent(self, "app:activate") catch |err| log(self, "app.activate.emit_failed", @errorName(err), &.{});
                 },
                 .app_deactivated => {
                     try dispatchEvent(self, app, .{ .lifecycle = .deactivate });
-                    emitAppLifecycleEvent(self, "app:deactivate") catch |err| try log(self, "app.deactivate.emit_failed", @errorName(err), &.{});
+                    emitAppLifecycleEvent(self, "app:deactivate") catch |err| log(self, "app.deactivate.emit_failed", @errorName(err), &.{});
                 },
                 .appearance_changed => |appearance| {
                     self.appearance = appearance;
@@ -153,7 +153,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         self.windows[index].info.frame.height = surface_value.size.height;
                         self.windows[index].info.scale_factor = surface_value.scale_factor;
                     }
-                    WindowViewMethods().relayoutShellViews(self, surface_value.id) catch |err| try log(self, "shell.relayout_failed", @errorName(err), &.{trace.uint("window_id", surface_value.id)});
+                    WindowViewMethods().relayoutShellViews(self, surface_value.id) catch |err| log(self, "shell.relayout_failed", @errorName(err), &.{trace.uint("window_id", surface_value.id)});
                     var detail_buffer: [512]u8 = undefined;
                     var detail_writer = std.Io.Writer.fixed(&detail_buffer);
                     try detail_writer.print("{{\"width\":{d},\"height\":{d},\"scale\":{d},\"safeAreaInsets\":{{\"top\":{d},\"right\":{d},\"bottom\":{d},\"left\":{d}}},\"keyboardInsets\":{{\"top\":{d},\"right\":{d},\"bottom\":{d},\"left\":{d}}}}}", .{
@@ -169,22 +169,22 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         surface_value.keyboard_insets.bottom,
                         surface_value.keyboard_insets.left,
                     });
-                    emitWindowEvent(self, surface_value.id, "resize", detail_writer.buffered()) catch |err| try log(self, "window.resize.emit_failed", @errorName(err), &.{});
+                    emitWindowEvent(self, surface_value.id, "resize", detail_writer.buffered()) catch |err| log(self, "window.resize.emit_failed", @errorName(err), &.{});
                     self.invalidateFor(.surface_resize, geometry.RectF.fromSize(surface_value.size));
                     const fields = [_]trace.Field{
                         trace.float("width", surface_value.size.width),
                         trace.float("height", surface_value.size.height),
                         trace.float("scale", surface_value.scale_factor),
                     };
-                    try log(self, "surface.resize", "surface updated", &fields);
+                    log(self, "surface.resize", "surface updated", &fields);
                 },
                 .window_frame_changed => |state| {
-                    WindowViewMethods().updateWindowState(self, state) catch |err| try log(self, "window.state.update_failed", @errorName(err), &.{trace.string("label", state.label)});
-                    WindowViewMethods().relayoutShellViews(self, state.id) catch |err| try log(self, "shell.relayout_failed", @errorName(err), &.{trace.uint("window_id", state.id)});
+                    WindowViewMethods().updateWindowState(self, state) catch |err| log(self, "window.state.update_failed", @errorName(err), &.{trace.string("label", state.label)});
+                    WindowViewMethods().relayoutShellViews(self, state.id) catch |err| log(self, "shell.relayout_failed", @errorName(err), &.{trace.uint("window_id", state.id)});
                     if (self.options.window_state_store) |store| {
-                        store.saveWindow(WindowViewMethods().runtimeWindowStateForPersistence(self, state)) catch |err| try log(self, "window.state.save_failed", @errorName(err), &.{trace.string("label", state.label)});
+                        store.saveWindow(WindowViewMethods().runtimeWindowStateForPersistence(self, state)) catch |err| log(self, "window.state.save_failed", @errorName(err), &.{trace.string("label", state.label)});
                     }
-                    try log(self, "window.frame", "window frame updated", &.{
+                    log(self, "window.frame", "window frame updated", &.{
                         trace.string("label", state.label),
                         trace.float("x", state.frame.x),
                         trace.float("y", state.frame.y),
@@ -199,7 +199,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .frame_requested => try frame(self, app),
                 .bridge_message => |message| try handleBridgeMessage(self, app, message),
                 .tray_action => |item_id| {
-                    try log(self, "tray.action", "tray item selected", &.{trace.uint("item_id", item_id)});
+                    log(self, "tray.action", "tray item selected", &.{trace.uint("item_id", item_id)});
                     try dispatchCommand(self, app, .{
                         .name = SystemServiceMethods().trayCommandNameForItem(self, item_id),
                         .source = .tray,
@@ -213,7 +213,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         .window_id = shortcut.window_id,
                     });
                     try dispatchEvent(self, app, .{ .shortcut = shortcut });
-                    emitShortcutEvent(self, shortcut) catch |err| try log(self, "shortcut.emit_failed", @errorName(err), &.{trace.string("id", shortcut.id)});
+                    emitShortcutEvent(self, shortcut) catch |err| log(self, "shortcut.emit_failed", @errorName(err), &.{trace.string("id", shortcut.id)});
                     self.invalidateFor(.command, null);
                 },
                 .native_command => |command| {
@@ -227,7 +227,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .gpu_surface_frame => |frame_event| try GpuSurfaceEventMethods().dispatchGpuSurfaceFrame(self, app, frame_event),
                 .gpu_surface_resized => |resize_event| {
                     try GpuSurfaceEventMethods().dispatchGpuSurfaceResized(self, app, resize_event);
-                    try log(self, "gpu_surface.resize", "gpu surface resized", &.{
+                    log(self, "gpu_surface.resize", "gpu surface resized", &.{
                         trace.string("label", resize_event.label),
                         trace.float("width", resize_event.frame.width),
                         trace.float("height", resize_event.frame.height),
@@ -268,27 +268,34 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         try dispatchEvent(self, app, .{ .canvas_widget_file_drop = drop_event });
                     }
                     try dispatchEvent(self, app, .{ .files_dropped = drop });
-                    emitFileDropEvent(self, drop) catch |err| try log(self, "drop.files.emit_failed", @errorName(err), &.{trace.uint("window_id", drop.window_id)});
+                    emitFileDropEvent(self, drop) catch |err| log(self, "drop.files.emit_failed", @errorName(err), &.{trace.uint("window_id", drop.window_id)});
                     self.invalidateFor(.command, null);
                 },
                 .app_shutdown => {
                     try dispatchEvent(self, app, .{ .lifecycle = .stop });
                     if (self.options.extensions) |registry| try registry.stopAll(extensionContext(self));
                     try app.stop(self);
-                    try log(self, "app.stop", "app stopped", &.{trace.string("app", app.name)});
+                    log(self, "app.stop", "app stopped", &.{trace.string("app", app.name)});
                 },
             }
         }
 
         pub fn dispatchEvent(self: *Runtime, app: App, event_value: Event) anyerror!void {
             const event_fields = [_]trace.Field{trace.string("event", event_value.name())};
-            try log(self, "runtime.event", null, &event_fields);
-            try app.event(self, event_value);
+            log(self, "runtime.event", null, &event_fields);
+            // A handler/update error degrades — recorded and observable,
+            // never fatal (#38). Propagating it would reach the platform
+            // callback, set `failed`, and exit the whole app. The tag
+            // name (not `Event.name()`, which for commands aliases
+            // transient command-name storage) keeps ring records static.
+            app.event(self, event_value) catch |err| recordDispatchError(self, @tagName(event_value), err);
 
             switch (event_value) {
                 .command => {
                     if (self.options.extensions) |registry| {
-                        try registry.dispatchCommand(extensionContext(self), .{ .name = event_value.command.name });
+                        registry.dispatchCommand(extensionContext(self), .{ .name = event_value.command.name }) catch |err| {
+                            recordDispatchError(self, "extension.command", err);
+                        };
                     }
                     self.invalidateFor(.command, null);
                 },
@@ -334,11 +341,11 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             self.command_count = 0;
             self.dirty_region_count = 0;
             self.invalidated = false;
-            try log(self, "runtime.frame", "frame published", &.{
+            log(self, "runtime.frame", "frame published", &.{
                 trace.uint("frame", self.frame_index),
                 trace.uint("dirty_regions", self.last_diagnostics.dirty_region_count),
             });
-            try app.event(self, .{ .lifecycle = .frame });
+            app.event(self, .{ .lifecycle = .frame }) catch |err| recordDispatchError(self, "lifecycle", err);
         }
 
         fn AutomationSnapshotMethods() type {
@@ -391,7 +398,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 try applyMainWebViewState(self, window.id);
                 self.next_window_id = @max(self.next_window_id, window.id + 1);
             }
-            try log(self, "webview.load", "loaded webview source", &.{
+            log(self, "webview.load", "loaded webview source", &.{
                 trace.string("kind", @tagName(source.kind)),
                 trace.uint("bytes", source.bytes.len),
             });
@@ -400,7 +407,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
         fn loadScene(self: *Runtime, app: App, scene: app_manifest.ShellConfig) anyerror!void {
             try app_manifest.validateShell(scene, &.{});
             if (scene.windows.len == 0) {
-                try log(self, "scene.load", "loaded empty app scene", &.{trace.string("app", app.name)});
+                log(self, "scene.load", "loaded empty app scene", &.{trace.string("app", app.name)});
                 return;
             }
 
@@ -415,7 +422,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 _ = try WindowViewMethods().createShellWindowWithSourceMode(self, window, source, source != null);
             }
 
-            try log(self, "scene.load", "loaded app scene", &.{
+            log(self, "scene.load", "loaded app scene", &.{
                 trace.string("app", app.name),
                 trace.uint("windows", scene.windows.len),
             });
@@ -511,7 +518,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             const response = dispatcher.dispatch(message.bytes, .{ .origin = message.origin, .window_id = message.window_id, .webview_label = message.webview_label }, &response_buffer);
             try completeBridgeResponse(self, message.window_id, message.webview_label, response);
             self.invalidateFor(.command, null);
-            try log(self, "bridge.dispatch", "bridge request handled", &.{
+            log(self, "bridge.dispatch", "bridge request handled", &.{
                 trace.uint("request_bytes", message.bytes.len),
                 trace.uint("response_bytes", response.len),
             });
@@ -595,7 +602,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 },
                 .screenshot => {
                     publishAutomationScreenshot(self, command.value) catch |err| {
-                        try log(self, "automation.screenshot_failed", @errorName(err), &.{});
+                        log(self, "automation.screenshot_failed", @errorName(err), &.{});
                     };
                 },
                 .native_command => {
@@ -670,7 +677,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             defer writer.deinit();
             try canvas.png.writeRgba8(&writer.writer, screenshot.width, screenshot.height, screenshot.rgba8);
             try server.publishScreenshot(parsed.view_label, writer.written());
-            try log(self, "automation.screenshot", "screenshot published", &.{
+            log(self, "automation.screenshot", "screenshot published", &.{
                 trace.string("view", parsed.view_label),
                 trace.uint("width", screenshot.width),
                 trace.uint("height", screenshot.height),
@@ -786,7 +793,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
         fn completeBridgeResponse(self: *Runtime, window_id: platform.WindowId, webview_label: []const u8, response: []const u8) anyerror!void {
             try self.options.platform.services.completeWebViewBridge(window_id, webview_label, response);
             if (self.options.automation) |server| {
-                server.publishBridgeResponse(response) catch |err| try log(self, "automation.bridge_response_failed", @errorName(err), &.{});
+                server.publishBridgeResponse(response) catch |err| log(self, "automation.bridge_response_failed", @errorName(err), &.{});
             }
         }
 
@@ -836,10 +843,40 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             try emitWindowEvent(self, drop.window_id, "drop:files", writer.buffered());
         }
 
-        fn log(self: *Runtime, name_value: []const u8, message: ?[]const u8, fields: []const trace.Field) trace.WriteError!void {
-            if (self.options.trace_sink) |sink| {
-                try trace.writeRecord(sink, trace.event(nextTimestamp(self), .info, name_value, message, fields));
+        /// Trace logging never fails dispatch (#38): a full or failing
+        /// sink drops the record and counts the loss where snapshots can
+        /// see it (`dropped_trace_records`).
+        fn log(self: *Runtime, name_value: []const u8, message: ?[]const u8, fields: []const trace.Field) void {
+            logAt(self, .info, name_value, message, fields);
+        }
+
+        fn logAt(self: *Runtime, level: trace.Level, name_value: []const u8, message: ?[]const u8, fields: []const trace.Field) void {
+            const sink = self.options.trace_sink orelse return;
+            trace.writeRecord(sink, trace.event(nextTimestamp(self), level, name_value, message, fields)) catch {
+                self.dropped_trace_records +%= 1;
+            };
+        }
+
+        /// A handler/update error must degrade, never terminate the app
+        /// (#38): record it in the bounded ring (queryable through
+        /// `Runtime.dispatchErrors` and the automation snapshot), trace
+        /// it at `.err`, and republish observable state.
+        fn recordDispatchError(self: *Runtime, event_name: []const u8, err: anyerror) void {
+            self.dispatch_error_total +%= 1;
+            const record: automation.snapshot.DispatchError = .{
+                .timestamp_ns = runtime_clock.timestampToU64(nowNanoseconds()),
+                .event = event_name,
+                .error_name = @errorName(err),
+            };
+            if (self.dispatch_error_len == self.dispatch_errors.len) {
+                std.mem.copyForwards(automation.snapshot.DispatchError, self.dispatch_errors[0 .. self.dispatch_errors.len - 1], self.dispatch_errors[1..]);
+                self.dispatch_errors[self.dispatch_errors.len - 1] = record;
+            } else {
+                self.dispatch_errors[self.dispatch_error_len] = record;
+                self.dispatch_error_len += 1;
             }
+            logAt(self, .err, "dispatch.error", @errorName(err), &.{trace.string("event", event_name)});
+            self.invalidateFor(.state, null);
         }
 
         fn extensionContext(self: *Runtime) extensions.RuntimeContext {

@@ -18,6 +18,23 @@ pub const Diagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
     runtime_uptime_ns: u64 = 0,
+    /// Lifetime count of handler/update errors dispatch caught and
+    /// degraded instead of terminating the app; the most recent ones
+    /// ride in `Input.errors`.
+    dispatch_error_count: u64 = 0,
+    /// Trace records dropped because a sink was full or failing —
+    /// logging failures never take dispatch down.
+    dropped_trace_records: u64 = 0,
+};
+
+/// One degraded dispatch failure: a handler or update error the runtime
+/// caught, recorded, and continued past (never a process exit). `event`
+/// and `error_name` reference static strings (event names and
+/// `@errorName` data), so records are plain values.
+pub const DispatchError = struct {
+    timestamp_ns: u64 = 0,
+    event: []const u8 = "",
+    error_name: []const u8 = "",
 };
 
 pub const WidgetActions = struct {
@@ -112,11 +129,20 @@ pub const Input = struct {
     views: []const platform.ViewInfo = &.{},
     widgets: []const Widget = &.{},
     diagnostics: Diagnostics = .{},
+    /// The most recent degraded dispatch errors, oldest first (bounded
+    /// ring; `diagnostics.dispatch_error_count` is the lifetime total).
+    errors: []const DispatchError = &.{},
     source: ?platform.WebViewSource = null,
 };
 
 pub fn writeText(input: Input, writer: anytype) !void {
-    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d}\n", .{ input.diagnostics.frame_index, input.diagnostics.command_count, input.diagnostics.runtime_uptime_ns });
+    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d} dispatch_errors={d} dropped_trace_records={d}\n", .{
+        input.diagnostics.frame_index,
+        input.diagnostics.command_count,
+        input.diagnostics.runtime_uptime_ns,
+        input.diagnostics.dispatch_error_count,
+        input.diagnostics.dropped_trace_records,
+    });
     for (input.windows) |window| {
         try writer.print(
             "window @w{d} \"{s}\" bounds=({d},{d} {d}x{d}) focused={any} frame={d} commands={d}\n",
@@ -302,6 +328,13 @@ pub fn writeText(input: Input, writer: anytype) !void {
         try writeWidgetActions(widget.actions, writer);
         try writeWidgetTextRanges(widget, writer);
         try writer.writeByte('\n');
+    }
+    for (input.errors) |dispatch_error| {
+        try writer.print("  error event={s} name={s} timestamp_ns={d}\n", .{
+            dispatch_error.event,
+            dispatch_error.error_name,
+            dispatch_error.timestamp_ns,
+        });
     }
     if (input.source) |source| {
         try writer.print("  source kind={s} bytes={d}\n", .{ @tagName(source.kind), source.bytes.len });

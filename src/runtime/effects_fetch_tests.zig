@@ -25,6 +25,8 @@ const fetch_windows = [_]app_manifest.ShellWindow{.{
 const fetch_scene: app_manifest.ShellConfig = .{ .windows = &fetch_windows };
 
 const max_recorded_body_bytes = 8192;
+const max_recorded_stream_lines = 16;
+const max_recorded_stream_line_bytes = 96;
 
 const FetchModel = struct {
     response_count: usize = 0,
@@ -35,6 +37,13 @@ const FetchModel = struct {
     body_hash: u64 = 0,
     body_storage: [max_recorded_body_bytes]u8 = undefined,
     rejected_count: usize = 0,
+    // Stream-mode line recording (`.response = .stream`).
+    line_count: usize = 0,
+    truncated_lines: usize = 0,
+    last_line_len: usize = 0,
+    last_line_hash: u64 = 0,
+    line_storage: [max_recorded_stream_lines][max_recorded_stream_line_bytes]u8 = undefined,
+    line_lens: [max_recorded_stream_lines]usize = [_]usize{0} ** max_recorded_stream_lines,
 
     /// Copy what we keep: the body slice is drain scratch and dies with
     /// the update call that delivers it.
@@ -53,11 +62,27 @@ const FetchModel = struct {
     fn body(model: *const FetchModel) []const u8 {
         return model.body_storage[0..@min(model.body_len, max_recorded_body_bytes)];
     }
+
+    fn recordLine(model: *FetchModel, line: effects_mod.EffectLine) void {
+        if (line.truncated) model.truncated_lines += 1;
+        model.last_line_len = line.line.len;
+        model.last_line_hash = std.hash.Wyhash.hash(0, line.line);
+        if (model.line_count >= max_recorded_stream_lines) return;
+        const len = @min(line.line.len, max_recorded_stream_line_bytes);
+        @memcpy(model.line_storage[model.line_count][0..len], line.line[0..len]);
+        model.line_lens[model.line_count] = len;
+        model.line_count += 1;
+    }
+
+    fn lineAt(model: *const FetchModel, index: usize) []const u8 {
+        return model.line_storage[index][0..model.line_lens[index]];
+    }
 };
 
 const FetchMsg = union(enum) {
     start,
     stop,
+    line: effects_mod.EffectLine,
     response: effects_mod.EffectResponse,
 };
 
@@ -73,6 +98,8 @@ var test_method: std.http.Method = .GET;
 var test_headers: []const std.http.Header = &.{};
 var test_payload: ?[]const u8 = null;
 var test_timeout_ms: u32 = effects_mod.default_effect_fetch_timeout_ms;
+var test_response_mode: effects_mod.FetchResponseMode = .buffered;
+var test_max_line_bytes: usize = effects_mod.max_effect_line_bytes;
 
 fn fetchUpdate(model: *FetchModel, msg: FetchMsg, fx: *FetchEffects) void {
     switch (msg) {
@@ -83,9 +110,13 @@ fn fetchUpdate(model: *FetchModel, msg: FetchMsg, fx: *FetchEffects) void {
             .headers = test_headers,
             .body = test_payload,
             .timeout_ms = test_timeout_ms,
+            .response = test_response_mode,
+            .max_line_bytes = test_max_line_bytes,
+            .on_line = FetchEffects.lineMsg(.line),
             .on_response = FetchEffects.responseMsg(.response),
         }),
         .stop => fx.cancel(fetch_key),
+        .line => |line| model.recordLine(line),
         .response => |response| model.record(response),
     }
 }
@@ -290,6 +321,130 @@ test "cancelling a fake fetch with no response yet delivers one cancelled termin
     try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
     try h.drainWakes();
     try std.testing.expectEqual(@as(usize, 1), h.app_state.model.response_count);
+}
+
+test "fake executor records stream fetches and feeds lines then the terminal" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_url = "https://sandbox.example.test/v2/sandboxes/sessions/abc/cmd";
+    test_method = .POST;
+    test_headers = &.{};
+    test_payload = "{\"cmd\":\"claude -p\"}";
+    test_timeout_ms = 600_000;
+    test_response_mode = .stream;
+    defer test_response_mode = .buffered;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+
+    const request = fx.pendingFetchAt(0).?;
+    try std.testing.expectEqual(effects_mod.FetchResponseMode.stream, request.response);
+    try std.testing.expectEqualStrings("{\"cmd\":\"claude -p\"}", request.body);
+
+    // Fed lines arrive as on_line Msgs, in order.
+    try fx.feedLine(fetch_key, "{\"event\":\"stdout\",\"seq\":1}");
+    try fx.feedLine(fetch_key, "{\"event\":\"stdout\",\"seq\":2}");
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 2), h.app_state.model.line_count);
+    try std.testing.expectEqualStrings("{\"event\":\"stdout\",\"seq\":1}", h.app_state.model.lineAt(0));
+    try std.testing.expectEqualStrings("{\"event\":\"stdout\",\"seq\":2}", h.app_state.model.lineAt(1));
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.response_count);
+
+    // The terminal carries the status and an empty body; the slot
+    // retires and the key stops feeding.
+    try fx.feedResponse(fetch_key, 200, "");
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.response_count);
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.ok, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(u16, 200), h.app_state.model.status);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.body_len);
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
+    try std.testing.expectError(error.EffectNotFound, fx.feedLine(fetch_key, "late"));
+}
+
+test "feedLine on a buffered fetch reports EffectNotFound" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_url = "http://api.example.test/once";
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .buffered;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try std.testing.expectError(error.EffectNotFound, fx.feedLine(fetch_key, "nope"));
+    try fx.feedResponse(fetch_key, 200, "done");
+    try h.drainWakes();
+}
+
+test "cancelling a fake stream fetch discards queued lines and delivers one cancelled terminal" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_url = "https://sandbox.example.test/stream";
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .stream;
+    defer test_response_mode = .buffered;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try fx.feedLine(fetch_key, "streamed before the cancel");
+
+    // Cancel BEFORE draining: the queued line must never become a Msg.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.response_count);
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.cancelled, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
+    try std.testing.expectError(error.EffectNotFound, fx.feedLine(fetch_key, "late"));
+}
+
+test "stream fetches honor a raised per-fetch line bound and reject over-ceiling requests" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_url = "https://sandbox.example.test/stream";
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .stream;
+    test_max_line_bytes = 16 * 1024;
+    defer {
+        test_response_mode = .buffered;
+        test_max_line_bytes = effects_mod.max_effect_line_bytes;
+    }
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try std.testing.expectEqual(@as(usize, 16 * 1024), fx.pendingFetchAt(0).?.max_line_bytes);
+
+    const long_line = try std.testing.allocator.alloc(u8, 6000);
+    defer std.testing.allocator.free(long_line);
+    @memset(long_line, 'z');
+    try fx.feedLine(fetch_key, long_line);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.truncated_lines);
+    try std.testing.expectEqual(@as(usize, 6000), h.app_state.model.last_line_len);
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, long_line), h.app_state.model.last_line_hash);
+    try fx.feedResponse(fetch_key, 200, "");
+    try h.drainWakes();
+
+    // Over-ceiling bound: rejected terminal, nothing started.
+    test_max_line_bytes = effects_mod.max_effect_line_bytes_ceiling + 1;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try h.drainWakes();
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.rejected, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
 }
 
 const RejectModel = struct {
@@ -521,6 +676,42 @@ const Fixture = struct {
             // Never respond; the sleep ends when `stop` cancels the
             // accept task (this is the timeout/cancel fixture).
             std.Io.sleep(io, std.Io.Duration.fromMilliseconds(120_000), .awake) catch return;
+        } else if (std.mem.eql(u8, target, "/ndjson")) {
+            // A slow NDJSON stream: each event flushed on its own, with
+            // real time between them (the sandbox-exec shape).
+            var stream_buffer: [512]u8 = undefined;
+            var response = try request.respondStreaming(&stream_buffer, .{ .respond_options = .{ .keep_alive = false } });
+            const lines = [_][]const u8{
+                "{\"event\":\"start\",\"seq\":1}\n",
+                "{\"event\":\"stdout\",\"seq\":2,\"data\":\"hello\"}\n",
+                "{\"event\":\"exit\",\"seq\":3,\"code\":0}\n",
+            };
+            for (lines) |line| {
+                try response.writer.writeAll(line);
+                try response.writer.flush();
+                try response.flush();
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(30), .awake) catch return;
+            }
+            try response.end();
+        } else if (std.mem.eql(u8, target, "/ndjson-big")) {
+            // One event far beyond the default 4 KiB line cap.
+            var stream_buffer: [512]u8 = undefined;
+            var response = try request.respondStreaming(&stream_buffer, .{ .respond_options = .{ .keep_alive = false } });
+            const big_line = try self.allocator.alloc(u8, 6001);
+            defer self.allocator.free(big_line);
+            @memset(big_line, 'e');
+            big_line[6000] = '\n';
+            try response.writer.writeAll(big_line);
+            try response.end();
+        } else if (std.mem.eql(u8, target, "/ndjson-hang")) {
+            // Two events, then the connection stays open forever — the
+            // cancel-mid-stream fixture.
+            var stream_buffer: [512]u8 = undefined;
+            var response = try request.respondStreaming(&stream_buffer, .{ .respond_options = .{ .keep_alive = false } });
+            try response.writer.writeAll("{\"event\":\"start\"}\n{\"event\":\"running\"}\n");
+            try response.writer.flush();
+            try response.flush();
+            std.Io.sleep(io, std.Io.Duration.fromMilliseconds(120_000), .awake) catch return;
         } else {
             try request.respond("nope", .{ .status = .not_found, .keep_alive = false });
         }
@@ -544,6 +735,114 @@ fn waitForResponse(h: *Harness) !void {
         try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(10), .awake);
     }
     return error.TestTimedOut;
+}
+
+fn waitForStreamLines(h: *Harness, count: usize) !void {
+    const io = std.testing.io;
+    var waited_ms: usize = 0;
+    while (waited_ms < 20_000) : (waited_ms += 10) {
+        try h.drainWakes();
+        if (h.app_state.model.line_count >= count) return;
+        try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(10), .awake);
+    }
+    return error.TestTimedOut;
+}
+
+test "real stream fetch frames a slow NDJSON body into line msgs with a terminal status" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fixture = try Fixture.start(std.testing.allocator);
+    defer fixture.stop();
+
+    var url_buffer: [128]u8 = undefined;
+    test_url = fixture.url(&url_buffer, "/ndjson");
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .stream;
+    defer test_response_mode = .buffered;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForResponse(&h);
+
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.ok, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(u16, 200), h.app_state.model.status);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.body_len);
+    try std.testing.expectEqual(@as(usize, 3), h.app_state.model.line_count);
+    try std.testing.expectEqualStrings("{\"event\":\"start\",\"seq\":1}", h.app_state.model.lineAt(0));
+    try std.testing.expectEqualStrings("{\"event\":\"stdout\",\"seq\":2,\"data\":\"hello\"}", h.app_state.model.lineAt(1));
+    try std.testing.expectEqualStrings("{\"event\":\"exit\",\"seq\":3,\"code\":0}", h.app_state.model.lineAt(2));
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.truncated_lines);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.effects.activeCount());
+}
+
+test "real stream fetch delivers an event beyond the default line cap intact with a raised bound" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fixture = try Fixture.start(std.testing.allocator);
+    defer fixture.stop();
+
+    var url_buffer: [128]u8 = undefined;
+    test_url = fixture.url(&url_buffer, "/ndjson-big");
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .stream;
+    test_max_line_bytes = 16 * 1024;
+    defer {
+        test_response_mode = .buffered;
+        test_max_line_bytes = effects_mod.max_effect_line_bytes;
+    }
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForResponse(&h);
+
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.ok, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.truncated_lines);
+    const expected = try std.testing.allocator.alloc(u8, 6000);
+    defer std.testing.allocator.free(expected);
+    @memset(expected, 'e');
+    try std.testing.expectEqual(@as(usize, 6000), h.app_state.model.last_line_len);
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, expected), h.app_state.model.last_line_hash);
+}
+
+test "real stream fetch cancels mid-stream with exactly one cancelled terminal" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fixture = try Fixture.start(std.testing.allocator);
+    defer fixture.stop();
+
+    var url_buffer: [128]u8 = undefined;
+    test_url = fixture.url(&url_buffer, "/ndjson-hang");
+    test_method = .GET;
+    test_headers = &.{};
+    test_payload = null;
+    test_timeout_ms = effects_mod.default_effect_fetch_timeout_ms;
+    test_response_mode = .stream;
+    defer test_response_mode = .buffered;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+
+    // Lines flow while the connection stays open...
+    try waitForStreamLines(&h, 2);
+    try std.testing.expectEqualStrings("{\"event\":\"start\"}", h.app_state.model.lineAt(0));
+    try std.testing.expectEqualStrings("{\"event\":\"running\"}", h.app_state.model.lineAt(1));
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.response_count);
+
+    // ...and cancel ends the stream with exactly one cancelled terminal.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+    try waitForResponse(&h);
+    try std.testing.expectEqual(effects_mod.EffectFetchOutcome.cancelled, h.app_state.model.outcome.?);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.body_len);
+
+    // Nothing for that fetch after the terminal Msg.
+    const lines_after_cancel = h.app_state.model.line_count;
+    const io = std.testing.io;
+    try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(200), .awake);
+    try h.drainWakes();
+    try std.testing.expectEqual(lines_after_cancel, h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.response_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.effects.activeCount());
 }
 
 test "real fetch delivers a 200 response body from the fixture server" {

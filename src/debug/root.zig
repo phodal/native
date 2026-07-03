@@ -145,16 +145,20 @@ pub fn envFromMap(env_map: *std.process.Environ.Map) app_dirs.Env {
 }
 
 pub fn appendTraceRecord(io: std.Io, log_dir: []const u8, path: []const u8, format: LogFormat, record: trace.Record) !void {
+    // Bounded formatting: oversized records are truncated (text) or
+    // rewritten minimally (json), never turned into a write error that
+    // would fail dispatch upstream.
     var line_buffer: [4096]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&line_buffer);
-    switch (format.traceFormat()) {
-        .text => {
-            try trace.formatText(record, &writer);
-            try writer.writeAll("\n");
+    const line = switch (format.traceFormat()) {
+        .text => blk: {
+            const text = trace.formatTextBounded(record, line_buffer[0 .. line_buffer.len - 1]);
+            line_buffer[text.len] = '\n';
+            break :blk line_buffer[0 .. text.len + 1];
         },
-        .json_lines => try trace.formatJsonLine(record, &writer),
-    }
-    try appendFile(io, log_dir, path, writer.buffered());
+        .json_lines => trace.formatJsonLineBounded(record, &line_buffer),
+    };
+    if (line.len == 0) return;
+    try appendFile(io, log_dir, path, line);
 }
 
 fn appendFile(io: std.Io, directory: []const u8, path: []const u8, bytes: []const u8) !void {

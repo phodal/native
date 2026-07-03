@@ -12,10 +12,11 @@ pub const StdoutTraceSink = struct {
 
     fn write(context: *anyopaque, record: zero_native.trace.Record) zero_native.trace.WriteError!void {
         _ = context;
-        var buffer: [1024]u8 = undefined;
-        var writer = std.Io.Writer.fixed(&buffer);
-        zero_native.trace.formatText(record, &writer) catch return error.OutOfSpace;
-        std.debug.print("{s}\n", .{writer.buffered()});
+        // Never fail on an oversized record: a trace-formatting failure
+        // inside dispatch must degrade (truncated output), not become an
+        // error the platform callback treats as fatal.
+        var buffer: [4096]u8 = undefined;
+        std.debug.print("{s}\n", .{zero_native.trace.formatTextBounded(record, &buffer)});
     }
 };
 

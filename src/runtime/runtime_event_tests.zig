@@ -849,3 +849,142 @@ test "gpu surface nonblank transition invalidates the runtime" {
     } });
     try std.testing.expect(!harness.runtime.invalidated);
 }
+
+test "a handler error degrades: dispatch continues, the error ring records it, snapshots publish it" {
+    // Friction #38: one erroring update arm used to exit the whole app
+    // (the platform callback saw the error, set `failed`, and stopped
+    // the run loop as CallbackFailed).
+    const TestApp = struct {
+        command_count: u32 = 0,
+        fail_next: bool = false,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "degrader", .source = platform.WebViewSource.html("<h1>Degrade</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .command => {
+                    self.command_count += 1;
+                    if (self.fail_next) {
+                        self.fail_next = false;
+                        return error.UpdateArmBlewUp;
+                    }
+                },
+                else => {},
+            }
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dispatchErrors().len);
+
+    // The erroring dispatch does NOT propagate (no CallbackFailed path).
+    app_state.fail_next = true;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .menu_command = .{ .name = "boom", .window_id = 1 } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.command_count);
+
+    // The error is recorded and queryable...
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqual(@as(u64, 1), harness.runtime.dispatchErrorTotal());
+    try std.testing.expectEqualStrings("command", harness.runtime.dispatchErrors()[0].event);
+    try std.testing.expectEqualStrings("UpdateArmBlewUp", harness.runtime.dispatchErrors()[0].error_name);
+
+    // ...traced at error level...
+    var traced = false;
+    for (harness.trace_sink.written()) |record| {
+        if (std.mem.eql(u8, record.name, "dispatch.error")) {
+            try std.testing.expectEqual(trace.Level.err, record.level);
+            try std.testing.expectEqualStrings("UpdateArmBlewUp", record.message.?);
+            traced = true;
+        }
+    }
+    try std.testing.expect(traced);
+
+    // ...and published in the automation snapshot text.
+    var snapshot_buffer: [16384]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&snapshot_buffer);
+    try automation.snapshot.writeText(harness.runtime.automationSnapshot("Degrade"), &writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "dispatch_errors=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "error event=command name=UpdateArmBlewUp") != null);
+
+    // The app keeps running: later dispatches still reach it.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .menu_command = .{ .name = "next", .window_id = 1 } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.command_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.dispatchErrors().len);
+}
+
+test "the dispatch error ring stays bounded and keeps the newest records plus the lifetime total" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "ring", .source = platform.WebViewSource.html("<h1>Ring</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = context;
+            _ = runtime;
+            if (event_value == .command) return error.AlwaysFails;
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    var index: usize = 0;
+    while (index < runtime_module.max_dispatch_errors + 5) : (index += 1) {
+        try harness.runtime.dispatchPlatformEvent(app, .{ .menu_command = .{ .name = "boom", .window_id = 1 } });
+    }
+    try std.testing.expectEqual(runtime_module.max_dispatch_errors, harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqual(@as(u64, runtime_module.max_dispatch_errors + 5), harness.runtime.dispatchErrorTotal());
+    for (harness.runtime.dispatchErrors()) |record| {
+        try std.testing.expectEqualStrings("AlwaysFails", record.error_name);
+    }
+}
+
+test "a full trace sink never fails dispatch; the loss is counted and published" {
+    // Friction #38 class (a): the TestHarness BufferSink holds 64
+    // records; dispatch used to fail with OutOfSpace once it filled.
+    const TestApp = struct {
+        command_count: u32 = 0,
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "chatty", .source = platform.WebViewSource.html("<h1>Chatty</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            if (event_value == .command) self.command_count += 1;
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    // Far more events than the sink holds: every one must dispatch.
+    var index: u32 = 0;
+    while (index < 200) : (index += 1) {
+        try harness.runtime.dispatchPlatformEvent(app, .{ .menu_command = .{ .name = "tick", .window_id = 1 } });
+    }
+    try std.testing.expectEqual(@as(u32, 200), app_state.command_count);
+    try std.testing.expect(harness.runtime.dropped_trace_records > 0);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.dispatchErrorTotal());
+
+    var snapshot_buffer: [16384]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&snapshot_buffer);
+    try automation.snapshot.writeText(harness.runtime.automationSnapshot("Chatty"), &writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "dropped_trace_records=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "dropped_trace_records=0") == null);
+}

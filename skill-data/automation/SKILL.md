@@ -83,7 +83,7 @@ zig-out/bin/zero-native automate snapshot
 3. Run `zero-native automate snapshot` to confirm app/window/source metadata.
 4. Run `zero-native automate list` to inspect window summaries.
 5. Run `zero-native automate bridge '...'` for bridge round-trip checks.
-6. Use `zero-native automate widget-action <view-label> <widget-id> <action> [value]` to exercise retained canvas widget actions.
+6. Use `zero-native automate widget-action <view-label> <widget-id> <action> [value]` to exercise retained canvas widget actions. `set_text` routes through the SAME input path real typing uses (focus, select-all, then a text-input event), so a TEA app's `on_input` mirror receives the edits and model state stays consistent with the on-screen field — it is not a presentation-only write.
 7. Use `zero-native automate widget-click <view-label> <widget-id>` to exercise pointer-style retained widget routing.
 8. Use `zero-native automate widget-drag <view-label> <widget-id> <start-x-ratio> <end-x-ratio> [start-y-ratio end-y-ratio]` for continuous pointer controls.
 9. Use `zero-native automate widget-wheel <view-label> <widget-id> <delta-y>` for retained widget scroll input.
@@ -147,7 +147,7 @@ The default directory is `.zig-cache/zero-native-automation/`.
 
 Files:
 
-- `snapshot.txt`: app name, readiness, source kind, source size, window metadata, accessibility summary.
+- `snapshot.txt`: app name, readiness, source kind, source size, window metadata, accessibility summary. The `ready=true` line also carries `dispatch_errors=<total>` and `dropped_trace_records=<total>`, and recent degraded handler/update errors appear as `  error event=<tag> name=<ErrorName> timestamp_ns=...` lines — a handler error no longer exits the app, so grep these to notice one happened.
 - `windows.txt`: window list.
 - `command.txt`: command input written by CLI and consumed by runtime.
 - `bridge-response.txt`: last bridge response.

@@ -212,7 +212,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .element => try out.append(ui.arena, try self.buildElement(ui, scope, child)),
                     .use_block => try out.append(ui.arena, try self.buildUse(ui, scope, child)),
                     .template_block => return self.failVoid(child, markup.template_top_level_message),
-                    .for_block => try self.buildFor(ui, scope, child, out),
+                    .for_block => {
+                        var else_node: ?markup.MarkupNode = null;
+                        if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
+                            else_node = node.children[index + 1];
+                            index += 1;
+                        }
+                        const item_count = try self.buildFor(ui, scope, child, out);
+                        if (item_count == 0) {
+                            if (else_node) |else_block| {
+                                try self.buildChildren(ui, scope, else_block, out);
+                            }
+                        }
+                    },
                     .if_block => {
                         const test_value = child.attr("test") orelse {
                             return self.failVoid(child, "if requires a test attribute");
@@ -229,21 +241,28 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                             try self.buildChildren(ui, scope, else_block, out);
                         }
                     },
-                    .else_block => return self.failVoid(child, "else must directly follow an if"),
+                    .else_block => return self.failVoid(child, markup.else_placement_message),
                     .text => return self.failVoid(child, "text content is only allowed inside text-bearing elements"),
                 }
             }
         }
 
-        fn buildFor(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+        /// Expands a `for` block: per item, the whole body (one or more
+        /// elements, `use` expansions, and nested `for`/`if`/`else`
+        /// structure) is appended to `out`. Returns the item count so the
+        /// caller can render a trailing `<else>` for the empty case.
+        fn buildFor(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!usize {
             const each = node.attr("each") orelse return self.failVoid(node, "for requires an each attribute");
             const as_name = node.attr("as") orelse return self.failVoid(node, "for requires an as attribute");
             const key_field = node.attr("key");
             if (scope.len >= max_scope_depth) return self.failVoid(node, "for nesting is too deep");
-            if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) {
-                return self.failVoid(node, "for takes exactly one element child");
+            if (node.children.len == 0) return self.failVoid(node, markup.for_children_message);
+            for (node.children) |child| {
+                switch (child.kind) {
+                    .element, .use_block, .for_block, .if_block, .else_block => {},
+                    else => return self.failVoid(child, markup.for_children_message),
+                }
             }
-            const template = node.children[0];
 
             inline for (item_types, 0..) |Item, type_index| {
                 if (try self.iterateItems(ui, Item, type_index, scope, each)) |items| {
@@ -255,15 +274,22 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         scope.len += 1;
                         defer scope.len -= 1;
 
-                        var built = try self.buildNode(ui, scope, template);
-                        if (built.key == null and built.global_key == null) {
-                            if (key_field) |field| {
-                                built.key = try self.itemKey(Item, item, template, field);
+                        const first_emitted = out.items.len;
+                        try self.buildChildren(ui, scope, node, out);
+                        if (key_field) |field| {
+                            // The item key stamps every node this item
+                            // emitted (unless the node claims its own
+                            // identity); later slots get a slot-suffixed
+                            // key so same-kind siblings stay distinct.
+                            const base = try self.itemKey(Item, item, node, field);
+                            for (out.items[first_emitted..], 0..) |*built, slot| {
+                                if (built.key == null and built.global_key == null) {
+                                    built.key = try canvas.forSlotKey(ui.arena, base, slot);
+                                }
                             }
                         }
-                        try out.append(ui.arena, built);
                     }
-                    return;
+                    return items.len;
                 }
             }
             return self.failVoid(node, "each does not name an iterable (a model slice, array, or fn - or a slice-valued template arg)");
@@ -874,6 +900,15 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 };
                 return;
             }
+            if (std.mem.eql(u8, event, "scroll")) {
+                if (!std.mem.eql(u8, node.name, "scroll")) {
+                    return self.failVoid(node, markup.on_scroll_element_message);
+                }
+                options.on_scroll = scrollConstructor(expression.tag) orelse {
+                    return self.failVoid(node, markup.on_scroll_payload_message);
+                };
+                return;
+            }
             const msg = try self.constructMessage(scope, node, expression);
             if (std.mem.eql(u8, event, "press")) {
                 options.on_press = msg;
@@ -941,6 +976,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 if (field.type == canvas.TextInputEvent) {
                     if (std.mem.eql(u8, field.name, tag)) {
                         return Ui.inputMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn scrollConstructor(tag: []const u8) ?Ui.ScrollMsgFn {
+            inline for (@typeInfo(MsgT).@"union".fields) |field| {
+                if (field.type == canvas.ScrollState) {
+                    if (std.mem.eql(u8, field.name, tag)) {
+                        return Ui.scrollMsg(@field(std.meta.Tag(MsgT), field.name));
                     }
                 }
             }

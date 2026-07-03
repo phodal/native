@@ -61,6 +61,7 @@ pub const UiHandlerEvent = enum {
     change,
     submit,
     input,
+    scroll,
 };
 
 /// A color design token referenced by name (the fields of
@@ -221,11 +222,21 @@ pub fn Ui(comptime Msg: type) type {
             /// through the ordinary press handler table. Pair with
             /// `linkMsg`.
             on_link: ?LinkMsgFn = null,
+            /// Message constructor for scroll offset changes on a scroll
+            /// container: called with the post-scroll `ScrollState`
+            /// (offset, viewport and content extents) after every
+            /// user-driven scroll — wheel, kinetic steps, keyboard, and
+            /// accessibility scroll actions. Pair with `scrollMsg`. The
+            /// delivered offset is the value the runtime already applied,
+            /// so echoing it back into `value` on the next rebuild never
+            /// fights the scroll reconcile rule.
+            on_scroll: ?ScrollMsgFn = null,
         };
 
         pub const InputMsgFn = *const fn (edit: canvas.TextInputEvent) Msg;
         pub const ValueMsgFn = *const fn (value: f32) Msg;
         pub const LinkMsgFn = *const fn (link: []const u8) Msg;
+        pub const ScrollMsgFn = *const fn (scroll: canvas.ScrollState) Msg;
 
         pub const Node = struct {
             widget: Widget = .{ .kind = .stack },
@@ -243,6 +254,7 @@ pub fn Ui(comptime Msg: type) type {
             on_submit: ?Msg = null,
             on_input: ?InputMsgFn = null,
             on_value: ?ValueMsgFn = null,
+            on_scroll: ?ScrollMsgFn = null,
             nodes: []const Node = &.{},
         };
 
@@ -255,6 +267,7 @@ pub fn Ui(comptime Msg: type) type {
                 message: Msg,
                 input: InputMsgFn,
                 value: ValueMsgFn,
+                scroll: ScrollMsgFn,
             };
         };
 
@@ -274,6 +287,18 @@ pub fn Ui(comptime Msg: type) type {
             return struct {
                 fn make(value: f32) Msg {
                     return @unionInit(Msg, @tagName(tag), value);
+                }
+            }.make;
+        }
+
+        /// Comptime message constructor for `on_scroll`:
+        /// `scrollMsg(.activity_scrolled)` yields a function building
+        /// `Msg{ .activity_scrolled = scroll }` from the post-scroll
+        /// `canvas.ScrollState`.
+        pub fn scrollMsg(comptime tag: std.meta.Tag(Msg)) ScrollMsgFn {
+            return struct {
+                fn make(scroll_state: canvas.ScrollState) Msg {
+                    return @unionInit(Msg, @tagName(tag), scroll_state);
                 }
             }.make;
         }
@@ -320,6 +345,17 @@ pub fn Ui(comptime Msg: type) type {
                 for (self.handlers) |handler| {
                     if (handler.id == id and handler.event == .change and handler.action == .value) {
                         return handler.action.value(value);
+                    }
+                }
+                return null;
+            }
+
+            /// Typed dispatch for scroll offset changes: builds the message
+            /// through the widget's `on_scroll` constructor.
+            pub fn msgForScroll(self: Tree, id: ObjectId, scroll_state: canvas.ScrollState) ?Msg {
+                for (self.handlers) |handler| {
+                    if (handler.id == id and handler.event == .scroll and handler.action == .scroll) {
+                        return handler.action.scroll(scroll_state);
                     }
                 }
                 return null;
@@ -395,6 +431,7 @@ pub fn Ui(comptime Msg: type) type {
                 .on_submit = options.on_submit,
                 .on_input = options.on_input,
                 .on_value = options.on_value,
+                .on_scroll = options.on_scroll,
                 .nodes = self.childNodes(children),
             };
         }
@@ -928,6 +965,10 @@ pub fn Ui(comptime Msg: type) type {
                 handlers[handler_len.*] = .{ .id = widget.id, .event = .change, .action = .{ .value = make } };
                 handler_len.* += 1;
             }
+            if (node.on_scroll) |make| {
+                handlers[handler_len.*] = .{ .id = widget.id, .event = .scroll, .action = .{ .scroll = make } };
+                handler_len.* += 1;
+            }
             return widget;
         }
 
@@ -945,6 +986,7 @@ pub fn Ui(comptime Msg: type) type {
             if (node.on_submit != null) total += 1;
             if (node.on_input != null) total += 1;
             if (node.on_value != null) total += 1;
+            if (node.on_scroll != null) total += 1;
             for (node.nodes) |child| total += countHandlers(child);
             return total;
         }
@@ -1048,6 +1090,22 @@ pub fn uiKey(value: anytype) UiKey {
         .int, .comptime_int => .{ .int = @intCast(value) },
         .pointer => .{ .str = value },
         else => @compileError("uiKey supports integers and byte slices"),
+    };
+}
+
+/// Per-item key for the Nth node a multi-child `for` body emits. Slot 0
+/// keeps the plain item key, so single-node items (the common case, and
+/// every pre-multi-child document) produce byte-identical structural ids.
+/// Later slots append a 0x1f-separated slot suffix: the same item key
+/// still groups the fragment, while same-kind siblings within one item
+/// stay distinct. Both markup engines share this, keeping their ids in
+/// parity.
+pub fn forSlotKey(arena: std.mem.Allocator, base: UiKey, slot: usize) error{OutOfMemory}!UiKey {
+    if (slot == 0) return base;
+    return switch (base) {
+        .index => |value| .{ .str = try std.fmt.allocPrint(arena, "{d}\x1f{d}", .{ value, slot }) },
+        .int => |value| .{ .str = try std.fmt.allocPrint(arena, "{d}\x1f{d}", .{ value, slot }) },
+        .str => |value| .{ .str = try std.fmt.allocPrint(arena, "{s}\x1f{d}", .{ value, slot }) },
     };
 }
 

@@ -215,6 +215,14 @@ pub const RuntimeView = struct {
     widget_revision: u64 = 0,
     widget_tokens: canvas.DesignTokens = .{},
     widget_scroll_states: [max_canvas_widget_nodes_per_view]canvas.ScrollState = undefined,
+    /// Scroll nodes whose offset changed since the last app dispatch
+    /// (wheel, kinetic, keyboard, accessibility): drained into
+    /// `canvas_widget_scroll` events at the gpu-surface dispatch points.
+    /// Deduped by id; the dispatched event reads the CURRENT state, so
+    /// coalescing wheel + kinetic steps per node is lossless (see
+    /// `canvas_limits.max_canvas_widget_scroll_events_per_view`).
+    widget_scroll_event_ids: [canvas_limits.max_canvas_widget_scroll_events_per_view]canvas.ObjectId = undefined,
+    widget_scroll_event_count: usize = 0,
     widget_source_text_entries: [max_canvas_widget_source_text_entries_per_view]CanvasWidgetSourceTextEntry = undefined,
     widget_source_text_count: usize = 0,
     widget_source_scroll_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetSourceScrollEntry = undefined,
@@ -256,6 +264,8 @@ pub const RuntimeView = struct {
     pub const applyCanvasWidgetScrollRoute = CanvasWidgetScrollMethods.applyCanvasWidgetScrollRoute;
     pub const deepestCanvasWidgetScrollIndex = CanvasWidgetScrollMethods.deepestCanvasWidgetScrollIndex;
     pub const canvasWidgetScrollState = CanvasWidgetScrollMethods.canvasWidgetScrollState;
+    pub const canvasWidgetScrollStateById = CanvasWidgetScrollMethods.canvasWidgetScrollStateById;
+    pub const noteCanvasWidgetScrollEvent = CanvasWidgetScrollMethods.noteCanvasWidgetScrollEvent;
     pub const canvasWidgetScrollCanConsume = CanvasWidgetScrollMethods.canvasWidgetScrollCanConsume;
     pub const applyCanvasWidgetScroll = CanvasWidgetScrollMethods.applyCanvasWidgetScroll;
     pub const applyCanvasWidgetTextareaScroll = CanvasWidgetScrollMethods.applyCanvasWidgetTextareaScroll;
@@ -362,7 +372,10 @@ pub const RuntimeView = struct {
     pub const copyWidgetText = CanvasWidgetTreeMethods.copyWidgetText;
     pub const copyWidgetSpans = CanvasWidgetTreeMethods.copyWidgetSpans;
 
-    pub fn info(self: RuntimeView) platform.ViewInfo {
+    // By pointer, never by value: a RuntimeView is multiple MiB of fixed
+    // capacity arrays, and a by-value self parameter copies it onto the
+    // caller's stack (method syntax auto-refs, so callers are unchanged).
+    pub fn info(self: *const RuntimeView) platform.ViewInfo {
         return .{
             .id = self.id,
             .window_id = self.window_id,
@@ -518,7 +531,7 @@ pub const RuntimeView = struct {
         self.gpu_first_frame_latency_budget_ok = self.gpu_first_frame_latency_budget_exceeded_count == 0;
     }
 
-    pub fn copyRuntimeStateFrom(self: *RuntimeView, source: *const RuntimeView) void {
+    pub fn copyRuntimeStateFrom(self: *RuntimeView, source: *const RuntimeView, scratch: *canvas_widget_runtime.CanvasWidgetCopyScratch) void {
         self.* = source.*;
         self.label = copyInto(&self.label_storage, source.label) catch unreachable;
         self.parent = if (source.parent) |parent| copyInto(&self.parent_storage, parent) catch unreachable else null;
@@ -529,7 +542,7 @@ pub const RuntimeView = struct {
         self.copyCanvasDisplayList(source.canvasDisplayList()) catch unreachable;
         self.canvas_revision = source.canvas_revision;
         self.copyPresentedCanvasSummaryFrom(source);
-        self.copyWidgetLayoutTree(source.widgetLayoutTree()) catch unreachable;
+        self.copyWidgetLayoutTree(source.widgetLayoutTree(), scratch) catch unreachable;
         self.widget_revision = source.widget_revision;
         @memcpy(self.widget_scroll_states[0..source.widget_layout_node_count], source.widget_scroll_states[0..source.widget_layout_node_count]);
     }

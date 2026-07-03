@@ -93,34 +93,32 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_source_text_count = entry_count;
         }
 
-        pub fn copyWidgetLayoutTree(self: *RuntimeView, layout: canvas.WidgetLayoutTree) anyerror!void {
+        /// `scratch` is reconcile scratch too large for the stack at the
+        /// 1024-node budget; callers pass the Runtime's shared
+        /// `canvas_widget_copy_scratch` (the event loop is single-threaded).
+        pub fn copyWidgetLayoutTree(self: *RuntimeView, layout: canvas.WidgetLayoutTree, scratch: *canvas_widget_runtime.CanvasWidgetCopyScratch) anyerror!void {
             if (layout.nodes.len > self.widget_layout_nodes.len) return error.WidgetNodeLimitReached;
             if (layout.nodes.len > 0 and layout.nodes.ptr == self.widget_layout_nodes[0..].ptr) {
                 self.widget_revision += 1;
                 return;
             }
 
-            var source_semantics_entries: [max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined;
-            const source_semantics = try layout.collectSemantics(&source_semantics_entries);
-            var previous_control_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined;
+            const source_semantics = try layout.collectSemantics(&scratch.source_semantics);
             const previous_control_states = collectCanvasWidgetControlReconcileEntries(
                 self.widgetLayoutTree().nodes,
-                &previous_control_entries,
+                &scratch.control_entries,
             );
-            var previous_scroll_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetScrollReconcileEntry = undefined;
             const previous_scroll_states = collectCanvasWidgetScrollReconcileEntries(
                 self.widgetLayoutTree().nodes,
                 self.widget_scroll_states[0..self.widget_layout_node_count],
-                &previous_scroll_entries,
+                &scratch.scroll_entries,
             );
-            var previous_text_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined;
-            var previous_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
             var previous_text_len: usize = 0;
             const previous_text_states = try collectCanvasWidgetTextReconcileEntries(
                 self.widgetLayoutTree().nodes,
                 self.widgetSourceTextEntries(),
-                &previous_text_entries,
-                &previous_text_bytes,
+                &scratch.text_entries,
+                &scratch.text_bytes,
                 &previous_text_len,
             );
 

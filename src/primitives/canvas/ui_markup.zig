@@ -548,7 +548,10 @@ pub const known_option_attrs = [_][]const u8{
     "key",     "global-key",  "role",  "label",
 };
 
-pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
+pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input", "scroll" };
+
+pub const on_scroll_element_message = "on-scroll is only supported on scroll - the runtime emits scroll offsets for scroll containers, so the handler belongs on the scroll element itself";
+pub const on_scroll_payload_message = "on-scroll takes a bare Msg tag whose payload is the post-scroll state (a canvas.ScrollState variant, like activity_scrolled: canvas.ScrollState)";
 
 /// Elements whose widget kind the engine never hit-tests: layout and
 /// decoration only, so pointer events pass through them and an `on-*`
@@ -597,18 +600,22 @@ pub const known_color_style_attrs = [_][]const u8{
 /// The field names of `canvas.ColorTokens`, kept in sync by a test in
 /// ui_markup_view_tests.zig (this module stays std-only).
 pub const known_color_token_names = [_][]const u8{
-    "background",  "surface",     "surface_subtle",   "surface_pressed",
-    "text",        "text_muted",  "border",           "accent",
-    "accent_text", "destructive", "destructive_text", "focus_ring",
-    "shadow",      "disabled",
+    "background",   "surface",     "surface_subtle",   "surface_pressed",
+    "text",         "text_muted",  "border",           "accent",
+    "accent_text",  "destructive", "destructive_text", "success",
+    "success_text", "warning",     "warning_text",     "focus_ring",
+    "shadow",       "disabled",
 };
 
 /// The field names of `canvas.RadiusTokens` (same sync test).
 pub const known_radius_token_names = [_][]const u8{ "sm", "md", "lg", "xl" };
 
 pub const style_token_literal_message = "style token attributes take a literal token name - dynamic styling stays in Zig";
-pub const unknown_color_token_message = "unknown color token: color style attributes take a canvas ColorTokens field name (background, surface, surface_subtle, surface_pressed, text, text_muted, border, accent, accent_text, destructive, destructive_text, focus_ring, shadow, disabled)";
+pub const unknown_color_token_message = "unknown color token: color style attributes take a canvas ColorTokens field name (background, surface, surface_subtle, surface_pressed, text, text_muted, border, accent, accent_text, destructive, destructive_text, success, success_text, warning, warning_text, focus_ring, shadow, disabled)";
 pub const unknown_radius_token_message = "unknown radius token: radius takes a canvas RadiusTokens field name (sm, md, lg, xl)";
+
+pub const for_children_message = "for takes one or more element children (elements, use, if/else, or a nested for) - text content is only allowed inside text-bearing elements";
+pub const else_placement_message = "else must directly follow an if (renders when the test is false) or a for (renders when the iterable is empty)";
 
 pub const invalid_expression_message = "invalid expression: values are a literal, one {binding}, or one {a == b} equality - no other operators or calls (put logic in a model function)";
 pub const arena_scalar_equality_message = "arena-computed bindings cannot be compared with == - compare the source fields directly, or bind a pub fn returning bool";
@@ -823,8 +830,8 @@ fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: 
     }
     var previous_kind: ?MarkupNodeKind = null;
     for (node.children) |child| {
-        if (child.kind == .else_block and previous_kind != .if_block) {
-            return errorAt(child, "else must directly follow an if");
+        if (child.kind == .else_block and previous_kind != .if_block and previous_kind != .for_block) {
+            return errorAt(child, else_placement_message);
         }
         if (validateNode(document, child, "timeline", template_limit)) |info| return info;
         previous_kind = child.kind;
@@ -932,7 +939,14 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     if (!nameInList(attribute.name[3..], &known_events)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = "unknown event attribute" };
                     }
-                    if (nameInList(node.name, &known_non_hit_target_element_names)) {
+                    if (std.mem.eql(u8, attribute.name, "on-scroll")) {
+                        // The runtime emits scroll offsets for scroll
+                        // containers only; anywhere else the handler could
+                        // never fire.
+                        if (!std.mem.eql(u8, node.name, "scroll")) {
+                            return .{ .line = attribute.line, .column = attribute.column, .message = on_scroll_element_message };
+                        }
+                    } else if (nameInList(node.name, &known_non_hit_target_element_names)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = non_hit_target_handler_message };
                     }
                     if (parseMessageExpression(attribute.value) == null) {
@@ -987,8 +1001,12 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
             if (parent_element == null) return errorAt(node, "for is only allowed inside an element");
             if (node.attr("each") == null) return errorAt(node, "for requires an each attribute");
             if (node.attr("as") == null) return errorAt(node, "for requires an as attribute");
-            if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) {
-                return errorAt(node, "for takes exactly one element child");
+            if (node.children.len == 0) return errorAt(node, for_children_message);
+            for (node.children) |child| {
+                switch (child.kind) {
+                    .element, .use_block, .for_block, .if_block, .else_block => {},
+                    else => return errorAt(child, for_children_message),
+                }
             }
         },
         .if_block => {
@@ -1007,8 +1025,8 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
     };
     var previous_kind: ?MarkupNodeKind = null;
     for (node.children) |child| {
-        if (child.kind == .else_block and previous_kind != .if_block) {
-            return errorAt(child, "else must directly follow an if");
+        if (child.kind == .else_block and previous_kind != .if_block and previous_kind != .for_block) {
+            return errorAt(child, else_placement_message);
         }
         if (validateNode(document, child, child_parent, template_limit)) |info| {
             return info;

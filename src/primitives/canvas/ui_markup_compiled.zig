@@ -189,12 +189,13 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         }
 
         /// One runtime step per child: elements and `use` expansions append
-        /// a node, `for` blocks append per item, and an `if` (with its
+        /// a node, `for` blocks append per item (with an adjacent `else`
+        /// paired at comptime for the empty case), and an `if` (with its
         /// adjacent `else` paired at comptime) branches on the test binding.
         const ChildStep = union(enum) {
             element: markup.MarkupNode,
             use: markup.MarkupNode,
-            for_block: markup.MarkupNode,
+            for_block: struct { node: markup.MarkupNode, else_block: ?markup.MarkupNode },
             conditional: struct { if_block: markup.MarkupNode, else_block: ?markup.MarkupNode },
         };
 
@@ -209,7 +210,14 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         .element => steps = steps ++ &[_]ChildStep{.{ .element = child }},
                         .use_block => steps = steps ++ &[_]ChildStep{.{ .use = child }},
                         .template_block => fail(child, markup.template_top_level_message),
-                        .for_block => steps = steps ++ &[_]ChildStep{.{ .for_block = child }},
+                        .for_block => {
+                            var else_block: ?markup.MarkupNode = null;
+                            if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
+                                else_block = node.children[index + 1];
+                                index += 1;
+                            }
+                            steps = steps ++ &[_]ChildStep{.{ .for_block = .{ .node = child, .else_block = else_block } }};
+                        },
                         .if_block => {
                             var else_block: ?markup.MarkupNode = null;
                             if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
@@ -218,7 +226,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                             }
                             steps = steps ++ &[_]ChildStep{.{ .conditional = .{ .if_block = child, .else_block = else_block } }};
                         },
-                        .else_block => fail(child, "else must directly follow an if"),
+                        .else_block => fail(child, markup.else_placement_message),
                         .text => fail(child, "text content is only allowed inside text-bearing elements"),
                     }
                 }
@@ -243,7 +251,12 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         return;
                     };
                 } else if (comptime (step == .for_block)) {
-                    buildFor(comptime step.for_block, entries, ui, model, scope, out);
+                    const item_count = buildFor(comptime step.for_block.node, entries, ui, model, scope, out);
+                    if (comptime (step.for_block.else_block != null)) {
+                        if (item_count == 0) {
+                            buildChildren(comptime step.for_block.else_block.?, entries, ui, model, scope, out);
+                        }
+                    }
                 } else {
                     const conditional = comptime step.conditional;
                     const test_value = comptime (conditional.if_block.attr("test") orelse fail(conditional.if_block, "if requires a test attribute"));
@@ -257,12 +270,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             }
         }
 
-        fn buildFor(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+        /// Expands a `for` block; returns the item count so the caller can
+        /// render a trailing `<else>` for the empty case.
+        fn buildFor(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) usize {
             const each = comptime (node.attr("each") orelse fail(node, "for requires an each attribute"));
             comptime {
                 _ = node.attr("as") orelse fail(node, "for requires an as attribute");
-                if (node.children.len != 1 or (node.children[0].kind != .element and node.children[0].kind != .use_block)) {
-                    fail(node, "for takes exactly one element child");
+                if (node.children.len == 0) fail(node, markup.for_children_message);
+                for (node.children) |child| {
+                    switch (child.kind) {
+                        .element, .use_block, .for_block, .if_block, .else_block => {},
+                        else => fail(child, markup.for_children_message),
+                    }
                 }
             }
             // Comptime mirror of the interpreter's `each` resolution:
@@ -277,32 +296,35 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 }
                 const items = scopePayload(entries, scope_index, scope);
                 buildForItems(comptime entries[scope_index].Item, node, entries, items, ui, model, scope, out);
-                return;
+                return items.len;
             }
             const info = comptime (eachInfo(each) orelse fail(node, "each does not name an iterable (a model slice, array, or fn - or a slice-valued template arg)"));
             const items = eachItems(info, ui, model);
             buildForItems(info.Item, node, entries, items, ui, model, scope, out);
+            return items.len;
         }
 
         fn buildForItems(comptime ItemT: type, comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, items: []const ItemT, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
             const as_name = comptime node.attr("as").?;
-            const template = comptime node.children[0];
             const child_entries = comptime (entries ++ &[_]ScopeEntry{.{ .name = as_name, .kind = .item, .Item = ItemT }});
             for (items) |*item| {
                 const child_scope = .{ .parent = scope, .item = @as(*const ItemT, item) };
-                var built = if (comptime (template.kind == .use_block))
-                    buildUse(template, child_entries, ui, model, child_scope)
-                else
-                    buildElement(template, child_entries, ui, model, child_scope);
+                const first_emitted = out.items.len;
+                buildChildren(node, child_entries, ui, model, child_scope, out);
                 if (comptime (node.attr("key") != null)) {
-                    if (built.key == null and built.global_key == null) {
-                        built.key = itemKey(ItemT, template, comptime node.attr("key").?, ui, item);
+                    // Mirror of the interpreter: the item key stamps every
+                    // node this item emitted (unless the node claims its
+                    // own identity); later slots get a slot-suffixed key.
+                    const base = itemKey(ItemT, node, comptime node.attr("key").?, ui, item);
+                    for (out.items[first_emitted..], 0..) |*built, slot| {
+                        if (built.key == null and built.global_key == null) {
+                            built.key = canvas.forSlotKey(ui.arena, base, slot) catch {
+                                ui.failed = true;
+                                return;
+                            };
+                        }
                     }
                 }
-                out.append(ui.arena, built) catch {
-                    ui.failed = true;
-                    return;
-                };
             }
         }
 
@@ -967,6 +989,13 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 options.on_input = comptime (inputConstructor(expression.tag) orelse fail(node, "on-input tag must carry a TextInputEvent payload"));
                 return;
             }
+            if (comptime std.mem.eql(u8, event, "scroll")) {
+                comptime {
+                    if (!std.mem.eql(u8, node.name, "scroll")) fail(node, markup.on_scroll_element_message);
+                }
+                options.on_scroll = comptime (scrollConstructor(expression.tag) orelse fail(node, markup.on_scroll_payload_message));
+                return;
+            }
             const msg = constructMessage(node, expression, entries, ui, model, scope);
             if (comptime std.mem.eql(u8, event, "press")) {
                 options.on_press = msg;
@@ -987,6 +1016,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 for (@typeInfo(MsgT).@"union".fields) |field| {
                     if (field.type == canvas.TextInputEvent and std.mem.eql(u8, field.name, tag)) {
                         return Ui.inputMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+                return null;
+            }
+        }
+
+        fn scrollConstructor(comptime tag: []const u8) ?Ui.ScrollMsgFn {
+            comptime {
+                @setEvalBranchQuota(10_000);
+                for (@typeInfo(MsgT).@"union".fields) |field| {
+                    if (field.type == canvas.ScrollState and std.mem.eql(u8, field.name, tag)) {
+                        return Ui.scrollMsg(@field(std.meta.Tag(MsgT), field.name));
                     }
                 }
                 return null;

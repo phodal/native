@@ -28,6 +28,7 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 self.views[index].recordGpuSurfaceFirstFrameLatency(frame_event.timestamp_ns);
                 self.views[index].recordGpuSurfaceInputLatencyForFrame(frame_event.timestamp_ns);
                 try CanvasWidgetDisplayMethods().advanceCanvasWidgetKineticScrollForFrame(self, index, frame_event.frame_interval_ns, had_pending_input);
+                try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
                 // Observable snapshots (automation, bridge state) only
                 // republish when the runtime is invalidated. The first
                 // nonblank presentation on an idle boot has no other
@@ -175,7 +176,41 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             if (widget_text_input_event) |text_input_event| {
                 try self.dispatchEvent(app, .{ .canvas_widget_keyboard = text_input_event });
             }
+            // Wheel and keyboard scroll mutations above noted pending
+            // scroll events on the view; deliver them after the input's
+            // own dispatches so the app observes inputs before offsets.
+            if (runtimeFindViewIndex(self, input_event.window_id, input_event.label)) |index| {
+                try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
+            }
             try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
+        }
+
+        /// Drain the view's pending scroll-event set into
+        /// `canvas_widget_scroll` app events. Each entry reads the node's
+        /// CURRENT scroll state, so motion that occurred since the note
+        /// (kinetic steps, further wheel ticks) is already folded in.
+        /// Also called from the accessibility semantic-action path so
+        /// assistive scrolls observe like wheel scrolls.
+        pub fn dispatchPendingCanvasWidgetScrollEvents(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            if (self.views[view_index].widget_scroll_event_count == 0) return;
+
+            // Copy-then-reset: app dispatch can rebuild the view (or
+            // scroll again), which may note fresh entries for the next
+            // drain without aliasing this one.
+            const pending_ids = self.views[view_index].widget_scroll_event_ids;
+            const pending_count = self.views[view_index].widget_scroll_event_count;
+            self.views[view_index].widget_scroll_event_count = 0;
+            for (pending_ids[0..pending_count]) |id| {
+                const scroll = self.views[view_index].canvasWidgetScrollStateById(id) orelse continue;
+                try self.dispatchEvent(app, .{ .canvas_widget_scroll = .{
+                    .window_id = self.views[view_index].window_id,
+                    .view_label = self.views[view_index].label,
+                    .id = id,
+                    .scroll = scroll,
+                } });
+            }
         }
 
         fn enrichGpuSurfaceFrameDiagnostics(self: *Runtime, index: usize, enriched_frame_event: *platform.GpuSurfaceFrameEvent) anyerror!void {

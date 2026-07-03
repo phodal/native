@@ -139,6 +139,7 @@ pub const Msg = union(enum) {
     open_deployment,
     submit_forecast,
     submit_search,
+    activity_scrolled: canvas.ScrollState,
     set_appearance: zero_native.Appearance,
     frame_status: DashboardFrameStatus,
 };
@@ -219,6 +220,11 @@ pub fn update(model: *Model, msg: Msg) void {
             model.setStatusFmt("Filter {s} applied.", .{filter_entries[index].title});
         },
         .open_deployment => model.setStatus("Deployment iad1 latency opened."),
+        // The typed scroll channel: the payload carries the offset the
+        // runtime already applied, so echoing it back through
+        // `.value = model.activity_scroll` on the next rebuild never
+        // fights the scroll reconcile rule.
+        .activity_scrolled => |scroll_state| model.activity_scroll = scroll_state.offset,
         .submit_forecast => model.setStatus("Forecast amount submitted."),
         .submit_search => model.setStatus("Segment search submitted."),
         .set_appearance => |appearance| {
@@ -393,6 +399,7 @@ fn sideColumn(ui: *DashboardUi, model: *const Model) DashboardUi.Node {
         ui.scroll(.{
             .height = 112,
             .value = model.activity_scroll,
+            .on_scroll = DashboardUi.scrollMsg(.activity_scrolled),
             .semantics = .{ .label = "Recent activity" },
         }, ui.column(.{ .gap = 4 }, ui.eachCtx(model.activity_selection, &activity_entries, entryKey, activityItem))),
     });
@@ -529,16 +536,17 @@ fn dashboardOnFrame(model: *const Model, frame: zero_native.platform.GpuFrame) ?
     } };
 }
 
-/// The runtime owns transient control state that never reaches the app as a
-/// typed message payload: slider drags/steps (the `.change` message carries
-/// no value) and scroll offsets (scroll intents dispatch no message at
-/// all). Read the reconciled values back into the model before rebuilding
-/// so the next source tree does not stomp them.
+/// The runtime owns transient control state that never reaches the app as
+/// a typed message payload: slider drags/steps (the `.change` message
+/// carries no value). Read the reconciled value back into the model before
+/// rebuilding so the next source tree does not stomp it. Scroll offsets no
+/// longer need this hook — `on_scroll` delivers them as typed Msgs (see
+/// `.activity_scrolled`), and the reconcile rule covers the gap between a
+/// runtime scroll and its Msg landing.
 fn dashboardSync(model: *Model, layout: canvas.WidgetLayoutTree) void {
     for (layout.nodes) |node| {
         switch (node.widget.kind) {
             .slider => model.confidence = node.widget.value,
-            .scroll_view => model.activity_scroll = node.widget.value,
             else => {},
         }
     }
@@ -1521,6 +1529,8 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "dashboard-canvas");
     const scrolled_offset = scrolled_layout.findById(scroll.id).?.widget.value;
     try std.testing.expect(scrolled_offset > 18);
+    // The typed on_scroll channel delivered the applied offset to the model.
+    try std.testing.expectEqual(scrolled_offset, app.model.activity_scroll);
     // A model-driven rebuild must not reset the runtime scroll offset.
     try harness.runtime.dispatchAutomationCommand(app.app(), try std.fmt.bufPrint(&command_buffer, "widget-action dashboard-canvas {d} toggle", .{auto_toggle.id}));
     try std.testing.expect(app.model.auto_refresh);

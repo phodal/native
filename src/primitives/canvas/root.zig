@@ -373,6 +373,7 @@ pub const Ui = ui_builder.Ui;
 pub const UiKey = ui_builder.UiKey;
 pub const UiHandlerEvent = ui_builder.UiHandlerEvent;
 pub const uiKey = ui_builder.uiKey;
+pub const forSlotKey = ui_builder.forSlotKey;
 pub const ColorTokenName = ui_builder.ColorTokenName;
 pub const RadiusTokenName = ui_builder.RadiusTokenName;
 pub const StyleTokenRefs = ui_builder.StyleTokenRefs;

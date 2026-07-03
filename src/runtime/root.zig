@@ -22,6 +22,7 @@ pub const GpuSurfaceResizeEvent = core.GpuSurfaceResizeEvent;
 pub const GpuSurfaceInputEvent = core.GpuSurfaceInputEvent;
 pub const CanvasWidgetPointerEvent = core.CanvasWidgetPointerEvent;
 pub const CanvasWidgetKeyboardEvent = core.CanvasWidgetKeyboardEvent;
+pub const CanvasWidgetScrollEvent = core.CanvasWidgetScrollEvent;
 pub const CanvasWidgetDisplayListChrome = core.CanvasWidgetDisplayListChrome;
 pub const CanvasPresentationMode = core.CanvasPresentationMode;
 pub const CanvasPresentationResult = core.CanvasPresentationResult;

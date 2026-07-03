@@ -57,6 +57,36 @@ pub fn RuntimeViewCanvasWidgetScroll(comptime RuntimeView: type) type {
             return result;
         }
 
+        /// Record a scroll offset change for app observation: the pending
+        /// set is drained into `canvas_widget_scroll` events at the next
+        /// gpu-surface dispatch point. Deduped by node id — the event
+        /// reads the current state, so coalescing repeated motion on one
+        /// node is lossless. Ids past the fixed bound are dropped (the
+        /// scroll itself still applies and repaints).
+        pub fn noteCanvasWidgetScrollEvent(self: *RuntimeView, id: canvas.ObjectId) void {
+            if (id == 0) return;
+            for (self.widget_scroll_event_ids[0..self.widget_scroll_event_count]) |existing| {
+                if (existing == id) return;
+            }
+            if (self.widget_scroll_event_count >= self.widget_scroll_event_ids.len) return;
+            self.widget_scroll_event_ids[self.widget_scroll_event_count] = id;
+            self.widget_scroll_event_count += 1;
+        }
+
+        /// Current scroll state of the scroll container with `id`, or null
+        /// when the id is not a mounted, measurable scroll view. Feeds the
+        /// `canvas_widget_scroll` event payload.
+        pub fn canvasWidgetScrollStateById(self: *const RuntimeView, id: canvas.ObjectId) ?canvas.ScrollState {
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
+                if (node.widget.id != id) continue;
+                if (node.widget.kind != .scroll_view) return null;
+                const viewport = node.frame.inset(node.widget.layout.padding).normalized();
+                if (viewport.isEmpty()) return null;
+                return self.canvasWidgetScrollState(index, node, viewport);
+            }
+            return null;
+        }
+
         pub fn canvasWidgetScrollState(self: *const RuntimeView, scroll_index: usize, scroll_node: canvas.WidgetLayoutNode, viewport: geometry.RectF) canvas.ScrollState {
             const retained = self.widget_scroll_states[scroll_index];
             return .{
@@ -119,6 +149,7 @@ pub fn RuntimeViewCanvasWidgetScroll(comptime RuntimeView: type) type {
             const offset_delta = next.offset - current.offset;
             self.widget_layout_nodes[scroll_index].widget.value = next.offset;
             self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
+            self.noteCanvasWidgetScrollEvent(scroll_node.widget.id);
 
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
@@ -175,6 +206,7 @@ pub fn RuntimeViewCanvasWidgetScroll(comptime RuntimeView: type) type {
             const offset_delta = next.offset - current.offset;
             self.widget_layout_nodes[scroll_index].widget.value = next.offset;
             self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
+            self.noteCanvasWidgetScrollEvent(scroll_node.widget.id);
 
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
@@ -208,6 +240,7 @@ pub fn RuntimeViewCanvasWidgetScroll(comptime RuntimeView: type) type {
                 const offset_delta = next.offset - current.offset;
                 self.widget_layout_nodes[scroll_index].widget.value = next.offset;
                 self.translateCanvasWidgetScrollDescendants(scroll_index, -offset_delta);
+                self.noteCanvasWidgetScrollEvent(scroll_node.widget.id);
                 dirty = unionRects(dirty, self.canvasWidgetDirtyBounds(scroll_index, scroll_node.frame));
                 changed = true;
             }

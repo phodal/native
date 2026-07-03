@@ -9,6 +9,7 @@ const runtime_clock = @import("clock.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
+const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
 
 const AutomationWidgetAction = automation_commands.AutomationWidgetAction;
 const AutomationWidgetTarget = automation_commands.AutomationWidgetTarget;
@@ -83,6 +84,11 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
 
             try CanvasWidgetDisplayMethods().endCanvasWidgetDisplayListRefreshBatch(self);
             batch_active = false;
+
+            // Accessibility scroll actions observe like wheel scrolls:
+            // drain the pending scroll-event set so the app's on_scroll
+            // channel sees the applied offset immediately.
+            try runtime_gpu_surface_events.RuntimeGpuSurfaceEvents(Runtime).dispatchPendingCanvasWidgetScrollEvents(self, app, view_index);
 
             if (action == .press and intent.actions.press) {
                 try CanvasWidgetEventMethods().dispatchCanvasWidgetCommandForId(self, app, view_index, id);

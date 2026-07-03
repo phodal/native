@@ -1,7 +1,20 @@
 const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
+const canvas_limits = @import("canvas_limits.zig");
 const platform = @import("../platform/root.zig");
+
+/// Scratch for `RuntimeView.copyWidgetLayoutTree`'s reconcile pass. Too
+/// large for the stack at the 1024-node budget (the semantics array alone
+/// is ~270 KiB); the Runtime owns one instance (`canvas_widget_copy_scratch`)
+/// and the single-threaded event loop makes sharing it safe.
+pub const CanvasWidgetCopyScratch = struct {
+    source_semantics: [canvas_limits.max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined,
+    control_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined,
+    scroll_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetScrollReconcileEntry = undefined,
+    text_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined,
+    text_bytes: [canvas_limits.max_canvas_widget_text_bytes_per_view]u8 = undefined,
+};
 
 const GpuSurfaceInputEvent = platform.GpuSurfaceInputEvent;
 

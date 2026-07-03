@@ -245,6 +245,11 @@ test "structural validation reports positions for grammar misuse" {
     var parser = markup.Parser.init(arena_state.allocator(), inbox_source);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
 
+    // on-scroll validates on the scroll element itself.
+    const scrollable = "<scroll on-scroll=\"scrolled\">\n  <column><text>x</text></column>\n</scroll>";
+    var scrollable_parser = markup.Parser.init(arena_state.allocator(), scrollable);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try scrollable_parser.parse()));
+
     const cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<column>\n  <weird />\n</column>", .message = "unknown element" },
         .{ .source = "<column bogus=\"1\" />", .message = "unknown attribute" },
@@ -257,7 +262,12 @@ test "structural validation reports positions for grammar misuse" {
         .{ .source = "<row gap=\"{a + b}\" />", .message = "invalid expression: values are a literal, one {binding}, or one {a == b} equality - no other operators or calls (put logic in a model function)" },
         .{ .source = "<column>\n  <for as=\"t\"><text>x</text></for>\n</column>", .message = "for requires an each attribute" },
         .{ .source = "<column>\n  <if><text>x</text></if>\n</column>", .message = "if requires a test attribute" },
-        .{ .source = "<column>\n  <else><text>x</text></else>\n</column>", .message = "else must directly follow an if" },
+        .{ .source = "<column>\n  <else><text>x</text></else>\n</column>", .message = markup.else_placement_message },
+        .{ .source = "<row>\n  <button on-scroll=\"scrolled\">X</button>\n</row>", .message = markup.on_scroll_element_message },
+        .{ .source = "<column>\n  <list on-scroll=\"scrolled\"><list-item>x</list-item></list>\n</column>", .message = markup.on_scroll_element_message },
+        .{ .source = "<column>\n  <text>x</text>\n  <else><text>y</text></else>\n</column>", .message = markup.else_placement_message },
+        .{ .source = "<column>\n  <for each=\"items\" as=\"t\"></for>\n</column>", .message = markup.for_children_message },
+        .{ .source = "<column>\n  <for each=\"items\" as=\"t\">stray text</for>\n</column>", .message = markup.for_children_message },
     };
     for (cases) |case| {
         var case_parser = markup.Parser.init(arena_state.allocator(), case.source);
@@ -265,6 +275,32 @@ test "structural validation reports positions for grammar misuse" {
         try testing.expectEqualStrings(case.message, info.message);
         try testing.expect(info.line > 0);
     }
+}
+
+test "for accepts multiple element children and a trailing else for the empty case" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Multi-child for bodies: elements, if/else arms, and nested fors are
+    // all valid without a wrapper node.
+    const valid_sources = [_][]const u8{
+        "<column>\n  <for each=\"items\" as=\"t\">\n    <text>{t.title}</text>\n    <separator />\n  </for>\n</column>",
+        "<column>\n  <for each=\"items\" as=\"t\">\n    <if test=\"{t.done}\"><text>done</text></if>\n    <else><text>{t.title}</text></else>\n  </for>\n</column>",
+        "<column>\n  <for each=\"items\" as=\"t\">\n    <for each=\"t.tags\" as=\"tag\"><badge>{tag.name}</badge></for>\n  </for>\n</column>",
+        "<column>\n  <for each=\"items\" as=\"t\">\n    <text>{t.title}</text>\n  </for>\n  <else>\n    <text>Nothing yet</text>\n  </else>\n</column>",
+        "<column>\n  <for each=\"items\" as=\"t\">\n    <text>{t.title}</text>\n  </for>\n  <else>\n    <text>empty</text>\n  </else>\n  <text>after</text>\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    // An else after the for's else (or anywhere else) still teaches.
+    const stray = "<column>\n  <for each=\"items\" as=\"t\"><text>{t.title}</text></for>\n  <else><text>empty</text></else>\n  <else><text>again</text></else>\n</column>";
+    var stray_parser = markup.Parser.init(arena, stray);
+    const info = markup.validate(try stray_parser.parse()) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(markup.else_placement_message, info.message);
 }
 
 test "a handler on a non-hit-target element reports the attribute position" {

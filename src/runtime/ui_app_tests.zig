@@ -132,6 +132,109 @@ test "ui app owns install, dispatch, and rebuild end to end" {
     try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 0"));
 }
 
+// ------------------------------------------------- scroll event fixture
+
+const FeedModel = struct {
+    /// Elm-style mirror of the scroll offset: on_scroll delivers the
+    /// offset the runtime already applied, the model stores it, and the
+    /// view echoes it back into `value` — which must never fight the
+    /// scroll reconcile rule (the echoed source value equals the runtime
+    /// offset).
+    offset: f32 = 0,
+    viewport_extent: f32 = 0,
+    content_extent: f32 = 0,
+    scroll_events: u32 = 0,
+};
+
+const FeedMsg = union(enum) {
+    feed_scrolled: canvas.ScrollState,
+};
+
+const FeedApp = ui_app_model.UiApp(FeedModel, FeedMsg);
+
+fn feedUpdate(model: *FeedModel, msg: FeedMsg) void {
+    switch (msg) {
+        .feed_scrolled => |scroll_state| {
+            model.offset = scroll_state.offset;
+            model.viewport_extent = scroll_state.viewport_extent;
+            model.content_extent = scroll_state.content_extent;
+            model.scroll_events += 1;
+        },
+    }
+}
+
+fn feedView(ui: *FeedApp.Ui, model: *const FeedModel) FeedApp.Ui.Node {
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.scroll(.{
+            .height = 96,
+            .value = model.offset,
+            .on_scroll = FeedApp.Ui.scrollMsg(.feed_scrolled),
+        }, ui.column(.{ .gap = 4 }, .{
+            ui.text(.{ .height = 80 }, "Row one"),
+            ui.text(.{ .height = 80 }, "Row two"),
+            ui.text(.{ .height = 80 }, "Row three"),
+            ui.text(.{ .height = 80 }, "Row four"),
+        })),
+        ui.text(.{}, ui.fmt("Offset {d:.0}", .{model.offset})),
+    });
+}
+
+fn feedOptions() FeedApp.Options {
+    return .{
+        .name = "ui-app-feed",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = feedUpdate,
+        .view = feedView,
+    };
+}
+
+test "ui app on_scroll delivers wheel offsets and the echoed model offset survives the rebuild" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(FeedApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = FeedApp.init(std.heap.page_allocator, .{}, feedOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    const scroll_id = findWidgetIdByKind(app_state.tree.?.root, .scroll_view).?;
+    var command_buffer: [96]u8 = undefined;
+    const wheel = try std.fmt.bufPrint(&command_buffer, "widget-wheel {s} {d} 18", .{ canvas_label, scroll_id });
+    try harness.runtime.dispatchAutomationCommand(app, wheel);
+
+    // The wheel dispatched a typed scroll Msg carrying the applied
+    // offset and the extents (content spans four 80pt rows + gaps).
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.scroll_events);
+    try std.testing.expect(app_state.model.offset > 0);
+    try std.testing.expect(app_state.model.content_extent > app_state.model.viewport_extent);
+
+    // The dispatch rebuilt with the echoed offset; the retained runtime
+    // offset agrees with the model (echoing never fights the reconcile
+    // rule, because the echoed source value IS the runtime offset).
+    const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    try std.testing.expectEqual(app_state.model.offset, layout.findById(scroll_id).?.widget.value);
+
+    // A second wheel accumulates from the reconciled offset.
+    const first_offset = app_state.model.offset;
+    try harness.runtime.dispatchAutomationCommand(app, wheel);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.scroll_events);
+    try std.testing.expect(app_state.model.offset > first_offset);
+}
+
 test "ui app presents pixels when the packet service is unsupported" {
     const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
     defer harness.destroy(std.testing.allocator);

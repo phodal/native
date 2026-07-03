@@ -187,8 +187,10 @@ test "paste clamps to view text capacity and flags truncation loudly" {
     const used = harness.runtime.views[0].widget_text_len;
     const available = canvas_limits.max_canvas_widget_text_bytes_per_view - used;
 
-    // A clipboard payload far over the view's shared text storage.
-    const big = try std.testing.allocator.alloc(u8, 20000);
+    // A clipboard payload over the view's REMAINING shared text storage
+    // (the semantics label already consumed a few bytes, and the widget
+    // text capacity now matches the clipboard bound exactly).
+    const big = try std.testing.allocator.alloc(u8, platform.max_clipboard_data_bytes);
     defer std.testing.allocator.free(big);
     @memset(big, 'a');
     try harness.runtime.writeClipboard(big);

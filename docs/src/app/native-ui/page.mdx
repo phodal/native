@@ -91,9 +91,23 @@ Color and radius attributes reference design tokens by name — literals only, v
 </row>
 ```
 
-The color attributes are `background`, `foreground`, `accent`, `accent-foreground`, `border-color`, and `focus-ring`; values are `ColorTokens` field names: `background`, `surface`, `surface_subtle`, `surface_pressed`, `text`, `text_muted`, `border`, `accent`, `accent_text`, `destructive`, `destructive_text`, `focus_ring`, `shadow`, `disabled`. `radius` takes a `RadiusTokens` name: `sm`, `md`, `lg`, `xl`.
+The color attributes are `background`, `foreground`, `accent`, `accent-foreground`, `border-color`, and `focus-ring`; values are `ColorTokens` field names: `background`, `surface`, `surface_subtle`, `surface_pressed`, `text`, `text_muted`, `border`, `accent`, `accent_text`, `destructive`, `destructive_text`, `success`, `success_text`, `warning`, `warning_text`, `focus_ring`, `shadow`, `disabled`. `radius` takes a `RadiusTokens` name: `sm`, `md`, `lg`, `xl`.
 
 References resolve against the app's live tokens on every rebuild, so themed apps re-resolve them when the theme changes — dark mode flips `surface` for free. Anything dynamic beyond that (raw colors, per-state styling) stays in Zig via `ElementOptions.style`, which always wins over a token reference.
+
+## Structure tags
+
+`<for each="..." as="...">` repeats its body per item and `<if test="{...}">` renders its children conditionally. A `for` body takes one or more children — elements, `<use>`, `<if>`/`<else>` arms, or nested `<for>`s — so polymorphic rows need no wrapper node. `key` names an item field: every node an item emits shares the item's identity across reorders (same-kind siblings within one item are disambiguated automatically), and a node's own `key`/`global-key` still wins. An `<else>` directly after an `</if>` renders when the test is false; directly after a `</for>` it renders the empty state when the iterable has no items:
+
+```html
+<for each="visible" key="id" as="t">
+  <if test="{t.done}"> <badge>done</badge> </if>
+  <else> <text>{t.title}</text> </else>
+</for>
+<else> <text>Nothing yet</text> </else>
+```
+
+There is no `else-if` chain tag — nest an `<if>`/`<else>` inside the `<else>` body instead.
 
 ## Templates
 
@@ -135,6 +149,8 @@ draft: canvas.TextBuffer(64) = .{},
 .draft_edit => |edit| model.draft.apply(edit),
 .add => { model.addTask(model.draft.text()); model.draft.clear(); },
 ```
+
+`on-scroll` (on the `scroll` element; `Ui.scrollMsg(.tag)` on `on_scroll` in Zig views) names a variant whose payload is `canvas.ScrollState`: after every user scroll — wheel, kinetic momentum, keyboard, accessibility — the runtime delivers the post-scroll `offset`, `viewport_extent`, and `content_extent`, so long content can page or lazy-load a bounded window that follows the scrollbar. The payload carries the offset the runtime already applied: store it in the model and echo it back through the scroll's `value`, and rebuilds never fight live scrolling.
 
 Handlers belong on hit-target elements only. Layout containers (`row`, `column`, `stack`, `grid`, `tabs`, `toggle-group`, ...) and decoration leaves (`badge`, `avatar`, `tooltip`, `separator`, ...) are never hit-tested, so an `on-*` on one could never fire — the validator, both engines, and the LSP reject it with a teaching error instead of accepting a dead handler. Put the handler on a leaf like `list-item` or `text`, or on a control inside the container.
 

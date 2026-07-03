@@ -176,6 +176,110 @@ test "runtime retains canvas widget design tokens" {
     return error.TestUnexpectedResult;
 }
 
+test "runtime dispatches canvas widget scroll events for wheel and kinetic scrolls" {
+    const TestApp = struct {
+        scroll_event_count: u32 = 0,
+        last_id: canvas.ObjectId = 0,
+        last_scroll: canvas.ScrollState = .{},
+
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-scroll-events", .source = platform.WebViewSource.html("<h1>Hello</h1>"), .event_fn = event };
+        }
+
+        fn event(context: *anyopaque, runtime: *Runtime, event_value: Event) anyerror!void {
+            _ = runtime;
+            const self: *@This() = @ptrCast(@alignCast(context));
+            switch (event_value) {
+                .canvas_widget_scroll => |scroll_event| {
+                    self.scroll_event_count += 1;
+                    self.last_id = scroll_event.id;
+                    self.last_scroll = scroll_event.scroll;
+                },
+                else => {},
+            }
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 180, 72),
+    });
+
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 0, 32), .text = "One" },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 44, 0, 32), .text = "Two" },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(0, 88, 0, 32), .text = "Three" },
+    };
+    const scroll = canvas.Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .children = &children,
+    };
+    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(scroll, geometry.RectF.init(0, 0, 180, 72), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // A wheel gesture delivers one canvas_widget_scroll event carrying
+    // the post-scroll state: the applied offset plus the viewport and
+    // content extents an app needs to page or lazy-load.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .timestamp_ns = 1_000_000_000,
+        .kind = .scroll,
+        .x = 20,
+        .y = 20,
+        .delta_y = 24,
+    } });
+
+    try std.testing.expectEqual(@as(u32, 1), app_state.scroll_event_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), app_state.last_id);
+    try std.testing.expectEqual(@as(f32, 24), app_state.last_scroll.offset);
+    try std.testing.expectEqual(@as(f32, 72), app_state.last_scroll.viewport_extent);
+    try std.testing.expectEqual(@as(f32, 120), app_state.last_scroll.content_extent);
+    try std.testing.expectEqual(@as(f32, 48), app_state.last_scroll.maxOffset());
+
+    // The wheel left momentum; the first frame after input skips the
+    // kinetic step (pending-input frame), the second one steps it and
+    // delivers a fresh event with the advanced offset.
+    try std.testing.expect(harness.runtime.views[0].widget_scroll_states[0].velocity > 0);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(180, 72),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_016_000_000,
+        .frame_interval_ns = 16_000_000,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.scroll_event_count);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(180, 72),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 1_032_000_000,
+        .frame_interval_ns = 16_000_000,
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.scroll_event_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), app_state.last_id);
+    try std.testing.expect(app_state.last_scroll.offset > 24);
+    try std.testing.expectEqual(
+        harness.runtime.views[0].widget_layout_nodes[0].widget.value,
+        app_state.last_scroll.offset,
+    );
+}
+
 test "runtime wheel input scrolls retained canvas scroll views" {
     const TestApp = struct {
         widget_pointer_count: u32 = 0,

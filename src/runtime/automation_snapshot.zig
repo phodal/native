@@ -2,6 +2,7 @@ const geometry = @import("geometry");
 const canvas = @import("canvas");
 const automation = @import("../automation/root.zig");
 const platform = @import("../platform/root.zig");
+const canvas_limits = @import("canvas_limits.zig");
 const runtime_clock = @import("clock.zig");
 const widget_bridge = @import("widget_bridge.zig");
 const runtime_api = @import("api.zig");
@@ -29,6 +30,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                     .diagnostics = automationDiagnostics(self),
                     .errors = self.dispatchErrors(),
                     .source = self.loaded_source,
+                    .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
+                    .widget_semantics_budget = canvas_limits.max_canvas_widget_semantics_per_view,
                 };
             }
             var view_count: usize = 0;
@@ -53,6 +56,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .diagnostics = automationDiagnostics(self),
                 .errors = self.dispatchErrors(),
                 .source = self.loaded_source,
+                .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
+                .widget_semantics_budget = canvas_limits.max_canvas_widget_semantics_per_view,
             };
         }
 

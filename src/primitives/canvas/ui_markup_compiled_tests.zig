@@ -41,6 +41,7 @@ fn expectSameTree(comptime MsgT: type, expected: canvas.Ui(MsgT).Tree, actual: c
             .message => |msg| try expectSameMsg(MsgT, msg, actual_handler.action.message),
             .input => |make| try testing.expectEqual(make, actual_handler.action.input),
             .value => |make| try testing.expectEqual(make, actual_handler.action.value),
+            .scroll => |make| try testing.expectEqual(make, actual_handler.action.scroll),
         }
     }
 }
@@ -180,6 +181,7 @@ const Entry = struct {
 const EntriesMsg = union(enum) {
     open_entry: u32,
     refresh,
+    feed_scrolled: canvas.ScrollState,
 };
 
 const EntriesModel = struct {
@@ -309,6 +311,133 @@ test "compiled global-key rows keep their ids across reorders" {
     // independent of position — and the interpreter agrees.
     try testing.expectEqual(first_before.id, first_after.id);
     try expectSameTree(EntriesMsg, try interpretEntries(arena, &model), after);
+}
+
+// ------------------------------------------------ on-scroll parity
+
+const scroll_feed_markup =
+    \\<scroll on-scroll="feed_scrolled">
+    \\  <column gap="4">
+    \\    <for each="entries" as="e" key="id">
+    \\      <text>{e.label}</text>
+    \\    </for>
+    \\  </column>
+    \\</scroll>
+;
+
+const ScrollFeedCompiled = canvas.CompiledMarkupView(EntriesModel, EntriesMsg, scroll_feed_markup);
+
+test "compiled on-scroll binds the ScrollState constructor identically to the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const entries = [_]Entry{.{ .id = 11, .label = "first" }};
+    const model = EntriesModel{ .entries = &entries };
+
+    var view = try markup_view.MarkupView(EntriesModel, EntriesMsg).init(arena, scroll_feed_markup);
+    var interpreter_ui = EntriesUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try view.build(&interpreter_ui, &model));
+    var compiled_ui = EntriesUi.init(arena);
+    const compiled = try compiled_ui.finalize(ScrollFeedCompiled.build(&compiled_ui, &model));
+    try expectSameTree(EntriesMsg, interpreted, compiled);
+
+    // Both engines dispatch the same typed scroll Msg for the container.
+    const feed = fixture.findByKind(compiled.root, .scroll_view).?;
+    const state = canvas.ScrollState{ .offset = 40, .viewport_extent = 80, .content_extent = 200 };
+    try testing.expectEqual(@as(f32, 40), compiled.msgForScroll(feed.id, state).?.feed_scrolled.offset);
+    try testing.expectEqual(
+        interpreted.msgForScroll(feed.id, state).?.feed_scrolled.offset,
+        compiled.msgForScroll(feed.id, state).?.feed_scrolled.offset,
+    );
+}
+
+// --------------------- multi-child for bodies and the for-empty else
+
+const multi_entries_markup =
+    \\<column gap="4">
+    \\  <for each="entries" as="e" key="id">
+    \\    <if test="{e.status == closed_status}">
+    \\      <badge>closed</badge>
+    \\    </if>
+    \\    <else>
+    \\      <badge>open</badge>
+    \\    </else>
+    \\    <text>{e.label}</text>
+    \\    <text>#{e.id}</text>
+    \\  </for>
+    \\  <else>
+    \\    <text>Nothing yet</text>
+    \\  </else>
+    \\</column>
+;
+
+const MultiEntriesCompiled = canvas.CompiledMarkupView(EntriesModel, EntriesMsg, multi_entries_markup);
+
+fn interpretMultiEntries(arena: std.mem.Allocator, model: *const EntriesModel) !EntriesUi.Tree {
+    var view = try EntriesInterpreter.init(arena, multi_entries_markup);
+    var ui = EntriesUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileMultiEntries(arena: std.mem.Allocator, model: *const EntriesModel) !EntriesUi.Tree {
+    var ui = EntriesUi.init(arena);
+    return ui.finalize(MultiEntriesCompiled.build(&ui, model));
+}
+
+test "compiled multi-child for bodies and the for-empty else match the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const entries = [_]Entry{
+        .{ .id = 11, .label = "first" },
+        .{ .id = 22, .label = "second", .status = .closed },
+    };
+
+    // Non-empty: each item emits an if/else badge arm plus two same-kind
+    // texts as siblings (no wrapper node), and the trailing else stays out.
+    var model = EntriesModel{ .entries = &entries };
+    const interpreted = try interpretMultiEntries(arena, &model);
+    const compiled = try compileMultiEntries(arena, &model);
+    try expectSameTree(EntriesMsg, interpreted, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+    try testing.expect(findText(compiled.root, "Nothing yet") == null);
+    try testing.expect(findText(compiled.root, "first") != null);
+    try testing.expect(findText(compiled.root, "#22") != null);
+    try testing.expect(findText(compiled.root, "closed") != null);
+    try testing.expect(findText(compiled.root, "open") != null);
+
+    // Same-kind siblings from one keyed item stay distinct: the item key
+    // slot-suffix keeps every structural id in the tree unique.
+    var ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer ids.deinit(testing.allocator);
+    try fixture.collectIds(compiled.root, &ids, testing.allocator);
+    for (ids.items, 0..) |id, index| {
+        for (ids.items[index + 1 ..]) |other| try testing.expect(id != other);
+    }
+
+    // Keyed identity survives reorders for every node an item emits.
+    const label_before = findText(compiled.root, "first").?;
+    const number_before = findText(compiled.root, "#11").?;
+    const reversed = [_]Entry{
+        .{ .id = 22, .label = "second", .status = .closed },
+        .{ .id = 11, .label = "first" },
+    };
+    model.entries = &reversed;
+    const reordered = try compileMultiEntries(arena, &model);
+    try expectSameTree(EntriesMsg, try interpretMultiEntries(arena, &model), reordered);
+    try testing.expectEqual(label_before.id, findText(reordered.root, "first").?.id);
+    try testing.expectEqual(number_before.id, findText(reordered.root, "#11").?.id);
+
+    // Empty: the trailing else renders the empty state in both engines.
+    model.entries = &.{};
+    const empty_interpreted = try interpretMultiEntries(arena, &model);
+    const empty_compiled = try compileMultiEntries(arena, &model);
+    try expectSameTree(EntriesMsg, empty_interpreted, empty_compiled);
+    try expectSameTexts(empty_interpreted.root, empty_compiled.root);
+    try testing.expect(findText(empty_compiled.root, "Nothing yet") != null);
+    try testing.expect(findText(empty_interpreted.root, "Nothing yet") != null);
 }
 
 test "the compiled path accepts every element the validator knows" {

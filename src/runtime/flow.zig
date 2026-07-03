@@ -319,6 +319,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .gpu_surface_input => {},
                 .canvas_widget_pointer => {},
                 .canvas_widget_keyboard => {},
+                .canvas_widget_scroll => {},
                 .canvas_widget_file_drop => {},
                 .canvas_widget_drag => {},
                 .lifecycle => {},

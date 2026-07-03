@@ -126,11 +126,21 @@ Numbers are plain (`gap="12"`), booleans are `true`/`false` or a binding.
 
 When children's minimum sizes exceed their container, debug builds log a `zero_canvas_layout` diagnostic naming the container, axis, and overflow in pixels — flex overflow is never silent. In Zig views, `.gap` on a stacking kind (`ui.panel(.{ .gap = 8 }, ...)`) logs a `zero_canvas_ui` warning in debug builds with the same lesson — it never fails the build.
 
+## Widget budgets and virtualization
+
+Every view has fixed per-view capacities (`src/runtime/canvas_limits.zig`): **1024 retained widget nodes** (`max_canvas_widget_nodes_per_view` — the budget that matters for tree design; semantics and spans match it), 64 KiB retained widget text, and per-frame content budgets (2048 commands, 8192 glyphs, 32 KiB frame text). Overflow is loud: `error.WidgetLayoutListFull` / `error.WidgetNodeLimitReached` fail tests under the harness's propagate policy and log a teaching diagnostic naming the budget in production (the app degrades to the previous frame). Watch headroom without overflowing: automation snapshots report `widget_nodes=N/1024 widget_semantics=N/1024` on every gpu_surface view line.
+
+Budget rules of thumb: 1024 nodes is roomy for a three-pane desktop app (~500 nodes measured for a dense sidebar + markdown detail + run surface), but node count scales with what is MOUNTED, not what is visible — so bound every unbounded collection:
+
+- `virtualized` on `scroll`/`list`/`grid`/`table` (with `virtual-item-extent` for fixed-extent items) lays out only the visible window + overscan; a 10,000-item list materializes ~viewport/extent nodes. It bounds NODES, not your source data: the builder still walks every item, so derive bounded slices in the model for very large collections. Virtualized containers are app-driven for scrolling (wheel offsets do not mutate them).
+- For non-uniform content (chat transcripts, ledgers, diffs), keep a bounded window in the model and slide it with `on-scroll` (see Messages) or explicit paging — the window follows the scrollbar instead of mounting everything.
+- Remember multi-node rows multiply: a 4-node row × 50 mounted rows is 200 nodes before chrome.
+
 ## Style token attributes
 
 Color and radius come from the design tokens, referenced by token NAME — literals only, no bindings, no raw colors (dynamic styling stays in Zig via `ElementOptions.style`):
 
-- Color attributes: `background`, `foreground`, `accent`, `accent-foreground`, `border-color`, `focus-ring`. Values are `canvas.ColorTokens` field names — the complete list: `background`, `surface`, `surface_subtle`, `surface_pressed`, `text`, `text_muted`, `border`, `accent`, `accent_text`, `destructive`, `destructive_text`, `focus_ring`, `shadow`, `disabled`. (`border-color`, not bare `border` — that name is reserved for a future width shorthand.)
+- Color attributes: `background`, `foreground`, `accent`, `accent-foreground`, `border-color`, `focus-ring`. Values are `canvas.ColorTokens` field names — the complete list: `background`, `surface`, `surface_subtle`, `surface_pressed`, `text`, `text_muted`, `border`, `accent`, `accent_text`, `destructive`, `destructive_text`, `success`, `success_text`, `warning`, `warning_text`, `focus_ring`, `shadow`, `disabled`. (`border-color`, not bare `border` — that name is reserved for a future width shorthand.)
 - `radius` — `canvas.RadiusTokens` field names: `sm`, `md`, `lg`, `xl`.
 
 ```html
@@ -227,7 +237,9 @@ For `<if test>`, prefer an explicit boolean predicate method over numeric truthi
 
 ## Messages
 
-`on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it.
+`on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it. `on-scroll` (the `scroll` element only) is the same shape: name a `Msg` variant whose payload is `canvas.ScrollState` and the runtime delivers the post-scroll state — `offset`, `viewport_extent`, `content_extent`, `maxOffset()` — after every user scroll (wheel, kinetic momentum steps, keyboard, accessibility). In Zig views the constructors are `Ui.inputMsg(.tag)` / `Ui.scrollMsg(.tag)` on `on_input` / `on_scroll`.
+
+Scroll offsets follow the same mirror discipline as text: the Msg carries the offset the runtime ALREADY applied, so store it in the model and echo it back through the scroll's `value` — the echoed source value equals the runtime offset, which the scroll reconcile rule treats as "unchanged", so rebuilds never stomp live scrolling. `on-scroll` is how long content pages or lazy-loads: keep a bounded window in the model and slide it from `offset` (near-end when `offset + viewport_extent` approaches `content_extent`).
 
 A handler or update error DEGRADES, it does not exit the app: dispatch catches it, records it in a bounded ring (`runtime.dispatchErrors()`, the `error event=... name=...` lines and `dispatch_errors=` count in automation snapshots, and a `dispatch.error` trace record at error level), and the app keeps running. Trace-sink capacity failures likewise never fail dispatch — dropped records are counted (`dropped_trace_records=`), not fatal. Design for it: an arm that can fail should still surface its own status in the model; the error ring is the safety net, not the UX.
 
@@ -509,10 +521,22 @@ Rules:
 ## Structure tags
 
 ```html
-<for each="visible" key="id" as="t"> <row>...</row> </for>   <!-- exactly one element child; key names an item field -->
+<for each="visible" key="id" as="t"> <row>...</row> </for>   <!-- one or more element children; key names an item field -->
 <if test="{c.movable}"> <button ...>Move</button> </if>
 <else> <text>Done!</text> </else>                             <!-- must directly follow the if -->
 ```
+
+A `<for>` body takes one or more children — elements, `<use>`, `<if>`/`<else>` arms, or nested `<for>`s — so polymorphic rows need no wrapper node: put the `<if>`/`<else>` arms directly in the body and each item emits whichever arm wins. With `key`, every node an item emits shares the item's identity (same-kind siblings within one item are disambiguated automatically); a node's own `key`/`global-key` still wins. An `<else>` directly after a `</for>` renders the empty state when the iterable has no items:
+
+```html
+<for each="visible" key="id" as="t">
+  <if test="{t.done}"> <badge>done</badge> </if>
+  <else> <text>{t.title}</text> </else>
+</for>
+<else> <text>Nothing yet</text> </else>                       <!-- renders when visible is empty -->
+```
+
+There is no `else-if` chain tag: nest an `<if>`/`<else>` inside the `<else>` body instead. `<if>` has no negation operator either — prefer an explicit boolean predicate method on the model per arm.
 
 ## Templates: `<template>` + `<use>`
 

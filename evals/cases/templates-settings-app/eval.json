@@ -32,7 +32,7 @@
     {
       "type": "file_grep",
       "files": "src/*.zml",
-      "pattern": "(foreground|background|accent|accent-foreground|border-color|focus-ring)=\"(background|surface|surface_subtle|surface_pressed|text|text_muted|border|accent|accent_text|destructive|destructive_text|focus_ring|shadow|disabled)\"",
+      "pattern": "(foreground|background|accent|accent-foreground|border-color|focus-ring)=\"(background|surface|surface_subtle|surface_pressed|text|text_muted|border|accent|accent_text|destructive|destructive_text|success|success_text|warning|warning_text|focus_ring|shadow|disabled)\"",
       "expect": true,
       "description": "markup uses at least one color token style attribute"
     },

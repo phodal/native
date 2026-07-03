@@ -23,6 +23,7 @@ const Msg = union(enum) {
     set_filter: Filter,
     draft: canvas.TextInputEvent,
     confidence: f32,
+    feed_scrolled: canvas.ScrollState,
 };
 
 const InboxUi = ui_model.Ui(Msg);
@@ -391,6 +392,25 @@ test "payload-carrying handlers build messages from edits and values" {
 
     // Direct value dispatch (accessibility set-value) works too.
     try testing.expectEqual(@as(f32, 0.25), tree.msgForValue(slider.id, 0.25).?.confidence);
+
+    // on_scroll builds a message from the post-scroll state; widgets
+    // without one dispatch nothing.
+    const scroll_tree = blk: {
+        var other_ui = InboxUi.init(arena_state.allocator());
+        break :blk try other_ui.finalize(other_ui.scroll(
+            .{ .on_scroll = InboxUi.scrollMsg(.feed_scrolled) },
+            other_ui.text(.{}, "Row"),
+        ));
+    };
+    const feed = findByKind(scroll_tree.root, .scroll_view).?;
+    const scrolled = scroll_tree.msgForScroll(feed.id, .{
+        .offset = 64,
+        .viewport_extent = 72,
+        .content_extent = 200,
+    }).?.feed_scrolled;
+    try testing.expectEqual(@as(f32, 64), scrolled.offset);
+    try testing.expectEqual(@as(f32, 128), scrolled.maxOffset());
+    try testing.expectEqual(@as(?Msg, null), tree.msgForScroll(slider.id, .{}));
 
     // Widgets without payload handlers dispatch nothing for edits.
     const checkbox_tree = blk: {

@@ -4,7 +4,11 @@ const platform = @import("../platform/root.zig");
 
 pub const max_windows: usize = platform.max_windows;
 pub const max_views: usize = platform.max_windows + platform.max_views + platform.max_webviews;
-pub const max_widgets_per_view: usize = 256;
+// Mirrors `canvas_limits.max_canvas_widget_nodes_per_view` (this module
+// cannot import the runtime); a lockstep test in
+// canvas_widget_layout_tests.zig fails if they drift, so snapshots never
+// silently truncate widget enumeration below the node budget.
+pub const max_widgets_per_view: usize = 1024;
 pub const max_widgets: usize = platform.max_views * max_widgets_per_view;
 
 pub const Window = struct {
@@ -129,6 +133,11 @@ pub const Input = struct {
     views: []const platform.ViewInfo = &.{},
     widgets: []const Widget = &.{},
     diagnostics: Diagnostics = .{},
+    /// Per-view widget budgets (`canvas_limits.max_canvas_widget_*`),
+    /// stamped by the runtime so gpu_surface view lines can report
+    /// `widget_nodes=current/budget` headroom.
+    widget_node_budget: usize = 0,
+    widget_semantics_budget: usize = 0,
     /// The most recent degraded dispatch errors, oldest first (bounded
     /// ring; `diagnostics.dispatch_error_count` is the lifetime total).
     errors: []const DispatchError = &.{},
@@ -278,6 +287,17 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.canvas_frame_change_count,
                 view.canvas_frame_budget_exceeded_count,
                 view.canvas_frame_budget_ok,
+            });
+            // Widget budget headroom telemetry (#62): current retained
+            // node/semantics counts against the per-view budget, so
+            // authors see the cliff coming instead of bisecting overflow
+            // by hand. `widget_node_budget` rides on Input because this
+            // module cannot import the runtime's canvas_limits.
+            try writer.print(" widget_nodes={d}/{d} widget_semantics={d}/{d}", .{
+                view.widget_node_count,
+                input.widget_node_budget,
+                view.widget_semantics_count,
+                input.widget_semantics_budget,
             });
             if (view.canvas_frame_dirty_bounds) |dirty| {
                 try writer.print(" canvas_frame_dirty=({d},{d} {d}x{d})", .{ dirty.x, dirty.y, dirty.width, dirty.height });

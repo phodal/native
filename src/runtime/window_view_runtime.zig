@@ -587,7 +587,7 @@ pub fn RuntimeWindowViewRuntime(comptime Runtime: type) type {
             var cursor = index;
             while (cursor + 1 < self.view_count) : (cursor += 1) {
                 const next = &self.views[cursor + 1];
-                self.views[cursor].copyRuntimeStateFrom(next);
+                self.views[cursor].copyRuntimeStateFrom(next, &self.canvas_widget_copy_scratch);
             }
             self.view_count -= 1;
         }

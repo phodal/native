@@ -63,6 +63,21 @@ pub const CanvasWidgetKeyboardEvent = struct {
     route: []const canvas.WidgetEventRouteEntry = &.{},
 };
 
+/// A scroll container's offset changed from a user gesture (wheel,
+/// kinetic momentum steps, keyboard, or an accessibility scroll action).
+/// `scroll` is the post-change state — offset, viewport and content
+/// extents (`maxOffset()` derives the range) — read at dispatch time, so
+/// rapid motion coalesces into the latest state per node. Programmatic
+/// source-tree offset changes do not emit this event: the model already
+/// knows those.
+pub const CanvasWidgetScrollEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    /// The scroll container's structural widget id.
+    id: canvas.ObjectId,
+    scroll: canvas.ScrollState,
+};
+
 pub const CanvasWidgetDisplayListChrome = runtime_view.CanvasWidgetDisplayListChrome;
 
 pub const CanvasPresentationMode = enum {
@@ -131,6 +146,7 @@ pub const Event = union(enum) {
     gpu_surface_input: GpuSurfaceInputEvent,
     canvas_widget_pointer: CanvasWidgetPointerEvent,
     canvas_widget_keyboard: CanvasWidgetKeyboardEvent,
+    canvas_widget_scroll: CanvasWidgetScrollEvent,
     canvas_widget_file_drop: CanvasWidgetFileDropEvent,
     canvas_widget_drag: CanvasWidgetDragEvent,
 
@@ -148,6 +164,7 @@ pub const Event = union(enum) {
             .gpu_surface_input => "gpu_surface_input",
             .canvas_widget_pointer => "canvas_widget_pointer",
             .canvas_widget_keyboard => "canvas_widget_keyboard",
+            .canvas_widget_scroll => "canvas_widget_scroll",
             .canvas_widget_file_drop => "canvas_widget_file_drop",
             .canvas_widget_drag => "canvas_widget_drag",
         };

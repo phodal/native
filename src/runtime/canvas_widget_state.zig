@@ -36,11 +36,11 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             const previous_layout = self.views[index].widgetLayoutTree();
             const source_semantics = try layout.collectSemantics(&self.canvas_widget_source_semantics_scratch);
             const reconciled_nodes = &self.canvas_widget_reconcile_nodes;
-            var previous_control_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetControlReconcileEntry = undefined;
-            var previous_scroll_entries: [max_canvas_widget_nodes_per_view]canvas_widget_runtime.CanvasWidgetSourceScrollEntry = undefined;
-            var previous_text_entries: [max_canvas_widget_nodes_per_view]CanvasWidgetTextReconcileEntry = undefined;
-            var previous_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined;
             const tokens = self.views[index].widget_tokens;
+            // Reconcile scratch lives on the Runtime, not the stack: at
+            // the 1024-node budget these arrays total several hundred
+            // KiB, and the single-threaded event loop makes the shared
+            // buffers safe.
             const reconciled_layout = try canvasWidgetLayoutTreeWithRuntimeReconcileState(
                 previous_layout,
                 layout,
@@ -48,14 +48,13 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 self.views[index].widgetSourceTextEntries(),
                 self.views[index].widgetSourceScrollEntries(),
                 reconciled_nodes,
-                &previous_control_entries,
-                &previous_scroll_entries,
-                &previous_text_entries,
-                &previous_text_bytes,
+                &self.canvas_widget_reconcile_control_entries,
+                &self.canvas_widget_reconcile_scroll_entries,
+                &self.canvas_widget_reconcile_text_entries,
+                &self.canvas_widget_reconcile_text_bytes,
                 tokens,
             );
-            var widget_invalidations: [max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined;
-            const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &widget_invalidations);
+            const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &self.canvas_widget_invalidations_scratch);
             const previous_render_state = self.views[index].canvasWidgetRenderState();
             const next_render_state = CanvasWidgetEventMethods(Runtime).canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);
             const render_state_changed = !CanvasWidgetEventMethods(Runtime).canvasWidgetRenderStatesEqual(previous_render_state, next_render_state);
@@ -65,7 +64,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 null;
             const previous_cursor = self.views[index].canvas_widget_cursor;
             const previous_widget_revision = self.views[index].widget_revision;
-            try self.views[index].copyWidgetLayoutTree(reconciled_layout);
+            try self.views[index].copyWidgetLayoutTree(reconciled_layout, &self.canvas_widget_copy_scratch);
             try self.views[index].copyCanvasWidgetSourceText(layout);
             self.views[index].copyCanvasWidgetSourceScroll(layout);
             const widget_revision_changed = self.views[index].widget_revision != previous_widget_revision;

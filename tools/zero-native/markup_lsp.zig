@@ -618,9 +618,9 @@ pub const element_docs = [_]Doc{
 };
 
 pub const structure_docs = [_]Doc{
-    .{ .name = "for", .doc = "Structure tag: repeats its single element child over each; requires each and as, key names an item field." },
+    .{ .name = "for", .doc = "Structure tag: repeats its element children over each (elements, use, if/else, nested for); requires each and as, key names an item field. A directly following else renders when the iterable is empty." },
     .{ .name = "if", .doc = "Structure tag: renders children when test={binding} or {a == b} is true." },
-    .{ .name = "else", .doc = "Structure tag: must directly follow an if." },
+    .{ .name = "else", .doc = "Structure tag: must directly follow an if (renders when the test is false) or a for (renders when the iterable is empty)." },
     .{ .name = "template", .doc = "Top-level template definition (before the view root): name, optional args, exactly one element child." },
     .{ .name = "use", .doc = "Expands a template in place: template names an earlier definition, other attributes must match its args exactly." },
 };
@@ -649,8 +649,8 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "role", .doc = "Accessibility role (listitem, button, ...)." },
     .{ .name = "label", .doc = "Accessible name." },
     .{ .name = "background", .doc = "Background color token (literal ColorTokens field name: background, surface, surface_subtle, ...)." },
-    .{ .name = "foreground", .doc = "Foreground/text color token (literal ColorTokens field name, e.g. text, text_muted)." },
-    .{ .name = "accent", .doc = "Accent color token (literal ColorTokens field name, e.g. accent, destructive)." },
+    .{ .name = "foreground", .doc = "Foreground/text color token (literal ColorTokens field name, e.g. text, text_muted, success, warning)." },
+    .{ .name = "accent", .doc = "Accent color token (literal ColorTokens field name, e.g. accent, destructive, success, warning)." },
     .{ .name = "accent-foreground", .doc = "Accent foreground color token (literal ColorTokens field name, e.g. accent_text)." },
     .{ .name = "border-color", .doc = "Border color token (literal ColorTokens field name, e.g. border)." },
     .{ .name = "focus-ring", .doc = "Focus ring color token (literal ColorTokens field name, e.g. focus_ring)." },
@@ -719,6 +719,7 @@ pub const event_docs = [_]Doc{
     .{ .name = "on-change", .doc = "Dispatch a Msg on change: tag or tag:{payload}. Hit-target elements only (slider, ...)." },
     .{ .name = "on-submit", .doc = "Dispatch a Msg on enter in a text field: tag or tag:{payload}." },
     .{ .name = "on-input", .doc = "Names a Msg variant with canvas.TextInputEvent payload; delivers each text edit." },
+    .{ .name = "on-scroll", .doc = "scroll element only: names a Msg variant with canvas.ScrollState payload; delivers the post-scroll offset/viewport/content extents after wheel, kinetic, keyboard, and accessibility scrolls." },
 };
 
 pub fn elementDoc(name: []const u8) ?[]const u8 {

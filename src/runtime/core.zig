@@ -18,6 +18,7 @@ const runtime_canvas_images = @import("canvas_images.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
 const runtime_canvas_widget_state = @import("canvas_widget_state.zig");
+const runtime_canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
 const runtime_flow = @import("flow.zig");
 const runtime_state = @import("state.zig");
@@ -129,6 +130,7 @@ pub const GpuSurfaceResizeEvent = runtime_api.GpuSurfaceResizeEvent;
 pub const GpuSurfaceInputEvent = runtime_api.GpuSurfaceInputEvent;
 pub const CanvasWidgetPointerEvent = runtime_api.CanvasWidgetPointerEvent;
 pub const CanvasWidgetKeyboardEvent = runtime_api.CanvasWidgetKeyboardEvent;
+pub const CanvasWidgetScrollEvent = runtime_api.CanvasWidgetScrollEvent;
 pub const CanvasWidgetDisplayListChrome = runtime_api.CanvasWidgetDisplayListChrome;
 pub const CanvasPresentationMode = runtime_api.CanvasPresentationMode;
 pub const CanvasPresentationResult = runtime_api.CanvasPresentationResult;
@@ -209,6 +211,15 @@ pub const Runtime = struct {
     // stack at the current node cap, and the event loop is single-threaded.
     canvas_widget_reconcile_nodes: [canvas_limits.max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
     canvas_widget_source_semantics_scratch: [canvas_limits.max_canvas_widget_semantics_per_view]canvas.WidgetSemanticsNode = undefined,
+    // More reconcile-pass scratch that outgrew the stack when the widget
+    // budgets quadrupled (#62): previous control/scroll/text reconcile
+    // entries, the previous text byte pool, and the invalidation diff.
+    canvas_widget_reconcile_control_entries: [canvas_limits.max_canvas_widget_nodes_per_view]runtime_canvas_widget_runtime.CanvasWidgetControlReconcileEntry = undefined,
+    canvas_widget_reconcile_scroll_entries: [canvas_limits.max_canvas_widget_nodes_per_view]runtime_canvas_widget_runtime.CanvasWidgetSourceScrollEntry = undefined,
+    canvas_widget_reconcile_text_entries: [canvas_limits.max_canvas_widget_nodes_per_view]runtime_canvas_widget_runtime.CanvasWidgetTextReconcileEntry = undefined,
+    canvas_widget_reconcile_text_bytes: [canvas_limits.max_canvas_widget_text_bytes_per_view]u8 = undefined,
+    canvas_widget_invalidations_scratch: [canvas_limits.max_canvas_widget_invalidations_per_view]canvas.WidgetInvalidation = undefined,
+    canvas_widget_copy_scratch: runtime_canvas_widget_runtime.CanvasWidgetCopyScratch = undefined,
     canvas_widget_display_list_refresh_pending: [platform.max_views]bool = [_]bool{false} ** platform.max_views,
     canvas_widget_accessibility_publish_pending: [platform.max_views]bool = [_]bool{false} ** platform.max_views,
     canvas_frame_render_commands: [max_canvas_commands_per_view]canvas.RenderCommand = undefined,
@@ -758,3 +769,4 @@ pub const testing = struct {
 test {
     std.testing.refAllDecls(@This());
 }
+

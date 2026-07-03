@@ -725,6 +725,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .gpu_surface_resized => |resize_event| try self.handleResize(runtime, resize_event),
                 .canvas_widget_pointer => |pointer_event| try self.handlePointer(runtime, pointer_event),
                 .canvas_widget_keyboard => |keyboard_event| try self.handleKeyboard(runtime, keyboard_event),
+                .canvas_widget_scroll => |scroll_event| try self.handleScroll(runtime, scroll_event),
                 else => {},
             }
         }
@@ -903,6 +904,18 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const target = keyboard_event.target orelse return;
             if (tree.msgForKeyboard(target.id, keyboard_event.keyboard)) |msg| {
                 try self.dispatch(runtime, keyboard_event.window_id, msg);
+            }
+        }
+
+        /// Scroll offset changes route through the scroll container's
+        /// `on_scroll` constructor. The payload is the offset the runtime
+        /// already applied, so a model that stores it and echoes it back
+        /// into `value` never fights the scroll reconcile rule.
+        fn handleScroll(self: *Self, runtime: *Runtime, scroll_event: core.CanvasWidgetScrollEvent) anyerror!void {
+            if (!std.mem.eql(u8, scroll_event.view_label, self.options.canvas_label)) return;
+            const tree = self.tree orelse return;
+            if (tree.msgForScroll(scroll_event.id, scroll_event.scroll)) |msg| {
+                try self.dispatch(runtime, scroll_event.window_id, msg);
             }
         }
     };

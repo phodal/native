@@ -95,6 +95,12 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
     const optimize = exampleOptimizeMode(b, optimize_request, .Debug);
 
     const zero_native_mod = zeroNativeModule(b, dep, target, optimize);
+    // Android hosts load the embed lib inside a shared object
+    // (System.loadLibrary / NativeActivity), so every object must be PIC —
+    // without it Zig emits local-exec TLS relocations (R_AARCH64_TLSLE_*)
+    // that the NDK linker rejects when producing the shim .so. Imported
+    // modules leave `pic` null and inherit this from the root module.
+    const pic: ?bool = if (target.result.abi.isAndroid()) true else null;
     const exports_mod = b.createModule(.{
         .root_source_file = dep.path(switch (options.scene) {
             .canvas => "src/embed/app_exports.zig",
@@ -102,6 +108,7 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
         }),
         .target = target,
         .optimize = optimize,
+        .pic = pic,
     });
     exports_mod.addImport("zero-native", zero_native_mod);
     if (options.scene == .canvas) {

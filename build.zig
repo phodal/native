@@ -584,6 +584,14 @@ pub fn build(b: *std.Build) void {
     mobile_canvas_lib_step.dependOn(&build_mobile_canvas_lib.step);
     mobile_examples_step.dependOn(&build_mobile_canvas_lib.step);
 
+    // Android cross-compile proof: pure Zig (no NDK sysroot — the static
+    // lib links no libc), PIC so the objects can land in the shim's .so.
+    const build_mobile_canvas_lib_android = b.addSystemCommand(&.{ "zig", "build", "lib", "-Dtarget=aarch64-linux-android" });
+    build_mobile_canvas_lib_android.setCwd(b.path("examples/mobile-canvas"));
+    const mobile_canvas_lib_android_step = b.step("test-example-mobile-canvas-lib-android", "Cross-compile the mobile-canvas embed static library for aarch64-linux-android");
+    mobile_canvas_lib_android_step.dependOn(&build_mobile_canvas_lib_android.step);
+    mobile_examples_step.dependOn(&build_mobile_canvas_lib_android.step);
+
     const examples_step = b.step("test-examples", "Run all example tests and layout checks");
     examples_step.dependOn(frontend_examples_step);
     examples_step.dependOn(native_examples_step);

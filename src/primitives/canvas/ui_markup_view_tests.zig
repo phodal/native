@@ -326,6 +326,14 @@ pub fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const 
     return null;
 }
 
+pub fn findByRoleLabel(widget: canvas.Widget, role: canvas.WidgetRole, label: []const u8) ?canvas.Widget {
+    if (widget.semantics.role == role and std.mem.eql(u8, widget.semantics.label, label)) return widget;
+    for (widget.children) |child| {
+        if (findByRoleLabel(child, role, label)) |found| return found;
+    }
+    return null;
+}
+
 test "template expansion builds the hand-written tree with ids from the expansion site" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1075,6 +1083,7 @@ pub const CatalogModel = struct {
     dialog_open: bool = false,
     loading: bool = true,
     page: u32 = 1,
+    stage: usize = 1,
     choice: []const u8 = "Bananas",
     query: []const u8 = "",
     rows: []const CatalogRow = &.{},
@@ -1142,6 +1151,17 @@ pub const catalog_markup_source =
     \\      </table-row>
     \\    </for>
     \\  </table>
+    \\  <stepper active="{stage}" key="pipeline">
+    \\    <step>Work</step>
+    \\    <step>Review · {page}</step>
+    \\    <step>Ready</step>
+    \\  </stepper>
+    \\  <timeline gap="4" label="run ledger">
+    \\    <for each="rows" key="id" as="entry">
+    \\      <timeline-item title="{entry.name}" description="Step summary" meta="claude · sonnet" variant="primary" on-press="pick_row:{entry.id}" />
+    \\    </for>
+    \\    <timeline-item title="Ready for review" indicator="✓" variant="secondary" connector="false" selected="true" />
+    \\  </timeline>
     \\  <pagination gap="4">
     \\    <button size="sm" on-press="set_page:{prevPage}">Prev</button>
     \\    <badge>{page}</badge>
@@ -1198,6 +1218,16 @@ fn catalogTableRow(ui: *CatalogUi, row: *const CatalogRow) CatalogUi.Node {
     });
 }
 
+fn catalogTimelineEntry(ui: *CatalogUi, row: *const CatalogRow) CatalogUi.Node {
+    return ui.timelineItem(.{
+        .title = row.name,
+        .description = "Step summary",
+        .meta = "claude · sonnet",
+        .variant = .primary,
+        .on_press = CatalogMsg{ .pick_row = row.id },
+    });
+}
+
 /// The hand-written equivalent of the catalog markup for a model with
 /// `loading` true and `dialog_open` false (the fixture model): parity
 /// means the interpreter and the compiled view both build exactly this.
@@ -1242,6 +1272,21 @@ pub fn handCatalogView(ui: *CatalogUi, model: *const CatalogModel) CatalogUi.Nod
                 textLeaf(ui, .data_cell, .{}, "Qty"),
             }),
             ui.each(model.rows, CatalogRow.key, catalogTableRow),
+        }),
+        ui.stepper(.{ .active = model.stage, .key = canvas.uiKey("pipeline") }, &.{
+            .{ .label = "Work" },
+            .{ .label = ui.fmt("Review · {d}", .{model.page}) },
+            .{ .label = "Ready" },
+        }),
+        ui.timeline(.{ .gap = 4, .semantics = .{ .label = "run ledger" } }, .{
+            ui.each(model.rows, CatalogRow.key, catalogTimelineEntry),
+            ui.timelineItem(.{
+                .title = "Ready for review",
+                .indicator = "✓",
+                .variant = .secondary,
+                .connector = false,
+                .selected = true,
+            }),
         }),
         ui.el(.pagination, .{ .gap = 4 }, .{
             ui.button(.{ .size = .sm, .on_press = CatalogMsg{ .set_page = model.prevPage() } }, "Prev"),
@@ -1333,6 +1378,16 @@ test "catalog elements build the hand-written tree and dispatch typed messages" 
     try testing.expectEqual(CatalogMsg.toggle_details, markup_tree.msgForPointer(accordion.id, .up).?);
     const pears_cell = findByText(markup_tree.root, .data_cell, "Pears").?;
     try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(pears_cell.id, .up).?.pick_row);
+
+    // Composite stepper: the active step (index 1) is selected and carries
+    // its interpolated label + state in semantics.
+    const active_step = findByRoleLabel(markup_tree.root, .listitem, "Review · 1 (active)").?;
+    try testing.expect(active_step.state.selected);
+    try testing.expect(findByRoleLabel(markup_tree.root, .listitem, "Work (completed)") != null);
+    // Composite timeline: an item press dispatches from the full-area
+    // overlay carrying the item's payload.
+    const ledger_overlay = findByRoleLabel(markup_tree.root, .listitem, "Pears").?;
+    try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(ledger_overlay.id, .up).?.pick_row);
     const prev_button = findByText(markup_tree.root, .button, "Prev").?;
     try testing.expectEqual(@as(u32, 0), markup_tree.msgForPointer(prev_button.id, .up).?.set_page);
 

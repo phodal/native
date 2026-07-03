@@ -300,6 +300,14 @@ pub const Server = struct {
                     // else takes no attributes
                 } else if (std.mem.eql(u8, element_name, "markdown")) {
                     for (markdown_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markdown attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "stepper")) {
+                    for (stepper_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "stepper attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "step")) {
+                    // step takes no attributes; its content is the label.
+                } else if (std.mem.eql(u8, element_name, "timeline")) {
+                    for (timeline_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "timeline-item")) {
+                    for (timeline_item_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline-item attribute", doc.doc);
                 } else {
                     for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
                     for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
@@ -598,7 +606,11 @@ pub const element_docs = [_]Doc{
     .{ .name = "combobox", .doc = "Text entry with menu affordance; edits via on-input, open via on-press." },
     .{ .name = "skeleton", .doc = "Loading placeholder block; size with width and height." },
     .{ .name = "spinner", .doc = "Indeterminate progress spinner leaf." },
-    .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset) as widgets; source is one {binding}, links dispatch on-link (bare URLs autolink), <details> blocks toggle via on-details + details-expanded, #123 refs linkify via issue-link-base." },
+    .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset, pipe tables included) as widgets; source is one {binding}, links dispatch on-link (bare URLs autolink), <details> blocks toggle via on-details + details-expanded, #123 refs linkify via issue-link-base." },
+    .{ .name = "stepper", .doc = "Stage stepper: step children joined by connectors; active names the current step index (earlier steps render completed, later ones pending)." },
+    .{ .name = "step", .doc = "One stepper stage; only allowed inside a stepper, the label is the text content (supports {} interpolation), state derives from the stepper's active index." },
+    .{ .name = "timeline", .doc = "Ledger/timeline list container; children are timeline-item elements (for/if work). Takes gap, grow, key, global-key, label." },
+    .{ .name = "timeline-item", .doc = "One timeline/ledger item: title (required), description, meta, indicator + variant color the leading badge, connector=\"false\" ends the rail; on-press makes the whole item pressable with a trailing chevron." },
 };
 
 pub const structure_docs = [_]Doc{
@@ -665,6 +677,34 @@ pub const markdown_attr_docs = [_]Doc{
     .{ .name = "issue-link-base", .doc = "markdown: literal URL prefix or one {binding}; '#123' refs become links to base ++ number (ghissue:// or https://github.com/owner/repo/issues/)." },
 };
 
+pub const stepper_attr_docs = [_]Doc{
+    .{ .name = "active", .doc = "stepper: the active step index (a number or one {binding}); earlier steps render completed, later ones pending. Required." },
+    .{ .name = "key", .doc = "Sibling-scoped identity key." },
+    .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
+    .{ .name = "label", .doc = "Accessible name." },
+};
+
+pub const timeline_attr_docs = [_]Doc{
+    .{ .name = "gap", .doc = "Spacing between items (plain number)." },
+    .{ .name = "grow", .doc = "Flex grow factor." },
+    .{ .name = "key", .doc = "Sibling-scoped identity key." },
+    .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
+    .{ .name = "label", .doc = "Accessible name." },
+};
+
+pub const timeline_item_attr_docs = [_]Doc{
+    .{ .name = "title", .doc = "timeline-item: bold first line (a literal or one {binding}). Required." },
+    .{ .name = "description", .doc = "timeline-item: wrapped muted preview under the title (a literal or one {binding})." },
+    .{ .name = "meta", .doc = "timeline-item: muted trailing meta line, e.g. \"claude · sonnet · 1m 12s\" (a literal or one {binding})." },
+    .{ .name = "indicator", .doc = "timeline-item: leading badge text (\"✓\", a number); empty renders a small dot." },
+    .{ .name = "variant", .doc = "timeline-item: indicator color variant (default|primary|secondary|outline|ghost|destructive) - map run outcomes here." },
+    .{ .name = "connector", .doc = "timeline-item: false ends the connector rail (set on the last item)." },
+    .{ .name = "selected", .doc = "timeline-item: selected state (true/false or a {binding})." },
+    .{ .name = "on-press", .doc = "timeline-item: Msg dispatched from anywhere on the item (tag or tag:{payload}); adds a trailing chevron." },
+    .{ .name = "key", .doc = "Sibling-scoped identity key; on for, names an item field." },
+    .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
+};
+
 pub const event_docs = [_]Doc{
     .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Hit-target elements only — never on layout containers (row, column, stack, ...); put it on a leaf like list-item or text, or on a control." },
     .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}. Hit-target elements only (checkbox, toggle, toggle-button, switch, accordion, ...)." },
@@ -684,6 +724,9 @@ pub fn attributeDoc(name: []const u8) ?[]const u8 {
     if (findDoc(&for_attr_docs, name)) |doc| return doc;
     if (findDoc(&template_attr_docs, name)) |doc| return doc;
     if (findDoc(&markdown_attr_docs, name)) |doc| return doc;
+    if (findDoc(&stepper_attr_docs, name)) |doc| return doc;
+    if (findDoc(&timeline_attr_docs, name)) |doc| return doc;
+    if (findDoc(&timeline_item_attr_docs, name)) |doc| return doc;
     return findDoc(&if_attr_docs, name);
 }
 
@@ -876,7 +919,7 @@ test "doc tables cover every known element, attribute, and event" {
     for (ui_markup.known_element_names) |name| {
         try testing.expect(elementDoc(name) != null);
     }
-    for ([_][]const u8{ "for", "if", "else", "template", "use", "markdown" }) |name| {
+    for ([_][]const u8{ "for", "if", "else", "template", "use", "markdown", "stepper", "step", "timeline", "timeline-item" }) |name| {
         try testing.expect(elementDoc(name) != null);
     }
     for (ui_markup.known_option_attrs) |name| {
@@ -888,8 +931,11 @@ test "doc tables cover every known element, attribute, and event" {
     for ([_][]const u8{ "radius", "name", "args", "template" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
-    // The markdown element's closed attribute set is documented.
+    // The composite elements' closed attribute sets are documented.
     for ([_][]const u8{ "source", "on-link", "on-details", "details-expanded", "issue-link-base" }) |name| {
+        try testing.expect(attributeDoc(name) != null);
+    }
+    for ([_][]const u8{ "active", "title", "description", "meta", "indicator", "connector" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

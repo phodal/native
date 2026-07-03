@@ -135,6 +135,19 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             if (comptime std.mem.eql(u8, node.name, "markdown")) {
                 return buildMarkdown(node, entries, ui, model, scope);
             }
+            if (comptime std.mem.eql(u8, node.name, "stepper")) {
+                return buildStepper(node, entries, ui, model, scope);
+            }
+            if (comptime std.mem.eql(u8, node.name, "step")) {
+                // Steps inside a stepper are consumed by buildStepper.
+                comptime fail(node, markup.step_parent_message);
+            }
+            if (comptime std.mem.eql(u8, node.name, "timeline")) {
+                return buildTimeline(node, entries, ui, model, scope);
+            }
+            if (comptime std.mem.eql(u8, node.name, "timeline-item")) {
+                return buildTimelineItem(node, entries, ui, model, scope);
+            }
             const kind = comptime (interpreter.elementKind(node.name) orelse fail(node, "unknown element"));
             comptime {
                 // Interpreter parity: handlers on non-hit-target kinds can
@@ -391,6 +404,183 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 if (info.Item != bool) fail(node, markup.markdown_details_expanded_message);
             }
             return eachItems(info, ui, model);
+        }
+
+        // ------------------------------------------------ stepper/timeline
+
+        /// Comptime mirror of the interpreter's `buildStepper`: attrs and
+        /// step structure resolve at comptime; the active index and step
+        /// labels are read at runtime. Misuse fails compilation with the
+        /// interpreter's message.
+        fn buildStepper(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "active")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.stepper_attr_message);
+                }
+                if (node.attr("active") == null) fail(node, markup.stepper_active_message);
+                for (node.children) |child| {
+                    if (child.kind != .element or !std.mem.eql(u8, child.name, "step")) {
+                        fail(child, markup.stepper_children_message);
+                    }
+                    for (child.attrs) |attribute| {
+                        if (!std.mem.eql(u8, attribute.name, "kind")) fail(child, markup.step_attr_message);
+                    }
+                }
+            }
+            var options: Ui.StepperOptions = .{};
+            const active_raw = comptime node.attr("active").?;
+            comptime requireVariant(exprVariant(node, entries, active_raw), &.{.integer}, node, markup.stepper_active_message);
+            options.active = switch (evalExpr(node, entries, active_raw, ui, model, scope)) {
+                .integer => |int| if (int < 0) 0 else @intCast(int),
+                else => runtimeFail(usize, ui),
+            };
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("label") != null)) {
+                options.semantics.label = stringAttr(node, entries, comptime node.attr("label").?, ui, model, scope, "label expects text");
+            }
+            const steps = ui.arena.alloc(Ui.StepperStep, node.children.len) catch {
+                ui.failed = true;
+                return ui.el(.row, .{}, .{});
+            };
+            inline for (0..node.children.len) |index| {
+                steps[index] = .{ .label = interpolatedText(comptime node.children[index], entries, ui, model, scope) };
+            }
+            return ui.stepper(options, steps);
+        }
+
+        /// Comptime mirror of the interpreter's `buildTimeline`.
+        fn buildTimeline(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "gap")) continue;
+                    if (std.mem.eql(u8, attribute.name, "grow")) continue;
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.timeline_attr_message);
+                }
+            }
+            var options: Ui.TimelineOptions = .{};
+            if (comptime (node.attr("gap") != null)) {
+                options.gap = floatAttr(node, entries, comptime node.attr("gap").?, ui, model, scope);
+            }
+            if (comptime (node.attr("grow") != null)) {
+                options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+            }
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("label") != null)) {
+                options.semantics.label = stringAttr(node, entries, comptime node.attr("label").?, ui, model, scope, "label expects text");
+            }
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            buildChildren(node, entries, ui, model, scope, &children);
+            return ui.timeline(options, @as([]const Ui.Node, children.items));
+        }
+
+        /// Comptime mirror of the interpreter's `buildTimelineItem`.
+        fn buildTimelineItem(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.timeline_item_children_message);
+                if (node.attr("title") == null) fail(node, markup.timeline_item_title_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "title")) continue;
+                    if (std.mem.eql(u8, attribute.name, "description")) continue;
+                    if (std.mem.eql(u8, attribute.name, "meta")) continue;
+                    if (std.mem.eql(u8, attribute.name, "indicator")) continue;
+                    if (std.mem.eql(u8, attribute.name, "variant")) continue;
+                    if (std.mem.eql(u8, attribute.name, "connector")) continue;
+                    if (std.mem.eql(u8, attribute.name, "selected")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-press")) continue;
+                    if (std.mem.startsWith(u8, attribute.name, "on-")) fail(node, markup.timeline_item_press_only_message);
+                    if (std.mem.eql(u8, attribute.name, "key")) continue;
+                    if (std.mem.eql(u8, attribute.name, "global-key")) continue;
+                    fail(node, markup.timeline_item_attr_message);
+                }
+            }
+            var options: Ui.TimelineItemOptions = .{ .title = "" };
+            options.title = stringAttr(node, entries, comptime node.attr("title").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            if (comptime (node.attr("description") != null)) {
+                options.description = stringAttr(node, entries, comptime node.attr("description").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("meta") != null)) {
+                options.meta = stringAttr(node, entries, comptime node.attr("meta").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("indicator") != null)) {
+                options.indicator = stringAttr(node, entries, comptime node.attr("indicator").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("variant") != null)) {
+                const raw = comptime node.attr("variant").?;
+                comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, "expected an option name");
+                const expression = comptime markup.parseAttrExpression(raw).?;
+                if (comptime (expression == .literal)) {
+                    options.variant = comptime (std.meta.stringToEnum(canvas.WidgetVariant, expression.literal) orelse fail(node, "unknown option value"));
+                } else {
+                    const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                        .string => |text| text,
+                        else => runtimeFail([]const u8, ui),
+                    };
+                    options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse runtimeFail(canvas.WidgetVariant, ui);
+                }
+            }
+            if (comptime (node.attr("connector") != null)) {
+                options.connector = evalExpr(node, entries, comptime node.attr("connector").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("selected") != null)) {
+                options.selected = evalExpr(node, entries, comptime node.attr("selected").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("on-press") != null)) {
+                // Reuse the full message-attr machinery (payload bindings
+                // included) through a scratch options value.
+                const press_index = comptime blk: {
+                    for (node.attrs, 0..) |attribute, index| {
+                        if (std.mem.eql(u8, attribute.name, "on-press")) break :blk index;
+                    }
+                    unreachable;
+                };
+                var scratch: Ui.ElementOptions = .{};
+                applyMessageAttr(node, comptime node.attrs[press_index], entries, ui, model, scope, &scratch);
+                options.on_press = scratch.on_press;
+            }
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            return ui.timelineItem(options);
+        }
+
+        fn stringAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, comptime message: []const u8) []const u8 {
+            comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, message);
+            return switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                .string => |text| text,
+                else => runtimeFail([]const u8, ui),
+            };
+        }
+
+        fn floatAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) f32 {
+            comptime requireVariant(exprVariant(node, entries, raw), &.{ .float, .integer }, node, "expected a number");
+            return switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                .float => |float| float,
+                .integer => |int| @floatFromInt(int),
+                else => runtimeFail(f32, ui),
+            };
         }
 
         // ------------------------------------------------------ templates

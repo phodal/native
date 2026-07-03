@@ -512,3 +512,191 @@ test "explicit sizes are definite except on resizable" {
     try testing.expectEqual(@as(f32, 240), resizable.layout.min_size.width);
     try testing.expectEqual(@as(f32, 0), resizable.layout.max_size.width);
 }
+
+// ------------------------------------------------------------ components
+
+fn countKindIn(widget: canvas.Widget, kind: canvas.WidgetKind) usize {
+    var count: usize = if (widget.kind == kind) 1 else 0;
+    for (widget.children) |child| count += countKindIn(child, kind);
+    return count;
+}
+
+fn findSemanticsLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
+    if (std.mem.eql(u8, widget.semantics.label, label)) return widget;
+    for (widget.children) |child| {
+        if (findSemanticsLabel(child, label)) |found| return found;
+    }
+    return null;
+}
+
+test "stepper derives completed/active/pending states from the active index" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const steps = [_]InboxUi.StepperStep{
+        .{ .label = "Work" },
+        .{ .label = "Triage" },
+        .{ .label = "Review" },
+        .{ .label = "Fix" },
+        .{ .label = "Ready" },
+    };
+    const tree = try ui.finalize(ui.stepper(.{ .active = 2 }, &steps));
+
+    // Root is a list; five listitems joined by four connectors.
+    try testing.expectEqual(canvas.WidgetRole.list, tree.root.semantics.role);
+    try testing.expectEqual(@as(usize, 4), countKindIn(tree.root, .separator));
+    try testing.expectEqual(@as(usize, 9), tree.root.children.len);
+
+    const done = findSemanticsLabel(tree.root, "Work (completed)").?;
+    try testing.expectEqual(canvas.WidgetRole.listitem, done.semantics.role);
+    try testing.expect(!done.state.selected);
+    const done_badge = findByKind(done, .badge).?;
+    try testing.expectEqualStrings("✓", done_badge.text);
+    try testing.expectEqual(canvas.WidgetVariant.primary, done_badge.variant);
+
+    const active = findSemanticsLabel(tree.root, "Review (active)").?;
+    try testing.expect(active.state.selected);
+    try testing.expectEqual(@as(u32, 2), active.semantics.list_item_index.?);
+    try testing.expectEqual(@as(u32, 5), active.semantics.list_item_count.?);
+    const active_badge = findByKind(active, .badge).?;
+    try testing.expectEqualStrings("3", active_badge.text);
+    try testing.expectEqual(canvas.WidgetVariant.primary, active_badge.variant);
+    // Active label is a bold span paragraph.
+    const active_label = active.children[1];
+    try testing.expectEqual(canvas.TextSpanWeight.bold, active_label.spans[0].weight);
+
+    const pending = findSemanticsLabel(tree.root, "Fix (pending)").?;
+    const pending_badge = findByKind(pending, .badge).?;
+    try testing.expectEqualStrings("4", pending_badge.text);
+    try testing.expectEqual(canvas.WidgetVariant.outline, pending_badge.variant);
+
+    // active past the end marks every step completed.
+    var ui2 = InboxUi.init(arena_state.allocator());
+    const tree2 = try ui2.finalize(ui2.stepper(.{ .active = steps.len }, &steps));
+    try testing.expect(findSemanticsLabel(tree2.root, "Ready (completed)") != null);
+}
+
+test "timeline items compose indicator, content, chevron, and a press overlay" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.timeline(.{ .gap = 4 }, .{
+        ui.timelineItem(.{
+            .key = ui_model.uiKey(1),
+            .variant = .primary,
+            .title = "Coder finished",
+            .description = "Implemented the fix and updated tests.",
+            .meta = "claude · sonnet · 1m 12s",
+            .on_press = Msg{ .toggle = 7 },
+        }),
+        ui.timelineItem(.{
+            .key = ui_model.uiKey(2),
+            .indicator = "✗",
+            .variant = .destructive,
+            .title = "Review failed",
+            .connector = false,
+        }),
+    }));
+
+    try testing.expectEqual(canvas.WidgetRole.list, tree.root.semantics.role);
+    const first = tree.root.children[0];
+    // Pressable: press overlay is the last stack child, focusable, and
+    // dispatches the item's message from anywhere on the item.
+    const overlay = first.children[first.children.len - 1];
+    try testing.expectEqual(canvas.WidgetKind.text, overlay.kind);
+    try testing.expectEqual(canvas.WidgetRole.listitem, overlay.semantics.role);
+    try testing.expect(overlay.semantics.focusable);
+    try testing.expectEqualStrings("Coder finished", overlay.semantics.label);
+    const msg = tree.msgForPointer(overlay.id, .up).?;
+    try testing.expectEqual(@as(u32, 7), msg.toggle);
+
+    // Indicator dot badge, connector separator, muted description + meta,
+    // trailing chevron.
+    const badge = findByKind(first, .badge).?;
+    try testing.expectEqual(canvas.WidgetVariant.primary, badge.variant);
+    try testing.expectEqual(@as(f32, 10), badge.layout.min_size.width);
+    try testing.expectEqual(@as(usize, 1), countKindIn(first, .separator));
+    try testing.expect(findSemanticsLabel(first, "Coder finished") != null);
+    const chevron = findKindText(first, "›");
+    try testing.expect(chevron != null);
+    const description = findTextContaining(first, "Implemented the fix");
+    try testing.expect(description.?.spans.len == 1); // wrap opt-in span
+    const meta = findTextContaining(first, "claude · sonnet");
+    try testing.expectEqual(canvas.TextSpanColor.text_muted, meta.?.spans[0].color.?);
+
+    // Non-pressable: no overlay, no chevron, no connector.
+    const second = tree.root.children[1];
+    try testing.expectEqual(@as(usize, 1), second.children.len);
+    try testing.expectEqual(canvas.WidgetRole.listitem, second.semantics.role);
+    try testing.expect(!second.semantics.focusable);
+    try testing.expect(findKindText(second, "›") == null);
+    try testing.expectEqual(@as(usize, 0), countKindIn(second, .separator));
+    const badge2 = findByKind(second, .badge).?;
+    try testing.expectEqualStrings("✗", badge2.text);
+    try testing.expectEqual(@as(f32, 0), badge2.layout.min_size.width);
+}
+
+fn findKindText(widget: canvas.Widget, content: []const u8) ?canvas.Widget {
+    if (widget.kind == .text and std.mem.eql(u8, widget.text, content)) return widget;
+    for (widget.children) |child| {
+        if (findKindText(child, content)) |found| return found;
+    }
+    return null;
+}
+
+fn findTextContaining(widget: canvas.Widget, fragment: []const u8) ?canvas.Widget {
+    if (widget.kind == .text and std.mem.indexOf(u8, widget.text, fragment) != null) return widget;
+    for (widget.children) |child| {
+        if (findTextContaining(child, fragment)) |found| return found;
+    }
+    return null;
+}
+
+test "nav mounts the active page with stable position-derived identity" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const Pane = struct {
+        fn view(ui: *InboxUi, active: usize, retain: bool) InboxUi.Node {
+            return ui.nav(.{ .active = active, .retain = retain }, .{
+                ui.scroll(.{}, .{ui.text(.{}, "ledger")}),
+                ui.scroll(.{}, .{ui.text(.{}, "transcript")}),
+            });
+        }
+    };
+
+    // Unmounted mode: only the active page is in the tree.
+    var first_ui = InboxUi.init(arena);
+    const first = try first_ui.finalize(Pane.view(&first_ui, 0, false));
+    try testing.expectEqual(canvas.WidgetRole.group, first.root.semantics.role);
+    try testing.expectEqual(@as(usize, 1), first.root.children.len);
+    try testing.expect(findTextContaining(first.root, "ledger") != null);
+    try testing.expect(findTextContaining(first.root, "transcript") == null);
+
+    var second_ui = InboxUi.init(arena);
+    const second = try second_ui.finalize(Pane.view(&second_ui, 1, false));
+    try testing.expect(findTextContaining(second.root, "transcript") != null);
+    // Pages carry position-derived keys, so page 2's scroll id differs from
+    // page 1's even though each is the sole child of the nav stack.
+    try testing.expect(first.root.children[0].id != second.root.children[0].id);
+
+    // A page's id is stable whether it is the active page or a retained
+    // hidden one — engine scroll/text state reconciles by that id.
+    var retained_ui = InboxUi.init(arena);
+    const retained = try retained_ui.finalize(Pane.view(&retained_ui, 1, true));
+    try testing.expectEqual(@as(usize, 2), retained.root.children.len);
+    try testing.expectEqual(first.root.children[0].id, retained.root.children[0].id);
+    try testing.expectEqual(second.root.children[0].id, retained.root.children[1].id);
+    // Inactive retained pages are hidden (excluded from render, hit
+    // testing, focus, and semantics); the active page is not.
+    try testing.expect(retained.root.children[0].semantics.hidden);
+    try testing.expect(!retained.root.children[1].semantics.hidden);
+
+    // Out-of-range active clamps to the last page.
+    var clamped_ui = InboxUi.init(arena);
+    const clamped = try clamped_ui.finalize(Pane.view(&clamped_ui, 9, false));
+    try testing.expect(findTextContaining(clamped.root, "transcript") != null);
+}

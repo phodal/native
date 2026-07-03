@@ -146,6 +146,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             if (std.mem.eql(u8, node.name, "markdown")) {
                 return self.buildMarkdown(ui, scope, node);
             }
+            if (std.mem.eql(u8, node.name, "stepper")) {
+                return self.buildStepper(ui, scope, node);
+            }
+            if (std.mem.eql(u8, node.name, "step")) {
+                // Steps inside a stepper are consumed by buildStepper.
+                return self.failNode(node, markup.step_parent_message);
+            }
+            if (std.mem.eql(u8, node.name, "timeline")) {
+                return self.buildTimeline(ui, scope, node);
+            }
+            if (std.mem.eql(u8, node.name, "timeline-item")) {
+                return self.buildTimelineItem(ui, scope, node);
+            }
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
@@ -360,6 +373,176 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
             const source_value = source_text orelse return self.failNode(node, markup.markdown_source_message);
             return Md.view(ui, source_value, options);
+        }
+
+        // ------------------------------------------------ stepper/timeline
+
+        /// `<stepper active="{stage_index}"><step>Work</step>...</stepper>`:
+        /// the composite stage stepper. Steps are text leaves; their
+        /// completed/active/pending states derive from position against
+        /// the active index, mirroring `Ui.stepper`.
+        fn buildStepper(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.StepperOptions = .{};
+            var has_active = false;
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                if (std.mem.eql(u8, attribute.name, "active")) {
+                    const value = try self.evalAttrExpression(scope, node, attribute.value);
+                    options.active = switch (value) {
+                        .integer => |int| if (int < 0) 0 else @intCast(int),
+                        else => return self.failNode(node, markup.stepper_active_message),
+                    };
+                    has_active = true;
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "key")) {
+                    options.key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "global-key")) {
+                    options.global_key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "label")) {
+                    options.semantics.label = try self.stringAttr(scope, node, attribute.value, "label expects text");
+                    continue;
+                }
+                return self.failNode(node, markup.stepper_attr_message);
+            }
+            if (!has_active) return self.failNode(node, markup.stepper_active_message);
+
+            const steps = try ui.arena.alloc(Ui.StepperStep, node.children.len);
+            for (node.children, 0..) |child, index| {
+                if (child.kind != .element or !std.mem.eql(u8, child.name, "step")) {
+                    return self.failNode(child, markup.stepper_children_message);
+                }
+                for (child.attrs) |attribute| {
+                    if (!std.mem.eql(u8, attribute.name, "kind")) {
+                        return self.failNode(child, markup.step_attr_message);
+                    }
+                }
+                steps[index] = .{ .label = try self.interpolatedText(ui, scope, child) };
+            }
+            return ui.stepper(options, steps);
+        }
+
+        /// `<timeline gap="4">` — a list container whose children are
+        /// timeline-item elements (structure tags work); mirrors
+        /// `Ui.timeline`.
+        fn buildTimeline(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.TimelineOptions = .{};
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                if (std.mem.eql(u8, attribute.name, "gap")) {
+                    options.gap = try self.floatAttr(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "grow")) {
+                    options.grow = try self.floatAttr(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "key")) {
+                    options.key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "global-key")) {
+                    options.global_key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "label")) {
+                    options.semantics.label = try self.stringAttr(scope, node, attribute.value, "label expects text");
+                    continue;
+                }
+                return self.failNode(node, markup.timeline_attr_message);
+            }
+            var children: std.ArrayListUnmanaged(Ui.Node) = .empty;
+            try self.buildChildren(ui, scope, node, &children);
+            return ui.timeline(options, @as([]const Ui.Node, children.items));
+        }
+
+        /// `<timeline-item title="{entry.title}" description="..."
+        /// meta="..." variant="primary" on-press="open_step:{entry.slot}"/>`:
+        /// one composite ledger item; mirrors `Ui.timelineItem`.
+        fn buildTimelineItem(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (node.children.len != 0) {
+                return self.failNode(node.children[0], markup.timeline_item_children_message);
+            }
+            var options: Ui.TimelineItemOptions = .{ .title = "" };
+            var has_title = false;
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                if (std.mem.eql(u8, attribute.name, "title")) {
+                    options.title = try self.stringAttr(scope, node, attribute.value, markup.timeline_item_text_attr_message);
+                    has_title = true;
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "description")) {
+                    options.description = try self.stringAttr(scope, node, attribute.value, markup.timeline_item_text_attr_message);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "meta")) {
+                    options.meta = try self.stringAttr(scope, node, attribute.value, markup.timeline_item_text_attr_message);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "indicator")) {
+                    options.indicator = try self.stringAttr(scope, node, attribute.value, markup.timeline_item_text_attr_message);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "variant")) {
+                    const text = try self.stringAttr(scope, node, attribute.value, "expected an option name");
+                    options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse {
+                        return self.failNode(node, "unknown option value");
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "connector")) {
+                    options.connector = (try self.evalAttrExpression(scope, node, attribute.value)).truthy();
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "selected")) {
+                    options.selected = (try self.evalAttrExpression(scope, node, attribute.value)).truthy();
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "on-press")) {
+                    // Reuse the full message-attr machinery (payload
+                    // bindings included) through a scratch options value.
+                    var scratch: Ui.ElementOptions = .{};
+                    try self.applyMessageAttr(scope, node, &scratch, attribute);
+                    options.on_press = scratch.on_press;
+                    continue;
+                }
+                if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                    return self.failNode(node, markup.timeline_item_press_only_message);
+                }
+                if (std.mem.eql(u8, attribute.name, "key")) {
+                    options.key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "global-key")) {
+                    options.global_key = try self.attrKey(scope, node, attribute.value);
+                    continue;
+                }
+                return self.failNode(node, markup.timeline_item_attr_message);
+            }
+            if (!has_title) return self.failNode(node, markup.timeline_item_title_message);
+            return ui.timelineItem(options);
+        }
+
+        fn stringAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, raw: []const u8, message: []const u8) BuildError![]const u8 {
+            const value = try self.evalAttrExpression(scope, node, raw);
+            return switch (value) {
+                .string => |text| text,
+                else => self.failValue(node, message),
+            };
+        }
+
+        fn floatAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, raw: []const u8) BuildError!f32 {
+            const value = try self.evalAttrExpression(scope, node, raw);
+            return switch (value) {
+                .float => |float| float,
+                .integer => |int| @floatFromInt(int),
+                else => self.failValue(node, "expected a number"),
+            };
         }
 
         /// Msg constructor for markdown link presses: the tag must name a

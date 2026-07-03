@@ -600,6 +600,18 @@ pub const markdown_issue_link_base_message = "issue-link-base takes a literal UR
 pub const markdown_on_link_message = "on-link takes a bare Msg tag whose payload is the pressed link URL (a []const u8 variant, like open_url: []const u8)";
 pub const markdown_on_details_message = "on-details takes a bare Msg tag whose payload is the details block index (a usize variant, like toggle_details: usize)";
 pub const markdown_details_expanded_message = "details-expanded takes one {binding} naming a []const bool iterable (a model field, pub decl, or fn - the same sources for each accepts)";
+pub const stepper_active_message = "stepper requires an active attribute (a number or one {binding}) naming the active step index";
+pub const stepper_attr_message = "unknown attribute for stepper - it takes active, key, global-key, and label";
+pub const stepper_children_message = "stepper takes only step children (each step is a text leaf: <step>Work</step>)";
+pub const step_parent_message = "step is only allowed inside a stepper";
+pub const step_attr_message = "step takes no attributes - its content is the label text";
+pub const timeline_attr_message = "unknown attribute for timeline - it takes gap, grow, key, global-key, and label";
+pub const timeline_item_parent_message = "timeline-item is only allowed inside a timeline (structure tags in between are fine)";
+pub const timeline_item_title_message = "timeline-item requires a title attribute (a literal or one {binding})";
+pub const timeline_item_attr_message = "unknown attribute for timeline-item - it takes title, description, meta, indicator, variant, connector, selected, on-press, key, and global-key";
+pub const timeline_item_text_attr_message = "title, description, meta, and indicator expect text (a literal or one {binding})";
+pub const timeline_item_children_message = "timeline-item takes no children - the title, description, and meta attributes provide the content";
+pub const timeline_item_press_only_message = "timeline-item dispatches presses only - use on-press (other on-* events have no surface here)";
 pub const text_leaf_children_message = "this element takes text content only - wrap element children in a container (row, column, stack)";
 pub const text_leaf_single_run_message = "text elements take a single run of text";
 pub const table_row_parent_message = "table-row is only allowed inside a table (structure tags in between are fine)";
@@ -734,6 +746,116 @@ fn validateMarkdown(node: MarkupNode) ?MarkupErrorInfo {
     return null;
 }
 
+/// `<stepper active="{index}">` takes only `<step>` text-leaf children:
+/// each step's state (completed/active/pending) derives from its position
+/// against the active index, so steps carry no attributes of their own.
+fn validateStepper(node: MarkupNode) ?MarkupErrorInfo {
+    var has_active = false;
+    for (node.attrs) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "active")) {
+            has_active = true;
+            if (parseAttrExpression(attribute.value) == null) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = stepper_active_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "key") or std.mem.eql(u8, attribute.name, "global-key") or std.mem.eql(u8, attribute.name, "label")) {
+            if (parseAttrExpression(attribute.value) == null) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+            }
+            continue;
+        }
+        return .{ .line = attribute.line, .column = attribute.column, .message = stepper_attr_message };
+    }
+    if (!has_active) return errorAt(node, stepper_active_message);
+    for (node.children) |child| {
+        if (child.kind != .element or !std.mem.eql(u8, child.name, "step")) {
+            return errorAt(child, stepper_children_message);
+        }
+        for (child.attrs) |attribute| {
+            return .{ .line = attribute.line, .column = attribute.column, .message = step_attr_message };
+        }
+        var text_runs: usize = 0;
+        for (child.children) |run| {
+            if (run.kind != .text) return errorAt(run, text_leaf_children_message);
+            text_runs += 1;
+            if (text_runs > 1) return errorAt(run, text_leaf_single_run_message);
+        }
+    }
+    return null;
+}
+
+/// `<timeline>` is a list container with a closed attribute set; its
+/// children (timeline-item elements, plus structure tags) validate
+/// through the ordinary pass so `for`/`if` work inside it.
+fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: usize) ?MarkupErrorInfo {
+    for (node.attrs) |attribute| {
+        const known = std.mem.eql(u8, attribute.name, "gap") or
+            std.mem.eql(u8, attribute.name, "grow") or
+            std.mem.eql(u8, attribute.name, "key") or
+            std.mem.eql(u8, attribute.name, "global-key") or
+            std.mem.eql(u8, attribute.name, "label");
+        if (!known) {
+            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_attr_message };
+        }
+        if (parseAttrExpression(attribute.value) == null) {
+            return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+        }
+    }
+    var previous_kind: ?MarkupNodeKind = null;
+    for (node.children) |child| {
+        if (child.kind == .else_block and previous_kind != .if_block) {
+            return errorAt(child, "else must directly follow an if");
+        }
+        if (validateNode(document, child, "timeline", template_limit)) |info| return info;
+        previous_kind = child.kind;
+    }
+    return null;
+}
+
+/// `<timeline-item>` is a leaf: attributes carry the content (title,
+/// description, meta, indicator) and the one supported event is on-press.
+fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
+    for (node.children) |child| {
+        return errorAt(child, timeline_item_children_message);
+    }
+    var has_title = false;
+    for (node.attrs) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "title")) {
+            has_title = true;
+            if (parseAttrExpression(attribute.value) == null) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_title_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "on-press")) {
+            if (parseMessageExpression(attribute.value) == null) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")" };
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, attribute.name, "on-")) {
+            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_press_only_message };
+        }
+        const known = std.mem.eql(u8, attribute.name, "description") or
+            std.mem.eql(u8, attribute.name, "meta") or
+            std.mem.eql(u8, attribute.name, "indicator") or
+            std.mem.eql(u8, attribute.name, "variant") or
+            std.mem.eql(u8, attribute.name, "connector") or
+            std.mem.eql(u8, attribute.name, "selected") or
+            std.mem.eql(u8, attribute.name, "key") or
+            std.mem.eql(u8, attribute.name, "global-key");
+        if (!known) {
+            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_attr_message };
+        }
+        if (parseAttrExpression(attribute.value) == null) {
+            return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+        }
+    }
+    if (!has_title) return errorAt(node, timeline_item_title_message);
+    return null;
+}
+
 /// `parent_element` is the name of the nearest enclosing element, looking
 /// through structure tags (`for`/`if`/`else`), or null at the view root and
 /// at a template body root.
@@ -745,6 +867,25 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
         .element => {
             if (std.mem.eql(u8, node.name, "markdown")) {
                 return validateMarkdown(node);
+            }
+            if (std.mem.eql(u8, node.name, "stepper")) {
+                return validateStepper(node);
+            }
+            if (std.mem.eql(u8, node.name, "step")) {
+                // Steps inside a stepper are consumed by validateStepper;
+                // one reaching the generic pass sits outside a stepper.
+                return errorAt(node, step_parent_message);
+            }
+            if (std.mem.eql(u8, node.name, "timeline")) {
+                return validateTimeline(document, node, template_limit);
+            }
+            if (std.mem.eql(u8, node.name, "timeline-item")) {
+                if (parent_element) |parent_name| {
+                    if (!std.mem.eql(u8, parent_name, "timeline")) {
+                        return errorAt(node, timeline_item_parent_message);
+                    }
+                }
+                return validateTimelineItem(node);
             }
             if (!nameInList(node.name, &known_element_names)) {
                 return errorAt(node, "unknown element");

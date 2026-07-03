@@ -11,7 +11,11 @@
 //! Supported blocks: `#`/`##`/`###` headings (deeper levels clamp to h3),
 //! paragraphs, bullet/ordered/task lists (nesting up to
 //! `max_markdown_list_depth` by two-space indent), fenced code blocks,
-//! `>` blockquotes, horizontal rules, and `<details>`/`<summary>`.
+//! `>` blockquotes, horizontal rules, GFM pipe tables (header row +
+//! delimiter row + body rows onto `table`/`data_row`/`data_cell` widgets;
+//! `:---`/`:--:`/`---:` delimiter cells set per-column start/center/end
+//! text alignment, header cells render bold, and every cell runs the full
+//! inline span grammar including links), and `<details>`/`<summary>`.
 //! Supported inlines: `**bold**`/`__bold__`, `*italic*`/`_italic_`,
 //! `` `code` ``, `~~strikethrough~~`, `[text](url)` links, `<url>`
 //! autolinks, bare `http(s)://` URLs at word boundaries (GFM-style
@@ -21,10 +25,14 @@
 //! alt text).
 //!
 //! Deliberately unsupported in v1 (rendered as plain paragraph text, never
-//! a build failure): tables, setext headings, indented code blocks,
-//! backslash escapes, reference-style links, raw HTML other than
+//! a build failure): setext headings, indented code blocks, backslash
+//! escapes (except `\|` inside table rows, which GFM needs to put a pipe
+//! in a cell), reference-style links, raw HTML other than
 //! details/summary, and footnotes. Malformed input degrades to literal
-//! text.
+//! text — a pipe block whose delimiter row is missing or does not match
+//! the header's column count renders as plain paragraphs, and tables
+//! wider than `max_markdown_table_columns` degrade the same way rather
+//! than silently dropping columns.
 //!
 //! State model (Elm-style, no hidden state):
 //! - Task-list checkboxes render as disabled checkboxes — display only.
@@ -63,6 +71,9 @@ pub const max_markdown_blocks_per_container: usize = 64;
 pub const max_markdown_list_items_per_list: usize = 64;
 pub const max_markdown_list_depth: usize = 4;
 pub const max_markdown_details_per_document: usize = 16;
+pub const max_markdown_table_columns: usize = 8;
+/// Rows per table including the header; trailing rows drop deterministically.
+pub const max_markdown_table_rows: usize = 64;
 
 /// Heading scales relative to the body typography token (GitHub's em
 /// ladder), applied through the span `scale` channel so heading pixel
@@ -175,6 +186,7 @@ pub fn Markdown(comptime Msg: type) type {
                 if (std.mem.startsWith(u8, trimmed, ">")) return self.parseBlockquote(lines);
                 if (listMarker(line)) |_| return self.parseList(lines, 0, 0);
                 if (std.ascii.startsWithIgnoreCase(trimmed, "<details")) return self.parseDetails(lines);
+                if (isTableStart(lines)) return self.parseTable(lines);
                 return self.parseParagraph(lines);
             }
 
@@ -192,7 +204,9 @@ pub fn Markdown(comptime Msg: type) type {
                 while (lines.peek()) |line| {
                     const trimmed = std.mem.trim(u8, line, " \t");
                     if (trimmed.len == 0) break;
-                    if (text.len > 0 and startsNewBlock(line)) break;
+                    // Tables interrupt paragraphs (GFM): a header line
+                    // followed by a matching delimiter row starts a table.
+                    if (text.len > 0 and (startsNewBlock(line) or isTableStart(lines))) break;
                     _ = lines.next();
                     text = self.joinLine(text, trimmed);
                     if (self.ui.failed) return null;
@@ -332,6 +346,87 @@ pub fn Markdown(comptime Msg: type) type {
                 const blocks = self.parseBlocks(lines, .details);
                 const body = self.ui.column(.{ .gap = 12, .padding = 8 }, blocks);
                 return self.ui.column(.{ .gap = 4 }, .{ header, body });
+            }
+
+            /// GFM pipe table: the caller (`isTableStart`) has verified a
+            /// header row followed by a delimiter row with a matching
+            /// column count. Body rows run until a blank line or a line
+            /// without a pipe; short rows pad with empty cells and long
+            /// rows drop trailing cells (GFM semantics). Rows past
+            /// `max_markdown_table_rows` drop deterministically.
+            fn parseTable(self: *Builder, lines: *LineIterator) ?Node {
+                const header_line = lines.next() orelse return null;
+                const header = splitTableRow(header_line) orelse return null;
+                const delimiter_line = lines.next() orelse return null;
+                const alignments = tableDelimiterAlignments(delimiter_line) orelse return null;
+                if (alignments.len != header.len) return null;
+
+                const rows = self.ui.arena.alloc(Node, max_markdown_table_rows) catch {
+                    self.ui.failed = true;
+                    return null;
+                };
+                rows[0] = self.tableRowNode(header, alignments, true);
+                var len: usize = 1;
+                while (lines.peek()) |line| {
+                    const trimmed = std.mem.trim(u8, line, " \t");
+                    if (trimmed.len == 0) break;
+                    if (std.mem.indexOfScalar(u8, trimmed, '|') == null) break;
+                    const row = splitTableRow(line) orelse break;
+                    _ = lines.next();
+                    if (len >= rows.len) continue;
+                    rows[len] = self.tableRowNode(row, alignments, false);
+                    len += 1;
+                }
+                return self.ui.el(.table, .{}, .{rows[0..len]});
+            }
+
+            fn tableRowNode(self: *Builder, row: TableRow, alignments: TableAlignments, is_header: bool) Node {
+                const cells = self.ui.arena.alloc(Node, alignments.len) catch {
+                    self.ui.failed = true;
+                    return self.ui.el(.data_row, .{}, .{});
+                };
+                for (cells, 0..) |*cell, column| {
+                    const content = if (column < row.len) row.cells[column] else "";
+                    cell.* = self.tableCellNode(content, alignments.columns[column], is_header);
+                }
+                return self.ui.el(.data_row, .{}, .{cells});
+            }
+
+            /// One cell: a `data_cell` widget carrying inline spans (the
+            /// full inline grammar, links included), per-column text
+            /// alignment from the delimiter row, and bold header styling.
+            fn tableCellNode(self: *Builder, content: []const u8, alignment: canvas.TextAlign, is_header: bool) Node {
+                const text = self.unescapeTablePipes(content);
+                const base: TextSpan = if (is_header) .{ .weight = .bold } else .{};
+                var spans: [text_spans.max_text_spans_per_paragraph]TextSpan = undefined;
+                const parsed = self.parseInline(text, base, &spans);
+                var cell = self.ui.paragraph(.{
+                    .grow = 1,
+                    .padding = 8,
+                    .on_link = self.options.on_link,
+                }, parsed);
+                cell.widget.kind = .data_cell;
+                cell.widget.text_alignment = alignment;
+                return cell;
+            }
+
+            /// `\|` is the one backslash escape tables need (a literal
+            /// pipe inside a cell); everything else keeps the mapper's
+            /// no-escapes policy.
+            fn unescapeTablePipes(self: *Builder, text: []const u8) []const u8 {
+                if (std.mem.indexOf(u8, text, "\\|") == null) return text;
+                const out = self.ui.arena.alloc(u8, text.len) catch {
+                    self.ui.failed = true;
+                    return text;
+                };
+                var len: usize = 0;
+                var index: usize = 0;
+                while (index < text.len) : (index += 1) {
+                    if (text[index] == '\\' and index + 1 < text.len and text[index + 1] == '|') continue;
+                    out[len] = text[index];
+                    len += 1;
+                }
+                return out[0..len];
             }
 
             fn skipDetails(self: *Builder, lines: *LineIterator) void {
@@ -523,7 +618,102 @@ const LineIterator = struct {
         var copy = self.*;
         return copy.next();
     }
+
+    fn peekSecond(self: *LineIterator) ?[]const u8 {
+        var copy = self.*;
+        _ = copy.next() orelse return null;
+        return copy.next();
+    }
 };
+
+// ----------------------------------------------------------- table model
+
+const TableRow = struct {
+    cells: [max_markdown_table_columns][]const u8 = undefined,
+    len: usize = 0,
+};
+
+const TextAlignValue = canvas.TextAlign;
+
+const TableAlignments = struct {
+    columns: [max_markdown_table_columns]TextAlignValue = undefined,
+    len: usize = 0,
+};
+
+/// Split a pipe row into trimmed cell slices. Null when the line has no
+/// pipe, yields no cells, or has more than `max_markdown_table_columns`
+/// cells (the caller then degrades the block to plain text). `\|` does
+/// not split (GFM's in-cell pipe escape); the cell text is unescaped at
+/// emit time.
+fn splitTableRow(line: []const u8) ?TableRow {
+    const trimmed = std.mem.trim(u8, line, " \t");
+    if (trimmed.len == 0) return null;
+    if (std.mem.indexOfScalar(u8, trimmed, '|') == null) return null;
+    var rest = trimmed;
+    if (rest[0] == '|') rest = rest[1..];
+    if (rest.len > 0 and rest[rest.len - 1] == '|' and !(rest.len > 1 and rest[rest.len - 2] == '\\')) {
+        rest = rest[0 .. rest.len - 1];
+    }
+    var row = TableRow{};
+    var start: usize = 0;
+    var index: usize = 0;
+    while (index < rest.len) : (index += 1) {
+        if (rest[index] == '\\') {
+            index += 1; // Skip the escaped byte (covers `\|`).
+            continue;
+        }
+        if (rest[index] != '|') continue;
+        if (row.len >= max_markdown_table_columns) return null;
+        row.cells[row.len] = std.mem.trim(u8, rest[start..index], " \t");
+        row.len += 1;
+        start = index + 1;
+    }
+    if (row.len >= max_markdown_table_columns) return null;
+    row.cells[row.len] = std.mem.trim(u8, rest[@min(start, rest.len)..], " \t");
+    row.len += 1;
+    return row;
+}
+
+/// Parse a GFM delimiter row (`| --- | :--: | ---: |`): every cell must
+/// be dashes with optional leading/trailing colons mapping to
+/// start/center/end column alignment.
+fn tableDelimiterAlignments(line: []const u8) ?TableAlignments {
+    const row = splitTableRow(line) orelse return null;
+    var result = TableAlignments{ .len = row.len };
+    for (row.cells[0..row.len], 0..) |cell, column| {
+        if (cell.len == 0) return null;
+        var body = cell;
+        const leading = body[0] == ':';
+        if (leading) body = body[1..];
+        var trailing = false;
+        if (body.len > 0 and body[body.len - 1] == ':') {
+            trailing = true;
+            body = body[0 .. body.len - 1];
+        }
+        if (body.len == 0) return null;
+        for (body) |byte| {
+            if (byte != '-') return null;
+        }
+        result.columns[column] = if (leading and trailing)
+            .center
+        else if (trailing)
+            .end
+        else
+            .start;
+    }
+    return result;
+}
+
+/// A table starts at a pipe header row whose next line is a delimiter row
+/// with the same column count (GFM). Anything else falls through to the
+/// paragraph path.
+fn isTableStart(lines: *LineIterator) bool {
+    const first = lines.peek() orelse return false;
+    const header = splitTableRow(first) orelse return false;
+    const second = lines.peekSecond() orelse return false;
+    const alignments = tableDelimiterAlignments(second) orelse return false;
+    return alignments.len == header.len;
+}
 
 fn headingLevel(line: []const u8) ?usize {
     var level: usize = 0;

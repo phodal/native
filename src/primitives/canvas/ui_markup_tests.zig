@@ -321,3 +321,38 @@ test "wrap and issue-link-base validate as vocabulary with teaching errors" {
         try testing.expect(info.line > 0);
     }
 }
+
+test "stepper and timeline validate structure with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const valid_sources = [_][]const u8{
+        "<column>\n  <stepper active=\"{stage}\">\n    <step>Work</step>\n    <step>Ready</step>\n  </stepper>\n</column>",
+        "<column>\n  <timeline gap=\"4\">\n    <timeline-item title=\"Done\" description=\"ok\" meta=\"1m\" variant=\"primary\" on-press=\"pick:{id}\" />\n    <if test=\"{ready}\">\n      <timeline-item title=\"Ready\" connector=\"false\" />\n    </if>\n  </timeline>\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<column>\n  <stepper>\n    <step>Work</step>\n  </stepper>\n</column>", .message = markup.stepper_active_message },
+        .{ .source = "<column>\n  <stepper active=\"1\" gap=\"4\" />\n</column>", .message = markup.stepper_attr_message },
+        .{ .source = "<column>\n  <stepper active=\"1\">\n    <text>Work</text>\n  </stepper>\n</column>", .message = markup.stepper_children_message },
+        .{ .source = "<column>\n  <stepper active=\"1\">\n    <step variant=\"primary\">Work</step>\n  </stepper>\n</column>", .message = markup.step_attr_message },
+        .{ .source = "<column>\n  <step>Work</step>\n</column>", .message = markup.step_parent_message },
+        .{ .source = "<column>\n  <timeline padding=\"8\" />\n</column>", .message = markup.timeline_attr_message },
+        .{ .source = "<column>\n  <timeline-item title=\"Done\" />\n</column>", .message = markup.timeline_item_parent_message },
+        .{ .source = "<column>\n  <timeline>\n    <timeline-item description=\"x\" />\n  </timeline>\n</column>", .message = markup.timeline_item_title_message },
+        .{ .source = "<column>\n  <timeline>\n    <timeline-item title=\"Done\" width=\"20\" />\n  </timeline>\n</column>", .message = markup.timeline_item_attr_message },
+        .{ .source = "<column>\n  <timeline>\n    <timeline-item title=\"Done\" on-toggle=\"pick\" />\n  </timeline>\n</column>", .message = markup.timeline_item_press_only_message },
+        .{ .source = "<column>\n  <timeline>\n    <timeline-item title=\"Done\">\n      <text>x</text>\n    </timeline-item>\n  </timeline>\n</column>", .message = markup.timeline_item_children_message },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}

@@ -25,6 +25,10 @@ const note_source =
     \\- [x] spans wired
     \\- [ ] effects wired
     \\
+    \\| Variable | Default |
+    \\| --- | ---: |
+    \\| `PORT` | [3000](https://example.com/port) |
+    \\
     \\<details>
     \\<summary>Rollout plan</summary>
     \\
@@ -144,6 +148,14 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
     try std.testing.expect(!shipped.enabled);
     try std.testing.expect(shipped.selected);
 
+    // The pipe table lands as grid/row/gridcell semantics, header bold cell
+    // included, and a link inside a cell is a pressable hit target.
+    const header_cell = snapshotWidgetNamed(snapshot, "gridcell", "Variable").?;
+    try std.testing.expect(header_cell.bounds.width > 0);
+    try std.testing.expect(snapshotWidgetNamed(snapshot, "gridcell", "PORT") != null);
+    const cell_link = snapshotWidgetNamed(snapshot, "link", "3000").?;
+    try std.testing.expect(cell_link.actions.press);
+
     // Clicking the link dispatches the typed Msg carrying the URL.
     var command_buffer: [96]u8 = undefined;
     const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, link.id });
@@ -162,6 +174,12 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
     try std.testing.expect(snapshotWidgetNamed(snapshot, "text", "Enable for 5% of traffic.") != null);
     try std.testing.expect(snapshotWidgetNamed(snapshot, "listitem", "▾ Rollout plan") != null);
 
+    // Clicking the link inside the table cell dispatches its URL too.
+    const port_link = snapshotWidgetNamed(snapshot, "link", "3000").?;
+    const cell_click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, port_link.id });
+    try harness.runtime.dispatchAutomationCommand(app, cell_click);
+    try std.testing.expectEqualStrings("https://example.com/port", app_state.model.openedUrl());
+
     // The retained widget tree kept the spans (copied + rebased into view
     // storage), so re-emitted display lists still carry the styled runs.
     const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
@@ -169,7 +187,7 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
     var found_link_span = false;
     var found_status = false;
     for (layout.nodes) |node| {
-        if (std.mem.eql(u8, node.widget.text, "opened https://example.com/guide")) found_status = true;
+        if (std.mem.eql(u8, node.widget.text, "opened https://example.com/port")) found_status = true;
         if (node.widget.spans.len == 0) continue;
         span_paragraphs += 1;
         for (node.widget.spans) |span| {

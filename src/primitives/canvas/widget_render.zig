@@ -173,7 +173,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .tooltip => try widget_render_controls.emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try widget_render_controls.emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try widget_render_controls.emitListItemWidget(builder, paint_widget, tokens),
-        .data_cell => try widget_render_controls.emitDataCellWidget(builder, paint_widget, tokens),
+        .data_cell => try emitDataCellContent(builder, paint_widget, tokens),
         .status_bar => try emitStatusBarWidget(builder, paint_widget, tokens),
         .segmented_control => try widget_render_controls.emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try widget_render_controls.emitCheckboxWidget(builder, paint_widget, tokens),
@@ -185,6 +185,16 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .skeleton => try emitSkeletonWidget(builder, paint_widget, tokens),
         .spinner => try emitSpinnerWidget(builder, paint_widget, tokens),
     }
+}
+
+/// A table cell draws its chrome (fill, border, focus ring) and then its
+/// text: span-carrying cells (markdown tables) draw inline-styled runs
+/// through the span paragraph emitter, classic cells keep the single-line
+/// path byte-identical.
+fn emitDataCellContent(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    if (widget.spans.len == 0) return widget_render_controls.emitDataCellWidget(builder, widget, tokens);
+    _ = try widget_render_controls.emitDataCellWidgetChrome(builder, widget, tokens);
+    try emitTextSpansWidget(builder, widget, tokens);
 }
 
 fn emitWidgetChildren(builder: *Builder, children: []const Widget, tokens: DesignTokens, depth: usize) Error!void {
@@ -283,7 +293,7 @@ fn emitWidgetLayoutNodeContent(
         .tooltip => try widget_render_controls.emitTooltipWidget(builder, paint_widget, tokens),
         .menu_item => try widget_render_controls.emitMenuItemWidget(builder, paint_widget, tokens),
         .list_item => try widget_render_controls.emitListItemWidget(builder, paint_widget, tokens),
-        .data_cell => try widget_render_controls.emitDataCellWidget(builder, paint_widget, tokens),
+        .data_cell => try emitDataCellContent(builder, paint_widget, tokens),
         .status_bar => try emitStatusBarWidget(builder, paint_widget, tokens),
         .segmented_control => try widget_render_controls.emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try widget_render_controls.emitCheckboxWidget(builder, paint_widget, tokens),
@@ -469,9 +479,9 @@ fn emitWidgetLayoutClippedChildren(
 
 fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     if (widget.spans.len > 0) return emitTextSpansWidget(builder, widget, tokens);
-    // Link hotspot children of a span paragraph are hit/semantics-only:
-    // the paragraph's runs already painted their text.
-    if (widget.semantics.role == .link and widget.text.len == 0) return;
+    // Empty text leaves are hit/semantics-only: paragraph link hotspots
+    // and composite press overlays (timeline items) draw nothing.
+    if (widget.text.len == 0) return;
     const text_size = widgetBodyTextSize(widget, tokens);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 1),

@@ -482,6 +482,27 @@ pub fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignToken
 }
 
 pub fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const visual = try emitDataCellWidgetChrome(builder, widget, tokens);
+    if (widget.text.len > 0) {
+        const text_size = widgetBodyTextSize(widget, tokens);
+        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 4),
+            .font_id = tokens.typography.font_id,
+            .size = text_size,
+            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
+            .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
+            .text = widget.text,
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, tokens),
+        });
+    }
+}
+
+/// The cell's fill, border, and focus ring — shared between the classic
+/// single-line cell and span-carrying cells (whose runs the span
+/// paragraph emitter draws). Returns the visual tokens so callers can
+/// reuse the resolved foreground.
+pub fn emitDataCellWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!ControlVisualTokens {
     const visual = listItemControlVisualTokens(widget, tokens);
     const state_fill = listItemFillColor(widget, tokens, widget.state);
     if (state_fill.a > 0) {
@@ -500,19 +521,7 @@ pub fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         },
     });
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
-    if (widget.text.len > 0) {
-        const text_size = widgetBodyTextSize(widget, tokens);
-        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-        try builder.drawText(.{
-            .id = widgetPartId(widget.id, 4),
-            .font_id = tokens.typography.font_id,
-            .size = text_size,
-            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-            .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
-            .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, tokens),
-        });
-    }
+    return visual;
 }
 
 pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {

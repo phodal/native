@@ -104,8 +104,10 @@ pub fn layoutWidgetDepth(
                 _ = try layoutWidgetDepth(child, stackChildFrame(content, child), index, depth + 1, output, len, tokens);
             }
         },
-        .text => try layoutTextSpanLinkChildren(widget, content, index, depth, output, len, tokens),
-        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        // Span paragraphs and span-carrying table cells share the link
+        // hotspot child convention (no spans or no children is a no-op).
+        .text, .data_cell => try layoutTextSpanLinkChildren(widget, content, index, depth, output, len, tokens),
+        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
     }
 
     return index;
@@ -250,9 +252,16 @@ fn preferredMainExtentInCross(
     return preferredMainExtent(child, axis, tokens);
 }
 
+/// Kinds whose `spans` field drives a span-paragraph text layout: plain
+/// paragraphs and table cells (markdown tables put inline-styled runs in
+/// `data_cell` widgets).
+fn widgetIsSpanParagraph(widget: Widget) bool {
+    return (widget.kind == .text or widget.kind == .data_cell) and widget.spans.len > 0;
+}
+
 fn widgetSubtreeHasTextSpans(widget: Widget, depth: usize) bool {
     if (depth >= max_widget_depth) return false;
-    if (widget.kind == .text and widget.spans.len > 0) return true;
+    if (widgetIsSpanParagraph(widget)) return true;
     for (widget.children) |child| {
         if (widgetSubtreeHasTextSpans(child, depth + 1)) return true;
     }
@@ -270,7 +279,7 @@ fn wrappedVerticalExtentForWidth(widget: Widget, width: f32, tokens: DesignToken
     const padding = widget.layout.padding;
     const inner_width = @max(0, width - padding.left - padding.right);
     const content_height: f32 = switch (widget.kind) {
-        .text => if (widget.spans.len > 0)
+        .text, .data_cell => if (widget.spans.len > 0)
             spanParagraphHeight(widget, inner_width, tokens)
         else
             return preferredMainExtent(widget, .vertical, tokens),
@@ -647,7 +656,13 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .search_field, .combobox => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
         .textarea => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetSizedDensityValue(widget, tokens, 80)),
         .tooltip => intrinsicPaddedTextWidgetSize(widget, tokens, widgetLabelTextSize(widget, tokens), widgetControlInset(widget, tokens, tokens.spacing.sm)),
-        .menu_item, .list_item, .data_cell => intrinsicRowTextWidgetSize(widget, tokens),
+        .menu_item, .list_item => intrinsicRowTextWidgetSize(widget, tokens),
+        // A span-carrying cell (markdown tables) measures like a padded
+        // span paragraph; classic cells keep the single-line row metric.
+        .data_cell => if (widget.spans.len > 0)
+            paddedIntrinsicSize(widget, intrinsicTextWidgetSize(widget, tokens, widgetBodyTextSize(widget, tokens)))
+        else
+            intrinsicRowTextWidgetSize(widget, tokens),
         .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
         .status_bar => intrinsicStatusBarWidgetSize(widget, tokens),
         .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
@@ -777,7 +792,7 @@ fn paddedIntrinsicSize(widget: Widget, content: geometry.SizeF) geometry.SizeF {
 }
 
 fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32) geometry.SizeF {
-    if (widget.kind == .text and widget.spans.len > 0) {
+    if (widgetIsSpanParagraph(widget)) {
         const options = widgetTextSpanLayoutOptions(widget, tokens, 0);
         return geometry.SizeF.init(
             text_spans_model.textSpansIntrinsicWidth(widget.spans, options),

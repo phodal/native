@@ -78,6 +78,8 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `separator`, `spacer` | separator, flexible space | `separator` is axis-aware: a horizontal rule in a `column`, a thin vertical divider in a `row`; give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
 | `markdown` | rendered markdown subtree | leaf; `source` is one `{binding}` — see "Markdown in markup" |
+| `stepper` > `step` | composite stage track | `active="{index}"` (required) derives each step's completed/active/pending state; steps are text leaves (no attributes) joined by connectors; stepper also takes `key`, `global-key`, `label` |
+| `timeline` > `timeline-item` | composite ledger list | items only inside a timeline (for/if fine); items are leaves — `title` (required), `description`, `meta`, `indicator`, `variant`, `connector="false"` on the last item, `selected`; `on-press` makes the whole item pressable with a trailing chevron |
 
 Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need ImageId asset references), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`).
 
@@ -402,6 +404,26 @@ A leaf element that renders a markdown string (the GFM subset below) as ordinary
 - `issue-link-base` (optional): a literal URL prefix or one `{binding}` producing it; `#123` references at word boundaries become links to base ++ number (`issue-link-base="ghissue://"` links `#123` to `ghissue://123` — an app scheme your `on-link` handler intercepts, or a web base like `https://github.com/owner/repo/issues/`). Off by default: resolving a ref needs repo context.
 - No children, no text content, no other attributes (teaching errors point at misuse). Without the details wiring, `<details>` blocks render collapsed and inert; without `on-link`, links render styled but inert.
 
+## Pipeline composites: stepper, timeline, nav
+
+Three composites for pipeline/run UIs — pure compositions of existing widgets (no new kinds), identical from markup and `canvas.Ui`:
+
+```html
+<stepper active="{stage_index}">
+  <step>Work</step><step>Triage</step><step>Review · {round}</step><step>Fix</step><step>Ready</step>
+</stepper>
+<timeline gap="4">
+  <for each="ledger" key="slot" as="entry">
+    <timeline-item title="{entry.title}" description="{entry.summary}" meta="{entry.meta}" variant="{entry.tone}" on-press="open_step:{entry.slot}" />
+  </for>
+</timeline>
+```
+
+- Stepper semantics: a `list` of `listitem`s; the active step is `selected` and every label carries its state (`"Review (active)"`) plus list position — assert pipeline stage from automation snapshots by label.
+- Timeline item: leading badge (dot colored by `variant`, or `indicator` text like `"✓"`), connector rail (`connector="false"` ends it), bold title, wrapped muted description, muted meta line. With `on-press` the item gains a trailing chevron and a full-area press hotspot (role `listitem`, focusable, labeled by the title) — click anywhere dispatches. No hover fill or description line-clamp in v1.
+- Zig: `ui.stepper(.{ .active = ... }, &.{ .{ .label = "Work" }, ... })`, `ui.timeline(options, items)`, `ui.timelineItem(.{ .title = ..., .on_press = ... })`.
+- Nav (Zig-only; markup swaps with `<if>`): `ui.nav(.{ .active = model.nav_depth, .retain = true }, .{ pageA, pageB })` — the model owns the stack; pages are index-keyed so widget ids (and engine scroll/text state) are stable across swaps; `retain=true` keeps inactive pages mounted-but-hidden (state preserved, excluded from render/hit-test/focus/semantics), default unmounts. Instant swap, no animation in v1; move focus in `update` when pushing/popping if the focused widget lives on the outgoing page.
+
 ## Rich text: inline spans and markdown (Zig views)
 
 Mixed-style text inside ONE wrapped paragraph is a Zig-builder feature (markup exposure is planned; the grammar is currently frozen):
@@ -435,8 +457,8 @@ Md.view(ui, model.body_markdown, .{
 })
 ```
 
-- Supported: `#`–`###` headings, paragraphs with `**bold**`/`*italic*`/`` `code` ``/`~~strike~~`/`[links](url)`, bare `http(s)://` URLs (autolink, trailing punctuation trimmed), `#123` issue refs (opt-in: set `Options.issue_link_base` and the ref links to base ++ number), bullet + ordered + task lists (task checkboxes are display-only, disabled), fenced code blocks, `> blockquotes`, `---` rules, `<details><summary>`.
-- Not in v1 (degrades to plain text, never fails): tables, reference links, raw HTML, footnotes, backslash escapes.
+- Supported: `#`–`###` headings, paragraphs with `**bold**`/`*italic*`/`` `code` ``/`~~strike~~`/`[links](url)`, bare `http(s)://` URLs (autolink, trailing punctuation trimmed), `#123` issue refs (opt-in: set `Options.issue_link_base` and the ref links to base ++ number), bullet + ordered + task lists (task checkboxes are display-only, disabled), fenced code blocks, `> blockquotes`, `---` rules, GFM pipe tables (header bold, `:---`/`:--:`/`---:` column alignment, inline spans + clickable links inside cells, `\|` escapes a pipe in a cell; columns share width equally, and a missing/mismatched delimiter row degrades the block to paragraphs), `<details><summary>`.
+- Not in v1 (degrades to plain text, never fails): reference links, raw HTML, footnotes, backslash escapes (except `\|` in table rows).
 - `<details>` state is elm-style: the CALLER owns the expanded flags. Keep a bounded `details_expanded: [8]bool` in the model, toggle it in `update` on the details message, and pass the slice back in.
 
 ## Validate without building

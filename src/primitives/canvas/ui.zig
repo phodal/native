@@ -477,6 +477,276 @@ pub fn Ui(comptime Msg: type) type {
             return self.el(.stack, .{ .grow = grow }, .{});
         }
 
+        /// Visual state of a stepper step, derived from its index against
+        /// `StepperOptions.active`.
+        pub const StepState = enum { completed, active, pending };
+
+        pub const StepperStep = struct {
+            /// Step label ("Work", "Review · round 2").
+            label: []const u8,
+        };
+
+        pub const StepperOptions = struct {
+            /// Index of the active step: earlier steps render completed
+            /// (check indicator), later ones pending. An index past the
+            /// last step renders every step completed.
+            active: usize = 0,
+            key: ?UiKey = null,
+            global_key: ?UiKey = null,
+            grow: f32 = 0,
+            /// Row semantics; role defaults to `list` (each step is a
+            /// `listitem` carrying its label, state, and position).
+            semantics: canvas.WidgetSemantics = .{},
+        };
+
+        pub fn stepState(active: usize, index: usize) StepState {
+            if (index < active) return .completed;
+            if (index == active) return .active;
+            return .pending;
+        }
+
+        /// Stage stepper (shadcn stepper conventions: item + indicator +
+        /// title joined by separators): a horizontal row of steps whose
+        /// completed/active/pending states derive from `options.active`.
+        /// Indicators are badges — a check for completed steps, the step
+        /// number otherwise — and hairline separators connect the steps.
+        /// Display-only: driving `active` belongs to the app model.
+        pub fn stepper(self: *Self, options: StepperOptions, steps: []const StepperStep) Node {
+            var semantics = options.semantics;
+            if (semantics.role == .none) semantics.role = .list;
+            const node_count = if (steps.len == 0) 0 else steps.len * 2 - 1;
+            const nodes = self.arena.alloc(Node, node_count) catch {
+                self.failed = true;
+                return self.el(.row, .{ .semantics = semantics }, .{});
+            };
+            for (steps, 0..) |step, index| {
+                nodes[index * 2] = self.stepperStepNode(options.active, index, steps.len, step);
+                if (index + 1 < steps.len) {
+                    // The connector between steps: a bare separator inside
+                    // a row renders as a hairline across the space it grows
+                    // into.
+                    nodes[index * 2 + 1] = self.el(.separator, .{ .grow = 1 }, .{});
+                }
+            }
+            return self.el(.row, .{
+                .key = options.key,
+                .global_key = options.global_key,
+                .gap = 8,
+                .cross = .center,
+                .grow = options.grow,
+                .semantics = semantics,
+            }, .{nodes});
+        }
+
+        fn stepperStepNode(self: *Self, active: usize, index: usize, count: usize, step: StepperStep) Node {
+            const state = stepState(active, index);
+            const indicator = self.el(.badge, .{
+                .variant = if (state == .pending) canvas.WidgetVariant.outline else .primary,
+                .text = if (state == .completed) "✓" else self.fmt("{d}", .{index + 1}),
+            }, .{});
+            const label: Node = switch (state) {
+                .active => self.paragraph(.{}, &.{.{ .text = step.label, .weight = .bold }}),
+                .completed => self.text(.{}, step.label),
+                .pending => self.text(.{ .style_tokens = .{ .foreground = .text_muted } }, step.label),
+            };
+            return self.el(.row, .{
+                .key = .{ .int = @intCast(index) },
+                .gap = 6,
+                .cross = .center,
+                .selected = state == .active,
+                .semantics = .{
+                    .role = .listitem,
+                    .label = self.fmt("{s} ({s})", .{ step.label, @tagName(state) }),
+                    .list_item_index = @intCast(index),
+                    .list_item_count = @intCast(count),
+                },
+            }, .{ indicator, label });
+        }
+
+        pub const TimelineOptions = struct {
+            key: ?UiKey = null,
+            global_key: ?UiKey = null,
+            gap: f32 = 0,
+            grow: f32 = 0,
+            /// Column semantics; role defaults to `list`.
+            semantics: canvas.WidgetSemantics = .{},
+        };
+
+        /// Timeline/ledger list (shadcn timeline conventions: item +
+        /// indicator + separator + title/description/meta): a column of
+        /// `timelineItem` nodes.
+        pub fn timeline(self: *Self, options: TimelineOptions, items: anytype) Node {
+            var semantics = options.semantics;
+            if (semantics.role == .none) semantics.role = .list;
+            return self.el(.column, .{
+                .key = options.key,
+                .global_key = options.global_key,
+                .gap = options.gap,
+                .grow = options.grow,
+                .semantics = semantics,
+            }, items);
+        }
+
+        pub const TimelineItemOptions = struct {
+            key: ?UiKey = null,
+            global_key: ?UiKey = null,
+            /// Indicator badge text ("✓", "3"); empty renders a small dot.
+            indicator: []const u8 = "",
+            /// Indicator color variant — map run outcomes here (primary
+            /// for done, destructive for errors, outline for stopped, ...).
+            variant: canvas.WidgetVariant = .outline,
+            title: []const u8,
+            /// Wrapped muted preview under the title (step summary).
+            description: []const u8 = "",
+            /// Muted trailing meta line ("claude · sonnet · 1m 12s").
+            meta: []const u8 = "",
+            /// Hairline connector from the indicator toward the next item;
+            /// authors clear it on the last item.
+            connector: bool = true,
+            /// Whole-item press: adds a trailing chevron and a full-area
+            /// press hotspot (the paragraph-link overlay pattern), focusable
+            /// with role `listitem`.
+            on_press: ?Msg = null,
+            selected: bool = false,
+        };
+
+        /// One timeline/ledger item: leading status indicator (plus
+        /// connector), a title/description/meta content column, and — when
+        /// pressable — a trailing chevron and a full-area press overlay.
+        pub fn timelineItem(self: *Self, options: TimelineItemOptions) Node {
+            const dot = options.indicator.len == 0;
+            const indicator = self.el(.badge, .{
+                .variant = options.variant,
+                .text = options.indicator,
+                .width = if (dot) 10 else 0,
+                .height = if (dot) 10 else 0,
+            }, .{});
+            const lead = if (options.connector)
+                self.el(.column, .{ .cross = .center, .gap = 4 }, .{
+                    indicator,
+                    self.el(.separator, .{ .grow = 1, .width = 1 }, .{}),
+                })
+            else
+                self.el(.column, .{ .cross = .center }, .{indicator});
+
+            const content_nodes = self.arena.alloc(Node, 3) catch {
+                self.failed = true;
+                return self.el(.stack, .{}, .{});
+            };
+            content_nodes[0] = self.paragraph(.{}, &.{.{ .text = options.title, .weight = .bold }});
+            var content_len: usize = 1;
+            if (options.description.len > 0) {
+                content_nodes[content_len] = self.text(.{ .wrap = true, .style_tokens = .{ .foreground = .text_muted } }, options.description);
+                content_len += 1;
+            }
+            if (options.meta.len > 0) {
+                content_nodes[content_len] = self.paragraph(.{}, &.{.{ .text = options.meta, .color = .text_muted, .scale = 0.9 }});
+                content_len += 1;
+            }
+            const content = self.el(.column, .{ .grow = 1, .gap = 2 }, .{content_nodes[0..content_len]});
+
+            const item_semantics = canvas.WidgetSemantics{
+                .role = .listitem,
+                .label = options.title,
+                .focusable = options.on_press != null,
+            };
+            const row_children = self.arena.alloc(Node, 3) catch {
+                self.failed = true;
+                return self.el(.stack, .{}, .{});
+            };
+            row_children[0] = lead;
+            row_children[1] = content;
+            var row_len: usize = 2;
+            if (options.on_press != null) {
+                row_children[row_len] = self.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "›");
+                row_len += 1;
+            }
+            const row_node = self.el(.row, .{ .gap = 10, .padding = 8 }, .{row_children[0..row_len]});
+
+            if (options.on_press == null) {
+                return self.el(.stack, .{
+                    .key = options.key,
+                    .global_key = options.global_key,
+                    .selected = options.selected,
+                    .semantics = item_semantics,
+                }, .{row_node});
+            }
+            // The full-area press hotspot rides an empty text leaf over
+            // the content — the same convention paragraph link hotspots
+            // use — so a click anywhere on the item dispatches on_press.
+            const overlay = self.el(.text, .{
+                .on_press = options.on_press,
+                .selected = options.selected,
+                .semantics = item_semantics,
+            }, .{});
+            return self.el(.stack, .{
+                .key = options.key,
+                .global_key = options.global_key,
+            }, .{ row_node, overlay });
+        }
+
+        pub const NavOptions = struct {
+            /// Index of the visible page; out-of-range clamps to the last
+            /// page. The app model owns this value (push = increment or
+            /// append, pop = decrement) — TEA, no hidden navigation state.
+            active: usize = 0,
+            /// Keep inactive pages mounted but hidden: they stay laid out
+            /// and keep engine-owned state (scroll offsets, text edits)
+            /// across swaps, while being excluded from rendering,
+            /// hit-testing, focus traversal, and semantics. Off (default)
+            /// mounts only the active page — cheapest, but engine-owned
+            /// state of unmounted pages is dropped and the app model must
+            /// re-derive anything it wants restored.
+            retain: bool = false,
+            key: ?UiKey = null,
+            global_key: ?UiKey = null,
+            grow: f32 = 0,
+            /// Container semantics; role defaults to `group`.
+            semantics: canvas.WidgetSemantics = .{},
+        };
+
+        /// Within-pane navigation stack: shows one of `pages` (index-keyed
+        /// by stack position, so page identity — and with it scroll/text
+        /// state reconciliation — is stable across swaps). v1 swaps
+        /// instantly; there is no built-in push/pop animation. Focus does
+        /// not transfer automatically: move it from `update` when changing
+        /// pages if the focused widget lives on the outgoing page (hidden
+        /// and unmounted pages drop out of focus traversal on their own).
+        pub fn nav(self: *Self, options: NavOptions, pages: anytype) Node {
+            var semantics = options.semantics;
+            if (semantics.role == .none) semantics.role = .group;
+            const page_nodes = self.childNodes(pages);
+            if (page_nodes.len == 0) {
+                return self.el(.stack, .{
+                    .key = options.key,
+                    .global_key = options.global_key,
+                    .grow = options.grow,
+                    .semantics = semantics,
+                }, .{});
+            }
+            const active = @min(options.active, page_nodes.len - 1);
+            const mounted_len = if (options.retain) page_nodes.len else 1;
+            const mounted = self.arena.alloc(Node, mounted_len) catch {
+                self.failed = true;
+                return self.el(.stack, .{ .semantics = semantics }, .{});
+            };
+            for (mounted, 0..) |*slot, offset| {
+                const index = if (options.retain) offset else active;
+                slot.* = page_nodes[index];
+                // Page identity is its stack position unless the author
+                // keyed it: distinct pages must never share a structural id
+                // or engine state would bleed between them.
+                if (slot.key == null) slot.key = .{ .int = @intCast(index) };
+                if (index != active) slot.widget.semantics.hidden = true;
+            }
+            return self.el(.stack, .{
+                .key = options.key,
+                .global_key = options.global_key,
+                .grow = options.grow,
+                .semantics = semantics,
+            }, .{mounted[0..mounted_len]});
+        }
+
         /// Keyed list projection: one node per item, keyed by `key_fn` unless
         /// the item view assigned its own key.
         pub fn each(self: *Self, items: anytype, comptime key_fn: anytype, comptime view_fn: anytype) []const Node {

@@ -214,6 +214,119 @@ test "empty and pathological inputs build empty-but-valid trees" {
     _ = try doc2.build("\n\n\n</details>\n<summary>stray</summary>\n", .{});
 }
 
+fn findCellContaining(widget: canvas.Widget, fragment: []const u8) ?canvas.Widget {
+    if (widget.kind == .data_cell and std.mem.indexOf(u8, widget.text, fragment) != null) return widget;
+    for (widget.children) |child| {
+        if (findCellContaining(child, fragment)) |found| return found;
+    }
+    return null;
+}
+
+test "pipe tables map onto table/data_row/data_cell with alignment and header styling" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+    const tree = try doc.build(
+        \\| Variable | Default | Notes |
+        \\| :--- | :---: | ---: |
+        \\| `PORT` | 3000 | **required** in prod |
+        \\| `LOG_LEVEL` | info | see [docs](https://example.com/logs) |
+    , .{ .on_link = Ui.linkMsg(.open_url) });
+
+    try testing.expectEqual(@as(usize, 1), countKind(tree.root, .table));
+    try testing.expectEqual(@as(usize, 3), countKind(tree.root, .data_row));
+    try testing.expectEqual(@as(usize, 9), countKind(tree.root, .data_cell));
+
+    // Header cells are bold with delimiter-driven alignment.
+    const header_cell = findCellContaining(tree.root, "Variable").?;
+    try testing.expectEqual(canvas.TextSpanWeight.bold, header_cell.spans[0].weight);
+    try testing.expectEqual(canvas.TextAlign.start, header_cell.text_alignment);
+    const centered = findCellContaining(tree.root, "Default").?;
+    try testing.expectEqual(canvas.TextAlign.center, centered.text_alignment);
+    const trailing = findCellContaining(tree.root, "Notes").?;
+    try testing.expectEqual(canvas.TextAlign.end, trailing.text_alignment);
+
+    // Body cells run the inline grammar: code, bold, and live links.
+    const port = findCellContaining(tree.root, "PORT").?;
+    try testing.expect(port.spans[0].monospace);
+    try testing.expectEqual(canvas.TextSpanWeight.regular, port.spans[0].weight);
+    const required = findCellContaining(tree.root, "required").?;
+    try testing.expectEqual(canvas.TextSpanWeight.bold, required.spans[0].weight);
+    const link_cell = findCellContaining(tree.root, "docs").?;
+    const hotspot = link_cell.children[0];
+    try testing.expectEqual(canvas.WidgetRole.link, hotspot.semantics.role);
+    const msg = tree.msgForPointer(hotspot.id, .up).?;
+    try testing.expectEqualStrings("https://example.com/logs", msg.open_url);
+}
+
+test "table rows pad short rows, drop extra cells, and stop at blank or pipeless lines" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+    const tree = try doc.build(
+        \\| A | B |
+        \\| --- | --- |
+        \\| one |
+        \\| one | two | three |
+        \\
+        \\After the table.
+    , .{});
+
+    try testing.expectEqual(@as(usize, 1), countKind(tree.root, .table));
+    try testing.expectEqual(@as(usize, 3), countKind(tree.root, .data_row));
+    // Every row has exactly the header's column count.
+    try testing.expectEqual(@as(usize, 6), countKind(tree.root, .data_cell));
+    try testing.expect(findCellContaining(tree.root, "three") == null);
+    const after = findParagraphContaining(tree.root, "After the table.").?;
+    try testing.expectEqual(canvas.WidgetKind.text, after.kind);
+}
+
+test "tables interrupt paragraphs and escape pipes inside cells" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+    const tree = try doc.build(
+        \\Leading prose
+        \\| Cmd | Effect |
+        \\| --- | --- |
+        \\| `a \| b` | pipe stays |
+    , .{});
+
+    try testing.expect(findParagraphContaining(tree.root, "Leading prose") != null);
+    try testing.expect(findParagraphContaining(tree.root, "Cmd") == null);
+    try testing.expectEqual(@as(usize, 1), countKind(tree.root, .table));
+    const escaped = findCellContaining(tree.root, "a | b").?;
+    try testing.expect(escaped.spans[0].monospace);
+}
+
+test "malformed pipe blocks degrade to plain paragraphs" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+
+    // No delimiter row.
+    const tree = try doc.build(
+        \\| a | b |
+        \\| c | d |
+    , .{});
+    try testing.expectEqual(@as(usize, 0), countKind(tree.root, .table));
+    try testing.expect(findParagraphContaining(tree.root, "| a | b |") != null);
+
+    // Column-count mismatch between header and delimiter row.
+    var doc2 = TestDoc.init();
+    defer doc2.deinit();
+    const tree2 = try doc2.build(
+        \\| a | b | c |
+        \\| --- | --- |
+    , .{});
+    try testing.expectEqual(@as(usize, 0), countKind(tree2.root, .table));
+
+    // Wider than max_markdown_table_columns degrades rather than dropping columns.
+    var doc3 = TestDoc.init();
+    defer doc3.deinit();
+    const tree3 = try doc3.build(
+        \\| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+        \\| - | - | - | - | - | - | - | - | - |
+    , .{});
+    try testing.expectEqual(@as(usize, 0), countKind(tree3.root, .table));
+}
+
 test "dev-2 README renders through the mapper and the reference renderer" {
     var doc = TestDoc.init();
     defer doc.deinit();
@@ -284,8 +397,10 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 }
 
 // Reference-renderer pixel signature of the fixture at 760x2400 with
-// default tokens and the deterministic estimator.
-const dev2_readme_reference_signature: u64 = 15066189027424610165;
+// default tokens and the deterministic estimator. Regenerated when GFM
+// pipe tables landed: the README's command table now renders as a real
+// table instead of paragraphs.
+const dev2_readme_reference_signature: u64 = 6219307851265720950;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

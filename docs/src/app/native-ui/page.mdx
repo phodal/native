@@ -56,6 +56,8 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `separator`, `spacer` | separator, flexible space | `separator` is axis-aware — a horizontal rule in a `column`, a thin vertical divider in a `row`; give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
 | `markdown` | rendered markdown | leaf; `source` is one `{binding}` — see [Rich text](#rich-text-inline-spans-and-markdown) |
+| `stepper` > `step` | stage stepper | `active="{index}"` derives each step's completed/active/pending state; steps are text leaves joined by connectors — see [Pipeline components](#pipeline-components-stepper-timeline-and-nav) |
+| `timeline` > `timeline-item` | ledger/timeline list | items are leaves whose `title`/`description`/`meta`/`indicator` attributes carry the content; `on-press` makes the whole item pressable |
 
 A tab strip, a select trigger, and a table read the way you would guess:
 
@@ -196,7 +198,7 @@ ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 
 Wrapping and measurement are span-aware (the platform text provider measures every run with the font it draws with), stacked paragraphs reserve their real wrapped height, and link spans are first-class: they carry `role=link` semantics in automation snapshots, show a pointer cursor, and clicking one dispatches your `Msg` with the link payload.
 
-Markdown builds on the same model. `zero_native.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, and `<details>` collapsibles — onto ordinary widgets:
+Markdown builds on the same model. `zero_native.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, pipe tables, and `<details>` collapsibles — onto ordinary widgets:
 
 ```zig
 const Md = zero_native.markdown.Markdown(Msg);
@@ -210,6 +212,8 @@ Md.view(ui, issue.body, .{
 
 Malformed input degrades to plain text — the build fn never fails. Task-list checkboxes render as disabled (display-only) checkboxes, and `<details>` expansion is state the caller's model owns.
 
+GFM pipe tables map onto the real `table`/`table-row`/`table-cell` widgets: the header row renders bold, the delimiter row's `:---`/`:--:`/`---:` cells set per-column start/center/end alignment, every cell runs the full inline grammar (code, bold, links — links in cells are clickable), `\|` puts a literal pipe in a cell, and cells wrap at their column width (columns share the width equally in v1). A pipe block whose delimiter row is missing or mismatched is not a table and renders as plain paragraphs.
+
 In markup, the `<markdown>` element wires all of this declaratively:
 
 ```html
@@ -217,6 +221,49 @@ In markup, the `<markdown>` element wires all of this declaratively:
 ```
 
 `source` (required) is one `{binding}` producing the markdown text — a string field, zero-arg method, or arena-taking method. `on-link` and `on-details` are bare `Msg` tags (the runtime supplies their payloads: the URL as `[]const u8`, the details index as `usize`), `details-expanded` names a `[]const bool` iterable through the same sources `for each` accepts, and `issue-link-base` (a literal prefix or one `{binding}`) turns `#123` references into links to base ++ number. Everything but `source` is optional — without the details wiring, `<details>` blocks render collapsed and inert. Both the interpreter and the comptime compiler implement the element identically.
+
+## Pipeline components: stepper, timeline, and nav
+
+Pipeline UIs (agent runs, wizards, activity feeds) get three composites. All three are ordinary compositions of existing widgets — same layout, theming, semantics, and hit-testing as hand-written trees.
+
+A **stepper** is a horizontal stage track (shadcn stepper conventions: indicator + title per step, separators as connectors). The model owns the active index; earlier steps render completed (a check badge), later ones pending:
+
+```html
+<stepper active="{stage_index}">
+  <step>Work</step>
+  <step>Triage</step>
+  <step>Review · {review_round}</step>
+  <step>Fix</step>
+  <step>Ready</step>
+</stepper>
+```
+
+From Zig: `ui.stepper(.{ .active = model.stage_index }, &.{ .{ .label = "Work" }, ... })`. Semantics: a `list` of `listitem`s, the active step `selected`, each label carrying its state (`"Review (active)"`) plus its position, so automation can read the pipeline at a glance.
+
+A **timeline** is a ledger list (shadcn timeline conventions: indicator + separator rail + title/description/meta per item). Items are leaves; the attributes carry the content:
+
+```html
+<timeline gap="4">
+  <for each="ledger" key="slot" as="entry">
+    <timeline-item title="{entry.title}" description="{entry.summary}" meta="{entry.meta}"
+                   variant="{entry.tone}" on-press="open_step:{entry.slot}" />
+  </for>
+  <timeline-item title="Ready for review" indicator="✓" variant="secondary" connector="false" />
+</timeline>
+```
+
+The leading badge is a small dot colored by `variant` (map run outcomes: `primary` for done, `destructive` for errors, `outline` for stopped, ...) or carries `indicator` text ("✓"); `connector="false"` ends the rail on the last item. With `on-press`, the item grows a trailing chevron and a full-area press hotspot (the same overlay convention paragraph links use), focusable with role `listitem` — a click anywhere on the item dispatches the message. There is no built-in hover fill or line-clamping on the description in v1.
+
+A **nav** container is the within-pane navigation stack (ledger item → step transcript, back button pops). Zig-only for now — markup swaps views with `<if>`:
+
+```zig
+ui.nav(.{ .active = model.nav_depth, .retain = true }, .{
+    ledgerPane(ui, model),
+    transcriptPane(ui, model),
+})
+```
+
+The model owns the stack (TEA: push = set `nav_depth = 1`, pop = back to 0; out-of-range clamps). Pages are index-keyed, so a page's widget ids — and with them engine-owned scroll offsets and text edits — are stable across swaps. `retain = true` keeps inactive pages mounted but hidden: they keep engine state and drop out of rendering, hit-testing, focus traversal, and semantics; the default unmounts them (cheapest, engine state dropped). v1 swaps instantly — there is no push/pop animation yet — and focus does not transfer automatically: move it from `update` when the focused widget lives on the outgoing page.
 
 ## Tooling
 

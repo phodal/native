@@ -2,6 +2,10 @@
 //! inline code / link / task list) through `zero_native.markdown`, and the
 //! full runtime loop — install, automation snapshot, click dispatch,
 //! retained re-emission, screenshot — works end to end.
+//!
+//! The view is authored in markup and compiled at comptime, dogfooding the
+//! `<markdown>` element (source/on-link/on-details/details-expanded) and
+//! an arena-taking scalar binding (`{status}`) through the release engine.
 
 const std = @import("std");
 const geometry = @import("geometry");
@@ -37,6 +41,19 @@ const NotesModel = struct {
     fn openedUrl(self: *const NotesModel) []const u8 {
         return self.opened_url[0..self.opened_len];
     }
+
+    /// Zero-arg binding fn: the markdown source for `<markdown source>`.
+    pub fn note(self: *const NotesModel) []const u8 {
+        _ = self;
+        return note_source;
+    }
+
+    /// Arena-taking scalar binding: `{status}` formats into the build
+    /// arena on every rebuild — derived, never stored.
+    pub fn status(self: *const NotesModel, arena: std.mem.Allocator) []const u8 {
+        if (self.opened_len == 0) return "no link opened";
+        return std.fmt.allocPrint(arena, "opened {s}", .{self.openedUrl()}) catch "";
+    }
 };
 
 const NotesMsg = union(enum) {
@@ -45,7 +62,14 @@ const NotesMsg = union(enum) {
 };
 
 const NotesApp = ui_app_model.UiApp(NotesModel, NotesMsg);
-const Md = canvas.markdown.Markdown(NotesMsg);
+
+const notes_markup =
+    \\<column padding="16">
+    \\  <markdown source="{note}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+    \\  <status-bar>{status}</status-bar>
+    \\</column>
+;
+const NotesView = canvas.CompiledMarkupView(NotesModel, NotesMsg, notes_markup);
 
 fn notesUpdate(model: *NotesModel, msg: NotesMsg) void {
     switch (msg) {
@@ -58,16 +82,6 @@ fn notesUpdate(model: *NotesModel, msg: NotesMsg) void {
             if (index < model.details_expanded.len) model.details_expanded[index] = !model.details_expanded[index];
         },
     }
-}
-
-fn notesView(ui: *NotesApp.Ui, model: *const NotesModel) NotesApp.Ui.Node {
-    return ui.column(.{ .padding = 16 }, .{
-        Md.view(ui, note_source, .{
-            .on_link = NotesApp.Ui.linkMsg(.open_url),
-            .on_details = Md.detailsMsg(.toggle_details),
-            .details_expanded = &model.details_expanded,
-        }),
-    });
 }
 
 const notes_views = [_]app_manifest.ShellView{
@@ -102,7 +116,7 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
         .scene = notes_scene,
         .canvas_label = canvas_label,
         .update = notesUpdate,
-        .view = notesView,
+        .view = NotesView.build,
     });
     defer app_state.deinit();
     const app = app_state.app();
@@ -153,7 +167,9 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
     const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
     var span_paragraphs: usize = 0;
     var found_link_span = false;
+    var found_status = false;
     for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.text, "opened https://example.com/guide")) found_status = true;
         if (node.widget.spans.len == 0) continue;
         span_paragraphs += 1;
         for (node.widget.spans) |span| {
@@ -162,6 +178,8 @@ test "markdown note app snapshots links, dispatches clicks, and screenshots" {
     }
     try std.testing.expect(span_paragraphs >= 3);
     try std.testing.expect(found_link_span);
+    // The arena-scalar status bar re-derived its text after the link click.
+    try std.testing.expect(found_status);
 
     // Screenshot: the reference-rendered canvas is non-blank and encodes
     // to a parseable PNG (the live-evidence artifact).

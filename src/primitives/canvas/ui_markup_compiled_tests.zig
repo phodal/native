@@ -38,10 +38,27 @@ fn expectSameTree(comptime MsgT: type, expected: canvas.Ui(MsgT).Tree, actual: c
         try testing.expectEqual(expected_handler.event, actual_handler.event);
         try testing.expectEqual(std.meta.activeTag(expected_handler.action), std.meta.activeTag(actual_handler.action));
         switch (expected_handler.action) {
-            .message => |msg| try testing.expect(std.meta.eql(msg, actual_handler.action.message)),
+            .message => |msg| try expectSameMsg(MsgT, msg, actual_handler.action.message),
             .input => |make| try testing.expectEqual(make, actual_handler.action.input),
             .value => |make| try testing.expectEqual(make, actual_handler.action.value),
         }
+    }
+}
+
+/// Messages are equal when their tag and payload agree; string payloads
+/// compare by bytes (each engine formats arena-computed payloads into its
+/// own arena, so pointer identity is not part of the contract).
+fn expectSameMsg(comptime MsgT: type, expected: MsgT, actual: MsgT) !void {
+    try testing.expectEqual(std.meta.activeTag(expected), std.meta.activeTag(actual));
+    switch (expected) {
+        inline else => |payload, tag| {
+            const actual_payload = @field(actual, @tagName(tag));
+            if (@TypeOf(payload) == []const u8) {
+                try testing.expectEqualStrings(payload, actual_payload);
+            } else {
+                try testing.expect(std.meta.eql(payload, actual_payload));
+            }
+        },
     }
 }
 
@@ -384,6 +401,141 @@ test "compiled catalog stays in parity when conditional surfaces flip" {
     const yes_button = fixture.findByText(compiled.root, .button, "Yes").?;
     try testing.expectEqual(fixture.CatalogMsg.submit_query, compiled.msgForPointer(yes_button.id, .up).?);
     try testing.expectEqual(@as(u32, 2), compiled.msgForPointer(fixture.findByText(compiled.root, .button, "Prev").?.id, .up).?.set_page);
+}
+
+// ---------------------------------------------- arena-scalar binding parity
+
+const ExpensesUi = fixture.ExpensesUi;
+const ExpensesInterpreter = markup_view.MarkupView(fixture.ExpensesModel, fixture.ExpensesMsg);
+const ExpensesCompiled = canvas.CompiledMarkupView(fixture.ExpensesModel, fixture.ExpensesMsg, fixture.expenses_markup_source);
+
+fn interpretExpenses(arena: std.mem.Allocator, model: *const fixture.ExpensesModel) !ExpensesUi.Tree {
+    var view = try ExpensesInterpreter.init(arena, fixture.expenses_markup_source);
+    var ui = ExpensesUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileExpenses(arena: std.mem.Allocator, model: *const fixture.ExpensesModel) !ExpensesUi.Tree {
+    var ui = ExpensesUi.init(arena);
+    return ui.finalize(ExpensesCompiled.build(&ui, model));
+}
+
+test "compiled arena-scalar bindings match the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.expensesTestModel();
+
+    const interpreted = try interpretExpenses(arena, &model);
+    const compiled = try compileExpenses(arena, &model);
+    var hand_ui = ExpensesUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handExpensesView(&hand_ui, &model));
+
+    // All three engines agree: the arena scalar flows through text
+    // content, interpolation, an attribute value (label), a message
+    // payload, an if test, and an item-level arena method.
+    try expectSameTree(fixture.ExpensesMsg, hand, interpreted);
+    try expectSameTree(fixture.ExpensesMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    try testing.expectEqualStrings("2 expenses · $12.94", fixture.findByKind(compiled.root, .status_bar).?.text);
+    const labeled = fixture.findByText(compiled.root, .text, "all: 2 expenses · $12.94").?;
+    try testing.expectEqualStrings("2 expenses · $12.94", labeled.semantics.label);
+    try testing.expect(fixture.findByText(compiled.root, .badge, "summarized") != null);
+
+    // Payload dispatch parity: the arena string rides the typed message.
+    const pick_button = fixture.findByKind(compiled.root, .button).?;
+    try testing.expectEqualStrings("$12.34", compiled.msgForPointer(pick_button.id, .up).?.pick);
+    try testing.expectEqualStrings(
+        interpreted.msgForPointer(pick_button.id, .up).?.pick,
+        compiled.msgForPointer(pick_button.id, .up).?.pick,
+    );
+}
+
+test "compiled string bindings pass to templates as value args" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.expensesTestModel();
+    const source =
+        "<template name=\"line\" args=\"title\"><text>{title}</text></template>\n" ++
+        "<column>\n" ++
+        "  <use template=\"line\" title=\"{filter}\" />\n" ++
+        "  <use template=\"line\" title=\"{summary}\" />\n" ++
+        "</column>";
+    const Compiled = canvas.CompiledMarkupView(fixture.ExpensesModel, fixture.ExpensesMsg, source);
+
+    var compiled_ui = ExpensesUi.init(arena);
+    const compiled = try compiled_ui.finalize(Compiled.build(&compiled_ui, &model));
+
+    var view = try ExpensesInterpreter.init(arena, source);
+    var interpreted_ui = ExpensesUi.init(arena);
+    const interpreted = try interpreted_ui.finalize(try view.build(&interpreted_ui, &model));
+
+    try expectSameTree(fixture.ExpensesMsg, interpreted, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+    try testing.expect(findText(compiled.root, "all") != null);
+    try testing.expect(findText(compiled.root, "2 expenses · $12.94") != null);
+}
+
+// -------------------------------------------------- markdown element parity
+
+const DocUi = fixture.DocUi;
+const DocInterpreter = markup_view.MarkupView(fixture.DocModel, fixture.DocMsg);
+const DocCompiled = canvas.CompiledMarkupView(fixture.DocModel, fixture.DocMsg, fixture.doc_markup_source);
+
+fn interpretDoc(arena: std.mem.Allocator, model: *const fixture.DocModel) !DocUi.Tree {
+    var view = try DocInterpreter.init(arena, fixture.doc_markup_source);
+    var ui = DocUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileDoc(arena: std.mem.Allocator, model: *const fixture.DocModel) !DocUi.Tree {
+    var ui = DocUi.init(arena);
+    return ui.finalize(DocCompiled.build(&ui, model));
+}
+
+test "compiled markdown element matches the interpreter and the hand-written Md.view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = fixture.DocModel{};
+
+    const interpreted = try interpretDoc(arena, &model);
+    const compiled = try compileDoc(arena, &model);
+    var hand_ui = DocUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handDocView(&hand_ui, &model));
+
+    try expectSameTree(fixture.DocMsg, hand, interpreted);
+    try expectSameTree(fixture.DocMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // Link dispatch parity, including the payload URL.
+    const link = fixture.findByRole(compiled.root, .link).?;
+    try testing.expectEqualStrings("https://example.com/guide", compiled.msgForPointer(link.id, .up).?.open_url);
+    try testing.expectEqualStrings(
+        interpreted.msgForPointer(link.id, .up).?.open_url,
+        compiled.msgForPointer(link.id, .up).?.open_url,
+    );
+
+    // Details dispatch parity: the summary press carries the block index.
+    const summary_item = fixture.findByKind(compiled.root, .list_item).?;
+    try testing.expectEqual(@as(usize, 0), compiled.msgForPointer(summary_item.id, .up).?.toggle_details);
+    try testing.expect(findText(compiled.root, "Enable for 5% of traffic.") == null);
+
+    // Expanding through the caller-owned flag keeps the engines in step.
+    model.details_expanded[0] = true;
+    const expanded_interpreted = try interpretDoc(arena, &model);
+    const expanded_compiled = try compileDoc(arena, &model);
+    try expectSameTree(fixture.DocMsg, expanded_interpreted, expanded_compiled);
+    try expectSameTexts(expanded_interpreted.root, expanded_compiled.root);
+    try testing.expect(findText(expanded_compiled.root, "Enable for 5% of traffic.") != null);
+
+    // The summary keeps its id across the expand (keyed by details index).
+    try testing.expectEqual(summary_item.id, fixture.findByKind(expanded_compiled.root, .list_item).?.id);
 }
 
 // ------------------------------------------- template/use + style parity

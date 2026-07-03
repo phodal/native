@@ -132,6 +132,9 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         // ------------------------------------------------------ building
 
         fn buildElement(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            if (comptime std.mem.eql(u8, node.name, "markdown")) {
+                return buildMarkdown(node, entries, ui, model, scope);
+            }
             const kind = comptime (interpreter.elementKind(node.name) orelse fail(node, "unknown element"));
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);
@@ -206,7 +209,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 } else {
                     const conditional = comptime step.conditional;
                     const test_value = comptime (conditional.if_block.attr("test") orelse fail(conditional.if_block, "if requires a test attribute"));
-                    const condition = evalExpr(conditional.if_block, entries, test_value, model, scope);
+                    const condition = evalExpr(conditional.if_block, entries, test_value, ui, model, scope);
                     if (condition.truthy()) {
                         buildChildren(conditional.if_block, entries, ui, model, scope, out);
                     } else if (comptime (conditional.else_block != null)) {
@@ -263,6 +266,106 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     return;
                 };
             }
+        }
+
+        // ------------------------------------------------------- markdown
+
+        const Md = canvas.markdown.Markdown(MsgT);
+
+        /// Comptime mirror of the interpreter's `buildMarkdown`: attrs,
+        /// message tags, and the details-expanded source resolve at
+        /// comptime; only the source string and expanded flags are read at
+        /// runtime. Misuse fails compilation with the interpreter's
+        /// message.
+        fn buildMarkdown(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.markdown_children_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "source")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-link")) continue;
+                    if (std.mem.eql(u8, attribute.name, "on-details")) continue;
+                    if (std.mem.eql(u8, attribute.name, "details-expanded")) continue;
+                    fail(node, markup.markdown_attr_message);
+                }
+            }
+            const source_path = comptime blk: {
+                const raw = node.attr("source") orelse fail(node, markup.markdown_source_message);
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_source_message);
+                if (expression != .binding) fail(node, markup.markdown_source_message);
+                break :blk expression.binding;
+            };
+            comptime requireVariant(pathVariant(node, entries, source_path, true), &.{.string}, node, markup.markdown_source_message);
+            const source_text = switch (bindingValue(node, entries, source_path, ui, model, scope, true)) {
+                .string => |text| text,
+                else => runtimeFail([]const u8, ui),
+            };
+
+            var options: Md.Options = .{};
+            if (comptime (node.attr("on-link") != null)) {
+                options.on_link = comptime markdownLinkConstructor(node, node.attr("on-link").?);
+            }
+            if (comptime (node.attr("on-details") != null)) {
+                options.on_details = comptime markdownDetailsConstructor(node, node.attr("on-details").?);
+            }
+            if (comptime (node.attr("details-expanded") != null)) {
+                options.details_expanded = detailsExpandedItems(node, entries, comptime node.attr("details-expanded").?, ui, model, scope);
+            }
+            return Md.view(ui, source_text, options);
+        }
+
+        fn markdownLinkConstructor(comptime node: markup.MarkupNode, comptime raw: []const u8) Ui.LinkMsgFn {
+            comptime {
+                @setEvalBranchQuota(10_000);
+                const expression = markup.parseMessageExpression(raw) orelse fail(node, markup.markdown_on_link_message);
+                if (expression.payload.len != 0) fail(node, markup.markdown_on_link_message);
+                for (@typeInfo(MsgT).@"union".fields) |field| {
+                    if (field.type == []const u8 and std.mem.eql(u8, field.name, expression.tag)) {
+                        return Ui.linkMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+                fail(node, markup.markdown_on_link_message);
+            }
+        }
+
+        fn markdownDetailsConstructor(comptime node: markup.MarkupNode, comptime raw: []const u8) *const fn (index: usize) MsgT {
+            comptime {
+                @setEvalBranchQuota(10_000);
+                const expression = markup.parseMessageExpression(raw) orelse fail(node, markup.markdown_on_details_message);
+                if (expression.payload.len != 0) fail(node, markup.markdown_on_details_message);
+                for (@typeInfo(MsgT).@"union".fields) |field| {
+                    if (field.type == usize and std.mem.eql(u8, field.name, expression.tag)) {
+                        return Md.detailsMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+                fail(node, markup.markdown_on_details_message);
+            }
+        }
+
+        /// Resolve `details-expanded` through the same sources `for each`
+        /// accepts (scope slice args shadow model iterables), requiring a
+        /// bool element type at comptime.
+        fn detailsExpandedItems(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) []const bool {
+            const path = comptime blk: {
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_details_expanded_message);
+                if (expression != .binding) fail(node, markup.markdown_details_expanded_message);
+                break :blk expression.binding;
+            };
+            const scope_index_opt = comptime scopeIndex(entries, path);
+            if (comptime (scope_index_opt != null)) {
+                const scope_index = comptime scope_index_opt.?;
+                comptime {
+                    if (entries[scope_index].kind != .slice_arg or entries[scope_index].Item != bool) {
+                        fail(node, markup.markdown_details_expanded_message);
+                    }
+                }
+                return scopePayload(entries, scope_index, scope);
+            }
+            const info = comptime (eachInfo(path) orelse fail(node, markup.markdown_details_expanded_message));
+            comptime {
+                if (info.Item != bool) fail(node, markup.markdown_details_expanded_message);
+            }
+            return eachItems(info, ui, model);
         }
 
         // ------------------------------------------------------ templates
@@ -339,7 +442,12 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                             return .{ .name = arg_name, .raw = raw, .kind = .slice, .Item = site_entries[index].Item, .site_index = index };
                         }
                     } else if (eachInfo(path)) |info| {
-                        return .{ .name = arg_name, .raw = raw, .kind = .slice, .Item = info.Item, .each = info };
+                        // Strings stay scalars (interpreter parity): a
+                        // binding producing []const u8 binds as a value
+                        // arg, never as an iterable of bytes.
+                        if (info.Item != u8) {
+                            return .{ .name = arg_name, .raw = raw, .kind = .slice, .Item = info.Item, .each = info };
+                        }
                     }
                 }
                 return .{ .name = arg_name, .raw = raw, .kind = .value, .variant = exprVariant(node, site_entries, raw) };
@@ -392,7 +500,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 }
                 return eachItems(comptime spec.each.?, ui, model);
             }
-            return evalExpr(node, site_entries, spec.raw, model, site_scope);
+            return evalExpr(node, site_entries, spec.raw, ui, model, site_scope);
         }
 
         // -------------------------------------------------- `for` sources
@@ -447,9 +555,12 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         }
 
         fn itemKey(comptime Item: type, comptime node: markup.MarkupNode, comptime field_path: []const u8, ui: *Ui, item: *const Item) canvas.UiKey {
-            const Leaf = comptime (OnType(Item, field_path) orelse fail(node, "key does not name a field on the item"));
+            // Keys stay identity-stable data: fields and zero-arg
+            // methods only, never arena-computed values (the interpreter
+            // resolves keys with a null arena for the same reason).
+            const Leaf = comptime (OnType(Item, field_path, false) orelse fail(node, "key does not name a field on the item"));
             comptime requireVariant(bindingVariant(Leaf), &.{ .integer, .string }, node, "key fields must be integers or strings");
-            const value = interpreter.valueOf(Leaf, valueOn(Item, field_path, item)) orelse unreachable;
+            const value = interpreter.valueOf(Leaf, valueOn(Item, field_path, item, ui.arena)) orelse unreachable;
             return uiKeyFromValue(value, ui);
         }
 
@@ -470,7 +581,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     options.semantics.role = roleValue(node, entries, attribute.value, ui, model, scope);
                 } else if (comptime std.mem.eql(u8, attribute.name, "label")) {
                     comptime requireVariant(exprVariant(node, entries, attribute.value), &.{.string}, node, "label expects text");
-                    options.semantics.label = switch (evalExpr(node, entries, attribute.value, model, scope)) {
+                    options.semantics.label = switch (evalExpr(node, entries, attribute.value, ui, model, scope)) {
                         .string => |text| text,
                         else => runtimeFail([]const u8, ui),
                     };
@@ -535,13 +646,13 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             switch (comptime @typeInfo(FieldType)) {
                 .float => {
                     comptime requireVariant(variant, &.{ .float, .integer }, node, "expected a number");
-                    @field(options, zig_field) = switch (evalExpr(node, entries, raw, model, scope)) {
+                    @field(options, zig_field) = switch (evalExpr(node, entries, raw, ui, model, scope)) {
                         .float => |float| float,
                         .integer => |int| @floatFromInt(int),
                         else => runtimeFail(FieldType, ui),
                     };
                 },
-                .bool => @field(options, zig_field) = evalExpr(node, entries, raw, model, scope).truthy(),
+                .bool => @field(options, zig_field) = evalExpr(node, entries, raw, ui, model, scope).truthy(),
                 .@"enum" => {
                     comptime requireVariant(variant, &.{.string}, node, "expected an option name");
                     const expression = comptime markup.parseAttrExpression(raw).?;
@@ -550,7 +661,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         // is a compile error, not a failed rebuild.
                         @field(options, zig_field) = comptime (std.meta.stringToEnum(FieldType, expression.literal) orelse fail(node, "unknown option value"));
                     } else {
-                        const text = switch (evalExpr(node, entries, raw, model, scope)) {
+                        const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
                             .string => |text| text,
                             else => runtimeFail([]const u8, ui),
                         };
@@ -559,7 +670,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 },
                 .pointer => {
                     comptime requireVariant(variant, &.{.string}, node, "expected text");
-                    @field(options, zig_field) = switch (evalExpr(node, entries, raw, model, scope)) {
+                    @field(options, zig_field) = switch (evalExpr(node, entries, raw, ui, model, scope)) {
                         .string => |text| text,
                         else => runtimeFail(FieldType, ui),
                     };
@@ -570,7 +681,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
 
         fn attrKey(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, comptime message: []const u8) canvas.UiKey {
             comptime requireVariant(exprVariant(node, entries, raw), &.{ .integer, .string }, node, message);
-            return uiKeyFromValue(evalExpr(node, entries, raw, model, scope), ui);
+            return uiKeyFromValue(evalExpr(node, entries, raw, ui, model, scope), ui);
         }
 
         fn uiKeyFromValue(value: Value, ui: *Ui) canvas.UiKey {
@@ -590,7 +701,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             if (comptime (expression == .literal)) {
                 return comptime (std.meta.stringToEnum(canvas.WidgetRole, expression.literal) orelse fail(node, "unknown role"));
             }
-            const text = switch (evalExpr(node, entries, raw, model, scope)) {
+            const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
                 .string => |text| text,
                 else => runtimeFail([]const u8, ui),
             };
@@ -654,8 +765,8 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             comptime {
                 if (expression.payload.len == 0) fail(node, "message requires a payload");
             }
-            const variant = comptime pathVariant(node, entries, expression.payload);
-            const value = bindingValue(node, entries, expression.payload, model, scope);
+            const variant = comptime pathVariant(node, entries, expression.payload, true);
+            const value = bindingValue(node, entries, expression.payload, ui, model, scope, true);
             return @unionInit(MsgT, field.name, coerce(field.type, node, variant, ui, value));
         }
 
@@ -703,18 +814,22 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
 
         const invalid_expression_message = markup.invalid_expression_message;
 
-        fn evalExpr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, model: *const ModelT, scope: anytype) Value {
+        fn evalExpr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) Value {
             const expression = comptime (markup.parseAttrExpression(raw) orelse fail(node, invalid_expression_message));
             if (comptime (expression == .literal)) {
                 return comptime interpreter.literalValue(expression.literal);
             }
             if (comptime (expression == .binding)) {
-                return bindingValue(node, entries, comptime expression.binding, model, scope);
+                return bindingValue(node, entries, comptime expression.binding, ui, model, scope, true);
             }
+            // Arena-computed bindings are excluded from equality on
+            // purpose (same rule as the interpreter): comparing freshly
+            // formatted strings is a smell — compare source fields, or
+            // bind a bool-returning fn.
             const sides = comptime expression.equals;
             return .{ .boolean = Value.eql(
-                bindingValue(node, entries, sides.left, model, scope),
-                bindingValue(node, entries, sides.right, model, scope),
+                bindingValue(node, entries, sides.left, ui, model, scope, false),
+                bindingValue(node, entries, sides.right, ui, model, scope, false),
             ) };
         }
 
@@ -731,7 +846,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         .float => .float,
                         .boolean => .boolean,
                     }),
-                    .binding => |path| pathVariant(node, entries, path),
+                    .binding => |path| pathVariant(node, entries, path, true),
                     .equals => .boolean,
                 };
             }
@@ -759,7 +874,9 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         /// for loop items and model paths: the Zig type a binding path
         /// resolves to, or a compile error with the interpreter's message.
         /// Value args have no leaf type; `pathVariant` handles them.
-        fn BindingLeaf(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8) type {
+        /// `allow_arena` gates arena-taking scalar fns (allowed everywhere
+        /// except inside `{a == b}` equality, with a teaching error).
+        fn BindingLeaf(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8, comptime allow_arena: bool) type {
             comptime {
                 const head = interpreter.pathHead(path);
                 if (scopeIndex(entries, head)) |index| {
@@ -768,19 +885,29 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     if (entry.kind == .value_arg) fail(node, "template arg values have no fields");
                     const Item = entry.Item;
                     if (interpreter.pathTail(path)) |tail| {
-                        return OnType(Item, tail) orelse fail(node, "binding does not name a field on the loop item");
+                        return OnType(Item, tail, allow_arena) orelse {
+                            if (!allow_arena and OnType(Item, tail, true) != null) {
+                                fail(node, markup.arena_scalar_equality_message);
+                            }
+                            fail(node, "binding does not name a field on the loop item");
+                        };
                     }
                     if (!supportedValue(Item)) fail(node, "loop items of this type cannot be used as values");
                     return Item;
                 }
-                return OnType(ModelT, path) orelse fail(node, "binding does not name a model field");
+                return OnType(ModelT, path, allow_arena) orelse {
+                    if (!allow_arena and OnType(ModelT, path, true) != null) {
+                        fail(node, markup.arena_scalar_equality_message);
+                    }
+                    fail(node, "binding does not name a model field");
+                };
             }
         }
 
         /// The comptime-known Value variant a binding path produces:
         /// template value args carry their use-site variant, loop items
         /// and model paths derive it from the resolved leaf type.
-        fn pathVariant(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8) ?ValueVariant {
+        fn pathVariant(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8, comptime allow_arena: bool) ?ValueVariant {
             comptime {
                 const head = interpreter.pathHead(path);
                 if (scopeIndex(entries, head)) |index| {
@@ -789,11 +916,11 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         return entries[index].variant;
                     }
                 }
-                return bindingVariant(BindingLeaf(node, entries, path));
+                return bindingVariant(BindingLeaf(node, entries, path, allow_arena));
             }
         }
 
-        fn bindingValue(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8, model: *const ModelT, scope: anytype) Value {
+        fn bindingValue(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime path: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, comptime allow_arena: bool) Value {
             const head = comptime interpreter.pathHead(path);
             const index_opt = comptime scopeIndex(entries, head);
             if (comptime (index_opt != null)) {
@@ -808,25 +935,26 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 if (comptime (entry.kind == .slice_arg)) {
                     comptime fail(node, "slice-valued template args are only usable with for each");
                 }
-                const Leaf = comptime BindingLeaf(node, entries, path);
+                const Leaf = comptime BindingLeaf(node, entries, path, allow_arena);
                 const item = scopePayload(entries, index, scope);
                 if (comptime (interpreter.pathTail(path) != null)) {
                     const tail = comptime interpreter.pathTail(path).?;
-                    return interpreter.valueOf(Leaf, valueOn(entry.Item, tail, item)) orelse unreachable;
+                    return interpreter.valueOf(Leaf, valueOn(entry.Item, tail, item, ui.arena)) orelse unreachable;
                 }
                 return interpreter.valueOf(Leaf, item.*) orelse unreachable;
             }
-            const Leaf = comptime BindingLeaf(node, entries, path);
-            return interpreter.valueOf(Leaf, valueOn(ModelT, path, model)) orelse unreachable;
+            const Leaf = comptime BindingLeaf(node, entries, path, allow_arena);
+            return interpreter.valueOf(Leaf, valueOn(ModelT, path, model, ui.arena)) orelse unreachable;
         }
 
         // ----------------------------------------------- path resolution
 
         /// Comptime mirror of the interpreter's `resolveOn`: the type a
-        /// dotted path resolves to on T — struct fields, then zero-arg
-        /// methods — or null when the path names nothing `valueOf` can
-        /// represent (which is exactly when the interpreter fails).
-        fn OnType(comptime T: type, comptime path: []const u8) ?type {
+        /// dotted path resolves to on T — struct fields, zero-arg methods,
+        /// and (when `allow_arena`) arena-taking scalar methods — or null
+        /// when the path names nothing `valueOf` can represent (which is
+        /// exactly when the interpreter fails).
+        fn OnType(comptime T: type, comptime path: []const u8, comptime allow_arena: bool) ?type {
             comptime {
                 @setEvalBranchQuota(10_000);
                 if (@typeInfo(T) != .@"struct") return null;
@@ -836,7 +964,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     if (!std.mem.eql(u8, field.name, head)) continue;
                     if (tail_opt) |tail| {
                         if (@typeInfo(field.type) != .@"struct") return null;
-                        return OnType(field.type, tail);
+                        return OnType(field.type, tail, allow_arena);
                     }
                     if (!supportedValue(field.type)) return null;
                     return field.type;
@@ -851,6 +979,12 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                                     return fn_info.return_type.?;
                                 }
                             }
+                            if (allow_arena and interpreter.isArenaScalarFn(T, DeclType)) {
+                                if (std.mem.eql(u8, decl.name, head) and tail_opt == null) {
+                                    if (!supportedValue(fn_info.return_type.?)) return null;
+                                    return fn_info.return_type.?;
+                                }
+                            }
                         },
                         else => {},
                     }
@@ -860,14 +994,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         }
 
         /// Direct access for a path `OnType` resolved: field chains compile
-        /// to member access, method leaves to a direct call.
-        fn valueOn(comptime T: type, comptime path: []const u8, ptr: *const T) (OnType(T, path).?) {
+        /// to member access, method leaves to a direct call (arena-taking
+        /// leaves receive the build arena).
+        fn valueOn(comptime T: type, comptime path: []const u8, ptr: *const T, arena: std.mem.Allocator) (OnType(T, path, true).?) {
             const head = comptime interpreter.pathHead(path);
             if (comptime (interpreter.pathTail(path) != null)) {
                 const tail = comptime interpreter.pathTail(path).?;
-                return valueOn(@FieldType(T, head), tail, &@field(ptr, head));
+                return valueOn(@FieldType(T, head), tail, &@field(ptr, head), arena);
             }
             if (comptime hasField(T, head)) return @field(ptr, head);
+            if (comptime interpreter.isArenaScalarFn(T, @TypeOf(@field(T, head)))) {
+                return @field(T, head)(ptr, arena);
+            }
             return @field(T, head)(ptr);
         }
 
@@ -926,7 +1064,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 if (comptime (segment == .literal)) {
                     out.appendSlice(ui.arena, comptime segment.literal) catch return runtimeFail([]const u8, ui);
                 } else {
-                    const value = bindingValue(node, entries, comptime segment.binding, model, scope);
+                    const value = bindingValue(node, entries, comptime segment.binding, ui, model, scope, true);
                     interpreter.appendValue(&out, ui.arena, value) catch return runtimeFail([]const u8, ui);
                 }
             }

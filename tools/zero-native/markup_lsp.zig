@@ -298,6 +298,8 @@ pub const Server = struct {
                     for (if_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "if attribute", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "else")) {
                     // else takes no attributes
+                } else if (std.mem.eql(u8, element_name, "markdown")) {
+                    for (markdown_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markdown attribute", doc.doc);
                 } else {
                     for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
                     for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
@@ -596,6 +598,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "combobox", .doc = "Text entry with menu affordance; edits via on-input, open via on-press." },
     .{ .name = "skeleton", .doc = "Loading placeholder block; size with width and height." },
     .{ .name = "spinner", .doc = "Indeterminate progress spinner leaf." },
+    .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset) as widgets; source is one {binding}, links dispatch on-link, <details> blocks toggle via on-details + details-expanded." },
 };
 
 pub const structure_docs = [_]Doc{
@@ -653,6 +656,13 @@ pub const if_attr_docs = [_]Doc{
     .{ .name = "test", .doc = "if: one {binding} or one {a == b} equality." },
 };
 
+pub const markdown_attr_docs = [_]Doc{
+    .{ .name = "source", .doc = "markdown: one {binding} producing the markdown text (a []const u8 field or fn; arena fns work). Required." },
+    .{ .name = "on-link", .doc = "markdown: bare Msg tag dispatched on link press; its payload is the URL ([]const u8 variant)." },
+    .{ .name = "on-details", .doc = "markdown: bare Msg tag dispatched on a <details> summary press; its payload is the block index (usize variant)." },
+    .{ .name = "details-expanded", .doc = "markdown: {binding} naming a []const bool iterable of expanded flags, in details-block document order." },
+};
+
 pub const event_docs = [_]Doc{
     .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}." },
     .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}." },
@@ -671,6 +681,7 @@ pub fn attributeDoc(name: []const u8) ?[]const u8 {
     if (findDoc(&event_docs, name)) |doc| return doc;
     if (findDoc(&for_attr_docs, name)) |doc| return doc;
     if (findDoc(&template_attr_docs, name)) |doc| return doc;
+    if (findDoc(&markdown_attr_docs, name)) |doc| return doc;
     return findDoc(&if_attr_docs, name);
 }
 
@@ -809,6 +820,12 @@ test "analyze reports parser and validation findings with positions" {
     try testing.expectEqualStrings("unknown element", unknown.message);
     try testing.expectEqual(@as(usize, 2), unknown.line);
     try testing.expectEqual(@as(usize, 3), unknown.column);
+
+    // markdown misuse surfaces the validator's teaching messages.
+    const missing_source = analyze(arena, "<row>\n  <markdown on-link=\"open_url\" />\n</row>").?;
+    try testing.expectEqualStrings(ui_markup.markdown_source_message, missing_source.message);
+    try testing.expectEqual(@as(usize, 2), missing_source.line);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><markdown source=\"{body}\" /></row>"));
 }
 
 test "completionContext classifies positions" {
@@ -849,7 +866,7 @@ test "doc tables cover every known element, attribute, and event" {
     for (ui_markup.known_element_names) |name| {
         try testing.expect(elementDoc(name) != null);
     }
-    for ([_][]const u8{ "for", "if", "else", "template", "use" }) |name| {
+    for ([_][]const u8{ "for", "if", "else", "template", "use", "markdown" }) |name| {
         try testing.expect(elementDoc(name) != null);
     }
     for (ui_markup.known_option_attrs) |name| {
@@ -859,6 +876,10 @@ test "doc tables cover every known element, attribute, and event" {
         try testing.expect(attributeDoc(name) != null);
     }
     for ([_][]const u8{ "radius", "name", "args", "template" }) |name| {
+        try testing.expect(attributeDoc(name) != null);
+    }
+    // The markdown element's closed attribute set is documented.
+    for ([_][]const u8{ "source", "on-link", "on-details", "details-expanded" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

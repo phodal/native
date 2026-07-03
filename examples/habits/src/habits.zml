@@ -27,5 +27,5 @@
   <else>
     <alert text="No habits yet - add your first habit." grow="1" />
   </else>
-  <status-bar>{habit_count} habits · {totalDays} total days</status-bar>
+  <status-bar>{summaryLine}</status-bar>
 </column>

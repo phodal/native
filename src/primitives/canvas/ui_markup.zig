@@ -576,6 +576,13 @@ pub const unknown_color_token_message = "unknown color token: color style attrib
 pub const unknown_radius_token_message = "unknown radius token: radius takes a canvas RadiusTokens field name (sm, md, lg, xl)";
 
 pub const invalid_expression_message = "invalid expression: values are a literal, one {binding}, or one {a == b} equality - no other operators or calls (put logic in a model function)";
+pub const arena_scalar_equality_message = "arena-computed bindings cannot be compared with == - compare the source fields directly, or bind a pub fn returning bool";
+pub const markdown_source_message = "markdown requires a source attribute with one {binding} naming the markdown text (a []const u8 field or fn - arena fns work)";
+pub const markdown_children_message = "markdown takes no children or text content - the source binding provides the markdown";
+pub const markdown_attr_message = "unknown attribute for markdown - it takes source, on-link, on-details, and details-expanded";
+pub const markdown_on_link_message = "on-link takes a bare Msg tag whose payload is the pressed link URL (a []const u8 variant, like open_url: []const u8)";
+pub const markdown_on_details_message = "on-details takes a bare Msg tag whose payload is the details block index (a usize variant, like toggle_details: usize)";
+pub const markdown_details_expanded_message = "details-expanded takes one {binding} naming a []const bool iterable (a model field, pub decl, or fn - the same sources for each accepts)";
 pub const text_leaf_children_message = "this element takes text content only - wrap element children in a container (row, column, stack)";
 pub const text_leaf_single_run_message = "text elements take a single run of text";
 pub const table_row_parent_message = "table-row is only allowed inside a table (structure tags in between are fine)";
@@ -657,6 +664,52 @@ fn validateUse(document: MarkupDocument, node: MarkupNode, template_limit: usize
     return null;
 }
 
+/// `<markdown>` is a leaf whose content comes entirely from its `source`
+/// binding: no children, a closed attribute set, and bare message tags for
+/// `on-link`/`on-details` (the runtime supplies their payloads). Whether
+/// the bindings and tags exist on the concrete Model/Msg is the engines'
+/// check, exactly like ordinary bindings.
+fn validateMarkdown(node: MarkupNode) ?MarkupErrorInfo {
+    for (node.children) |child| {
+        return errorAt(child, markdown_children_message);
+    }
+    var has_source = false;
+    for (node.attrs) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "source")) {
+            has_source = true;
+            const expression = parseAttrExpression(attribute.value);
+            if (expression == null or expression.? != .binding) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_source_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "on-link")) {
+            const expression = parseMessageExpression(attribute.value);
+            if (expression == null or expression.?.payload.len != 0) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_on_link_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "on-details")) {
+            const expression = parseMessageExpression(attribute.value);
+            if (expression == null or expression.?.payload.len != 0) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_on_details_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "details-expanded")) {
+            const expression = parseAttrExpression(attribute.value);
+            if (expression == null or expression.? != .binding) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_details_expanded_message };
+            }
+            continue;
+        }
+        return .{ .line = attribute.line, .column = attribute.column, .message = markdown_attr_message };
+    }
+    if (!has_source) return errorAt(node, markdown_source_message);
+    return null;
+}
+
 /// `parent_element` is the name of the nearest enclosing element, looking
 /// through structure tags (`for`/`if`/`else`), or null at the view root and
 /// at a template body root.
@@ -666,6 +719,9 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
         .template_block => return errorAt(node, template_top_level_message),
         .use_block => return validateUse(document, node, template_limit),
         .element => {
+            if (std.mem.eql(u8, node.name, "markdown")) {
+                return validateMarkdown(node);
+            }
             if (!nameInList(node.name, &known_element_names)) {
                 return errorAt(node, "unknown element");
             }

@@ -55,6 +55,7 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `status-bar` | status bar | content only, no children |
 | `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
+| `markdown` | rendered markdown | leaf; `source` is one `{binding}` — see [Rich text](#rich-text-inline-spans-and-markdown) |
 
 A tab strip, a select trigger, and a table read the way you would guess:
 
@@ -119,6 +120,8 @@ A `<use>` is allowed anywhere an element is, and its attributes must match the t
 Attribute values take a literal or exactly one expression. There are three forms — `{path.to.value}` (a binding), `{a == b}` (equality, for selection states), and `msg` or `msg:{path}` on `on-*` attributes. Text content also interpolates: `{openCount} open`. There is no arithmetic, no other comparisons, and no function calls — anything smarter is a Zig model function you bind to.
 
 Bindings resolve against your model: struct fields, zero-argument public methods, and — for `for each` — slices, public array declarations, or functions taking `(*const Model)` or `(*const Model, std.mem.Allocator)` (the allocator variant is how filtered lists work). Enums resolve to their tag names.
+
+Scalar bindings take the allocator form too: `{summary}` binds `pub fn summary(m: *const Model, arena: std.mem.Allocator) []const u8` directly, formatting a derived display string into the build arena — it works in text interpolation, attribute values, and message payloads. The one exclusion is `{a == b}` equality, which rejects arena-computed values with a teaching error: compare the source fields, or bind a `bool`-returning method. For `<if test>`, prefer an explicit boolean predicate method (`test="{hasItems}"`) over numeric truthiness.
 
 ## Messages
 
@@ -199,6 +202,14 @@ Md.view(ui, issue.body, .{
 ```
 
 Malformed input degrades to plain text — the build fn never fails. Task-list checkboxes render as disabled (display-only) checkboxes, and `<details>` expansion is state the caller's model owns.
+
+In markup, the `<markdown>` element wires all of this declaratively:
+
+```html
+<markdown source="{issue_body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+```
+
+`source` (required) is one `{binding}` producing the markdown text — a string field, zero-arg method, or arena-taking method. `on-link` and `on-details` are bare `Msg` tags (the runtime supplies their payloads: the URL as `[]const u8`, the details index as `usize`), and `details-expanded` names a `[]const bool` iterable through the same sources `for each` accepts. Everything but `source` is optional — without the details wiring, `<details>` blocks render collapsed and inert. Both the interpreter and the comptime compiler implement the element identically.
 
 ## Tooling
 

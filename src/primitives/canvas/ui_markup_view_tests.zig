@@ -587,6 +587,396 @@ test "every built-in component is expressible in markup" {
     }
 }
 
+// ---------------------------------------------- arena-scalar binding fixture
+
+pub const Expense = struct {
+    id: u32,
+    cents: u32,
+
+    /// Arena-taking item method: formats into the build arena, so the
+    /// string lives exactly as long as the built tree.
+    pub fn amount(expense: *const Expense, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "${d}.{d:0>2}", .{ expense.cents / 100, expense.cents % 100 }) catch "";
+    }
+};
+
+pub const ExpensesMsg = union(enum) {
+    pick: []const u8,
+    refresh,
+};
+
+pub const ExpensesModel = struct {
+    expenses: []const Expense = &.{},
+    filter: []const u8 = "all",
+
+    /// Arena-taking scalar binding: `{summary}` binds this directly — no
+    /// one-element `<for>` needed.
+    pub fn summary(model: *const ExpensesModel, arena: std.mem.Allocator) []const u8 {
+        var total: u32 = 0;
+        for (model.expenses) |expense| total += expense.cents;
+        return std.fmt.allocPrint(arena, "{d} expenses · ${d}.{d:0>2}", .{ model.expenses.len, total / 100, total % 100 }) catch "";
+    }
+};
+
+/// Arena scalars everywhere a scalar binding works: text interpolation
+/// (mixed with other bindings), attribute values (label), message
+/// payloads, if-test truthiness, and item-level arena methods.
+pub const expenses_markup_source =
+    \\<column gap="8">
+    \\  <for each="expenses" key="id" as="e">
+    \\    <row gap="4">
+    \\      <text grow="1">{e.amount}</text>
+    \\      <button size="sm" on-press="pick:{e.amount}">Pick</button>
+    \\    </row>
+    \\  </for>
+    \\  <if test="{summary}">
+    \\    <badge>summarized</badge>
+    \\  </if>
+    \\  <text label="{summary}">{filter}: {summary}</text>
+    \\  <status-bar>{summary}</status-bar>
+    \\</column>
+;
+
+pub const ExpensesUi = canvas.Ui(ExpensesMsg);
+
+fn expenseRow(ui: *ExpensesUi, expense: *const Expense) ExpensesUi.Node {
+    return ui.row(.{ .gap = 4 }, .{
+        ui.text(.{ .grow = 1 }, expense.amount(ui.arena)),
+        ui.button(.{ .size = .sm, .on_press = ExpensesMsg{ .pick = expense.amount(ui.arena) } }, "Pick"),
+    });
+}
+
+fn expenseKey(expense: *const Expense) canvas.UiKey {
+    return canvas.uiKey(expense.id);
+}
+
+fn expensesBadge(ui: *ExpensesUi) ExpensesUi.Node {
+    var node = ui.el(.badge, .{}, .{});
+    node.widget.text = "summarized";
+    return node;
+}
+
+/// The hand-written equivalent of the arena-scalar markup: parity means
+/// both engines build exactly this.
+pub fn handExpensesView(ui: *ExpensesUi, model: *const ExpensesModel) ExpensesUi.Node {
+    return ui.column(.{ .gap = 8 }, .{
+        ui.each(model.expenses, expenseKey, expenseRow),
+        expensesBadge(ui),
+        ui.text(
+            .{ .semantics = .{ .label = model.summary(ui.arena) } },
+            ui.fmt("{s}: {s}", .{ model.filter, model.summary(ui.arena) }),
+        ),
+        ui.statusBar(.{}, model.summary(ui.arena)),
+    });
+}
+
+pub fn expensesTestModel() ExpensesModel {
+    return .{
+        .expenses = &[_]Expense{
+            .{ .id = 1, .cents = 1234 },
+            .{ .id = 2, .cents = 60 },
+        },
+    };
+}
+
+test "arena-taking scalar bindings work in interpolation, attributes, payloads, and if tests" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = expensesTestModel();
+    const ExpensesMarkup = markup_view.MarkupView(ExpensesModel, ExpensesMsg);
+
+    var view = try ExpensesMarkup.init(arena, expenses_markup_source);
+    var markup_ui = ExpensesUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = ExpensesUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handExpensesView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+
+    // The scalar binds directly — text content and interpolation.
+    try testing.expectEqualStrings("2 expenses · $12.94", findByKind(markup_tree.root, .status_bar).?.text);
+    const labeled = findByText(markup_tree.root, .text, "all: 2 expenses · $12.94").?;
+    // Attribute values (accessible label).
+    try testing.expectEqualStrings("2 expenses · $12.94", labeled.semantics.label);
+    // Item-level arena methods.
+    try testing.expect(findByText(markup_tree.root, .text, "$12.34") != null);
+    try testing.expect(findByText(markup_tree.root, .text, "$0.60") != null);
+    // If-test truthiness on an arena scalar (non-empty string).
+    try testing.expect(findByText(markup_tree.root, .badge, "summarized") != null);
+
+    // Message payloads carry the arena string; it lives while the tree
+    // does (the build arena outlives dispatch between rebuilds).
+    const pick_button = findByKind(markup_tree.root, .button).?;
+    try testing.expectEqualStrings("$12.34", markup_tree.msgForPointer(pick_button.id, .up).?.pick);
+}
+
+test "arena scalars are rejected inside equality with a teaching error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = expensesTestModel();
+    const ExpensesMarkup = markup_view.MarkupView(ExpensesModel, ExpensesMsg);
+
+    const cases = [_][]const u8{
+        "<column>\n  <badge selected=\"{summary == filter}\">x</badge>\n</column>",
+        "<column>\n  <badge selected=\"{filter == summary}\">x</badge>\n</column>",
+        "<column>\n  <if test=\"{summary == filter}\"><text>x</text></if>\n</column>",
+    };
+    for (cases) |source| {
+        var view = try ExpensesMarkup.init(arena, source);
+        var ui = ExpensesUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(canvas.ui_markup.arena_scalar_equality_message, view.diagnostic.message);
+        try testing.expect(view.diagnostic.line > 0);
+    }
+}
+
+test "string-producing bindings pass to templates as value args" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = expensesTestModel();
+    const ExpensesMarkup = markup_view.MarkupView(ExpensesModel, ExpensesMsg);
+
+    // Both a string field (filter) and an arena scalar (summary) bind as
+    // scalar value args — never as iterables of bytes.
+    const source =
+        "<template name=\"line\" args=\"title\"><text>{title}</text></template>\n" ++
+        "<column>\n" ++
+        "  <use template=\"line\" title=\"{filter}\" />\n" ++
+        "  <use template=\"line\" title=\"{summary}\" />\n" ++
+        "</column>";
+    var view = try ExpensesMarkup.init(arena, source);
+    var ui = ExpensesUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    try testing.expect(findByText(tree.root, .text, "all") != null);
+    try testing.expect(findByText(tree.root, .text, "2 expenses · $12.94") != null);
+}
+
+// --------------------------------------------------- markdown element fixture
+
+pub const DocMsg = union(enum) {
+    open_url: []const u8,
+    toggle_details: usize,
+    refresh,
+};
+
+pub const doc_body_source =
+    \\## Release
+    \\
+    \\Read [the guide](https://example.com/guide) before shipping.
+    \\
+    \\<details>
+    \\<summary>Rollout</summary>
+    \\
+    \\Enable for 5% of traffic.
+    \\
+    \\</details>
+;
+
+pub const DocModel = struct {
+    body: []const u8 = doc_body_source,
+    details_expanded: [2]bool = .{ false, false },
+    opened_count: usize = 0,
+
+    /// Arena scalar as a markdown source: composed at view time.
+    pub fn banner(model: *const DocModel, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "**{d}** links opened", .{model.opened_count}) catch "";
+    }
+};
+
+pub const doc_markup_source =
+    \\<column gap="8">
+    \\  <markdown source="{body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+    \\  <markdown source="{banner}" />
+    \\</column>
+;
+
+pub const DocUi = canvas.Ui(DocMsg);
+const DocMd = canvas.markdown.Markdown(DocMsg);
+
+/// The hand-written equivalent of the markdown markup: both engines must
+/// build exactly what direct `Md.view` calls produce.
+pub fn handDocView(ui: *DocUi, model: *const DocModel) DocUi.Node {
+    return ui.column(.{ .gap = 8 }, .{
+        DocMd.view(ui, model.body, .{
+            .on_link = DocUi.linkMsg(.open_url),
+            .on_details = DocMd.detailsMsg(.toggle_details),
+            .details_expanded = &model.details_expanded,
+        }),
+        DocMd.view(ui, model.banner(ui.arena), .{}),
+    });
+}
+
+pub fn findByRole(widget: canvas.Widget, role: canvas.WidgetRole) ?canvas.Widget {
+    if (widget.semantics.role == role) return widget;
+    for (widget.children) |child| {
+        if (findByRole(child, role)) |found| return found;
+    }
+    return null;
+}
+
+test "the markdown element builds the hand-written Md.view tree and dispatches links and details" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = DocModel{};
+    const DocMarkup = markup_view.MarkupView(DocModel, DocMsg);
+
+    var view = try DocMarkup.init(arena, doc_markup_source);
+    var markup_ui = DocUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = DocUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handDocView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+
+    // Link spans dispatch the typed on-link message carrying the URL.
+    const link = findByRole(markup_tree.root, .link).?;
+    try testing.expectEqualStrings("https://example.com/guide", markup_tree.msgForPointer(link.id, .up).?.open_url);
+
+    // Details summary dispatches on-details with the block index; the body
+    // is hidden while the caller-owned flag is false.
+    try testing.expect(findByText(markup_tree.root, .text, "Enable for 5% of traffic.") == null);
+    const summary_item = findByKind(markup_tree.root, .list_item).?;
+    try testing.expectEqual(@as(usize, 0), markup_tree.msgForPointer(summary_item.id, .up).?.toggle_details);
+
+    model.details_expanded[0] = true;
+    var expanded_ui = DocUi.init(arena);
+    const expanded_tree = try expanded_ui.finalize(try view.build(&expanded_ui, &model));
+    try testing.expect(findByText(expanded_tree.root, .text, "Enable for 5% of traffic.") != null);
+}
+
+test "markdown misuse fails the build with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = DocModel{};
+    const DocMarkup = markup_view.MarkupView(DocModel, DocMsg);
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            // Missing source entirely.
+            .source = "<column>\n  <markdown on-link=\"open_url\" />\n</column>",
+            .message = canvas.ui_markup.markdown_source_message,
+        },
+        .{
+            // A literal is not a source binding.
+            .source = "<column>\n  <markdown source=\"# hi\" />\n</column>",
+            .message = canvas.ui_markup.markdown_source_message,
+        },
+        .{
+            // Source binding must produce text (opened_count is a usize).
+            .source = "<column>\n  <markdown source=\"{opened_count}\" />\n</column>",
+            .message = canvas.ui_markup.markdown_source_message,
+        },
+        .{
+            // on-link tag must carry a []const u8 payload (refresh is void).
+            .source = "<column>\n  <markdown source=\"{body}\" on-link=\"refresh\" />\n</column>",
+            .message = canvas.ui_markup.markdown_on_link_message,
+        },
+        .{
+            // on-link takes a bare tag, never a payload binding.
+            .source = "<column>\n  <markdown source=\"{body}\" on-link=\"open_url:{body}\" />\n</column>",
+            .message = canvas.ui_markup.markdown_on_link_message,
+        },
+        .{
+            // on-details tag must carry a usize payload.
+            .source = "<column>\n  <markdown source=\"{body}\" on-details=\"refresh\" />\n</column>",
+            .message = canvas.ui_markup.markdown_on_details_message,
+        },
+        .{
+            // details-expanded must name a bool iterable (body is text).
+            .source = "<column>\n  <markdown source=\"{body}\" details-expanded=\"{body}\" />\n</column>",
+            .message = canvas.ui_markup.markdown_details_expanded_message,
+        },
+        .{
+            // Closed attribute set.
+            .source = "<column>\n  <markdown source=\"{body}\" gap=\"8\" />\n</column>",
+            .message = canvas.ui_markup.markdown_attr_message,
+        },
+        .{
+            // No children: the source binding provides the content.
+            .source = "<column>\n  <markdown source=\"{body}\">text</markdown>\n</column>",
+            .message = canvas.ui_markup.markdown_children_message,
+        },
+    };
+    for (cases) |case| {
+        var view = try DocMarkup.init(arena, case.source);
+        var ui = DocUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(case.message, view.diagnostic.message);
+        try testing.expect(view.diagnostic.line > 0);
+    }
+}
+
+test "markdown misuse is caught by the model-agnostic validator with positions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            .source = "<column>\n  <markdown on-link=\"open_url\" />\n</column>",
+            .message = canvas.ui_markup.markdown_source_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"# literal\" />\n</column>",
+            .message = canvas.ui_markup.markdown_source_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" on-link=\"open_url:{body}\" />\n</column>",
+            .message = canvas.ui_markup.markdown_on_link_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" on-details=\"toggle:{body}\" />\n</column>",
+            .message = canvas.ui_markup.markdown_on_details_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" details-expanded=\"literal\" />\n</column>",
+            .message = canvas.ui_markup.markdown_details_expanded_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" padding=\"8\" />\n</column>",
+            .message = canvas.ui_markup.markdown_attr_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\"><text>x</text></markdown>\n</column>",
+            .message = canvas.ui_markup.markdown_children_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = canvas.ui_markup.Parser.init(arena, case.source);
+        const info = canvas.ui_markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+        try testing.expect(info.column > 0);
+    }
+
+    // A correct markdown element validates cleanly.
+    var parser = canvas.ui_markup.Parser.init(arena, "<column><markdown source=\"{body}\" on-link=\"open_url\" on-details=\"toggle_details\" details-expanded=\"{flags}\" /></column>");
+    try testing.expectEqual(@as(?canvas.ui_markup.MarkupErrorInfo, null), canvas.ui_markup.validate(try parser.parse()));
+}
+
 // -------------------------------------------------- component catalog fixture
 
 pub const CatalogRow = struct {

@@ -77,6 +77,7 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `status-bar` | status bar | text leaf: content only, no children |
 | `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
+| `markdown` | rendered markdown subtree | leaf; `source` is one `{binding}` — see "Markdown in markup" |
 
 Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need ImageId asset references), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`).
 
@@ -122,6 +123,7 @@ A path like `{h.streak}` resolves left to right, starting from the model or a `f
 
 - struct fields bind directly: `{habit_count}`, `{h.done}`
 - zero-arg pub methods bind like fields: `{totalDays}` calls `pub fn totalDays(m: *const Model) usize`
+- arena-taking scalar methods bind the same way: `{summary}` calls `pub fn summary(m: *const Model, arena: std.mem.Allocator) []const u8` — format derived display strings straight into the build arena (it lives exactly one view build). Works anywhere a scalar binding does — text interpolation, attribute values, message payloads — EXCEPT inside `{a == b}` equality, which rejects arena-computed values with a teaching error: compare the source fields, or bind a `pub fn ... bool`
 - enums resolve to their tag name — so `{f}` renders "active", `{f == filter}` compares tags, and `set_filter:{f}` coerces the tag back into an enum payload
 - `for each="name"` resolves, in order: a Model field that is a slice/array, a pub array/slice decl (`pub const filters = [_]Filter{...}`), a pub fn `(*const Model) []const T`, or a pub fn `(*const Model, std.mem.Allocator) []const T` — the allocator variant is how filtered/derived lists work (allocate from the passed arena)
 - item methods work too: `{h.name}` may be a field or `pub fn name(h: *const Habit) []const u8`
@@ -169,23 +171,23 @@ pub fn visible(model: *const Model, arena: std.mem.Allocator) []const VisibleExp
 }
 ```
 
-A one-off formatted line that plain interpolation can't express (e.g. a currency total in a summary) is the same pattern with a single-element slice:
+A one-off formatted line that plain interpolation can't express (e.g. a currency total in a summary) is an arena-taking scalar fn bound directly:
 
 ```zig
-pub const SummaryLine = struct { text: []const u8 };
-pub fn summary(model: *const Model, arena: std.mem.Allocator) []const SummaryLine {
-    const text = std.fmt.allocPrint(arena, "{d} expenses · {s} total", .{
+pub fn summary(model: *const Model, arena: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(arena, "{d} expenses · {s} total", .{
         model.visibleCount(), formatCents(arena, model.visibleCents()),
-    }) catch return &.{};
-    const out = arena.alloc(SummaryLine, 1) catch return &.{};
-    out[0] = .{ .text = text };
-    return out;
+    }) catch "";
 }
 ```
 
 ```html
-<for each="summary" as="s"><status-bar>{s.text}</status-bar></for>
+<status-bar>{summary}</status-bar>
 ```
+
+(The old workaround — wrapping the string in a one-element slice and iterating it with `<for each="summary" as="s">` — is no longer needed; bind the fn directly. Item methods take the arena too: `{e.amount}` may call `pub fn amount(e: *const Expense, arena: std.mem.Allocator) []const u8`.)
+
+For `<if test>`, prefer an explicit boolean predicate method over numeric truthiness: `test="{hasHabits}"` with `pub fn hasHabits(m: *const Model) bool` states the condition; `test="{habit_count}"` works (non-zero is truthy, non-empty strings too) but hides it.
 
 ## Messages
 
@@ -333,6 +335,20 @@ Rules and semantics:
 
 Both engines implement templates: the interpreter expands at build time, `CompiledMarkupView` inlines each use at comptime with the identical result. See `examples/kanban/src/board.zml`.
 
+## Markdown in markup: `<markdown>`
+
+A leaf element that renders a markdown string (the GFM subset below) as ordinary widgets, wiring `zero_native.markdown` for you — both engines implement it identically:
+
+```html
+<markdown source="{issue_body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+```
+
+- `source` (required): one `{binding}` producing the markdown text — a `[]const u8` field, zero-arg fn, or arena-taking fn (compose the document into the build arena at view time).
+- `on-link` (optional): a BARE Msg tag — no `:{payload}` — whose payload is the pressed link URL; declare `open_url: []const u8` in `Msg`.
+- `on-details` (optional): a bare Msg tag whose payload is the `<details>` block's document-order index; declare `toggle_details: usize`.
+- `details-expanded` (optional): one `{binding}` naming a `[]const bool` iterable (a model field, pub decl, or fn — the same sources `for each` accepts); flags are read in details-block document order. Keep a bounded `details_expanded: [8]bool` in the model and toggle it in `update`.
+- No children, no text content, no other attributes (teaching errors point at misuse). Without the details wiring, `<details>` blocks render collapsed and inert; without `on-link`, links render styled but inert.
+
 ## Rich text: inline spans and markdown (Zig views)
 
 Mixed-style text inside ONE wrapped paragraph is a Zig-builder feature (markup exposure is planned; the grammar is currently frozen):
@@ -354,7 +370,7 @@ ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 - Link spans are hit-testable: they appear in automation snapshots as `role=link` named by their visible text, show a pointer cursor, and pressing one dispatches `on_link(span.link)` — declare `open_url: []const u8` in `Msg` and pair with `Ui.linkMsg(.open_url)`.
 - Capacities: `canvas.max_text_spans_per_paragraph` (32) spans per paragraph; overflow truncates deterministically.
 
-Markdown (GitHub-flavored subset) maps onto the same widgets:
+Markdown (GitHub-flavored subset) maps onto the same widgets. In markup use the `<markdown>` element above; from a Zig view call it directly:
 
 ```zig
 const Md = zero_native.markdown.Markdown(Msg);

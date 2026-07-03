@@ -101,6 +101,14 @@ pub const Model = struct {
         return total;
     }
 
+    /// Arena-taking scalar binding: `{summaryLine}` formats the status
+    /// line into the build arena on every rebuild — derived, never stored.
+    pub fn summaryLine(model: *const Model, arena: std.mem.Allocator) []const u8 {
+        return std.fmt.allocPrint(arena, "{d} habits · {d} total days", .{
+            model.habit_count, model.totalDays(),
+        }) catch "";
+    }
+
     /// Habits under the current filter, copied into the build arena for
     /// the view pass. `active` means the streak is non-zero.
     pub fn visible(model: *const Model, arena: std.mem.Allocator) []const Habit {

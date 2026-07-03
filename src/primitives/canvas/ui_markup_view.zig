@@ -74,7 +74,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// Build the view for the current model. Compatible with the
         /// hand-written `view(ui, model)` shape.
         pub fn build(self: *Self, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
-            var scope = Scope{ .model = model };
+            var scope = Scope{ .model = model, .arena = ui.arena };
             return self.buildNode(ui, &scope, self.document.root);
         }
 
@@ -104,6 +104,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         const Scope = struct {
             model: *const ModelT,
+            /// The build arena, threaded to arena-taking scalar binding fns
+            /// (`pub fn summary(m: *const Model, arena: std.mem.Allocator)
+            /// []const u8`). Strings they produce live exactly as long as
+            /// the built tree.
+            arena: std.mem.Allocator,
             entries: [max_scope_depth]ScopeEntry = undefined,
             len: usize = 0,
             /// Bindings resolve entries[floor..len] then the model: a
@@ -138,6 +143,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildElement(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (std.mem.eql(u8, node.name, "markdown")) {
+                return self.buildMarkdown(ui, scope, node);
+            }
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
@@ -266,6 +274,110 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             return null;
         }
 
+        // ------------------------------------------------------- markdown
+
+        const Md = canvas.markdown.Markdown(MsgT);
+
+        /// `<markdown source="{body}" on-link="open_url"
+        /// on-details="toggle_details" details-expanded="{flags}" />`:
+        /// a leaf that renders its source binding through
+        /// `zero_native.markdown.Markdown(Msg).view`. Only `source` is
+        /// required; without `on-details`/`details-expanded` the details
+        /// blocks render collapsed and inert (Md.view's null defaults).
+        fn buildMarkdown(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            if (node.children.len != 0) {
+                return self.failNode(node.children[0], markup.markdown_children_message);
+            }
+            var options: Md.Options = .{};
+            var source_text: ?[]const u8 = null;
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                if (std.mem.eql(u8, attribute.name, "source")) {
+                    const expression = markup.parseAttrExpression(attribute.value) orelse {
+                        return self.failNode(node, markup.markdown_source_message);
+                    };
+                    if (expression != .binding) return self.failNode(node, markup.markdown_source_message);
+                    const value = try self.evalBinding(scope, node, expression.binding, true);
+                    source_text = switch (value) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.markdown_source_message),
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "on-link")) {
+                    const expression = markup.parseMessageExpression(attribute.value) orelse {
+                        return self.failNode(node, markup.markdown_on_link_message);
+                    };
+                    if (expression.payload.len != 0) return self.failNode(node, markup.markdown_on_link_message);
+                    options.on_link = linkConstructor(expression.tag) orelse {
+                        return self.failNode(node, markup.markdown_on_link_message);
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "on-details")) {
+                    const expression = markup.parseMessageExpression(attribute.value) orelse {
+                        return self.failNode(node, markup.markdown_on_details_message);
+                    };
+                    if (expression.payload.len != 0) return self.failNode(node, markup.markdown_on_details_message);
+                    options.on_details = detailsConstructor(expression.tag) orelse {
+                        return self.failNode(node, markup.markdown_on_details_message);
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "details-expanded")) {
+                    const expression = markup.parseAttrExpression(attribute.value) orelse {
+                        return self.failNode(node, markup.markdown_details_expanded_message);
+                    };
+                    if (expression != .binding) return self.failNode(node, markup.markdown_details_expanded_message);
+                    options.details_expanded = try self.boolItems(ui, scope, node, expression.binding);
+                    continue;
+                }
+                return self.failNode(node, markup.markdown_attr_message);
+            }
+            const source_value = source_text orelse return self.failNode(node, markup.markdown_source_message);
+            return Md.view(ui, source_value, options);
+        }
+
+        /// Msg constructor for markdown link presses: the tag must name a
+        /// `[]const u8` variant (mirrors `Ui.linkMsg`).
+        fn linkConstructor(tag: []const u8) ?Ui.LinkMsgFn {
+            inline for (@typeInfo(MsgT).@"union".fields) |field| {
+                if (field.type == []const u8) {
+                    if (std.mem.eql(u8, field.name, tag)) {
+                        return Ui.linkMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Msg constructor for markdown details toggles: the tag must name
+        /// a `usize` variant (mirrors `Markdown(Msg).detailsMsg`).
+        fn detailsConstructor(tag: []const u8) ?*const fn (index: usize) MsgT {
+            inline for (@typeInfo(MsgT).@"union".fields) |field| {
+                if (field.type == usize) {
+                    if (std.mem.eql(u8, field.name, tag)) {
+                        return Md.detailsMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Resolve a `details-expanded` binding to a bool slice through the
+        /// same sources `for each` accepts (scope slice args shadow model
+        /// fields, pub decls, and fns).
+        fn boolItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const bool {
+            inline for (item_types, 0..) |Item, type_index| {
+                if (comptime (Item == bool)) {
+                    if (try self.iterateItems(ui, bool, type_index, scope, path)) |items| {
+                        return items;
+                    }
+                }
+            }
+            return self.failText(node, markup.markdown_details_expanded_message);
+        }
+
         // ------------------------------------------------------ templates
 
         /// Build a `<use>` site: evaluate the template args against the
@@ -346,12 +458,18 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     }
                 } else {
                     inline for (item_types, 0..) |Item, type_index| {
-                        if (try self.iterateItems(ui, Item, type_index, scope, path)) |items| {
-                            return .{ .slice = .{
-                                .type_index = type_index,
-                                .ptr = @ptrCast(items.ptr),
-                                .len = items.len,
-                            } };
+                        // Strings stay scalars: a binding producing
+                        // []const u8 (a field, zero-arg fn, or arena fn)
+                        // binds as a value arg, never as an iterable of
+                        // bytes.
+                        if (comptime (Item != u8)) {
+                            if (try self.iterateItems(ui, Item, type_index, scope, path)) |items| {
+                                return .{ .slice = .{
+                                    .type_index = type_index,
+                                    .ptr = @ptrCast(items.ptr),
+                                    .len = items.len,
+                                } };
+                            }
                         }
                     }
                 }
@@ -365,7 +483,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn itemKey(self: *Self, comptime Item: type, item: *const Item, node: markup.MarkupNode, field: []const u8) BuildError!canvas.UiKey {
-            const value = resolveOn(Item, item, field) orelse {
+            // Keys stay identity-stable data: fields and zero-arg methods
+            // only, never arena-computed values.
+            const value = resolveOn(Item, item, field, null) orelse {
                 return self.failKey(node, "key does not name a field on the item");
             };
             return switch (value) {
@@ -532,7 +652,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (expression.payload.len == 0) {
                         return self.failMsg(node, "message requires a payload");
                     }
-                    const value = try self.evalBinding(scope, node, expression.payload);
+                    const value = try self.evalBinding(scope, node, expression.payload, true);
                     return @unionInit(MsgT, field.name, try self.coerce(field.type, node, value));
                 }
             }
@@ -587,16 +707,24 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             };
             return switch (expression) {
                 .literal => |text| literalValue(text),
-                .binding => |path| try self.evalBinding(scope, node, path),
+                .binding => |path| try self.evalBinding(scope, node, path, true),
+                // Arena-computed bindings are excluded from equality on
+                // purpose: comparing freshly formatted strings is a smell —
+                // compare the source fields, or bind a bool-returning fn.
                 .equals => |sides| .{ .boolean = Value.eql(
-                    try self.evalBinding(scope, node, sides.left),
-                    try self.evalBinding(scope, node, sides.right),
+                    try self.evalBinding(scope, node, sides.left, false),
+                    try self.evalBinding(scope, node, sides.right, false),
                 ) },
             };
         }
 
-        fn evalBinding(self: *Self, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError!Value {
+        /// Resolve a binding path to a `Value`. `allow_arena` gates the
+        /// arena-taking scalar fn form (allowed everywhere a scalar binding
+        /// is — text interpolation, attribute values, message payloads —
+        /// except inside `{a == b}` equality).
+        fn evalBinding(self: *Self, scope: *Scope, node: markup.MarkupNode, path: []const u8, allow_arena: bool) BuildError!Value {
             const head = pathHead(path);
+            const arena: ?std.mem.Allocator = if (allow_arena) scope.arena else null;
             if (scope.lookup(head)) |entry| {
                 switch (entry.payload) {
                     .item => |item_entry| {
@@ -604,7 +732,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                             if (item_entry.type_index == type_index) {
                                 const item: *const Item = @ptrCast(@alignCast(item_entry.ptr));
                                 if (pathTail(path)) |tail| {
-                                    return resolveOn(Item, item, tail) orelse self.failValue(node, "binding does not name a field on the loop item");
+                                    if (resolveOn(Item, item, tail, arena)) |value| return value;
+                                    if (!allow_arena and resolveOn(Item, item, tail, scope.arena) != null) {
+                                        return self.failValue(node, markup.arena_scalar_equality_message);
+                                    }
+                                    return self.failValue(node, "binding does not name a field on the loop item");
                                 }
                                 return valueOf(Item, item.*) orelse self.failValue(node, "loop items of this type cannot be used as values");
                             }
@@ -620,7 +752,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .slice => return self.failValue(node, "slice-valued template args are only usable with for each"),
                 }
             }
-            return resolveOn(ModelT, scope.model, path) orelse self.failValue(node, "binding does not name a model field");
+            if (resolveOn(ModelT, scope.model, path, arena)) |value| return value;
+            if (!allow_arena and resolveOn(ModelT, scope.model, path, scope.arena) != null) {
+                return self.failValue(node, markup.arena_scalar_equality_message);
+            }
+            return self.failValue(node, "binding does not name a model field");
         }
 
         fn interpolatedText(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError![]const u8 {
@@ -640,7 +776,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     return self.failText(node, "unterminated interpolation");
                 };
                 const path = std.mem.trim(u8, rest[open + 1 .. close], " ");
-                const value = try self.evalBinding(scope, node, path);
+                const value = try self.evalBinding(scope, node, path, true);
                 try appendValue(&out, ui.arena, value);
                 rest = rest[close + 1 ..];
             }
@@ -795,10 +931,12 @@ pub fn asSlice(comptime Item: type, value: anytype) []const Item {
     };
 }
 
-/// Resolve a dotted path on a value: struct fields, zero-arg methods, and
-/// bounded model conventions (a `field_count`-style pair is the author's
-/// job; the resolver only follows what exists).
-fn resolveOn(comptime T: type, value: *const T, path: []const u8) ?Value {
+/// Resolve a dotted path on a value: struct fields, zero-arg methods,
+/// arena-taking methods (`fn (*const T, std.mem.Allocator) V`, skipped
+/// when `arena` is null), and bounded model conventions (a
+/// `field_count`-style pair is the author's job; the resolver only follows
+/// what exists).
+fn resolveOn(comptime T: type, value: *const T, path: []const u8, arena: ?std.mem.Allocator) ?Value {
     const head = pathHead(path);
     const tail = pathTail(path);
     switch (@typeInfo(T)) {
@@ -806,7 +944,7 @@ fn resolveOn(comptime T: type, value: *const T, path: []const u8) ?Value {
             inline for (@typeInfo(T).@"struct".fields) |field| {
                 if (std.mem.eql(u8, field.name, head)) {
                     if (tail) |rest| {
-                        return resolveNested(field.type, &@field(value, field.name), rest);
+                        return resolveNested(field.type, &@field(value, field.name), rest, arena);
                     }
                     return valueOf(field.type, @field(value, field.name));
                 }
@@ -820,6 +958,12 @@ fn resolveOn(comptime T: type, value: *const T, path: []const u8) ?Value {
                                 return valueOf(info.return_type.?, @field(T, decl.name)(value));
                             }
                         }
+                        if (comptime isArenaScalarFn(T, DeclType)) {
+                            if (std.mem.eql(u8, decl.name, head) and tail == null) {
+                                const allocator = arena orelse return null;
+                                return valueOf(info.return_type.?, @field(T, decl.name)(value, allocator));
+                            }
+                        }
                     },
                     else => {},
                 }
@@ -830,9 +974,23 @@ fn resolveOn(comptime T: type, value: *const T, path: []const u8) ?Value {
     }
 }
 
-fn resolveNested(comptime T: type, ptr: anytype, path: []const u8) ?Value {
+/// An arena-taking scalar binding fn: `fn (self: *const T,
+/// arena: std.mem.Allocator) V`. The `for each` arena form returns a slice
+/// of items; this form returns one value (typically a formatted
+/// `[]const u8` allocated from the arena).
+pub fn isArenaScalarFn(comptime T: type, comptime DeclType: type) bool {
+    const info = switch (@typeInfo(DeclType)) {
+        .@"fn" => |fn_info| fn_info,
+        else => return false,
+    };
+    if (info.params.len != 2 or info.return_type == null) return false;
+    if (info.params[0].type != *const T) return false;
+    return info.params[1].type == std.mem.Allocator;
+}
+
+fn resolveNested(comptime T: type, ptr: anytype, path: []const u8, arena: ?std.mem.Allocator) ?Value {
     return switch (@typeInfo(T)) {
-        .@"struct" => resolveOn(T, ptr, path),
+        .@"struct" => resolveOn(T, ptr, path, arena),
         else => null,
     };
 }

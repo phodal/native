@@ -90,6 +90,7 @@ All notable changes to zero-native will be documented in this file.
 
 - **GTK shell**: initial window allocation now reflows shell views, and overlay z-order lets native overlays receive pointer input.
 - **Linux startup**: the runtime is heap-allocated in all runners, fixing a startup crash under default stack limits.
+- **Scaffolded web-frontend runners**: `zero-native init --frontend next|vite|react|svelte|vue` generated a `src/runner.zig` that constructed the multi-megabyte `Runtime` by value on the stack — a guaranteed stack overflow at startup now that the runtime carries the raised node budgets. All four generated run paths (null, macOS, Linux, Windows) heap-allocate via `page_allocator.create` + `Runtime.initAt`, matching the framework runner.
 - **Docs site security**: `next` and `postcss` advisories patched.
 
 ### Contributors

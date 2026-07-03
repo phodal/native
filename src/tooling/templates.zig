@@ -1599,7 +1599,11 @@ fn runnerZig() []const u8 {
     \\    const menus = options.resolvedMenus(&menu_storage);
     \\    var command_storage: CommandStorage = .{};
     \\    const commands = options.resolvedCommands(&command_storage);
-    \\    var runtime = zero_native.Runtime.init(.{
+    \\    // The Runtime is multi-megabyte; default thread stacks overflow on a
+    \\    // stack instance, so construct it on the heap.
+    \\    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    \\    defer std.heap.page_allocator.destroy(runtime);
+    \\    zero_native.Runtime.initAt(runtime, .{
     \\        .platform = null_platform.platform(),
     \\        .trace_sink = runtime_trace_sink,
     \\        .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -1644,7 +1648,11 @@ fn runnerZig() []const u8 {
     \\    const menus = options.resolvedMenus(&menu_storage);
     \\    var command_storage: CommandStorage = .{};
     \\    const commands = options.resolvedCommands(&command_storage);
-    \\    var runtime = zero_native.Runtime.init(.{
+    \\    // The Runtime is multi-megabyte; default thread stacks overflow on a
+    \\    // stack instance, so construct it on the heap.
+    \\    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    \\    defer std.heap.page_allocator.destroy(runtime);
+    \\    zero_native.Runtime.initAt(runtime, .{
     \\        .platform = mac_platform.platform(),
     \\        .trace_sink = runtime_trace_sink,
     \\        .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -1689,7 +1697,11 @@ fn runnerZig() []const u8 {
     \\    const menus = options.resolvedMenus(&menu_storage);
     \\    var command_storage: CommandStorage = .{};
     \\    const commands = options.resolvedCommands(&command_storage);
-    \\    var runtime = zero_native.Runtime.init(.{
+    \\    // The Runtime is multi-megabyte; default thread stacks overflow on a
+    \\    // stack instance, so construct it on the heap.
+    \\    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    \\    defer std.heap.page_allocator.destroy(runtime);
+    \\    zero_native.Runtime.initAt(runtime, .{
     \\        .platform = linux_platform.platform(),
     \\        .trace_sink = runtime_trace_sink,
     \\        .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -1734,7 +1746,11 @@ fn runnerZig() []const u8 {
     \\    const menus = options.resolvedMenus(&menu_storage);
     \\    var command_storage: CommandStorage = .{};
     \\    const commands = options.resolvedCommands(&command_storage);
-    \\    var runtime = zero_native.Runtime.init(.{
+    \\    // The Runtime is multi-megabyte; default thread stacks overflow on a
+    \\    // stack instance, so construct it on the heap.
+    \\    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    \\    defer std.heap.page_allocator.destroy(runtime);
+    \\    zero_native.Runtime.initAt(runtime, .{
     \\        .platform = windows_platform.platform(),
     \\        .trace_sink = runtime_trace_sink,
     \\        .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -2723,6 +2739,12 @@ test "writeDefaultApp emits Vite project files" {
     try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "fn manifestWindowOptions") != null);
     try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "info.windows = windows") != null);
     try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "for (restored_windows, 0..)") != null);
+    // The Runtime is multi-megabyte; the generated runner must heap-allocate
+    // it and construct in place, never build it by value on the stack.
+    try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "std.heap.page_allocator.create(zero_native.Runtime)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "defer std.heap.page_allocator.destroy(runtime)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "zero_native.Runtime.initAt(runtime, .{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "Runtime.init(.{") == null);
     try std.testing.expect(std.mem.indexOf(u8, package_json_text, "\"vite\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, main_js_text, "window.zero") != null);
 

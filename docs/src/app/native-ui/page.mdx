@@ -155,7 +155,21 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
 The process runs on a worker thread the runtime owns; results post to a bounded queue, the platform loop is nudged, and Msgs dispatch on the loop thread — the model is never touched off-thread. Views never spawn: a button dispatches a Msg, and that Msg's update arm spawns.
 
-Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn requests and feed synthetic lines and exits back deterministically — see `examples/effects-probe`.
+HTTP requests ride the same channel: `fx.fetch` runs one request on a worker thread and delivers its terminal outcome as exactly one Msg — a real response (any status, non-2xx included), a classified failure (`rejected`, `connect_failed`, `tls_failed`, `protocol_failed`, `timed_out`), or `cancelled`:
+
+```zig
+.load => fx.fetch(.{
+    .key = search_key,                                 // fetches share the spawn slots and key space
+    .url = "https://api.example.com/search?q=zig",
+    .on_response = Effects.responseMsg(.fetched),      // Msg{ .fetched = zero_native.EffectResponse }
+}),
+.stop => fx.cancel(search_key),
+.fetched => |response| model.recordResults(response),  // copy response.body — the slice dies with this call
+```
+
+Response bodies are binary-safe and bounded (256 KiB; longer arrives cut with `truncated = true`), the whole exchange honors a per-fetch timeout (default 30 s), and cancelling a fetch delivers exactly one `cancelled` Msg with nothing after it.
+
+Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, and a fetch that cannot run delivers a response Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn and fetch requests and feed synthetic lines, exits, and responses back deterministically — see `examples/effects-probe`.
 
 ## Rich text: inline spans and markdown
 

@@ -207,7 +207,7 @@ draft: canvas.TextBuffer(64) = .{},                   // model field: text + sel
 
 See `examples/ui-inbox` for the complete pattern.
 
-## Effects: subprocesses from update
+## Effects: subprocesses and HTTP from update
 
 `update` can take a third parameter — the effects channel — by declaring `.update_fx` instead of `.update` (existing two-argument apps are untouched; set exactly one):
 
@@ -250,7 +250,36 @@ Rules that keep this honest:
 - After `fx.cancel(key)` returns, no further `on_line` Msgs for that spawn arrive; exactly one `.cancelled` exit follows. The process is killed and reaped — no zombies. Streaming a chat agent's stdout for minutes and cancelling mid-stream is the designed-for case.
 - Overflow is never silent: a full completion queue drops lines but the next delivered line's `dropped_before` and the exit's `dropped_lines` carry the count; over-long lines arrive truncated with `truncated = true`. Capacities: 16 in-flight effects, 4 KiB per line, 64 queued completions.
 
-Test effects with the fake executor — deterministic, no processes:
+`fx.fetch` runs one HTTP(S) request on a worker thread and delivers its terminal outcome — response, classified failure, timeout, or cancel — as exactly ONE Msg:
+
+```zig
+pub const Msg = union(enum) {
+    load,
+    stop,
+    fetched: zero_native.EffectResponse,   // the fixed payload type
+};
+
+.load => fx.fetch(.{
+    .key = search_key,                     // same key space + 16 slots as spawns
+    .method = .POST,                       // std.http.Method; default .GET
+    .url = "https://api.example.com/run",  // http:// or https:// only
+    .headers = &.{.{ .name = "authorization", .value = "Bearer abc" }},
+    .body = "{\"q\":\"zig\"}",             // optional request payload
+    .timeout_ms = 10_000,                  // whole exchange; default 30 s
+    .on_response = Effects.responseMsg(.fetched),
+}),
+.stop => fx.cancel(search_key),
+.fetched => |response| model.record(response),  // COPY response.body — drain
+                                                // scratch, dead after this call
+```
+
+Fetch rules:
+
+- Exactly one `on_response` Msg per fetch, always terminal. `response.outcome` says what happened: `.ok` (real HTTP status in `.status` — non-2xx included; an HTTP-level error is still a delivered response), `.rejected` (never started: slots busy, duplicate active key, malformed URL or non-http(s) scheme, over-capacity URL/headers/payload), `.connect_failed` (DNS or TCP), `.tls_failed`, `.protocol_failed` (mid-exchange), `.timed_out`, `.cancelled`.
+- `response.body` is binary-safe bytes (zeros and high bits round-trip). Bodies over 256 KiB arrive cut at that bound with `truncated = true` — never silently. Capacities: 2 KiB URLs, 8 extra headers (1 KiB of names+values total), 64 KiB request payloads.
+- `fx.cancel(key)` keeps the spawn promise: exactly one `.cancelled` response Msg, nothing for that fetch after it.
+
+Test effects with the fake executor — deterministic, no processes, no network:
 
 ```zig
 app_state.effects.executor = .fake;             // before dispatching
@@ -259,6 +288,10 @@ const request = app_state.effects.pendingSpawnAt(0).?;   // assert key/argv
 try app_state.effects.feedLine(stream_key, "stream line 1");
 try app_state.effects.feedExit(stream_key, 0);
 try harness.runtime.dispatchPlatformEvent(app, .wake);   // drain -> update
+
+const fetch_req = app_state.effects.pendingFetchAt(0).?; // assert key/method/url/headers/body
+try app_state.effects.feedResponse(search_key, 200, "{\"ok\":true}");
+try harness.runtime.dispatchPlatformEvent(app, .wake);   // Msg{ .fetched = ... }
 ```
 
 The `.wake` platform event is how live platforms marshal worker completions onto the loop thread (macOS main-queue dispatch, GTK `g_idle_add`, Win32 `PostMessage`); dispatching it in tests exercises the same drain path. See `examples/effects-probe` for the complete pattern, including the live cancel flow.

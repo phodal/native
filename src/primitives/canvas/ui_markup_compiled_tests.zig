@@ -521,6 +521,18 @@ test "compiled markdown element matches the interpreter and the hand-written Md.
         compiled.msgForPointer(link.id, .up).?.open_url,
     );
 
+    // Autolink parity: issue refs through the issue-link-base binding and
+    // bare URLs resolve to the same targets in both engines.
+    try testing.expectEqualStrings("ghissue://12", fixture.findSpanLink(compiled.root, "#12").?);
+    try testing.expectEqualStrings(
+        fixture.findSpanLink(interpreted.root, "#12").?,
+        fixture.findSpanLink(compiled.root, "#12").?,
+    );
+    try testing.expectEqualStrings(
+        fixture.findSpanLink(interpreted.root, "https://status.example.com").?,
+        fixture.findSpanLink(compiled.root, "https://status.example.com").?,
+    );
+
     // Details dispatch parity: the summary press carries the block index.
     const summary_item = fixture.findByKind(compiled.root, .list_item).?;
     try testing.expectEqual(@as(usize, 0), compiled.msgForPointer(summary_item.id, .up).?.toggle_details);
@@ -624,4 +636,41 @@ test "compiled template expansion keeps ids per use site and re-resolves tokens"
     const dark_interpreted = try interpretTemplates(arena, &model, dark_tokens);
     try expectSameTree(fixture.TemplateMsg, dark_interpreted, dark);
     try expectSameStyles(dark_interpreted.root, dark.root);
+}
+
+// ------------------------------------------------------ text wrap parity
+
+const WrapUi = fixture.WrapUi;
+const WrapInterpreter = markup_view.MarkupView(fixture.WrapModel, fixture.WrapMsg);
+const WrapCompiled = canvas.CompiledMarkupView(fixture.WrapModel, fixture.WrapMsg, fixture.wrap_markup_source);
+
+test "compiled wrap attribute matches the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.WrapModel{};
+
+    var view = try WrapInterpreter.init(arena, fixture.wrap_markup_source);
+    var interpreted_ui = WrapUi.init(arena);
+    const interpreted = try interpreted_ui.finalize(try view.build(&interpreted_ui, &model));
+
+    var compiled_ui = WrapUi.init(arena);
+    const compiled = try compiled_ui.finalize(WrapCompiled.build(&compiled_ui, &model));
+
+    var hand_ui = WrapUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handWrapView(&hand_ui, &model));
+
+    try expectSameTree(fixture.WrapMsg, hand, interpreted);
+    try expectSameTree(fixture.WrapMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // Both engines produce the single-span paragraph conversion.
+    const compiled_wrapped = compiled.root.children[0];
+    try testing.expectEqual(@as(usize, 1), compiled_wrapped.spans.len);
+    try testing.expectEqualStrings(model.message, compiled_wrapped.text);
+    try testing.expectEqual(@as(usize, 0), compiled.root.children[1].spans.len);
+    // The definite width lands in both bounds.
+    try testing.expectEqual(@as(f32, 360), compiled.root.layout.min_size.width);
+    try testing.expectEqual(@as(f32, 360), compiled.root.layout.max_size.width);
 }

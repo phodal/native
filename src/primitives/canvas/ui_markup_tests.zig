@@ -284,3 +284,40 @@ test "a handler on a non-hit-target element reports the attribute position" {
     var fixed_parser = markup.Parser.init(arena_state.allocator(), fixed);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try fixed_parser.parse()));
 }
+
+test "wrap and issue-link-base validate as vocabulary with teaching errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Valid: wrap on a text leaf, issue-link-base as a literal prefix or
+    // one binding.
+    const valid_sources = [_][]const u8{
+        "<column>\n  <text wrap=\"true\">long message</text>\n</column>",
+        "<column>\n  <markdown source=\"{body}\" issue-link-base=\"ghissue://\" />\n</column>",
+        "<column>\n  <markdown source=\"{body}\" issue-link-base=\"{issue_base}\" />\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    // issue-link-base rejects equality expressions with the teaching
+    // message; the closed markdown attr set names it.
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" issue-link-base=\"{a == b}\" />\n</column>",
+            .message = markup.markdown_issue_link_base_message,
+        },
+        .{
+            .source = "<column>\n  <markdown source=\"{body}\" wrap=\"true\" />\n</column>",
+            .message = markup.markdown_attr_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}

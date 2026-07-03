@@ -821,6 +821,8 @@ pub const doc_body_source =
     \\
     \\Read [the guide](https://example.com/guide) before shipping.
     \\
+    \\Tracked in #12, see https://status.example.com.
+    \\
     \\<details>
     \\<summary>Rollout</summary>
     \\
@@ -833,6 +835,7 @@ pub const DocModel = struct {
     body: []const u8 = doc_body_source,
     details_expanded: [2]bool = .{ false, false },
     opened_count: usize = 0,
+    issue_base: []const u8 = "ghissue://",
 
     /// Arena scalar as a markdown source: composed at view time.
     pub fn banner(model: *const DocModel, arena: std.mem.Allocator) []const u8 {
@@ -842,7 +845,7 @@ pub const DocModel = struct {
 
 pub const doc_markup_source =
     \\<column gap="8">
-    \\  <markdown source="{body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+    \\  <markdown source="{body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" issue-link-base="{issue_base}" />
     \\  <markdown source="{banner}" />
     \\</column>
 ;
@@ -858,9 +861,22 @@ pub fn handDocView(ui: *DocUi, model: *const DocModel) DocUi.Node {
             .on_link = DocUi.linkMsg(.open_url),
             .on_details = DocMd.detailsMsg(.toggle_details),
             .details_expanded = &model.details_expanded,
+            .issue_link_base = model.issue_base,
         }),
         DocMd.view(ui, model.banner(ui.arena), .{}),
     });
+}
+
+/// The link payload of the span whose text is exactly `span_text`, found
+/// anywhere in the subtree; null when no such linked span exists.
+pub fn findSpanLink(widget: canvas.Widget, span_text: []const u8) ?[]const u8 {
+    for (widget.spans) |span| {
+        if (span.link.len > 0 and std.mem.eql(u8, span.text, span_text)) return span.link;
+    }
+    for (widget.children) |child| {
+        if (findSpanLink(child, span_text)) |link| return link;
+    }
+    return null;
 }
 
 pub fn findByRole(widget: canvas.Widget, role: canvas.WidgetRole) ?canvas.Widget {
@@ -898,6 +914,11 @@ test "the markdown element builds the hand-written Md.view tree and dispatches l
     // Link spans dispatch the typed on-link message carrying the URL.
     const link = findByRole(markup_tree.root, .link).?;
     try testing.expectEqualStrings("https://example.com/guide", markup_tree.msgForPointer(link.id, .up).?.open_url);
+
+    // Issue refs linkify through the issue-link-base binding, and bare
+    // URLs autolink (trailing punctuation trimmed).
+    try testing.expectEqualStrings("ghissue://12", findSpanLink(markup_tree.root, "#12").?);
+    try testing.expectEqualStrings("https://status.example.com", findSpanLink(markup_tree.root, "https://status.example.com").?);
 
     // Details summary dispatches on-details with the block index; the body
     // is hidden while the caller-owned flag is false.
@@ -1362,4 +1383,65 @@ test "new element misuse is validated with positions and teaching messages" {
     // Structure tags between a table and its rows are fine.
     var parser = canvas.ui_markup.Parser.init(arena, "<table><for each=\"rows\" as=\"r\"><table-row><table-cell>{r.name}</table-cell></table-row></for></table>");
     try testing.expectEqual(@as(?canvas.ui_markup.MarkupErrorInfo, null), canvas.ui_markup.validate(try parser.parse()));
+}
+
+// --------------------------------------------------------- text wrapping
+
+pub const WrapMsg = union(enum) { refresh };
+
+pub const WrapModel = struct {
+    message: []const u8 = "A long error message that should wrap onto several lines instead of clipping on one",
+};
+
+pub const wrap_markup_source =
+    \\<column gap="8" width="360">
+    \\  <text wrap="true">{message}</text>
+    \\  <text>{message}</text>
+    \\</column>
+;
+
+pub const WrapUi = canvas.Ui(WrapMsg);
+
+pub fn handWrapView(ui: *WrapUi, model: *const WrapModel) WrapUi.Node {
+    return ui.column(.{ .gap = 8, .width = 360 }, .{
+        ui.text(.{ .wrap = true }, model.message),
+        ui.text(.{}, model.message),
+    });
+}
+
+test "the wrap attribute builds the hand-written wrapped text leaf" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = WrapModel{};
+    const WrapMarkup = markup_view.MarkupView(WrapModel, WrapMsg);
+
+    var view = try WrapMarkup.init(arena, wrap_markup_source);
+    var markup_ui = WrapUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = WrapUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handWrapView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+
+    // wrap="true" becomes a single-span paragraph over the interpolated
+    // text; the default stays the single-line path.
+    const wrapped = markup_tree.root.children[0];
+    try testing.expectEqual(@as(usize, 1), wrapped.spans.len);
+    try testing.expectEqualStrings(model.message, wrapped.text);
+    try testing.expect(wrapped.spans[0].text.ptr == wrapped.text.ptr);
+    const plain = markup_tree.root.children[1];
+    try testing.expectEqual(@as(usize, 0), plain.spans.len);
+
+    // The definite column width is both floor and cap.
+    try testing.expectEqual(@as(f32, 360), markup_tree.root.layout.min_size.width);
+    try testing.expectEqual(@as(f32, 360), markup_tree.root.layout.max_size.width);
 }

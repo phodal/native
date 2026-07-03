@@ -343,6 +343,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     options.details_expanded = try self.boolItems(ui, scope, node, expression.binding);
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "issue-link-base")) {
+                    const expression = markup.parseAttrExpression(attribute.value) orelse {
+                        return self.failNode(node, markup.markdown_issue_link_base_message);
+                    };
+                    if (expression == .equals) return self.failNode(node, markup.markdown_issue_link_base_message);
+                    const value = try self.evalAttrExpression(scope, node, attribute.value);
+                    const text = switch (value) {
+                        .string => |text| text,
+                        else => return self.failNode(node, markup.markdown_issue_link_base_message),
+                    };
+                    if (text.len > 0) options.issue_link_base = text;
+                    continue;
+                }
                 return self.failNode(node, markup.markdown_attr_message);
             }
             const source_value = source_text orelse return self.failNode(node, markup.markdown_source_message);
@@ -856,6 +869,7 @@ pub const attr_names: []const AttrName = &.{
     .{ .markup = "padding", .zig = "padding" },
     .{ .markup = "main", .zig = "main" },
     .{ .markup = "cross", .zig = "cross" },
+    .{ .markup = "wrap", .zig = "wrap" },
     .{ .markup = "virtualized", .zig = "virtualized" },
     .{ .markup = "virtual-item-extent", .zig = "virtual_item_extent" },
 };

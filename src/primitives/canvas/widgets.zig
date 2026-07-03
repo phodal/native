@@ -143,6 +143,11 @@ pub const WidgetLayoutStyle = struct {
     virtual_item_extent: f32 = 0,
     virtual_overscan: usize = 0,
     min_size: geometry.SizeF = .{},
+    /// Per-axis upper bound; 0 leaves the axis unbounded. An explicit
+    /// author size is definite: the ui builder writes `width`/`height`
+    /// into both `min_size` and `max_size`, so intrinsic content can
+    /// neither shrink nor silently grow the box past it.
+    max_size: geometry.SizeF = .{},
 };
 
 pub const WidgetStyle = struct {
@@ -828,5 +833,7 @@ fn widgetLayoutStyleIsDefault(layout: WidgetLayoutStyle) bool {
         layout.virtual_item_extent == 0 and
         layout.virtual_overscan == 0 and
         layout.min_size.width == 0 and
-        layout.min_size.height == 0;
+        layout.min_size.height == 0 and
+        layout.max_size.width == 0 and
+        layout.max_size.height == 0;
 }

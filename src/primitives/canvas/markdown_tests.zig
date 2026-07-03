@@ -287,3 +287,87 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // default tokens and the deterministic estimator.
 const dev2_readme_reference_signature: u64 = 15066189027424610165;
 
+
+test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+    const tree = try doc.build(
+        \\See https://example.com/path(1). Also (https://foo.dev/a?b=1), or http://bar.io!
+        \\
+        \\But nothttps://nope.com stays literal, as does a bare https:// scheme.
+    , .{ .on_link = Ui.linkMsg(.open_url) });
+
+    const paragraph = findParagraphContaining(tree.root, "See").?;
+    var links: usize = 0;
+    for (paragraph.spans) |span| {
+        if (span.link.len == 0) continue;
+        links += 1;
+        switch (links) {
+            // The trailing period is trimmed; the balanced paren is kept.
+            1 => try testing.expectEqualStrings("https://example.com/path(1)", span.link),
+            // The unbalanced close paren and comma are trimmed.
+            2 => try testing.expectEqualStrings("https://foo.dev/a?b=1", span.link),
+            3 => try testing.expectEqualStrings("http://bar.io", span.link),
+            else => {},
+        }
+        try testing.expectEqualStrings(span.link, span.text);
+    }
+    try testing.expectEqual(@as(usize, 3), links);
+
+    // No word-boundary, or no target after the scheme: literal text.
+    const literal = findParagraphContaining(tree.root, "nope").?;
+    for (literal.spans) |span| {
+        try testing.expectEqual(@as(usize, 0), span.link.len);
+    }
+
+    // Autolinked URLs are pressable through the ordinary link machinery.
+    const link_child = paragraph.children[0];
+    const msg = tree.msgForPointer(link_child.id, .up).?;
+    try testing.expectEqualStrings("https://example.com/path(1)", msg.open_url);
+}
+
+test "issue refs linkify only with an issue link base, at dev-2 boundaries" {
+    var doc = TestDoc.init();
+    defer doc.deinit();
+
+    // Without the option, refs stay plain text (no repo context).
+    {
+        const tree = try doc.build("Fixes #123 for real", .{});
+        const paragraph = findParagraphContaining(tree.root, "Fixes").?;
+        for (paragraph.spans) |span| {
+            try testing.expectEqual(@as(usize, 0), span.link.len);
+        }
+    }
+    doc.deinit();
+    doc = TestDoc.init();
+
+    const tree = try doc.build(
+        \\Fixes #123 and (#45), but not path/#6, not &#39;, not #12abc, and not word#7.
+    , .{
+        .on_link = Ui.linkMsg(.open_url),
+        .issue_link_base = "ghissue://",
+    });
+    const paragraph = findParagraphContaining(tree.root, "Fixes").?;
+    var links: usize = 0;
+    for (paragraph.spans) |span| {
+        if (span.link.len == 0) continue;
+        links += 1;
+        switch (links) {
+            1 => {
+                try testing.expectEqualStrings("#123", span.text);
+                try testing.expectEqualStrings("ghissue://123", span.link);
+            },
+            2 => {
+                try testing.expectEqualStrings("#45", span.text);
+                try testing.expectEqualStrings("ghissue://45", span.link);
+            },
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), links);
+
+    // The ref press dispatches the composed target through on_link.
+    const link_child = paragraph.children[0];
+    const msg = tree.msgForPointer(link_child.id, .up).?;
+    try testing.expectEqualStrings("ghissue://123", msg.open_url);
+}

@@ -2109,3 +2109,161 @@ test "widget tree layout widths follow the injected text measure provider" {
 
     try std.testing.expect(measured_layout.findById(2).?.frame.width > default_layout.findById(2).?.frame.width);
 }
+
+// ------------------------------------------------- definite sizes (#30)
+
+test "definite width caps intrinsic content so siblings keep their share" {
+    // Ovation repro shape: a non-growing 360px pane whose single-line text
+    // is far wider than the pane. With width as a min-only floor the pane
+    // ballooned to its intrinsic text width and starved the growing
+    // sibling; a definite width (min AND max) keeps the pane at 360.
+    const long_text = "A long single-line status message that lays out much wider than the pane it sits in, pushing siblings to zero";
+    const pane_children = [_]Widget{
+        .{ .id = 3, .kind = .text, .text = long_text },
+    };
+    const definite = geometry.SizeF.init(360, 0);
+    const row_children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .column,
+            .layout = .{ .min_size = definite, .max_size = definite },
+            .children = &pane_children,
+        },
+        .{ .id = 4, .kind = .column, .layout = .{ .grow = 1 } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 800, 200), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 360, 200));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(360, 0, 440, 200));
+    // The text child stretches to the pane's definite width, not past it.
+    try std.testing.expectEqual(@as(f32, 360), layout.findById(3).?.frame.width);
+}
+
+test "min-only width keeps the classic floor behavior" {
+    // The min channel alone (no max) still lets intrinsic content widen
+    // the box - the pre-definite behavior existing Zig callers of
+    // `min_size` rely on.
+    const long_text = "A long single-line status message that lays out much wider than the pane it sits in, pushing siblings to zero";
+    const pane_children = [_]Widget{
+        .{ .id = 3, .kind = .text, .text = long_text },
+    };
+    const row_children = [_]Widget{
+        .{
+            .id = 2,
+            .kind = .column,
+            .layout = .{ .min_size = geometry.SizeF.init(360, 0) },
+            .children = &pane_children,
+        },
+        .{ .id = 4, .kind = .column, .layout = .{ .grow = 1 } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 800, 200), &nodes);
+    try std.testing.expect(layout.findById(2).?.frame.width > 360);
+}
+
+test "definite width caps grow distribution" {
+    const definite = geometry.SizeF.init(200, 0);
+    const row_children = [_]Widget{
+        .{ .id = 2, .kind = .column, .layout = .{ .grow = 1, .min_size = definite, .max_size = definite } },
+        .{ .id = 3, .kind = .column, .layout = .{ .grow = 1 } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 800, 100), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 200, 100));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(200, 0, 400, 100));
+}
+
+test "definite height caps cross-axis stretch in a row" {
+    const definite = geometry.SizeF.init(0, 40);
+    const row_children = [_]Widget{
+        .{ .id = 2, .kind = .column, .layout = .{ .grow = 1, .min_size = definite, .max_size = definite } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 300, 200), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 300, 40));
+}
+
+test "definite size caps stack children instead of stretching them" {
+    const definite = geometry.SizeF.init(120, 60);
+    const stack_children = [_]Widget{
+        .{ .id = 2, .kind = .panel, .layout = .{ .min_size = definite, .max_size = definite } },
+    };
+    const root = Widget{ .id = 1, .kind = .stack, .children = &stack_children };
+
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 500, 400), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 120, 60));
+}
+
+// -------------------------------------------- separator orientation (#31)
+
+test "separator in a row is a thin vertical divider" {
+    // Ovation repro shape: a divider between two growing panes. The
+    // separator's h-rule default length no longer applies in the row
+    // axis, so it takes its stroke width (hairline) and the panes split
+    // the rest.
+    const row_children = [_]Widget{
+        .{ .id = 2, .kind = .column, .layout = .{ .grow = 1 } },
+        .{ .id = 3, .kind = .separator },
+        .{ .id = 4, .kind = .column, .layout = .{ .grow = 1 } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &row_children };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 401, 120), &nodes);
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 200, 120));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(200, 0, 1, 120));
+    try expectLayoutFrame(layout, 4, geometry.RectF.init(201, 0, 200, 120));
+}
+
+test "separator in a column keeps the horizontal rule behavior" {
+    const column_children = [_]Widget{
+        .{ .id = 2, .kind = .text, .text = "Above" },
+        .{ .id = 3, .kind = .separator },
+        .{ .id = 4, .kind = .text, .text = "Below" },
+    };
+    const root = Widget{ .id = 1, .kind = .column, .children = &column_children };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 240, 200), &nodes);
+    const separator = layout.findById(3).?.frame;
+    try std.testing.expectEqual(@as(f32, 240), separator.width);
+    try std.testing.expectEqual(@as(f32, 1), separator.height);
+}
+
+test "row intrinsic width counts a separator as its stroke width" {
+    const inner_children = [_]Widget{
+        .{ .id = 3, .kind = .stack, .frame = geometry.RectF.init(0, 0, 50, 20) },
+        .{ .id = 4, .kind = .separator },
+        .{ .id = 5, .kind = .stack, .frame = geometry.RectF.init(0, 0, 50, 20) },
+    };
+    const outer_children = [_]Widget{
+        .{ .id = 2, .kind = .row, .children = &inner_children },
+        .{ .id = 6, .kind = .column, .layout = .{ .grow = 1 } },
+    };
+    const root = Widget{ .id = 1, .kind = .row, .children = &outer_children };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 800, 100), &nodes);
+    // 50 + 1 + 50: the separator contributes its stroke width, not the
+    // 160px horizontal-rule default.
+    try std.testing.expectEqual(@as(f32, 101), layout.findById(2).?.frame.width);
+}
+
+// ------------------------------------------- overflow diagnostics (#31)
+
+test "axis layout overflow is reported past the float-noise epsilon" {
+    const widget_layout = @import("widget_layout.zig");
+    try std.testing.expect(widget_layout.axisLayoutOverflow(400, 400) == null);
+    try std.testing.expect(widget_layout.axisLayoutOverflow(400, 400.25) == null);
+    const overflow = widget_layout.axisLayoutOverflow(400, 446) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 46), overflow);
+}

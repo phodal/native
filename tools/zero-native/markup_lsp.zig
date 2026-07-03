@@ -556,7 +556,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "scroll", .doc = "Scroll view; wrap multiple children in a single column inside it." },
     .{ .name = "list", .doc = "Vertical stack of items; supports virtualized and virtual-item-extent." },
     .{ .name = "grid", .doc = "Cell grid container." },
-    .{ .name = "text", .doc = "Text leaf; content supports {} interpolation." },
+    .{ .name = "text", .doc = "Text leaf; content supports {} interpolation. Single-line by default; wrap=\"true\" word-wraps." },
     .{ .name = "badge", .doc = "Text leaf badge; content supports {} interpolation." },
     .{ .name = "button", .doc = "Text-bearing control; the label is the text content. Dispatch with on-press." },
     .{ .name = "checkbox", .doc = "Value control; bind checked, dispatch with on-toggle." },
@@ -570,7 +570,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "list-item", .doc = "Text-bearing item control; the label is the text content." },
     .{ .name = "menu-item", .doc = "Text-bearing menu control; the label is the text content." },
     .{ .name = "status-bar", .doc = "Status bar text leaf: content only, no children." },
-    .{ .name = "separator", .doc = "Separator line." },
+    .{ .name = "separator", .doc = "Separator line: a horizontal rule in a column, a thin vertical divider in a row." },
     .{ .name = "spacer", .doc = "Flexible space; give it a grow." },
     .{ .name = "breadcrumb", .doc = "Row container for a breadcrumb trail; children flow horizontally." },
     .{ .name = "button-group", .doc = "Row container grouping buttons; children flow horizontally." },
@@ -598,7 +598,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "combobox", .doc = "Text entry with menu affordance; edits via on-input, open via on-press." },
     .{ .name = "skeleton", .doc = "Loading placeholder block; size with width and height." },
     .{ .name = "spinner", .doc = "Indeterminate progress spinner leaf." },
-    .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset) as widgets; source is one {binding}, links dispatch on-link, <details> blocks toggle via on-details + details-expanded." },
+    .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset) as widgets; source is one {binding}, links dispatch on-link (bare URLs autolink), <details> blocks toggle via on-details + details-expanded, #123 refs linkify via issue-link-base." },
 };
 
 pub const structure_docs = [_]Doc{
@@ -618,13 +618,14 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "disabled", .doc = "Disables the control; true/false or a {binding}." },
     .{ .name = "variant", .doc = "Visual variant: default|primary|secondary|outline|ghost|destructive." },
     .{ .name = "size", .doc = "Control size: default|sm|lg|icon." },
-    .{ .name = "width", .doc = "Fixed width (plain number)." },
-    .{ .name = "height", .doc = "Fixed height (plain number)." },
+    .{ .name = "width", .doc = "Definite width (plain number): the element is exactly this wide; content neither shrinks nor overflows it. On resizable it is the initial width." },
+    .{ .name = "height", .doc = "Definite height (plain number): the element is exactly this tall; content neither shrinks nor overflows it." },
     .{ .name = "grow", .doc = "Flex grow factor; give spacer one." },
     .{ .name = "gap", .doc = "Spacing between children (plain number)." },
     .{ .name = "padding", .doc = "Uniform padding (plain number)." },
     .{ .name = "main", .doc = "Main-axis alignment: start|center|end|space_between." },
     .{ .name = "cross", .doc = "Cross-axis alignment: stretch|start|center|end." },
+    .{ .name = "wrap", .doc = "text only: true word-wraps the content at the width the element receives (reserving wrapped height in columns); default is single-line." },
     .{ .name = "virtualized", .doc = "Enable list virtualization (true/false)." },
     .{ .name = "virtual-item-extent", .doc = "Fixed item extent for virtualized lists (plain number)." },
     .{ .name = "key", .doc = "Sibling-scoped identity key; on for, names an item field." },
@@ -661,6 +662,7 @@ pub const markdown_attr_docs = [_]Doc{
     .{ .name = "on-link", .doc = "markdown: bare Msg tag dispatched on link press; its payload is the URL ([]const u8 variant)." },
     .{ .name = "on-details", .doc = "markdown: bare Msg tag dispatched on a <details> summary press; its payload is the block index (usize variant)." },
     .{ .name = "details-expanded", .doc = "markdown: {binding} naming a []const bool iterable of expanded flags, in details-block document order." },
+    .{ .name = "issue-link-base", .doc = "markdown: literal URL prefix or one {binding}; '#123' refs become links to base ++ number (ghissue:// or https://github.com/owner/repo/issues/)." },
 };
 
 pub const event_docs = [_]Doc{
@@ -887,7 +889,7 @@ test "doc tables cover every known element, attribute, and event" {
         try testing.expect(attributeDoc(name) != null);
     }
     // The markdown element's closed attribute set is documented.
-    for ([_][]const u8{ "source", "on-link", "on-details", "details-expanded" }) |name| {
+    for ([_][]const u8{ "source", "on-link", "on-details", "details-expanded", "issue-link-base" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

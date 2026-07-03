@@ -48,12 +48,12 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `alert`, `bubble` | surfaces | `alert` title via the `text` attribute; children stack inside |
 | `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text`, wrap in `<if>` to show conditionally |
 | `resizable` | resizable panel | engine-managed drag handle; `width` sets the initial width |
-| `text`, `badge`, `tooltip` | text leaves | `{}` interpolation allowed in content |
+| `text`, `badge`, `tooltip` | text leaves | `{}` interpolation allowed in content; `text` is single-line unless `wrap="true"` |
 | `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | the label is the element content; `select` shows its `placeholder` while empty and dispatches `on-press` |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits arrive via `on-input` |
 | `status-bar` | status bar | content only, no children |
-| `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
+| `separator`, `spacer` | separator, flexible space | `separator` is axis-aware — a horizontal rule in a `column`, a thin vertical divider in a `row`; give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
 | `markdown` | rendered markdown | leaf; `source` is one `{binding}` — see [Rich text](#rich-text-inline-spans-and-markdown) |
 
@@ -77,7 +77,7 @@ A tab strip, a select trigger, and a table read the way you would guess:
 
 A few widget kinds are deliberately **not** markup elements because their shape does not fit the closed grammar — write these as Zig view functions with `canvas.Ui`: `icon`, `image`, and icon buttons (they reference image assets by `ImageId`, which attribute values cannot carry), `data_grid` (needs per-column cell templates — arbitrary render callbacks), `popover` and `menu_surface` (floating surfaces anchored to runtime geometry; `dropdown-menu` covers the declarative case), and `segmented_control` (a shell-chrome kind; `tabs` and `toggle-group` cover its use cases).
 
-Layout attributes: `gap`, `padding`, `grow`, `width`, `height`, `main`, `cross`, `virtualized`. Appearance: `variant`, `size`, `disabled`, `checked`, `selected`. Semantics: `role`, `label`. Identity: `key` (sibling-scoped) and `global-key` (survives moving between containers — board cards, tab pages).
+Layout attributes: `gap`, `padding`, `grow`, `width`, `height`, `wrap`, `main`, `cross`, `virtualized`. `width` and `height` are definite sizes: the element is exactly that size, so intrinsic content neither shrinks nor silently overflows it (`resizable` treats `width` as its initial width), and debug builds log a `zero_canvas_layout` diagnostic whenever children's minimum sizes overflow their container. `wrap` applies to `text` only: `wrap="true"` word-wraps the content at the width the element receives and reserves the wrapped height in columns. Appearance: `variant`, `size`, `disabled`, `checked`, `selected`. Semantics: `role`, `label`. Identity: `key` (sibling-scoped) and `global-key` (survives moving between containers — board cards, tab pages).
 
 ## Styling with design tokens
 
@@ -196,7 +196,7 @@ ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 
 Wrapping and measurement are span-aware (the platform text provider measures every run with the font it draws with), stacked paragraphs reserve their real wrapped height, and link spans are first-class: they carry `role=link` semantics in automation snapshots, show a pointer cursor, and clicking one dispatches your `Msg` with the link payload.
 
-Markdown builds on the same model. `zero_native.markdown` maps a GitHub-flavored subset — headings, inline styles, links, bullet/ordered/task lists, fenced code blocks, blockquotes, rules, and `<details>` collapsibles — onto ordinary widgets:
+Markdown builds on the same model. `zero_native.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, and `<details>` collapsibles — onto ordinary widgets:
 
 ```zig
 const Md = zero_native.markdown.Markdown(Msg);
@@ -204,6 +204,7 @@ Md.view(ui, issue.body, .{
     .on_link = Ui.linkMsg(.open_url),
     .on_details = Md.detailsMsg(.toggle_details),
     .details_expanded = &model.details_expanded, // caller-owned flags, elm-style
+    .issue_link_base = "ghissue://", // opt-in: "#123" links to ghissue://123
 })
 ```
 
@@ -212,10 +213,10 @@ Malformed input degrades to plain text — the build fn never fails. Task-list c
 In markup, the `<markdown>` element wires all of this declaratively:
 
 ```html
-<markdown source="{issue_body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
+<markdown source="{issue_body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" issue-link-base="ghissue://" />
 ```
 
-`source` (required) is one `{binding}` producing the markdown text — a string field, zero-arg method, or arena-taking method. `on-link` and `on-details` are bare `Msg` tags (the runtime supplies their payloads: the URL as `[]const u8`, the details index as `usize`), and `details-expanded` names a `[]const bool` iterable through the same sources `for each` accepts. Everything but `source` is optional — without the details wiring, `<details>` blocks render collapsed and inert. Both the interpreter and the comptime compiler implement the element identically.
+`source` (required) is one `{binding}` producing the markdown text — a string field, zero-arg method, or arena-taking method. `on-link` and `on-details` are bare `Msg` tags (the runtime supplies their payloads: the URL as `[]const u8`, the details index as `usize`), `details-expanded` names a `[]const bool` iterable through the same sources `for each` accepts, and `issue-link-base` (a literal prefix or one `{binding}`) turns `#123` references into links to base ++ number. Everything but `source` is optional — without the details wiring, `<details>` blocks render collapsed and inert. Both the interpreter and the comptime compiler implement the element identically.
 
 ## Tooling
 

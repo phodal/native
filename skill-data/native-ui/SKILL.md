@@ -70,12 +70,12 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `alert`, `bubble` | surfaces | `alert` title via `text` attr; children stack inside |
 | `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text` attr, wrap in `<if>` to show conditionally |
 | `resizable` | resizable | engine-managed drag handle; `width` sets the initial width |
-| `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed |
+| `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed; `text` is single-line unless `wrap="true"` |
 | `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits via `on-input`, enter via `on-submit` |
 | `status-bar` | status bar | text leaf: content only, no children |
-| `separator`, `spacer` | separator, flexible space | give `spacer` a `grow` |
+| `separator`, `spacer` | separator, flexible space | `separator` is axis-aware: a horizontal rule in a `column`, a thin vertical divider in a `row`; give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
 | `markdown` | rendered markdown subtree | leaf; `source` is one `{binding}` — see "Markdown in markup" |
 
@@ -83,12 +83,14 @@ Not markup-expressible (deliberately — write these as Zig view functions with 
 
 ## Attributes
 
-Layout: `gap`, `padding` (uniform), `grow`, `width`, `height`, `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`.
+Layout: `gap`, `padding` (uniform), `grow`, `width`, `height` (definite: the element is exactly that size — intrinsic content neither shrinks nor silently overflows it; `resizable` treats `width` as the initial width), `wrap` (`text` only: `wrap="true"` word-wraps at the width the element receives and reserves the wrapped height in columns; default is single-line), `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`.
 Appearance/state: `variant` (default|primary|secondary|outline|ghost|destructive), `size` (default|sm|lg|icon), `disabled`, `checked`, `selected`, `value`, `placeholder`.
 Semantics: `role` (listitem, button, ...), `label` (accessible name).
 Identity: `key` (sibling-scoped), `global-key` (parent-independent — use for items that move between containers, e.g. board cards; ids then survive reparenting).
 
 Numbers are plain (`gap="12"`), booleans are `true`/`false` or a binding.
+
+When children's minimum sizes exceed their container, debug builds log a `zero_canvas_layout` diagnostic naming the container, axis, and overflow in pixels — flex overflow is never silent.
 
 ## Style token attributes
 
@@ -373,6 +375,7 @@ A leaf element that renders a markdown string (the GFM subset below) as ordinary
 - `on-link` (optional): a BARE Msg tag — no `:{payload}` — whose payload is the pressed link URL; declare `open_url: []const u8` in `Msg`.
 - `on-details` (optional): a bare Msg tag whose payload is the `<details>` block's document-order index; declare `toggle_details: usize`.
 - `details-expanded` (optional): one `{binding}` naming a `[]const bool` iterable (a model field, pub decl, or fn — the same sources `for each` accepts); flags are read in details-block document order. Keep a bounded `details_expanded: [8]bool` in the model and toggle it in `update`.
+- `issue-link-base` (optional): a literal URL prefix or one `{binding}` producing it; `#123` references at word boundaries become links to base ++ number (`issue-link-base="ghissue://"` links `#123` to `ghissue://123` — an app scheme your `on-link` handler intercepts, or a web base like `https://github.com/owner/repo/issues/`). Off by default: resolving a ref needs repo context.
 - No children, no text content, no other attributes (teaching errors point at misuse). Without the details wiring, `<details>` blocks render collapsed and inert; without `on-link`, links render styled but inert.
 
 ## Rich text: inline spans and markdown (Zig views)
@@ -408,7 +411,7 @@ Md.view(ui, model.body_markdown, .{
 })
 ```
 
-- Supported: `#`–`###` headings, paragraphs with `**bold**`/`*italic*`/`` `code` ``/`~~strike~~`/`[links](url)`, bullet + ordered + task lists (task checkboxes are display-only, disabled), fenced code blocks, `> blockquotes`, `---` rules, `<details><summary>`.
+- Supported: `#`–`###` headings, paragraphs with `**bold**`/`*italic*`/`` `code` ``/`~~strike~~`/`[links](url)`, bare `http(s)://` URLs (autolink, trailing punctuation trimmed), `#123` issue refs (opt-in: set `Options.issue_link_base` and the ref links to base ++ number), bullet + ordered + task lists (task checkboxes are display-only, disabled), fenced code blocks, `> blockquotes`, `---` rules, `<details><summary>`.
 - Not in v1 (degrades to plain text, never fails): tables, reference links, raw HTML, footnotes, backslash escapes.
 - `<details>` state is elm-style: the CALLER owns the expanded flags. Keep a bounded `details_expanded: [8]bool` in the model, toggle it in `update` on the details message, and pass the slice back in.
 

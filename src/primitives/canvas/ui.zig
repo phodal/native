@@ -137,13 +137,25 @@ pub fn Ui(comptime Msg: type) type {
             disabled: bool = false,
             variant: canvas.WidgetVariant = .default,
             size: canvas.WidgetSize = .default,
+            /// Definite width: the widget is exactly this wide (the value
+            /// becomes both the min and max bound), so intrinsic content
+            /// can neither shrink nor silently overflow the box. 0 keeps
+            /// intrinsic sizing. `resizable` treats it as the initial
+            /// width only (the drag handle keeps resizing past it).
             width: f32 = 0,
+            /// Definite height; same contract as `width`.
             height: f32 = 0,
             grow: f32 = 0,
             gap: f32 = 0,
             padding: f32 = 0,
             main: canvas.WidgetMainAlignment = .start,
             cross: canvas.WidgetCrossAlignment = .stretch,
+            /// Opt-in word wrapping for `text` leaves: the content lays
+            /// out through the span paragraph machinery (a single-span
+            /// paragraph), wrapping at the width the widget receives and
+            /// reserving its real wrapped height in columns. Off keeps
+            /// the classic single-line text path byte-identical.
+            wrap: bool = false,
             virtualized: bool = false,
             virtual_item_extent: f32 = 0,
             style: canvas.WidgetStyle = .{},
@@ -177,6 +189,11 @@ pub fn Ui(comptime Msg: type) type {
             widget: Widget = .{ .kind = .stack },
             key: ?UiKey = null,
             global_key: ?UiKey = null,
+            /// Deferred `ElementOptions.wrap`: text content may be
+            /// assigned after `el` returns (builder sugar and the markup
+            /// engines both do), so the single-span conversion happens in
+            /// `finalizeNode`, when the text is final.
+            wrap: bool = false,
             style_tokens: StyleTokenRefs = .{},
             on_press: ?Msg = null,
             on_toggle: ?Msg = null,
@@ -328,6 +345,7 @@ pub fn Ui(comptime Msg: type) type {
                 .widget = widgetFromOptions(kind, options),
                 .key = options.key,
                 .global_key = options.global_key,
+                .wrap = options.wrap,
                 .style_tokens = options.style_tokens,
                 .on_press = options.on_press,
                 .on_toggle = options.on_toggle,
@@ -533,6 +551,17 @@ pub fn Ui(comptime Msg: type) type {
         ) error{OutOfMemory}!Widget {
             var widget = node.widget;
             applyStyleTokens(&widget.style, node.style_tokens, tokens);
+            // Opt-in text wrapping reuses the span paragraph machinery: a
+            // wrapped text leaf becomes a single-span paragraph over its
+            // own bytes (the span invariant: span text subslices
+            // `widget.text`), so wrapping, intrinsic sizing, wrapped
+            // height reservation, and rendering are all the existing span
+            // path — no forked text pipeline.
+            if (node.wrap and widget.kind == .text and widget.spans.len == 0 and widget.text.len > 0) {
+                const spans = try self.arena.alloc(canvas.TextSpan, 1);
+                spans[0] = .{ .text = widget.text };
+                widget.spans = spans;
+            }
             widget.id = if (node.global_key) |global_key|
                 structuralId(global_id_seed, widget.kind, global_key)
             else
@@ -663,6 +692,11 @@ pub fn Ui(comptime Msg: type) type {
                     .virtualized = options.virtualized,
                     .virtual_item_extent = options.virtual_item_extent,
                     .min_size = .{ .width = options.width, .height = options.height },
+                    // Explicit sizes are definite (min AND max). Resizable
+                    // is the exception: width documents the initial width
+                    // and the engine's drag handle keeps writing larger
+                    // frames past it.
+                    .max_size = if (kind == .resizable) .{} else .{ .width = options.width, .height = options.height },
                 },
                 .style = options.style,
                 .semantics = options.semantics,

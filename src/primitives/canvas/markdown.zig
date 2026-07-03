@@ -14,7 +14,11 @@
 //! `>` blockquotes, horizontal rules, and `<details>`/`<summary>`.
 //! Supported inlines: `**bold**`/`__bold__`, `*italic*`/`_italic_`,
 //! `` `code` ``, `~~strikethrough~~`, `[text](url)` links, `<url>`
-//! autolinks, and `![alt](url)` images (rendered as their alt text).
+//! autolinks, bare `http(s)://` URLs at word boundaries (GFM-style
+//! autolink extension, trailing punctuation trimmed), `#123` issue
+//! references (opt-in via `Options.issue_link_base`, since resolving a
+//! ref needs repo context), and `![alt](url)` images (rendered as their
+//! alt text).
 //!
 //! Deliberately unsupported in v1 (rendered as plain paragraph text, never
 //! a build failure): tables, setext headings, indented code blocks,
@@ -81,6 +85,16 @@ pub fn Markdown(comptime Msg: type) type {
             /// Expanded flags for `<details>` blocks in document order;
             /// blocks beyond the slice render collapsed.
             details_expanded: []const bool = &.{},
+            /// Non-null turns `#123` issue references at word boundaries
+            /// (dev-2 MarkdownView semantics: not preceded by a word
+            /// byte, `/`, or `&`; digits end at a word boundary) into
+            /// link spans whose target is this prefix followed by the
+            /// number — an app scheme (`"ghissue://"`) or a web base
+            /// (`"https://github.com/owner/repo/issues/"`). The press
+            /// dispatches through `on_link` like any other link. Null
+            /// keeps refs as plain text (they need repo context to
+            /// resolve, so there is no default).
+            issue_link_base: ?[]const u8 = null,
         };
 
         /// Comptime message constructor for `on_details`:
@@ -346,7 +360,6 @@ pub fn Markdown(comptime Msg: type) type {
             /// as literal text. Span-capacity overflow appends the rest of
             /// the text as one unstyled span.
             fn parseInline(self: *Builder, text: []const u8, base: TextSpan, spans: *[text_spans.max_text_spans_per_paragraph]TextSpan) []const TextSpan {
-                _ = self;
                 var len: usize = 0;
                 var bold = false;
                 var italic = false;
@@ -421,6 +434,27 @@ pub fn Markdown(comptime Msg: type) type {
                             index += link.consumed;
                             literal_start = index;
                             continue;
+                        }
+                    } else if (rest[0] == 'h' and atAutolinkBoundary(text, index)) {
+                        if (parseBareUrlAt(rest)) |link| {
+                            flushLiteral(spans, &len, text[literal_start..index], base, bold, italic, strike);
+                            appendSpan(spans, &len, spanWith(base, .{ .text = link.text, .link = link.target }));
+                            index += link.consumed;
+                            literal_start = index;
+                            continue;
+                        }
+                    } else if (rest[0] == '#' and atAutolinkBoundary(text, index)) {
+                        if (self.options.issue_link_base) |issue_base| {
+                            if (parseIssueRefAt(rest)) |ref| {
+                                flushLiteral(spans, &len, text[literal_start..index], base, bold, italic, strike);
+                                appendSpan(spans, &len, spanWith(base, .{
+                                    .text = rest[0..ref.consumed],
+                                    .link = self.ui.fmt("{s}{s}", .{ issue_base, ref.digits }),
+                                }));
+                                index += ref.consumed;
+                                literal_start = index;
+                                continue;
+                            }
                         }
                     }
                     index += 1;
@@ -598,6 +632,73 @@ fn parseAutolinkAt(rest: []const u8) ?InlineLink {
     if (std.mem.indexOf(u8, target, "://") == null) return null;
     if (std.mem.indexOfScalar(u8, target, ' ') != null) return null;
     return .{ .text = target, .target = target, .consumed = close + 1 };
+}
+
+/// Word-boundary test for bare-URL and `#N` autolinking (dev-2
+/// MarkdownView's `(^|[^\w/&])`): don't link when continuing a word, a
+/// path (`/`), or an HTML entity (`&`).
+fn atAutolinkBoundary(text: []const u8, index: usize) bool {
+    if (index == 0) return true;
+    const previous = text[index - 1];
+    return !isWordByte(previous) and previous != '/' and previous != '&';
+}
+
+/// Parse a bare `http://`/`https://` URL at the start of `rest`
+/// (GFM-style autolink extension): the URL runs to whitespace or `<`,
+/// then trailing punctuation and unbalanced close parens are trimmed so
+/// prose like "see https://example.com." links cleanly.
+fn parseBareUrlAt(rest: []const u8) ?InlineLink {
+    const scheme_len: usize = if (std.mem.startsWith(u8, rest, "https://"))
+        "https://".len
+    else if (std.mem.startsWith(u8, rest, "http://"))
+        "http://".len
+    else
+        return null;
+    var end = scheme_len;
+    while (end < rest.len) : (end += 1) {
+        const byte = rest[end];
+        if (isInlineSpace(byte) or byte == '\n' or byte == '<' or byte == '>') break;
+    }
+    while (end > scheme_len) {
+        const byte = rest[end - 1];
+        if (byte == ')') {
+            var balance: isize = 0;
+            for (rest[scheme_len..end]) |candidate| {
+                if (candidate == '(') balance += 1;
+                if (candidate == ')') balance -= 1;
+            }
+            if (balance < 0) {
+                end -= 1;
+                continue;
+            }
+            break;
+        }
+        switch (byte) {
+            '.', ',', ';', ':', '!', '?', '\'', '"' => end -= 1,
+            else => break,
+        }
+    }
+    if (end == scheme_len) return null;
+    const target = rest[0..end];
+    return .{ .text = target, .target = target, .consumed = end };
+}
+
+const IssueRef = struct {
+    /// The digits after `#`.
+    digits: []const u8,
+    consumed: usize,
+};
+
+/// Parse `#123` at the start of `rest`: one or more digits ending at a
+/// word boundary (dev-2 MarkdownView's `#(\d+)\b`). The caller checks
+/// the leading boundary and supplies the link base.
+fn parseIssueRefAt(rest: []const u8) ?IssueRef {
+    if (rest.len < 2 or rest[0] != '#') return null;
+    var end: usize = 1;
+    while (end < rest.len and std.ascii.isDigit(rest[end])) end += 1;
+    if (end == 1) return null;
+    if (end < rest.len and isWordByte(rest[end])) return null;
+    return .{ .digits = rest[1..end], .consumed = end };
 }
 
 fn hasCloser(rest: []const u8, delim: []const u8) bool {

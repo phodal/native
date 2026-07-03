@@ -544,8 +544,8 @@ pub const known_text_leaf_element_names = [_][]const u8{
 pub const known_option_attrs = [_][]const u8{
     "text",       "placeholder", "value", "checked",     "selected",            "disabled",
     "variant",    "size",        "width", "height",      "grow",                "gap",
-    "padding",    "main",        "cross", "virtualized", "virtual-item-extent", "key",
-    "global-key", "role",        "label",
+    "padding",    "main",        "cross", "wrap",        "virtualized",         "virtual-item-extent",
+    "key",        "global-key",  "role",  "label",
 };
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
@@ -595,7 +595,8 @@ pub const invalid_expression_message = "invalid expression: values are a literal
 pub const arena_scalar_equality_message = "arena-computed bindings cannot be compared with == - compare the source fields directly, or bind a pub fn returning bool";
 pub const markdown_source_message = "markdown requires a source attribute with one {binding} naming the markdown text (a []const u8 field or fn - arena fns work)";
 pub const markdown_children_message = "markdown takes no children or text content - the source binding provides the markdown";
-pub const markdown_attr_message = "unknown attribute for markdown - it takes source, on-link, on-details, and details-expanded";
+pub const markdown_attr_message = "unknown attribute for markdown - it takes source, on-link, on-details, details-expanded, and issue-link-base";
+pub const markdown_issue_link_base_message = "issue-link-base takes a literal URL prefix or one {binding} producing it - '#123' refs become links to base ++ number (like ghissue:// or https://github.com/owner/repo/issues/)";
 pub const markdown_on_link_message = "on-link takes a bare Msg tag whose payload is the pressed link URL (a []const u8 variant, like open_url: []const u8)";
 pub const markdown_on_details_message = "on-details takes a bare Msg tag whose payload is the details block index (a usize variant, like toggle_details: usize)";
 pub const markdown_details_expanded_message = "details-expanded takes one {binding} naming a []const bool iterable (a model field, pub decl, or fn - the same sources for each accepts)";
@@ -717,6 +718,13 @@ fn validateMarkdown(node: MarkupNode) ?MarkupErrorInfo {
             const expression = parseAttrExpression(attribute.value);
             if (expression == null or expression.? != .binding) {
                 return .{ .line = attribute.line, .column = attribute.column, .message = markdown_details_expanded_message };
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "issue-link-base")) {
+            const expression = parseAttrExpression(attribute.value);
+            if (expression == null or expression.? == .equals) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_issue_link_base_message };
             }
             continue;
         }

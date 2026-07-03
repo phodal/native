@@ -1,3 +1,5 @@
+const std = @import("std");
+const builtin = @import("builtin");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 const text_model = @import("text.zig");
@@ -151,6 +153,9 @@ fn layoutAxisChildren(
     const remaining = @max(0, available_extent - fixed_extent - total_gap);
     const assigned_extent = assignedAxisChildrenExtent(children, axis, fixed_extent, grow_total, remaining);
     const used_extent = assigned_extent + total_gap;
+    if (axisLayoutOverflow(available_extent, used_extent)) |overflow| {
+        logAxisChildrenOverflow(output[parent_index].widget.kind, axis, available_extent, used_extent, overflow);
+    }
     const free_extent = @max(0, available_extent - used_extent);
     var child_gap = clamped_gap;
     if (style.main_alignment == .space_between and children.len > 1) {
@@ -164,7 +169,7 @@ fn layoutAxisChildren(
     for (children) |child| {
         const grow = nonNegative(child.layout.grow);
         const main_extent = if (grow > 0 and grow_total > 0)
-            @max(minMainExtent(child, axis), remaining * grow / grow_total)
+            clampMainExtent(child, axis, remaining * grow / grow_total)
         else
             preferredMainExtentInCross(child, axis, cross_extent, style.cross_alignment, tokens);
         const cross = preferredCrossExtent(child, axis, cross_extent, style.cross_alignment, tokens);
@@ -176,6 +181,53 @@ fn layoutAxisChildren(
         _ = try layoutWidgetDepth(child, child_frame, parent_index, depth + 1, output, len, tokens);
         cursor += main_extent + child_gap;
     }
+}
+
+/// Tolerance separating real layout overflow from float noise.
+pub const axis_layout_overflow_epsilon: f32 = 0.5;
+
+/// Positive overflow of the children's assigned extent past the
+/// container's content extent, or null when everything fits. Grow
+/// children participate with their min-size floors, fixed children with
+/// their preferred (intrinsic or explicit) extents — exactly the floors
+/// `layoutAxisChildren` cannot shrink below.
+pub fn axisLayoutOverflow(available_extent: f32, used_extent: f32) ?f32 {
+    const overflow = used_extent - available_extent;
+    if (overflow <= axis_layout_overflow_epsilon) return null;
+    return overflow;
+}
+
+const layout_log = std.log.scoped(.zero_canvas_layout);
+
+/// Debug-build diagnostic for silent flex overflow: when the children's
+/// minimum extents exceed the container, the extra pixels spill past the
+/// content box with no visual cue at authoring time. Logged at .debug so
+/// debug app runs surface it while release builds and test runs stay
+/// quiet.
+fn logAxisChildrenOverflow(kind: widget_model.WidgetKind, axis: LayoutAxis, available_extent: f32, used_extent: f32, overflow: f32) void {
+    if (builtin.mode != .Debug) return;
+    layout_log.debug(
+        "{s} children overflow the {s} axis by {d:.1}px (need {d:.1}px, have {d:.1}px): intrinsic/min sizes exceed the container - shrink the content, or give siblings grow factors or definite width/height that fit",
+        .{ @tagName(kind), @tagName(axis), overflow, used_extent, available_extent },
+    );
+}
+
+/// Floor `value` with the widget's `min_size` for the axis and cap it at
+/// `max_size` when set (0 = unbounded). Explicit author sizes write both
+/// bounds, making the extent definite.
+fn clampMainExtent(widget: Widget, axis: LayoutAxis, value: f32) f32 {
+    return @max(minMainExtent(widget, axis), boundedByMax(value, maxMainExtent(widget, axis)));
+}
+
+fn maxMainExtent(widget: Widget, axis: LayoutAxis) f32 {
+    return switch (axis) {
+        .horizontal => widget.layout.max_size.width,
+        .vertical => widget.layout.max_size.height,
+    };
+}
+
+fn boundedByMax(value: f32, max: f32) f32 {
+    return if (max > 0) @min(value, max) else value;
 }
 
 /// Main extent of a non-growing flex child, given the cross-axis space it
@@ -193,7 +245,7 @@ fn preferredMainExtentInCross(
 ) f32 {
     if (axis == .vertical and child.frame.height <= 0 and widgetSubtreeHasTextSpans(child, 0)) {
         const width = preferredCrossExtent(child, axis, cross_extent, alignment, tokens);
-        return @max(minMainExtent(child, axis), wrappedVerticalExtentForWidth(child, width, tokens, 0));
+        return clampMainExtent(child, axis, wrappedVerticalExtentForWidth(child, width, tokens, 0));
     }
     return preferredMainExtent(child, axis, tokens);
 }
@@ -214,7 +266,7 @@ fn widgetSubtreeHasTextSpans(widget: Widget, depth: usize) bool {
 /// everywhere else.
 fn wrappedVerticalExtentForWidth(widget: Widget, width: f32, tokens: DesignTokens, depth: usize) f32 {
     if (depth >= max_widget_depth) return preferredMainExtent(widget, .vertical, tokens);
-    if (widget.frame.height > 0) return @max(minMainExtent(widget, .vertical), widget.frame.height);
+    if (widget.frame.height > 0) return clampMainExtent(widget, .vertical, widget.frame.height);
     const padding = widget.layout.padding;
     const inner_width = @max(0, width - padding.left - padding.right);
     const content_height: f32 = switch (widget.kind) {
@@ -256,7 +308,7 @@ fn wrappedVerticalExtentForWidth(widget: Widget, width: f32, tokens: DesignToken
         },
         else => return preferredMainExtent(widget, .vertical, tokens),
     };
-    return @max(minMainExtent(widget, .vertical), content_height + padding.top + padding.bottom);
+    return clampMainExtent(widget, .vertical, content_height + padding.top + padding.bottom);
 }
 
 /// The width the `index`-th child of a horizontal container receives —
@@ -280,7 +332,7 @@ fn rowChildWidth(row: Widget, available_width: f32, index: usize, tokens: Design
     const remaining = @max(0, available_width - fixed_extent - total_gap);
     const child = children[index];
     const grow = nonNegative(child.layout.grow);
-    if (grow > 0 and grow_total > 0) return @max(minMainExtent(child, .horizontal), remaining * grow / grow_total);
+    if (grow > 0 and grow_total > 0) return clampMainExtent(child, .horizontal, remaining * grow / grow_total);
     return preferredMainExtent(child, .horizontal, tokens);
 }
 
@@ -338,7 +390,7 @@ fn assignedAxisChildrenExtent(children: []const Widget, axis: LayoutAxis, fixed_
     for (children) |child| {
         const grow = nonNegative(child.layout.grow);
         if (grow <= 0) continue;
-        assigned += @max(minMainExtent(child, axis), remaining * grow / grow_total);
+        assigned += clampMainExtent(child, axis, remaining * grow / grow_total);
     }
     return assigned;
 }
@@ -401,8 +453,8 @@ fn layoutGridChildren(
         const row = child_index / columns;
         const x = content.x + @as(f32, @floatFromInt(column)) * (cell_width + clamped_gap);
         const y = content.y + @as(f32, @floatFromInt(row)) * (fallback_cell_height + clamped_gap);
-        const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else cell_width);
-        const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else fallback_cell_height);
+        const width = clampIntrinsicAxis(if (child.frame.width > 0) child.frame.width else cell_width, child.layout.min_size.width, child.layout.max_size.width);
+        const height = clampIntrinsicAxis(if (child.frame.height > 0) child.frame.height else fallback_cell_height, child.layout.min_size.height, child.layout.max_size.height);
         const child_frame = geometry.RectF.init(
             x + child.frame.x,
             y + child.frame.y,
@@ -462,8 +514,8 @@ fn layoutVirtualGridChildren(
             child.semantics.list_item_count = saturatingU32(children.len);
             const x = content.x + @as(f32, @floatFromInt(column)) * (cell_width + clamped_gap);
             const y = content.y + @as(f32, @floatFromInt(row)) * stride - range.layout_offset + child.frame.y;
-            const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else cell_width);
-            const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
+            const width = clampIntrinsicAxis(if (child.frame.width > 0) child.frame.width else cell_width, child.layout.min_size.width, child.layout.max_size.width);
+            const height = clampIntrinsicAxis(if (child.frame.height > 0) child.frame.height else range.item_extent, child.layout.min_size.height, child.layout.max_size.height);
             const child_frame = geometry.RectF.init(
                 x + child.frame.x,
                 y,
@@ -537,8 +589,8 @@ fn layoutVirtualVerticalChildren(
         child.semantics.list_item_index = saturatingU32(index);
         child.semantics.list_item_count = saturatingU32(children.len);
         const y = content.y + @as(f32, @floatFromInt(index)) * stride - range.layout_offset + child.frame.y;
-        const width = @max(child.layout.min_size.width, if (child.frame.width > 0) child.frame.width else content.width);
-        const height = @max(child.layout.min_size.height, if (child.frame.height > 0) child.frame.height else range.item_extent);
+        const width = clampIntrinsicAxis(if (child.frame.width > 0) child.frame.width else content.width, child.layout.min_size.width, child.layout.max_size.width);
+        const height = clampIntrinsicAxis(if (child.frame.height > 0) child.frame.height else range.item_extent, child.layout.min_size.height, child.layout.max_size.height);
         const child_frame = geometry.RectF.init(
             content.x + child.frame.x,
             y,
@@ -555,8 +607,8 @@ fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
     return geometry.RectF.init(
         content.x + child.frame.x,
         content.y + child.frame.y,
-        @max(child.layout.min_size.width, width),
-        @max(child.layout.min_size.height, height),
+        clampIntrinsicAxis(width, child.layout.min_size.width, child.layout.max_size.width),
+        clampIntrinsicAxis(height, child.layout.min_size.height, child.layout.max_size.height),
     );
 }
 
@@ -632,9 +684,30 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
 fn intrinsicChildSize(child: Widget, tokens: DesignTokens, depth: usize) geometry.SizeF {
     const intrinsic = intrinsicWidgetSizeDepth(child, tokens, depth);
     return geometry.SizeF.init(
-        @max(intrinsic.width, @max(child.layout.min_size.width, nonNegative(child.frame.width))),
-        @max(intrinsic.height, @max(child.layout.min_size.height, nonNegative(child.frame.height))),
+        clampIntrinsicAxis(@max(intrinsic.width, nonNegative(child.frame.width)), child.layout.min_size.width, child.layout.max_size.width),
+        clampIntrinsicAxis(@max(intrinsic.height, nonNegative(child.frame.height)), child.layout.min_size.height, child.layout.max_size.height),
     );
+}
+
+fn clampIntrinsicAxis(value: f32, min: f32, max: f32) f32 {
+    return @max(min, boundedByMax(value, max));
+}
+
+/// Child contribution to a flex container's intrinsic size. A bare
+/// separator inside a horizontal container is a divider: it contributes
+/// its stroke thickness on both axes (thin along the row, cross-sized by
+/// the siblings it divides) instead of its default horizontal-rule
+/// length. Vertical containers keep the classic contribution.
+fn intrinsicChildSizeInAxis(child: Widget, tokens: DesignTokens, depth: usize, axis: LayoutAxis) geometry.SizeF {
+    const size = intrinsicChildSize(child, tokens, depth);
+    if (child.kind == .separator and axis == .horizontal and child.frame.width <= 0) {
+        const thin = @min(size.width, size.height);
+        return geometry.SizeF.init(
+            @max(nonNegative(child.layout.min_size.width), thin),
+            @max(nonNegative(child.layout.min_size.height), thin),
+        );
+    }
+    return size;
 }
 
 fn intrinsicAxisChildrenSize(widget: Widget, tokens: DesignTokens, axis: LayoutAxis, depth: usize) geometry.SizeF {
@@ -643,7 +716,7 @@ fn intrinsicAxisChildrenSize(widget: Widget, tokens: DesignTokens, axis: LayoutA
     var main_sum: f32 = 0;
     var cross_max: f32 = 0;
     for (widget.children) |child| {
-        const size = intrinsicChildSize(child, tokens, depth + 1);
+        const size = intrinsicChildSizeInAxis(child, tokens, depth + 1, axis);
         switch (axis) {
             .horizontal => {
                 main_sum += size.width;
@@ -837,7 +910,7 @@ fn preferredMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f
         .horizontal => widget.frame.width,
         .vertical => widget.frame.height,
     };
-    return @max(minMainExtent(widget, axis), if (value > 0) value else intrinsicMainExtent(widget, axis, tokens));
+    return clampMainExtent(widget, axis, if (value > 0) value else intrinsicMainExtent(widget, axis, tokens));
 }
 
 fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32, alignment: WidgetCrossAlignment, tokens: DesignTokens) f32 {
@@ -849,9 +922,13 @@ fn preferredCrossExtent(widget: Widget, axis: LayoutAxis, available: f32, alignm
         .horizontal => widget.layout.min_size.height,
         .vertical => widget.layout.min_size.width,
     };
-    if (value > 0) return @max(min_value, value);
-    if (alignment == .stretch) return @max(min_value, available);
-    return @max(min_value, @min(available, intrinsicCrossExtent(widget, axis, tokens)));
+    const max_value = switch (axis) {
+        .horizontal => widget.layout.max_size.height,
+        .vertical => widget.layout.max_size.width,
+    };
+    if (value > 0) return @max(min_value, boundedByMax(value, max_value));
+    if (alignment == .stretch) return @max(min_value, boundedByMax(available, max_value));
+    return @max(min_value, boundedByMax(@min(available, intrinsicCrossExtent(widget, axis, tokens)), max_value));
 }
 
 fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
@@ -862,7 +939,7 @@ fn minMainExtent(widget: Widget, axis: LayoutAxis) f32 {
 }
 
 fn intrinsicMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
-    const size = intrinsicWidgetSize(widget, tokens);
+    const size = orientedIntrinsicWidgetSize(widget, tokens, axis);
     return switch (axis) {
         .horizontal => size.width,
         .vertical => size.height,
@@ -870,11 +947,25 @@ fn intrinsicMainExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f
 }
 
 fn intrinsicCrossExtent(widget: Widget, axis: LayoutAxis, tokens: DesignTokens) f32 {
-    const size = intrinsicWidgetSize(widget, tokens);
+    const size = orientedIntrinsicWidgetSize(widget, tokens, axis);
     return switch (axis) {
         .horizontal => size.height,
         .vertical => size.width,
     };
+}
+
+/// Axis-aware intrinsic size. A separator's intrinsic size is authored as
+/// a horizontal rule (default length x stroke width); inside a horizontal
+/// container the rule runs vertically, so the components swap — the
+/// separator stays hairline-thin along the row's main axis (a pane
+/// divider) instead of eating its default length from the row. Explicit
+/// `width`/`frame` values still win through the min/frame channels.
+fn orientedIntrinsicWidgetSize(widget: Widget, tokens: DesignTokens, axis: LayoutAxis) geometry.SizeF {
+    const size = intrinsicWidgetSize(widget, tokens);
+    if (widget.kind == .separator and axis == .horizontal) {
+        return geometry.SizeF.init(size.height, size.width);
+    }
+    return size;
 }
 
 pub fn virtualWidgetScrollContentExtent(widget: Widget, viewport_extent: f32) f32 {

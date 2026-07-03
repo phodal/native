@@ -423,3 +423,92 @@ test "allocation failure latches and surfaces from finalize" {
     });
     try testing.expectError(error.OutOfMemory, ui.finalize(node));
 }
+
+test "text wrap opt-in becomes a single-span paragraph at finalize" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const content = "A long error message that should wrap instead of clipping on one line";
+    const wrapped = ui.text(.{ .wrap = true }, content);
+    const plain = ui.text(.{}, content);
+    const tree = try ui.finalize(ui.column(.{}, .{ wrapped, plain }));
+
+    const wrapped_widget = tree.root.children[0];
+    try testing.expectEqual(@as(usize, 1), wrapped_widget.spans.len);
+    // The span invariant: span text subslices widget.text, so retained
+    // copies rebase instead of duplicating bytes.
+    try testing.expectEqualStrings(content, wrapped_widget.text);
+    try testing.expect(wrapped_widget.spans[0].text.ptr == wrapped_widget.text.ptr);
+    try testing.expectEqual(content.len, wrapped_widget.spans[0].text.len);
+
+    // Default stays the classic single-line path, byte-identical.
+    const plain_widget = tree.root.children[1];
+    try testing.expectEqual(@as(usize, 0), plain_widget.spans.len);
+}
+
+test "wrapped text reserves its wrapped height in a definite-width pane" {
+    // Ovation repro shape end-to-end: a 360px pane with a long wrapped
+    // text. The pane stays 360 wide, and the text lays out over multiple
+    // lines whose height the column layout reserves.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const content = "This is a long single-line status message that lays out much wider than the pane it sits in and should wrap onto several lines";
+    const tree = try ui.finalize(ui.row(.{}, .{
+        ui.column(.{ .width = 360 }, .{
+            ui.text(.{ .wrap = true }, content),
+            ui.text(.{}, "Below"),
+        }),
+        ui.column(.{ .grow = 1 }, .{}),
+    }));
+
+    var layout_nodes: [16]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 800, 400), &layout_nodes);
+
+    const pane = tree.root.children[0];
+    const pane_frame = blk: {
+        for (layout.nodes) |node| {
+            if (node.widget.id == pane.id) break :blk node.frame;
+        }
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(f32, 360), pane_frame.width);
+
+    const wrapped = pane.children[0];
+    const below = pane.children[1];
+    var wrapped_frame: ?geometry.RectF = null;
+    var below_frame: ?geometry.RectF = null;
+    for (layout.nodes) |node| {
+        if (node.widget.id == wrapped.id) wrapped_frame = node.frame;
+        if (node.widget.id == below.id) below_frame = node.frame;
+    }
+    // Multiple lines reserved: the wrapped text is taller than the
+    // single-line sibling, which sits below it rather than overlapping.
+    try testing.expect(wrapped_frame.?.height > below_frame.?.height);
+    try testing.expect(below_frame.?.y >= wrapped_frame.?.y + wrapped_frame.?.height);
+}
+
+test "explicit sizes are definite except on resizable" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.column(.{}, .{
+        ui.el(.panel, .{ .width = 240, .height = 40 }, .{}),
+        // Resizable keeps width as the initial/min width only: the engine's
+        // drag handle writes larger frames past it.
+        ui.el(.resizable, .{ .width = 240 }, .{}),
+    }));
+
+    const panel = tree.root.children[0];
+    try testing.expectEqual(@as(f32, 240), panel.layout.min_size.width);
+    try testing.expectEqual(@as(f32, 240), panel.layout.max_size.width);
+    try testing.expectEqual(@as(f32, 40), panel.layout.min_size.height);
+    try testing.expectEqual(@as(f32, 40), panel.layout.max_size.height);
+
+    const resizable = tree.root.children[1];
+    try testing.expectEqual(@as(f32, 240), resizable.layout.min_size.width);
+    try testing.expectEqual(@as(f32, 0), resizable.layout.max_size.width);
+}

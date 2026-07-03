@@ -297,6 +297,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     if (std.mem.eql(u8, attribute.name, "on-link")) continue;
                     if (std.mem.eql(u8, attribute.name, "on-details")) continue;
                     if (std.mem.eql(u8, attribute.name, "details-expanded")) continue;
+                    if (std.mem.eql(u8, attribute.name, "issue-link-base")) continue;
                     fail(node, markup.markdown_attr_message);
                 }
             }
@@ -321,6 +322,19 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             }
             if (comptime (node.attr("details-expanded") != null)) {
                 options.details_expanded = detailsExpandedItems(node, entries, comptime node.attr("details-expanded").?, ui, model, scope);
+            }
+            if (comptime (node.attr("issue-link-base") != null)) {
+                const raw = comptime node.attr("issue-link-base").?;
+                comptime {
+                    const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.markdown_issue_link_base_message);
+                    if (expression == .equals) fail(node, markup.markdown_issue_link_base_message);
+                }
+                comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, markup.markdown_issue_link_base_message);
+                const base = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                    .string => |text| text,
+                    else => runtimeFail([]const u8, ui),
+                };
+                if (base.len > 0) options.issue_link_base = base;
             }
             return Md.view(ui, source_text, options);
         }

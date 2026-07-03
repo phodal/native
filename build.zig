@@ -1039,6 +1039,21 @@ pub fn build(b: *std.Build) void {
     gpu_dashboard_smoke_run.step.dependOn(&cli_exe.step);
     gpu_dashboard_smoke_step.dependOn(&gpu_dashboard_smoke_run.step);
 
+    // Percentile performance check (friction log #77). Deliberately NOT part
+    // of `zig build test` or the fast gate tier: N launches are slow and the
+    // numbers only mean something on a controlled machine. Runs via
+    // `scripts/gate.sh full --perf` locally and a dedicated macos-14 CI job.
+    // Knobs: ZN_PERF_LAUNCHES, ZN_PERF_INTERACTIONS, ZN_PERF_BUDGET_MS,
+    // ZN_PERF_INPUT_BUDGET_MS — see scripts/perf-gpu-dashboard.sh.
+    const gpu_dashboard_perf_step = b.step("test-gpu-dashboard-perf", "Run macOS GPU dashboard percentile performance check (N launches; slow)");
+    const gpu_dashboard_perf_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
+    gpu_dashboard_perf_build.setCwd(b.path("examples/gpu-dashboard"));
+    const gpu_dashboard_perf_run = b.addSystemCommand(&.{ "sh", "scripts/perf-gpu-dashboard.sh" });
+    gpu_dashboard_perf_run.addFileArg(cli_exe.getEmittedBin());
+    gpu_dashboard_perf_run.step.dependOn(&gpu_dashboard_perf_build.step);
+    gpu_dashboard_perf_run.step.dependOn(&cli_exe.step);
+    gpu_dashboard_perf_step.dependOn(&gpu_dashboard_perf_run.step);
+
     const canvas_preview_smoke_step = b.step("test-canvas-preview-smoke", "Run macOS canvas + webview (both-in-one-window) automation smoke test");
     const canvas_preview_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
     canvas_preview_smoke_build.setCwd(b.path("examples/canvas-preview"));

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tiered local gate for zero-native.
 #
-#   scripts/gate.sh fast [base-ref]         # affected-only: what your diff touches
-#   scripts/gate.sh full [base-ref] [--all] # everything CI-shaped that runs locally
+#   scripts/gate.sh fast [base-ref]                  # affected-only: what your diff touches
+#   scripts/gate.sh full [base-ref] [--all] [--perf] # everything CI-shaped that runs locally
 #
 # fast — root `zig build test` + `zig build validate`, plus the suites for
 # the examples AFFECTED by your diff against base-ref (default: main). The
@@ -30,7 +30,9 @@
 # canvas-preview, mobile), the four macOS GPU smokes (gpu-surface,
 # gpu-dashboard, gpu-components, canvas-preview; skipped off-macOS), a
 # markup check over every example .zml, and the docs check if docs/ changed
-# vs base-ref or --all was passed.
+# vs base-ref or --all was passed. --perf additionally runs the percentile
+# GPU perf check (test-gpu-dashboard-perf; macOS only, slow, load-sensitive —
+# opt-in so a busy dev box doesn't fail the gate on noise).
 #
 # Deliberately NOT `set -e`: every step runs even after a failure so the
 # summary shows the whole picture; the exit code is non-zero if any step
@@ -41,7 +43,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root" || exit 1
 
 usage() {
-  echo "usage: scripts/gate.sh <fast|full> [base-ref] [--all]" >&2
+  echo "usage: scripts/gate.sh <fast|full> [base-ref] [--all] [--perf]" >&2
   exit 2
 }
 
@@ -51,9 +53,11 @@ shift
 
 base_ref="main"
 run_all=false
+run_perf=false
 for arg in "$@"; do
   case "$arg" in
     --all) run_all=true ;;
+    --perf) run_perf=true ;;
     -*) usage ;;
     *) base_ref="$arg" ;;
   esac
@@ -206,6 +210,16 @@ else # full
     skip_step "smoke-gpu-dashboard" "macOS only"
     skip_step "smoke-gpu-components" "macOS only"
     skip_step "smoke-canvas-preview" "macOS only"
+  fi
+
+  if $run_perf; then
+    if $is_macos; then
+      run_step "perf-gpu-dashboard" zig build test-gpu-dashboard-perf
+    else
+      skip_step "perf-gpu-dashboard" "macOS only"
+    fi
+  else
+    skip_step "perf-gpu-dashboard" "opt-in: pass --perf (slow, load-sensitive)"
   fi
 
   markup_check() {

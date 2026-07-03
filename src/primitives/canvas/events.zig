@@ -75,6 +75,10 @@ pub const WidgetKeyboardEvent = struct {
     key: []const u8 = "",
     text: []const u8 = "",
     edit: ?TextInputEvent = null,
+    /// True when the runtime clamped a clipboard paste to fit capacity
+    /// before building `edit`; apps that care about lost bytes must check
+    /// this instead of assuming the whole clipboard landed.
+    edit_truncated: bool = false,
     modifiers: WidgetKeyboardModifiers = .{},
 
     pub fn textEditEvent(self: WidgetKeyboardEvent) ?TextInputEvent {
@@ -82,6 +86,25 @@ pub const WidgetKeyboardEvent = struct {
         return widgetKeyboardTextEditEvent(self);
     }
 };
+
+/// The clipboard intent of a key event: cmd+C/X/V on macOS, ctrl+C/X/V
+/// elsewhere (`hasCommandModifier` covers both). Shift/alt variants are
+/// deliberately excluded so shift+ctrl+V-style paste-special chords stay
+/// available to apps.
+pub const WidgetClipboardAction = enum {
+    copy,
+    cut,
+    paste,
+};
+
+pub fn widgetKeyboardClipboardAction(event: WidgetKeyboardEvent) ?WidgetClipboardAction {
+    if (event.phase != .key_down) return null;
+    if (!event.modifiers.hasCommandModifier() or event.modifiers.alt or event.modifiers.shift) return null;
+    if (std.ascii.eqlIgnoreCase(event.key, "c")) return .copy;
+    if (std.ascii.eqlIgnoreCase(event.key, "x")) return .cut;
+    if (std.ascii.eqlIgnoreCase(event.key, "v")) return .paste;
+    return null;
+}
 
 pub const WidgetControlIntentKind = enum {
     press,

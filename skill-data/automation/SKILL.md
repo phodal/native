@@ -66,6 +66,7 @@ zero-native automate widget-click canvas 3
 zero-native automate widget-drag canvas 4 0.25 0.82
 zero-native automate widget-wheel canvas 5 18
 zero-native automate widget-key canvas tab
+zero-native automate widget-key canvas cmd+c
 zero-native automate bridge '{"id":"smoke","command":"native.ping","payload":{"source":"automation"}}'
 ```
 
@@ -87,7 +88,7 @@ zig-out/bin/zero-native automate snapshot
 7. Use `zero-native automate widget-click <view-label> <widget-id>` to exercise pointer-style retained widget routing.
 8. Use `zero-native automate widget-drag <view-label> <widget-id> <start-x-ratio> <end-x-ratio> [start-y-ratio end-y-ratio]` for continuous pointer controls.
 9. Use `zero-native automate widget-wheel <view-label> <widget-id> <delta-y>` for retained widget scroll input.
-10. Use `zero-native automate widget-key <view-label> <key> [text]` for focused retained widget keyboard input.
+10. Use `zero-native automate widget-key <view-label> <key> [text]` for focused retained widget keyboard input. The key accepts modifier chords — `cmd+a`, `cmd+c`, `cmd+v`, `cmd+x`, `ctrl+shift+arrowleft` (`cmd` sets the primary shortcut modifier on every platform) — so select-all/copy/cut/paste and shift-extended selection are drivable; after a copy, widget lines in the snapshot show the live selection as `selection=a..b`, and the copied text lands on the real system clipboard (`pbpaste` on macOS).
 11. Use `zero-native automate screenshot <view-label> [scale]` to capture the named `gpu_surface` view's canvas as `screenshot-<view-label>.png` (the CLI prints the artifact path and waits for the file).
 12. Use `zero-native automate reload` to request a WebView reload.
 

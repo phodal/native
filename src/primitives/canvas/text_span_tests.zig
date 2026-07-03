@@ -347,3 +347,49 @@ test "paragraph intrinsic and wrapped extents drive stacked layout" {
     try testing.expect(paragraph_node.frame.height > 14 * 1.25 * 2);
     try testing.expect(below_node.frame.y >= paragraph_node.frame.y + paragraph_node.frame.height - 0.001);
 }
+
+test "span selection maps points to paragraph offsets and back to rects" {
+    const paragraph = "Hello world again";
+    const spans = [_]TextSpan{
+        .{ .text = paragraph[0..5], .weight = .bold },
+        .{ .text = paragraph[5..] },
+    };
+    const options = text_spans.TextSpanLayoutOptions{ .size = 14, .max_width = 60 };
+    var runs: [text_spans.max_text_span_runs_per_paragraph]TextSpanRun = undefined;
+    const result = layout(&spans, options, &runs);
+    try testing.expect(result.line_count >= 2);
+
+    // Left of the first run on line 0 clamps to offset 0.
+    try testing.expectEqual(@as(usize, 0), text_spans.textSpanOffsetForPoint(paragraph, &spans, options, geometry.PointF.init(-5, 2)).?);
+    // Far right of the last line clamps to the paragraph end.
+    const bottom = @as(f32, @floatFromInt(result.line_count)) * result.line_height - 1;
+    try testing.expectEqual(paragraph.len, text_spans.textSpanOffsetForPoint(paragraph, &spans, options, geometry.PointF.init(500, bottom)).?);
+    // Below the paragraph clamps to the last line.
+    try testing.expectEqual(paragraph.len, text_spans.textSpanOffsetForPoint(paragraph, &spans, options, geometry.PointF.init(500, bottom + 300)).?);
+
+    // Whole-paragraph selection produces one rect per selected line.
+    var rects: [8]canvas.TextSelectionRect = undefined;
+    const selection = text_spans.textSpanSelectionRects(paragraph, &spans, options, .{ .start = 0, .end = paragraph.len }, &rects);
+    try testing.expectEqual(result.line_count, selection.len);
+    try testing.expectEqual(@as(usize, 0), selection[0].range.start);
+    try testing.expectEqual(paragraph.len, selection[selection.len - 1].range.end);
+    for (selection, 0..) |rect, index| {
+        try testing.expectEqual(@as(f32, @floatFromInt(index)) * result.line_height, rect.rect.y);
+        try testing.expect(rect.rect.width >= 1);
+    }
+
+    // A collapsed range selects nothing.
+    try testing.expectEqual(@as(usize, 0), text_spans.textSpanSelectionRects(paragraph, &spans, options, .{ .start = 3, .end = 3 }, &rects).len);
+}
+
+test "span selection degrades to unsupported when spans alias other storage" {
+    const paragraph = "Hello world";
+    // Spans that do NOT slice into `paragraph` (a stack copy: the bytes
+    // match but the storage differs — identical literals intern).
+    var other: [11]u8 = "Hello world".*;
+    const spans = [_]TextSpan{.{ .text = &other }};
+    const options = text_spans.TextSpanLayoutOptions{ .size = 14 };
+    try testing.expect(text_spans.textSpanOffsetForPoint(paragraph, &spans, options, geometry.PointF.init(5, 5)) == null);
+    var rects: [4]canvas.TextSelectionRect = undefined;
+    try testing.expectEqual(@as(usize, 0), text_spans.textSpanSelectionRects(paragraph, &spans, options, .{ .start = 0, .end = paragraph.len }, &rects).len);
+}

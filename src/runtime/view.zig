@@ -216,6 +216,10 @@ pub const RuntimeView = struct {
     canvas_widget_focus_visible_id: canvas.ObjectId = 0,
     canvas_widget_hovered_id: canvas.ObjectId = 0,
     canvas_widget_pressed_id: canvas.ObjectId = 0,
+    /// The static `.text` widget owning the view's active click-drag
+    /// selection (0 = none). One static selection per view; starting a
+    /// selection elsewhere (or pressing anywhere else) clears it.
+    canvas_widget_selected_text_id: canvas.ObjectId = 0,
     canvas_widget_cursor: platform.Cursor = .arrow,
     widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
     widget_text_len: usize = 0,
@@ -235,6 +239,8 @@ pub const RuntimeView = struct {
     pub const canvasWidgetKeyboardTextEdit = CanvasWidgetTextMethods.canvasWidgetKeyboardTextEdit;
     pub const canEditCanvasWidgetText = CanvasWidgetTextMethods.canEditCanvasWidgetText;
     pub const applyCanvasWidgetTextPointer = CanvasWidgetTextMethods.applyCanvasWidgetTextPointer;
+    pub const clearCanvasWidgetStaticTextSelection = CanvasWidgetTextMethods.clearCanvasWidgetStaticTextSelection;
+    pub const canvasWidgetCopyText = CanvasWidgetTextMethods.canvasWidgetCopyText;
     pub const rewriteCanvasWidgetTextStorage = CanvasWidgetTextMethods.rewriteCanvasWidgetTextStorage;
     pub const setCanvasWidgetTextValue = CanvasWidgetTextMethods.setCanvasWidgetTextValue;
 

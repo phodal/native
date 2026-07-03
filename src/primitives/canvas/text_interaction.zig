@@ -371,6 +371,10 @@ pub fn TextBuffer(comptime capacity: usize) type {
         len: usize = 0,
         selection: TextSelection = .{},
         composition: ?TextRange = null,
+        /// True when the most recent `apply` had to clamp (insertions) or
+        /// reject (other edits) the event to stay within capacity. Loud
+        /// seam for paste: check after applying a clipboard insert.
+        truncated: bool = false,
 
         pub fn init(initial: []const u8) Self {
             var self = Self{};
@@ -386,8 +390,9 @@ pub fn TextBuffer(comptime capacity: usize) type {
             return std.mem.trim(u8, self.text(), " \t").len == 0;
         }
 
-        /// Apply one edit event; edits that would exceed capacity are
-        /// truncated to fit.
+        /// Apply one edit event. Insertions that would exceed capacity are
+        /// clamped to the bytes that fit (at a UTF-8 boundary); any other
+        /// over-capacity edit is rejected. Both set `truncated`.
         pub fn apply(self: *Self, event: TextInputEvent) void {
             var scratch: [capacity]u8 = undefined;
             const state = TextEditState{
@@ -395,7 +400,18 @@ pub fn TextBuffer(comptime capacity: usize) type {
                 .selection = self.selection,
                 .composition = self.composition,
             };
-            const next = applyTextInputEvent(state, event, &scratch) catch return;
+            const next = applyTextInputEvent(state, event, &scratch) catch {
+                self.truncated = true;
+                const clamped = clampedInsertEvent(state, event, capacity) orelse return;
+                const next_clamped = applyTextInputEvent(state, clamped, &scratch) catch return;
+                self.commit(next_clamped);
+                return;
+            };
+            self.truncated = false;
+            self.commit(next);
+        }
+
+        fn commit(self: *Self, next: TextEditState) void {
             const next_len = @min(next.text.len, capacity);
             std.mem.copyForwards(u8, self.storage[0..next_len], next.text[0..next_len]);
             self.len = next_len;
@@ -419,20 +435,69 @@ pub fn TextBuffer(comptime capacity: usize) type {
     };
 }
 
+/// For an over-capacity `.insert_text`, the same event with its payload
+/// clamped (at a UTF-8 boundary) to the bytes that fit alongside the text
+/// the edit keeps. Null when the event is not an insertion or when
+/// nothing fits.
+fn clampedInsertEvent(state: TextEditState, event: TextInputEvent, capacity: usize) ?TextInputEvent {
+    const insertion = switch (event) {
+        .insert_text => |text| text,
+        else => return null,
+    };
+    const normalized = normalizeTextEditState(state);
+    const replaced = activeTextReplaceRange(normalized).byteLen(normalized.text.len);
+    const kept = normalized.text.len - replaced;
+    if (kept >= capacity) return null;
+    const available = capacity - kept;
+    if (available >= insertion.len) return null;
+    const clamped_len = snapTextOffset(insertion, available);
+    if (clamped_len == 0) return null;
+    return .{ .insert_text = insertion[0..clamped_len] };
+}
+
 test "TextBuffer mirrors edits, truncates at capacity, and clears" {
     var buffer = TextBuffer(8){};
     buffer.apply(.{ .insert_text = "hi" });
     buffer.apply(.{ .insert_text = " there" });
     try @import("std").testing.expectEqualStrings("hi there", buffer.text());
+    try @import("std").testing.expect(!buffer.truncated);
 
-    // Over-capacity edits truncate rather than fail.
+    // Over-capacity edits truncate rather than fail, and say so.
     buffer.apply(.{ .insert_text = "!" });
     try @import("std").testing.expectEqual(@as(usize, 8), buffer.text().len);
+    try @import("std").testing.expect(buffer.truncated);
 
     buffer.apply(.delete_backward);
     try @import("std").testing.expectEqualStrings("hi ther", buffer.text());
+    try @import("std").testing.expect(!buffer.truncated);
 
     buffer.clear();
     try @import("std").testing.expectEqualStrings("", buffer.text());
     try @import("std").testing.expect(buffer.isEmpty());
+}
+
+test "TextBuffer clamps over-capacity insertions at a UTF-8 boundary" {
+    const std_testing = @import("std").testing;
+    var buffer = TextBuffer(8){};
+    buffer.apply(.{ .insert_text = "hi" });
+    // 8-byte insertion into 6 available bytes clamps to what fits.
+    buffer.apply(.{ .insert_text = " there!!" });
+    try std_testing.expectEqualStrings("hi there", buffer.text());
+    try std_testing.expect(buffer.truncated);
+    try std_testing.expectEqualDeep(TextSelection.collapsed(8), buffer.selection);
+
+    // Multi-byte codepoints never split: "é" is 2 bytes and only 1 fits.
+    var accents = TextBuffer(3){};
+    accents.apply(.{ .insert_text = "ab" });
+    accents.apply(.{ .insert_text = "\xc3\xa9\xc3\xa9" });
+    try std_testing.expectEqualStrings("ab", accents.text());
+    try std_testing.expect(accents.truncated);
+
+    // A selection being replaced frees its bytes for the insertion.
+    var replace = TextBuffer(8){};
+    replace.apply(.{ .insert_text = "abcdefgh" });
+    replace.apply(.{ .set_selection = .{ .anchor = 0, .focus = 8 } });
+    replace.apply(.{ .insert_text = "0123456789" });
+    try std_testing.expectEqualStrings("01234567", replace.text());
+    try std_testing.expect(replace.truncated);
 }

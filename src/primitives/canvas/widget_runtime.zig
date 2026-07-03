@@ -203,6 +203,12 @@ pub fn textSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
     return widget_render.textSelectionFillColor(widget, tokens);
 }
 
+/// Stable command id of the `ordinal`-th static text selection highlight
+/// rect on a `.text` widget (tests and retained diffing).
+pub fn textSelectionCommandId(widget_id: ObjectId, ordinal: usize) ObjectId {
+    return widget_render.textSelectionCommandId(widget_id, ordinal);
+}
+
 pub fn colorWithAlpha(color: Color, alpha: f32) Color {
     return widget_render.colorWithAlpha(color, alpha);
 }

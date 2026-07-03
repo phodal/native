@@ -45,7 +45,52 @@ pub const AutomationWidgetKey = struct {
     view_label: []const u8,
     key: []const u8,
     text: []const u8 = "",
+    modifiers: AutomationKeyModifiers = .{},
 };
+
+/// Modifier chord for automation key dispatch, mirroring
+/// `platform.ShortcutModifiers` field-for-field (automation stays
+/// platform-agnostic; the dispatch layer copies these across).
+pub const AutomationKeyModifiers = struct {
+    shift: bool = false,
+    control: bool = false,
+    option: bool = false,
+    command: bool = false,
+    primary: bool = false,
+};
+
+const AutomationKeyChord = struct {
+    key: []const u8,
+    modifiers: AutomationKeyModifiers = .{},
+};
+
+/// Parse a `cmd+c` / `ctrl+shift+arrowleft` style chord. `cmd` sets both
+/// `command` and `primary` so one spelling drives the primary shortcut on
+/// every platform. A token without recognized modifier prefixes (including
+/// a literal `+`) is passed through as the key unchanged.
+fn parseAutomationKeyChord(token: []const u8) AutomationKeyChord {
+    var modifiers = AutomationKeyModifiers{};
+    var rest = token;
+    while (std.mem.indexOfScalar(u8, rest, '+')) |separator| {
+        if (separator == 0 or separator + 1 >= rest.len) break;
+        const part = rest[0..separator];
+        if (std.ascii.eqlIgnoreCase(part, "cmd") or std.ascii.eqlIgnoreCase(part, "meta") or std.ascii.eqlIgnoreCase(part, "super")) {
+            modifiers.command = true;
+            modifiers.primary = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "ctrl") or std.ascii.eqlIgnoreCase(part, "control")) {
+            modifiers.control = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "alt") or std.ascii.eqlIgnoreCase(part, "option")) {
+            modifiers.option = true;
+        } else if (std.ascii.eqlIgnoreCase(part, "shift")) {
+            modifiers.shift = true;
+        } else {
+            return .{ .key = token };
+        }
+        rest = rest[separator + 1 ..];
+    }
+    if (rest.len == 0) return .{ .key = token };
+    return .{ .key = rest, .modifiers = modifiers };
+}
 
 pub const AutomationWidgetPointerDrag = struct {
     target: AutomationWidgetTarget,
@@ -150,7 +195,8 @@ pub fn parseAutomationWidgetKey(value: []const u8) !AutomationWidgetKey {
     const key_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
     const text = std.mem.trim(u8, key_part.rest, " \n\r\t");
     if (key_part.token.len == 0) return error.InvalidCommand;
-    return .{ .view_label = view.token, .key = key_part.token, .text = text };
+    const chord = parseAutomationKeyChord(key_part.token);
+    return .{ .view_label = view.token, .key = chord.key, .text = text, .modifiers = chord.modifiers };
 }
 
 pub fn parseAutomationWidgetPointerDrag(value: []const u8) !AutomationWidgetPointerDrag {
@@ -483,6 +529,27 @@ test "runtime parses automation widget key inputs" {
 
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetKey(""));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetKey("canvas"));
+}
+
+test "runtime parses automation widget key modifier chords" {
+    const copy = try parseAutomationWidgetKey("canvas cmd+c");
+    try std.testing.expectEqualStrings("c", copy.key);
+    try std.testing.expect(copy.modifiers.command);
+    try std.testing.expect(copy.modifiers.primary);
+    try std.testing.expect(!copy.modifiers.shift);
+
+    const extend = try parseAutomationWidgetKey("canvas ctrl+shift+arrowleft");
+    try std.testing.expectEqualStrings("arrowleft", extend.key);
+    try std.testing.expect(extend.modifiers.control);
+    try std.testing.expect(extend.modifiers.shift);
+    try std.testing.expect(!extend.modifiers.command);
+
+    // Unrecognized prefixes and a literal plus pass through untouched.
+    const literal_plus = try parseAutomationWidgetKey("canvas +");
+    try std.testing.expectEqualStrings("+", literal_plus.key);
+    try std.testing.expectEqualDeep(AutomationKeyModifiers{}, literal_plus.modifiers);
+    const unknown = try parseAutomationWidgetKey("canvas foo+c");
+    try std.testing.expectEqualStrings("foo+c", unknown.key);
 }
 
 test "runtime parses automation widget pointer drags" {

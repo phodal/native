@@ -276,6 +276,77 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             _ = try runtime_canvas_widget_display.RuntimeCanvasWidgetDisplay(Runtime).refreshCanvasWidgetDisplayListIfOwnedSkippingAccessibility(self, index);
         }
 
+        /// Resolve cmd/ctrl+C/X/V against the view's text state before the
+        /// keyboard event reaches the text editor and the app.
+        ///
+        /// - copy: writes the focused editable widget's selection (or the
+        ///   view's static text selection) through the platform clipboard
+        ///   seam; no widget state changes.
+        /// - cut: copy, then stamp a delete-selection edit onto the routed
+        ///   keyboard event so runtime widget and app model apply the same
+        ///   removal.
+        /// - paste: reads the clipboard into `paste_buffer`, clamps it to
+        ///   the view's text capacity (setting `edit_truncated` loudly),
+        ///   and stamps the insertion onto the routed keyboard event.
+        ///
+        /// Platforms without a clipboard capability report
+        /// `UnsupportedService`; the shortcut degrades to a no-op instead
+        /// of failing input dispatch.
+        pub fn applyCanvasWidgetClipboardShortcut(
+            self: *Runtime,
+            input_event: GpuSurfaceInputEvent,
+            keyboard_event: ?*CanvasWidgetKeyboardEvent,
+            paste_buffer: []u8,
+        ) anyerror!void {
+            if (input_event.kind != .key_down) return;
+            const action = canvas.widgetKeyboardClipboardAction(.{
+                .phase = .key_down,
+                .key = input_event.key,
+                .modifiers = canvasWidgetKeyboardModifiers(input_event.modifiers),
+            }) orelse return;
+            const index = runtimeFindViewIndex(self, input_event.window_id, input_event.label) orelse return;
+            if (self.views[index].kind != .gpu_surface or !self.views[index].focused) return;
+
+            switch (action) {
+                .copy => {
+                    const text = self.views[index].canvasWidgetCopyText() orelse return;
+                    self.writeClipboard(text) catch return;
+                },
+                .cut => {
+                    const event = keyboard_event orelse return;
+                    const target = event.target orelse return;
+                    const text = canvasWidgetEditableSelectionText(self, index, target) orelse return;
+                    // Never delete text that did not make it onto the
+                    // clipboard: a failed write turns cut into a no-op.
+                    self.writeClipboard(text) catch return;
+                    event.keyboard.edit = .{ .insert_text = "" };
+                },
+                .paste => {
+                    const event = keyboard_event orelse return;
+                    const target = event.target orelse return;
+                    const node_index = self.views[index].canvasWidgetNodeIndexById(target.id) orelse return;
+                    const widget = self.views[index].widget_layout_nodes[node_index].widget;
+                    if (!canvas_widget_runtime.canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return;
+                    // An empty or unavailable clipboard pastes nothing.
+                    const text = self.readClipboard(paste_buffer) catch return;
+                    if (text.len == 0) return;
+                    const clamp = canvas_widget_runtime.clampCanvasWidgetPasteText(widget, self.views[index].widget_text_len, text);
+                    event.keyboard.edit_truncated = clamp.truncated;
+                    if (clamp.text.len == 0) return;
+                    event.keyboard.edit = .{ .insert_text = clamp.text };
+                },
+            }
+        }
+
+        fn canvasWidgetEditableSelectionText(self: *Runtime, view_index: usize, target: canvas.WidgetFocusTarget) ?[]const u8 {
+            const node_index = self.views[view_index].canvasWidgetNodeIndexById(target.id) orelse return null;
+            const widget = self.views[view_index].widget_layout_nodes[node_index].widget;
+            if (!canvas_widget_runtime.canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
+            const range = canvas.widgetTextSelectionRange(widget) orelse return null;
+            if (range.isCollapsed(widget.text.len)) return null;
+            return widget.text[range.start..range.end];
+        }
+
         pub fn updateCanvasWidgetTextFromKeyboard(self: *Runtime, keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {
             const index = runtimeFindViewIndex(self, keyboard_event.window_id, keyboard_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
@@ -300,6 +371,16 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .move => self.views[index].canvas_widget_pressed_id,
                 else => return,
             };
+            // Pressing anywhere outside the selected static text drops
+            // the selection (macOS-style single live selection).
+            if (pointer_event.pointer.phase == .down and
+                self.views[index].canvas_widget_selected_text_id != 0 and
+                self.views[index].canvas_widget_selected_text_id != target_id)
+            {
+                if (try self.views[index].clearCanvasWidgetStaticTextSelection()) |dirty| {
+                    try invalidateForCanvasWidgetDirty(self, index, dirty);
+                }
+            }
             if (target_id == 0) return;
 
             const dirty = try self.views[index].applyCanvasWidgetTextPointer(

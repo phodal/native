@@ -155,6 +155,13 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 .timestamp_ns = automationInputTimestampNs(),
                 .key = key.key,
                 .text = key.text,
+                .modifiers = .{
+                    .shift = key.modifiers.shift,
+                    .control = key.modifiers.control,
+                    .option = key.modifiers.option,
+                    .command = key.modifiers.command,
+                    .primary = key.modifiers.primary,
+                },
             } });
         }
 

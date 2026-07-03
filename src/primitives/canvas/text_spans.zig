@@ -496,6 +496,175 @@ pub fn textSpanRunBounds(layout: TextSpanLayout, run: TextSpanRun) geometry.Rect
     return geometry.RectF.init(run.x, top, run.width, layout.line_height);
 }
 
+/// Byte range of `run` inside the paragraph's concatenated plain text.
+/// Builders (`ui.paragraph`, markdown) keep every span's bytes a subslice
+/// of the paragraph text, so a run's offsets fall out of pointer
+/// arithmetic; hand-built spans that alias other storage return null and
+/// selection quietly degrades to unsupported for that paragraph.
+pub fn textSpanRunParagraphRange(paragraph: []const u8, run: TextSpanRun) ?text_interaction.TextRange {
+    if (run.text.len == 0 or paragraph.len == 0) return null;
+    const base = @intFromPtr(paragraph.ptr);
+    const run_start = @intFromPtr(run.text.ptr);
+    if (run_start < base) return null;
+    const start = run_start - base;
+    const end = start + run.text.len;
+    if (end > paragraph.len) return null;
+    return text_interaction.TextRange.init(start, end);
+}
+
+/// Paragraph byte offset for a point relative to the paragraph origin.
+/// Clamps vertically to the nearest line and horizontally to that line's
+/// run edges, so drag selection keeps working when the pointer leaves the
+/// text. Null when the paragraph has no runs or its spans do not index
+/// into `paragraph` (see `textSpanRunParagraphRange`).
+pub fn textSpanOffsetForPoint(
+    paragraph: []const u8,
+    spans: []const TextSpan,
+    options: TextSpanLayoutOptions,
+    point: geometry.PointF,
+) ?usize {
+    var runs: [max_text_span_runs_per_paragraph]TextSpanRun = undefined;
+    const layout = layoutTextSpans(spans, options, &runs);
+    if (layout.runs.len == 0 or layout.line_count == 0 or layout.line_height <= 0) return null;
+
+    const raw_line = point.y / layout.line_height;
+    const max_line = layout.line_count - 1;
+    const line_index: usize = if (raw_line < 0)
+        0
+    else
+        @min(max_line, @as(usize, @intFromFloat(@floor(raw_line))));
+
+    var result: ?usize = null;
+    var first_range: ?text_interaction.TextRange = null;
+    var last_range: ?text_interaction.TextRange = null;
+    var first_x: f32 = 0;
+    var last_end_x: f32 = 0;
+    for (layout.runs) |run| {
+        if (run.line_index != line_index) continue;
+        const range = textSpanRunParagraphRange(paragraph, run) orelse return null;
+        if (first_range == null) {
+            first_range = range;
+            first_x = run.x;
+        }
+        last_range = range;
+        last_end_x = run.x + run.width;
+        if (point.x >= run.x and point.x < run.x + run.width) {
+            result = range.start + spanRunOffsetForX(spans[run.span_index], run, options, point.x - run.x);
+        }
+    }
+    if (result) |offset| return offset;
+    const first = first_range orelse return lineFallbackOffset(paragraph, layout, line_index);
+    if (point.x < first_x) return first.start;
+    if (last_range) |last| {
+        if (point.x >= last_end_x) return last.end;
+    }
+    return first.start;
+}
+
+/// Offset within `run.text` for a run-relative x, midpoint rule per
+/// codepoint, mirroring the plain-text `textLineOffsetForX`.
+fn spanRunOffsetForX(span: TextSpan, run: TextSpanRun, options: TextSpanLayoutOptions, x: f32) usize {
+    if (x <= 0) return 0;
+    var cursor: usize = 0;
+    var caret_x: f32 = 0;
+    while (cursor < run.text.len) {
+        const next_cursor = text_interaction.nextTextOffset(run.text, cursor);
+        const next_x = @max(caret_x + 1, measureSpanSlice(span, run.text[0..next_cursor], options));
+        if (x < (caret_x + next_x) * 0.5) return cursor;
+        caret_x = next_x;
+        cursor = next_cursor;
+    }
+    return run.text.len;
+}
+
+/// When a line exists but has no runs (blank line from an explicit "\n"),
+/// selection lands on the nearest following run's start; an entirely
+/// runless paragraph cannot happen here (guarded by the caller).
+fn lineFallbackOffset(paragraph: []const u8, layout: TextSpanLayout, line_index: usize) ?usize {
+    for (layout.runs) |run| {
+        if (run.line_index < line_index) continue;
+        const range = textSpanRunParagraphRange(paragraph, run) orelse return null;
+        return range.start;
+    }
+    for (0..layout.runs.len) |back| {
+        const run = layout.runs[layout.runs.len - 1 - back];
+        const range = textSpanRunParagraphRange(paragraph, run) orelse return null;
+        return range.end;
+    }
+    return null;
+}
+
+/// Selection highlight rects (relative to the paragraph origin) for a
+/// paragraph byte range: one rect per line, spanning the selected extent
+/// across that line's runs. Returns the rects that fit in `output`;
+/// overflow truncates deterministically like span layout itself.
+pub fn textSpanSelectionRects(
+    paragraph: []const u8,
+    spans: []const TextSpan,
+    options: TextSpanLayoutOptions,
+    range: text_interaction.TextRange,
+    output: []text_interaction.TextSelectionRect,
+) []const text_interaction.TextSelectionRect {
+    const normalized = text_interaction.snapTextRange(paragraph, range);
+    if (normalized.isCollapsed(paragraph.len)) return output[0..0];
+
+    var runs: [max_text_span_runs_per_paragraph]TextSpanRun = undefined;
+    const layout = layoutTextSpans(spans, options, &runs);
+    if (layout.line_height <= 0) return output[0..0];
+
+    var len: usize = 0;
+    var current_line: ?usize = null;
+    var line_left: f32 = 0;
+    var line_right: f32 = 0;
+    var line_range = text_interaction.TextRange.init(0, 0);
+    for (layout.runs) |run| {
+        const run_range = textSpanRunParagraphRange(paragraph, run) orelse continue;
+        const start = @max(normalized.start, run_range.start);
+        const end = @min(normalized.end, run_range.end);
+        if (start >= end) continue;
+
+        const span = spans[run.span_index];
+        const x0 = run.x + measureSpanSlice(span, run.text[0 .. start - run_range.start], options);
+        const x1 = run.x + measureSpanSlice(span, run.text[0 .. end - run_range.start], options);
+        if (current_line) |line| {
+            if (line == run.line_index) {
+                line_left = @min(line_left, @min(x0, x1));
+                line_right = @max(line_right, @max(x0, x1));
+                line_range = text_interaction.TextRange.init(@min(line_range.start, start), @max(line_range.end, end));
+                continue;
+            }
+            if (!flushSpanSelectionLine(layout, line, line_left, line_right, line_range, output, &len)) return output[0..len];
+        }
+        current_line = run.line_index;
+        line_left = @min(x0, x1);
+        line_right = @max(x0, x1);
+        line_range = text_interaction.TextRange.init(start, end);
+    }
+    if (current_line) |line| {
+        if (!flushSpanSelectionLine(layout, line, line_left, line_right, line_range, output, &len)) return output[0..len];
+    }
+    return output[0..len];
+}
+
+fn flushSpanSelectionLine(
+    layout: TextSpanLayout,
+    line_index: usize,
+    left: f32,
+    right: f32,
+    range: text_interaction.TextRange,
+    output: []text_interaction.TextSelectionRect,
+    len: *usize,
+) bool {
+    if (len.* >= output.len) return false;
+    const top = @as(f32, @floatFromInt(line_index)) * layout.line_height;
+    output[len.*] = .{
+        .range = range,
+        .rect = geometry.RectF.init(left, top, @max(1, right - left), @max(1, layout.line_height)),
+    };
+    len.* += 1;
+    return true;
+}
+
 /// Deep equality for widget invalidation: styles, text bytes, and link
 /// payload bytes.
 pub fn textSpansEqual(a: []const TextSpan, b: []const TextSpan) bool {

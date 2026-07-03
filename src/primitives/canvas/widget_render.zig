@@ -14,6 +14,7 @@ const widget_access = @import("widget_access.zig");
 const widget_semantics = @import("widget_semantics.zig");
 const widget_metrics = @import("widget_metrics.zig");
 const widget_text_input = @import("widget_text_input.zig");
+const widget_text_select = @import("widget_text_select.zig");
 const widget_render_style = @import("widget_render_style.zig");
 const widget_render_scroll = @import("widget_render_scroll.zig");
 const widget_render_surfaces = @import("widget_render_surfaces.zig");
@@ -482,6 +483,7 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
     // Empty text leaves are hit/semantics-only: paragraph link hotspots
     // and composite press overlays (timeline items) draw nothing.
     if (widget.text.len == 0) return;
+    try emitStaticTextSelection(builder, widget, tokens);
     const text_size = widgetBodyTextSize(widget, tokens);
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 1),
@@ -500,11 +502,30 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
     });
 }
 
+/// Static text selection highlight: fill rects behind the selected lines
+/// of a `.text` widget (plain or span paragraph). Command ids are hashed
+/// per line ordinal like span runs, so retained diffing stays stable.
+fn emitStaticTextSelection(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const range = widget_access.widgetTextSelectionRange(widget) orelse return;
+    if (range.isCollapsed(widget.text.len)) return;
+    var rect_buffer: [widget_text_select.max_static_text_layout_lines]text_model.TextSelectionRect = undefined;
+    const rects = widget_text_select.staticTextSelectionRects(widget, tokens, range, &rect_buffer);
+    for (rects, 0..) |selection, ordinal| {
+        try builder.fillRoundedRect(.{
+            .id = textSelectionCommandId(widget.id, ordinal),
+            .rect = pixelSnapGeometryRect(tokens, selection.rect),
+            .radius = Radius.all(tokens.radius.sm),
+            .fill = .{ .color = textSelectionFillColor(widget, tokens) },
+        });
+    }
+}
+
 /// Draw a span paragraph: one single-line text command per laid-out run
 /// plus thin fill rects for underline/strikethrough decorations. Runs and
 /// decorations get stable hashed command ids derived from the widget id
 /// and their ordinal, so retained diffing works across frames.
 fn emitTextSpansWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    try emitStaticTextSelection(builder, widget, tokens);
     const content = widget.frame.inset(widget.layout.padding);
     var runs: [text_spans_model.max_text_span_runs_per_paragraph]text_spans_model.TextSpanRun = undefined;
     const layout = text_spans_model.layoutTextSpans(
@@ -570,6 +591,10 @@ pub fn textSpanRunCommandId(widget_id: ObjectId, ordinal: usize) ObjectId {
 
 pub fn textSpanDecorationCommandId(widget_id: ObjectId, ordinal: usize) ObjectId {
     return textSpanCommandId(0x5eed_59a2_0000_0002, widget_id, ordinal);
+}
+
+pub fn textSelectionCommandId(widget_id: ObjectId, ordinal: usize) ObjectId {
+    return textSpanCommandId(0x5eed_59a2_0000_0003, widget_id, ordinal);
 }
 
 fn textSpanCommandId(seed: u64, widget_id: ObjectId, ordinal: usize) ObjectId {

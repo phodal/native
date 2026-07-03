@@ -217,6 +217,12 @@ draft: canvas.TextBuffer(64) = .{},                   // model field: text + sel
 
 See `examples/ui-inbox` for the complete pattern.
 
+### Clipboard and selection (free — do not reimplement)
+
+The runtime owns cmd/ctrl+C/X/V in editable text: copy writes the current selection to the system clipboard, cut copies then delivers the removal to your `on-input` handler as an `insert_text ""` edit, and paste arrives as an ordinary `insert_text` edit — the TEA mirror above stays consistent with zero extra code. Paste is clamped to the view's text capacity: when bytes were dropped, the keyboard event carries `edit_truncated = true` and your `TextBuffer` mirror sets its own `truncated` flag (check it if lost paste bytes matter to your UX; `TextBuffer` clamps oversized insertions at a UTF-8 boundary rather than dropping the edit). Shift+arrows/home/end extend the selection from the keyboard.
+
+Static text is selectable too: click-drag inside one `text` leaf or `paragraph` (markdown bodies included) selects with a highlight, cmd/ctrl+C copies it, and pressing anywhere else clears it. Selection is per-widget by design — there is no document model ordering text across widgets, so a drag cannot span two paragraphs (copy per paragraph). The selection survives rebuilds while that widget's text bytes are unchanged, and shows up in semantics/automation snapshots as `selection=a..b` on the widget line. Direct clipboard access for app logic is `runtime.readClipboard(&buffer)` / `runtime.writeClipboard(text)`.
+
 ## Effects: subprocesses and HTTP from update
 
 `update` can take a third parameter — the effects channel — by declaring `.update_fx` instead of `.update` (existing two-argument apps are untouched; set exactly one):

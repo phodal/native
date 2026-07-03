@@ -90,9 +90,15 @@ pub fn booleanControlSelected(widget: Widget) bool {
 }
 
 pub fn widgetTextSelectionRange(widget: Widget) ?TextRange {
-    if (!widgetTextInputKind(widget.kind)) return null;
+    if (!widgetSelectableTextKind(widget.kind)) return null;
     if (widget.text_selection) |selection| return snapTextRange(widget.text, selection.range(widget.text.len));
     return null;
+}
+
+/// Kinds whose `text_selection` is live state: editable text inputs plus
+/// static `.text` widgets (read-only click-drag selection for copy).
+pub fn widgetSelectableTextKind(kind: WidgetKind) bool {
+    return widgetTextInputKind(kind) or kind == .text;
 }
 
 pub fn widgetTextCompositionRange(widget: Widget) ?TextRange {

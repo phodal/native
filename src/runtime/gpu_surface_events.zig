@@ -117,7 +117,7 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             };
             const widget_surface_dismissed = try CanvasWidgetEventMethods().dismissCanvasWidgetSurfaceFromKeyboardInput(self, input_event);
             if (!widget_surface_dismissed) try CanvasWidgetEventMethods().updateCanvasWidgetFocusFromKeyboardInput(self, input_event);
-            const widget_keyboard_event = if (widget_surface_dismissed)
+            var widget_keyboard_event = if (widget_surface_dismissed)
                 null
             else
                 CanvasWidgetEventMethods().routeCanvasWidgetKeyboardInput(self, input_event, &self.widget_event_route_entries) catch |err| switch (err) {
@@ -127,6 +127,19 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     => null,
                     else => return err,
                 };
+            // Clipboard shortcuts resolve against the raw input (copy has
+            // no routed target when a static text selection is live) and
+            // may stamp a paste/cut edit onto the routed keyboard event;
+            // the pasted bytes live in this frame until dispatch returns.
+            var clipboard_paste_buffer: [platform.max_clipboard_data_bytes]u8 = undefined;
+            if (!widget_surface_dismissed) {
+                try CanvasWidgetEventMethods().applyCanvasWidgetClipboardShortcut(
+                    self,
+                    input_event,
+                    if (widget_keyboard_event) |*keyboard_event| keyboard_event else null,
+                    &clipboard_paste_buffer,
+                );
+            }
             if (widget_keyboard_event) |keyboard_event| {
                 try CanvasWidgetEventMethods().updateCanvasWidgetControlFromKeyboard(self, keyboard_event);
                 try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, keyboard_event);

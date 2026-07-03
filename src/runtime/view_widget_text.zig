@@ -81,7 +81,9 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
         pub fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
             const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
             const widget = self.widget_layout_nodes[index].widget;
-            if (!canvasWidgetEditableTextKind(widget.kind) or widget.state.disabled) return null;
+            if (widget.state.disabled) return null;
+            if (canvas.widgetStaticTextSelectable(widget)) return applyCanvasWidgetStaticTextPointer(self, index, target_id, point, extend);
+            if (!canvasWidgetEditableTextKind(widget.kind)) return null;
 
             const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len);
             const anchor: ?usize = if (extend) current_selection.anchor else null;
@@ -93,6 +95,64 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
             return self.canvasWidgetDirtyBounds(index, widget.frame);
+        }
+
+        /// Click-drag selection inside one static `.text` widget. Press
+        /// collapses at the hit offset, drag extends from the press
+        /// anchor. Cross-widget selection is out of scope: the selection
+        /// model is the widget's own `text_selection` — there is no
+        /// document model ordering text across widgets to extend into.
+        fn applyCanvasWidgetStaticTextPointer(self: *RuntimeView, index: usize, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
+            const widget = self.widget_layout_nodes[index].widget;
+            if (extend and self.canvas_widget_selected_text_id != target_id) return null;
+            const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(0);
+            const anchor: ?usize = if (extend) current_selection.anchor else null;
+            const next_selection = canvas.staticTextSelectionForWidgetPoint(widget, point, anchor, self.widget_tokens) orelse return null;
+            if (self.canvas_widget_selected_text_id == target_id and widget.text_selection != null and canvasTextSelectionsEqual(current_selection, next_selection)) return null;
+
+            self.widget_layout_nodes[index].widget.text_selection = next_selection;
+            self.canvas_widget_selected_text_id = target_id;
+            try self.refreshCanvasWidgetSemantics();
+            self.widget_revision += 1;
+            return self.canvasWidgetDirtyBounds(index, widget.frame);
+        }
+
+        /// Drop the view's static text selection (pointer pressed
+        /// elsewhere, or the copy source went away). Returns the dirty
+        /// bounds of the widget that lost its highlight.
+        pub fn clearCanvasWidgetStaticTextSelection(self: *RuntimeView) anyerror!?geometry.RectF {
+            const id = self.canvas_widget_selected_text_id;
+            if (id == 0) return null;
+            self.canvas_widget_selected_text_id = 0;
+            const index = self.canvasWidgetNodeIndexById(id) orelse return null;
+            if (self.widget_layout_nodes[index].widget.text_selection == null) return null;
+            self.widget_layout_nodes[index].widget.text_selection = null;
+            try self.refreshCanvasWidgetSemantics();
+            self.widget_revision += 1;
+            return self.canvasWidgetDirtyBounds(index, self.widget_layout_nodes[index].frame);
+        }
+
+        /// The text a copy shortcut should place on the clipboard: the
+        /// focused editable widget's selection when it has one, else the
+        /// view's static text selection.
+        pub fn canvasWidgetCopyText(self: *const RuntimeView) ?[]const u8 {
+            if (self.canvas_widget_focused_id != 0) {
+                if (canvasWidgetSelectionSliceById(self, self.canvas_widget_focused_id, true)) |slice| return slice;
+            }
+            if (self.canvas_widget_selected_text_id != 0) {
+                if (canvasWidgetSelectionSliceById(self, self.canvas_widget_selected_text_id, false)) |slice| return slice;
+            }
+            return null;
+        }
+
+        fn canvasWidgetSelectionSliceById(self: *const RuntimeView, id: canvas.ObjectId, editable_only: bool) ?[]const u8 {
+            const index = self.canvasWidgetNodeIndexById(id) orelse return null;
+            const widget = self.widget_layout_nodes[index].widget;
+            if (widget.state.disabled) return null;
+            if (editable_only and !canvasWidgetEditableTextKind(widget.kind)) return null;
+            const range = canvas.widgetTextSelectionRange(widget) orelse return null;
+            if (range.isCollapsed(widget.text.len)) return null;
+            return widget.text[range.start..range.end];
         }
 
         pub fn rewriteCanvasWidgetTextStorage(self: *RuntimeView, edited_index: usize, next_state: canvas.TextEditState) anyerror!void {

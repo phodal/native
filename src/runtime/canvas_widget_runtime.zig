@@ -205,6 +205,29 @@ pub fn canvasWidgetEditableTextKind(kind: canvas.WidgetKind) bool {
     return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox or kind == .textarea;
 }
 
+/// Clipboard paste text clamped to what the view's shared widget text
+/// storage can absorb (the bytes the edit replaces are freed first).
+/// Clamping lands on a UTF-8 boundary; `truncated` is the loud flag the
+/// runtime forwards to apps on the keyboard event.
+pub const CanvasWidgetPasteClamp = struct {
+    text: []const u8 = "",
+    truncated: bool = false,
+};
+
+pub fn clampCanvasWidgetPasteText(widget: canvas.Widget, view_text_len: usize, text: []const u8) CanvasWidgetPasteClamp {
+    const capacity = @import("canvas_limits.zig").max_canvas_widget_text_bytes_per_view;
+    const replaced_len = blk: {
+        if (widget.text_composition) |composition| break :blk composition.byteLen(widget.text.len);
+        if (canvas.widgetTextSelectionRange(widget)) |range| break :blk range.byteLen(widget.text.len);
+        break :blk 0;
+    };
+    const used = view_text_len -| replaced_len;
+    const available = capacity -| used;
+    if (text.len <= available) return .{ .text = text };
+    const clamped = canvas.snapTextOffset(text, available);
+    return .{ .text = text[0..clamped], .truncated = true };
+}
+
 pub fn canvasWidgetSingleLineTextKind(kind: canvas.WidgetKind) bool {
     return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox;
 }
@@ -295,7 +318,7 @@ pub fn collectCanvasWidgetTextReconcileEntries(
 ) anyerror![]const CanvasWidgetTextReconcileEntry {
     var len: usize = 0;
     for (nodes) |node| {
-        if (node.widget.id == 0 or !canvasWidgetEditableTextKind(node.widget.kind)) continue;
+        if (node.widget.id == 0 or !canvasWidgetTextReconcileKind(node.widget)) continue;
         if (len >= output.len) break;
         const text_range = try appendWidgetTextStorageRange(text_storage, text_len, node.widget.text);
         const source_text = canvasWidgetSourceTextByIdKind(source_entries, node.widget.id, node.widget.kind) orelse canvasWidgetSourceTextFingerprint(node.widget.text);
@@ -312,6 +335,17 @@ pub fn collectCanvasWidgetTextReconcileEntries(
         len += 1;
     }
     return output[0..len];
+}
+
+/// Which widgets the text reconcile pass tracks across rebuilds: every
+/// editable text input, plus static `.text` widgets that currently carry
+/// a selection (bounded to the view's single static selection, so the
+/// reconcile text storage never inflates for text-heavy views).
+fn canvasWidgetTextReconcileKind(widget: canvas.Widget) bool {
+    if (canvasWidgetEditableTextKind(widget.kind)) return true;
+    if (widget.kind != .text) return false;
+    const selection = widget.text_selection orelse return false;
+    return !selection.isCollapsed(widget.text.len);
 }
 
 pub const CanvasWidgetSourceTextFingerprint = struct {
@@ -386,8 +420,22 @@ pub fn canvasWidgetLayoutNodeWithTextReconcileState(
     previous: []const CanvasWidgetTextReconcileEntry,
 ) canvas.WidgetLayoutNode {
     var copy = node;
-    if (copy.widget.id == 0 or !canvasWidgetEditableTextKind(copy.widget.kind)) return copy;
+    if (copy.widget.id == 0) return copy;
     if (copy.widget.state.disabled or canvasWidgetLayoutNodeHidden(layout, node_index)) return copy;
+
+    if (copy.widget.kind == .text) {
+        // Static text selections survive rebuilds only while the source
+        // text is byte-identical; changed text drops the selection.
+        for (previous) |entry| {
+            if (entry.id != copy.widget.id or entry.kind != copy.widget.kind) continue;
+            if (copy.widget.text_selection == null and std.mem.eql(u8, entry.text, copy.widget.text)) {
+                copy.widget.text_selection = entry.text_selection;
+            }
+            break;
+        }
+        return copy;
+    }
+    if (!canvasWidgetEditableTextKind(copy.widget.kind)) return copy;
 
     for (previous) |entry| {
         if (entry.id != copy.widget.id or entry.kind != copy.widget.kind) continue;

@@ -401,6 +401,8 @@ pub const WidgetListMetrics = event_model.WidgetListMetrics;
 pub const WidgetSemanticsNode = event_model.WidgetSemanticsNode;
 pub const WidgetInvalidationKind = event_model.WidgetInvalidationKind;
 pub const WidgetInvalidation = event_model.WidgetInvalidation;
+pub const WidgetClipboardAction = event_model.WidgetClipboardAction;
+pub const widgetKeyboardClipboardAction = event_model.widgetKeyboardClipboardAction;
 pub const widgetKeyboardControlIntent = event_model.widgetKeyboardControlIntent;
 pub const semanticActions = event_model.semanticActions;
 pub const widgetSemanticControlIntent = event_model.widgetSemanticControlIntent;
@@ -427,14 +429,28 @@ pub const textSelectionRectsForLayout = text_model.textSelectionRectsForLayout;
 pub const layoutTextOffsetForPoint = text_model.layoutTextOffsetForPoint;
 pub const textOffsetForLayoutPoint = text_model.textOffsetForLayoutPoint;
 pub const applyTextInputEvent = text_model.applyTextInputEvent;
+pub const snapTextOffset = text_model.snapTextOffset;
+pub const snapTextRange = text_model.snapTextRange;
+pub const snapTextSelection = text_model.snapTextSelection;
 
 pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimations;
 
 pub const emitWidgetLayout = widget_runtime.emitWidgetLayout;
 pub const toggleWidgetKnobCommandId = widget_runtime.toggleWidgetKnobCommandId;
+pub const textSelectionCommandId = widget_runtime.textSelectionCommandId;
 pub const toggleWidgetKnobTravel = widget_runtime.toggleWidgetKnobTravel;
 pub const textSelectionForWidgetPoint = widget_runtime.textSelectionForWidgetPoint;
 pub const textOffsetForWidgetPoint = widget_runtime.textOffsetForWidgetPoint;
+
+// Static text selection (click-drag select + copy in `.text` widgets;
+// widget_text_select.zig).
+pub const widgetStaticTextSelectable = @import("widget_text_select.zig").widgetStaticTextSelectable;
+pub const staticTextSelectionForWidgetPoint = @import("widget_text_select.zig").staticTextSelectionForWidgetPoint;
+pub const staticTextOffsetForWidgetPoint = @import("widget_text_select.zig").staticTextOffsetForWidgetPoint;
+pub const staticTextSelectionRects = @import("widget_text_select.zig").staticTextSelectionRects;
+pub const max_static_text_layout_lines = @import("widget_text_select.zig").max_static_text_layout_lines;
+pub const widgetSelectableTextKind = @import("widget_access.zig").widgetSelectableTextKind;
+pub const widgetTextSelectionRange = @import("widget_access.zig").widgetTextSelectionRange;
 pub const textInputViewportForWidget = widget_runtime.textInputViewportForWidget;
 pub const textInputContentExtentForWidget = widget_runtime.textInputContentExtentForWidget;
 pub const textInputMaxScrollOffsetForWidget = widget_runtime.textInputMaxScrollOffsetForWidget;

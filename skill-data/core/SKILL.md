@@ -216,6 +216,8 @@ zero-native doctor --manifest app.zon --strict
 zig build package
 ```
 
+Run BOTH `zig build` and `zig build test` before calling a change done: Zig's lazy analysis means code only tests reference (or only `main()` reference) can sit broken for weeks under the other command alone — tests never analyze `main`, so an API removed from std can keep "passing" until the app build finally touches it.
+
 For GUI smoke tests, build with automation enabled and use the `automation` skill:
 
 ```bash

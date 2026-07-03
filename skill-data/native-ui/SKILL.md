@@ -280,7 +280,7 @@ Rules that keep this honest:
 - One `on_exit` Msg per spawn, always. A spawn that cannot run (all `max_effects = 16` slots busy, duplicate active key, argv over capacity) still delivers it, with reason `.rejected`. Reasons: `exited` (code is real), `signaled`, `cancelled`, `rejected`, `spawn_failed`.
 - After `fx.cancel(key)` returns, no further `on_line` Msgs for that spawn arrive; exactly one `.cancelled` exit follows. The process is killed and reaped — no zombies. Streaming a chat agent's stdout for minutes and cancelling mid-stream is the designed-for case.
 - Overflow is never silent: a full completion queue drops lines but the next delivered line's `dropped_before` and the exit's `dropped_lines` carry the count; over-long lines arrive truncated with `truncated = true`. Capacities: 16 in-flight effects, 4 KiB per line by default, 64 queued completions.
-- Agent CLIs emit whole events as single NDJSON lines far beyond 4 KiB (`claude -p --output-format stream-json` repeats the entire answer on one line). Raise the bound per spawn with `.max_line_bytes = 64 * 1024` — anything up to `max_effect_line_bytes_ceiling` (64 KiB); requests above the ceiling (or zero) are rejected through `on_exit`, never silently clamped. Lines beyond the granted bound still arrive truncated and flagged.
+- Agent CLIs emit whole events as single NDJSON lines far beyond 4 KiB (`claude -p --output-format stream-json` repeats the entire answer on one line). Raise the bound per spawn with `.max_line_bytes = 64 * 1024` — anything up to `max_effect_line_bytes_ceiling` (256 KiB); requests above the ceiling (or zero) are rejected through `on_exit`, never silently clamped. Lines beyond the granted bound still arrive truncated and flagged. The ceiling has envelope headroom: a stream that WRAPS another stream's lines (sandbox exec NDJSON envelopes carrying JSON-escaped agent events) can carry a full 64 KiB inner line with escaping overhead to spare — size the outer bound at roughly 2-3x the inner one.
 - JSON-over-stdout (`gh --json`, `jq -c`, `curl`) emits one giant line the 4 KiB line cap would destroy. Spawn with `.output = .collect` instead of the default `.lines`: whole stdout (up to 512 KiB) arrives ONCE on the exit Msg as `exit.output`, plus the child's stderr tail (last 4 KiB) in `exit.stderr_tail` — check it when `exit.code != 0` (auth errors, usage messages). No `on_line` Msgs fire for a collect spawn; overflow arrives cut with `output_truncated`/`stderr_truncated` set, never silently. COPY `exit.output`/`exit.stderr_tail` in update — drain scratch like `line.line`; the scalar exit fields stay plain data, safe to store. (`.lines` mode still ignores stderr entirely; use `.collect`, or an sh `2>&1` re-route if you truly need interleaved streaming.)
 
 `fx.fetch` runs one HTTP(S) request on a worker thread and delivers its terminal outcome — response, classified failure, timeout, or cancel — as exactly ONE Msg:
@@ -323,7 +323,9 @@ Streaming responses (`.response = .stream`) frame the body into `on_line` Msgs a
     .body = cmd_json,
     .timeout_ms = 600_000,                 // covers the STREAM's whole lifetime
     .response = .stream,                   // body arrives as on_line Msgs
-    .max_line_bytes = 64 * 1024,           // agent events exceed the 4 KiB default
+    .max_line_bytes = 256 * 1024,          // envelope lines WRAP agent events
+                                           // (JSON-escaped): size the outer
+                                           // bound 2-3x the inner one
     .on_line = Effects.lineMsg(.exec_event),
     .on_response = Effects.responseMsg(.exec_done),
 }),
@@ -331,7 +333,38 @@ Streaming responses (`.response = .stream`) frame the body into `on_line` Msgs a
 .exec_done => |response| model.finish(response), // status set, body always empty
 ```
 
-Stream rules: each body line is one `on_line` Msg (same payload type and copy rule as spawn lines; `max_line_bytes` mirrors the spawn override with the same 64 KiB ceiling); the terminal `on_response` Msg carries the real HTTP status with an empty body; `fx.cancel(key)` mid-stream stops the lines and delivers exactly one `.cancelled` terminal; the whole-exchange `timeout_ms` covers the stream's full lifetime, so raise it for long-running commands; lines dropped on a full queue that no later line reported ride the terminal's `response.dropped_before`. In the fake executor, `feedLine` feeds a stream fetch's lines and `feedResponse(key, status, "")` delivers its terminal.
+Stream rules: each body line is one `on_line` Msg (same payload type and copy rule as spawn lines; `max_line_bytes` mirrors the spawn override with the same 256 KiB ceiling); the terminal `on_response` Msg carries the real HTTP status with an empty body; `fx.cancel(key)` mid-stream stops the lines and delivers exactly one `.cancelled` terminal; the whole-exchange `timeout_ms` covers the stream's full lifetime, so raise it for long-running commands; lines dropped on a full queue that no later line reported ride the terminal's `response.dropped_before`. In the fake executor, `feedLine` feeds a stream fetch's lines and `feedResponse(key, status, "")` delivers its terminal.
+
+`fx.writeFile` / `fx.readFile` are TEA-friendly file persistence — session snapshots, app state — without smuggling an `Io` handle from `main` into `update`. Same discipline as spawn and fetch: bounded, key-based (shared key space and 16 slots), exactly one terminal Msg with an explicit outcome:
+
+```zig
+pub const Msg = union(enum) {
+    save,
+    boot,
+    saved: zero_native.EffectFileResult,   // the fixed payload type
+    loaded: zero_native.EffectFileResult,
+};
+
+.save => fx.writeFile(.{
+    .key = save_key,
+    .path = model.sessionPath(),           // ≤ 1 KiB; parent dirs are created
+    .bytes = model.snapshotJson(),         // ≤ 1 MiB, copied at call time
+    .on_result = Effects.fileMsg(.saved),
+}),
+.boot => fx.readFile(.{
+    .key = load_key,
+    .path = model.sessionPath(),
+    .on_result = Effects.fileMsg(.loaded),
+}),
+.saved => |result| model.noteSaved(result.outcome),
+.loaded => |result| model.restore(result),  // COPY result.bytes — drain scratch
+```
+
+File rules:
+
+- `result.outcome` is explicit: `.ok` (a read's whole content in `result.bytes`; a write fully on disk), `.not_found` (reads only — writes create the path, parent directories included), `.io_failed` (permissions, path is a directory, disk), `.truncated` (the file exceeds the 1 MiB `max_effect_file_bytes`; `result.bytes` is the first bound bytes — its own outcome, not a flag, because a cut JSON snapshot must not parse as whole), `.rejected` (never ran: slots busy, duplicate key, empty/over-long path, write bytes over the bound — an over-bound WRITE is rejected outright since a partial write would corrupt the file), `.cancelled`.
+- Writes replace the file whole; `writeFile` bytes are copied at call time so the caller's buffer is immediately reusable. Reads deliver drain-scratch bytes — copy what the model keeps.
+- In the fake executor: `pendingFileAt(0)` records `key`/`op`/`path`/`bytes` for assertions; `feedFileResult(key, .ok, "{...}")` answers a read (over-bound content is cut and rewritten to `.truncated`, mirroring the real reader), `feedFileResult(key, .ok, "")` acknowledges a write; failure outcomes pass through as fed.
 
 Test effects with the fake executor — deterministic, no processes, no network:
 
@@ -357,6 +390,32 @@ try harness.runtime.dispatchPlatformEvent(app, .wake);   // Msg{ .fetched = ... 
 ```
 
 The `.wake` platform event is how live platforms marshal worker completions onto the loop thread (macOS main-queue dispatch, GTK `g_idle_add`, Win32 `PostMessage`); dispatching it in tests exercises the same drain path. Note that after `fx.cancel(key)` runs in `update`, a subsequent `feedExit(key)` correctly fails with `error.EffectNotFound` — the cancel already delivered the terminal `.cancelled` exit, so there is no active effect left to feed. See `examples/effects-probe` for the complete pattern, including the live cancel flow.
+
+## Time: wall clock + monotonic, with a testable seam
+
+Zig 0.16 puts `std.time.milliTimestamp` behind `std.Io`, which `update` never sees — do NOT call `clock_gettime` yourself. The facade owns the clocks:
+
+```zig
+zero_native.nowMs()                  // wall ms since the Unix epoch (i64) — ledger timestamps
+zero_native.nowNanoseconds()         // wall ns (i128)
+zero_native.monotonicMs()            // duration clock (u64, arbitrary origin, never goes backwards)
+zero_native.monotonicNanoseconds()   // subtract two reads for an elapsed time
+```
+
+Time-DEPENDENT logic (elapsed-time display, timeouts driven from update) should hold the seam in the model instead of calling the free functions, so tests stay deterministic:
+
+```zig
+pub const Model = struct { clock: zero_native.Clock = .system, ... };
+.step_started => model.entry.started_ms = model.clock.wallMs(),
+
+// in tests:
+var test_clock: zero_native.TestClock = .{};
+model.clock = test_clock.clock();
+test_clock.advanceMs(1500);          // moves wall + monotonic together
+test_clock.setWallMs(1_700_000_000_000);  // NTP-style wall jump, monotonic untouched
+```
+
+Wall answers "what time is it?" (jumps with OS clock adjustments); monotonic answers "how long did it take?". Don't subtract wall timestamps for durations.
 
 ## Structure tags
 

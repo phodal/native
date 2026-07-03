@@ -56,8 +56,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         pub const MarkupView = canvas.MarkupView(ModelT, MsgT);
 
         /// The app's effect system (TEA's Cmd half): `fx.spawn` /
-        /// `fx.cancel` from an `update_fx`-style update. See
-        /// `runtime/effects.zig` for capacities and semantics.
+        /// `fx.fetch` / `fx.writeFile` / `fx.readFile` / `fx.cancel`
+        /// from an `update_fx`-style update. See `runtime/effects.zig`
+        /// for capacities and semantics.
         pub const Effects = runtime_effects.Effects(MsgT);
 
         pub const ChromeOptions = struct {

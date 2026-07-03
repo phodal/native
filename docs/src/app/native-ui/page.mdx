@@ -180,7 +180,21 @@ HTTP requests ride the same channel: `fx.fetch` runs one request on a worker thr
 
 Response bodies are binary-safe and bounded (256 KiB; longer arrives cut with `truncated = true`), the whole exchange honors a per-fetch timeout (default 30 s), and cancelling a fetch delivers exactly one `cancelled` Msg with nothing after it.
 
-Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, and a fetch that cannot run delivers a response Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn and fetch requests and feed synthetic lines, stderr (`feedStderr`, collect spawns), exits, and responses back deterministically — set it before the first frame and `init_fx` boot spawns are recorded too. See `examples/effects-probe`.
+Files ride the same channel: `fx.writeFile` / `fx.readFile` persist app state — session snapshots, transcripts — without smuggling an `Io` handle from `main` into `update`. Bounded (1 KiB paths, 1 MiB files), key-based, one terminal Msg per operation with an explicit outcome (`ok`, `not_found`, `io_failed`, `truncated` — an over-bound read's own outcome, so a cut JSON snapshot cannot parse as whole — `rejected`, `cancelled`); writes create missing parent directories and replace the file whole:
+
+```zig
+.save => fx.writeFile(.{
+    .key = save_key,
+    .path = model.sessionPath(),
+    .bytes = model.snapshotJson(),                 // copied at call time
+    .on_result = Effects.fileMsg(.saved),          // Msg{ .saved = zero_native.EffectFileResult }
+}),
+.saved => |result| model.noteSaved(result.outcome),
+```
+
+Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, a fetch that cannot run delivers a response Msg with outcome `rejected`, and a file effect that cannot run delivers a result Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn, fetch, and file requests and feed synthetic lines, stderr (`feedStderr`, collect spawns), exits, responses, and file results back deterministically — set it before the first frame and `init_fx` boot spawns are recorded too. See `examples/effects-probe`.
+
+For timestamps, the facade owns the clocks (Zig 0.16 puts `std.time` behind `std.Io`, which `update` never sees): `zero_native.nowMs()` / `nowNanoseconds()` read the wall clock and `monotonicMs()` / `monotonicNanoseconds()` the duration clock. Time-dependent logic stores the `zero_native.Clock` seam in the model (`.system` by default) so tests substitute a deterministic `zero_native.TestClock` and advance it by hand.
 
 ## Rich text: inline spans and markdown
 

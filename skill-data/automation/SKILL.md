@@ -118,6 +118,11 @@ Determinism semantics:
   text measurement provider, text widths can differ between OS versions, so
   compare screenshots taken on the same machine or assert on properties
   (dimensions, changed/unchanged) rather than exact bytes across machines.
+- OS-level captures (`screencapture -x` on macOS) are NOT a substitute: in a
+  shell without Screen Recording permission they exit 0 and silently return
+  wallpaper-only images with no app window in them. If you shell out for a
+  real-pixel capture, verify the image is not blank/wallpaper before trusting
+  it; `automate screenshot` plus a semantics snapshot is the reliable pair.
 
 ## Bridge smoke test pattern
 
@@ -144,7 +149,7 @@ If the command fails, inspect the bridge error code:
 
 ## File protocol
 
-The default directory is `.zig-cache/zero-native-automation/`.
+The default directory is `.zig-cache/zero-native-automation/`, resolved against the CLI's CURRENT WORKING DIRECTORY — run `zero-native automate` from the app project's directory (where the app was launched). The dir is created by the running app, never by the CLI: a command sent from the wrong cwd fails loudly (`error: no automation dir at <abs path>`) instead of queueing into a dir no app reads, and every queued command prints the absolute dir it wrote to — check that line when a command seems to do nothing.
 
 Files:
 

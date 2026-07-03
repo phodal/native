@@ -124,15 +124,51 @@ fn sendCommand(allocator: std.mem.Allocator, io: std.Io, action: []const u8, val
     const buffer = try allocator.alloc(u8, protocol.max_command_bytes);
     defer allocator.free(buffer);
     const line = try protocol.commandLine(action, value, buffer);
-    try std.Io.Dir.cwd().createDirPath(io, automation_dir);
+    // The automation dir is created by the RUNNING APP (built with
+    // -Dautomation=true), never by this CLI: a queue written into a
+    // freshly created dir would go to an app that does not exist —
+    // classically, the wrong cwd — and silently do nothing. Refuse
+    // loudly instead, naming the dir we looked at.
+    try requireAutomationDir(io);
     var command_path: [256]u8 = undefined;
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path(&command_path, "command.txt"), .data = line });
-    std.debug.print("queued {s}\n", .{action});
+    var dir_buffer: [1024]u8 = undefined;
+    std.debug.print("queued {s} -> {s}\n", .{ action, automationDirDescription(io, &dir_buffer) });
+}
+
+/// Error out (loudly, with the absolute path) when the automation dir
+/// does not exist under the current cwd — the app creates it at start,
+/// so its absence means no automation-enabled app runs HERE and the
+/// command would be queued into the void.
+fn requireAutomationDir(io: std.Io) error{AutomationCommandFailed}!void {
+    var dir = std.Io.Dir.cwd().openDir(io, automation_dir, .{}) catch {
+        var dir_buffer: [1024]u8 = undefined;
+        std.debug.print(
+            "error: no automation dir at {s}\n" ++
+                "       (the app creates it on launch when built with -Dautomation=true;\n" ++
+                "        run this command from the app project's working directory)\n",
+            .{automationDirDescription(io, &dir_buffer)},
+        );
+        return error.AutomationCommandFailed;
+    };
+    dir.close(io);
+}
+
+/// The automation dir as an absolute path when the cwd resolves, the
+/// relative default otherwise — for messages only.
+fn automationDirDescription(io: std.Io, buffer: []u8) []const u8 {
+    var cwd_buffer: [1024]u8 = undefined;
+    const cwd_len = std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer) catch return automation_dir;
+    return std.fmt.bufPrint(buffer, "{s}/{s}", .{ cwd_buffer[0..cwd_len], automation_dir }) catch automation_dir;
 }
 
 fn printFile(io: std.Io, name: []const u8) !void {
     var file_path: [256]u8 = undefined;
-    const bytes = readFile(std.heap.page_allocator, io, path(&file_path, name)) catch return fail("no app connected");
+    const bytes = readFile(std.heap.page_allocator, io, path(&file_path, name)) catch {
+        var dir_buffer: [1024]u8 = undefined;
+        std.debug.print("error: no app connected — nothing readable at {s}\n", .{automationDirDescription(io, &dir_buffer)});
+        return error.AutomationCommandFailed;
+    };
     defer std.heap.page_allocator.free(bytes);
     std.debug.print("{s}", .{bytes});
 }

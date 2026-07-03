@@ -1,13 +1,19 @@
 //! The effect system: TEA's `Cmd` half for `UiApp`.
 //!
-//! `Effects(Msg)` runs subprocesses and HTTP fetches on worker threads
+//! `Effects(Msg)` runs subprocesses, HTTP fetches, and whole-file
+//! reads/writes on worker threads
 //! owned by the app loop, streams subprocess stdout lines back as typed
 //! `Msg` values (or, in `.collect` mode, accumulates whole stdout plus a
 //! stderr tail and delivers both on the exit Msg), reports process exits
 //! the same way, and delivers each fetch's terminal outcome as exactly
 //! one `Msg` — with `.response = .stream` framing the response body into
 //! `on_line` Msgs first (the spawn `.lines` contract over HTTP, for
-//! NDJSON/SSE endpoints that hold the connection open). The model is
+//! NDJSON/SSE endpoints that hold the connection open). File effects
+//! (`writeFile`/`readFile`) follow the fetch shape: one bounded
+//! operation, one terminal Msg with an explicit outcome
+//! (ok / not_found / io_failed / truncated / rejected / cancelled) —
+//! TEA-friendly persistence without smuggling an `Io` handle into
+//! `update`. The model is
 //! never touched off-thread: workers post
 //! fixed-size completion records into a bounded MPSC queue, nudge the
 //! platform loop through `PlatformServices.wake_fn`, and the loop thread
@@ -76,8 +82,15 @@ pub const max_effect_line_bytes: usize = 4096;
 /// never silently clamped. Lines beyond the granted bound still arrive
 /// truncated and flagged. Overrides above the default heap-allocate one
 /// line buffer per accepted effect plus one transfer buffer per
-/// oversized line in flight.
-pub const max_effect_line_bytes_ceiling: usize = 64 * 1024;
+/// oversized line in flight — the ceiling only bounds what an app may
+/// ask for; nothing is allocated until an effect opts in. Sized so an
+/// envelope protocol (NDJSON wrapping another stream's lines as
+/// JSON-escaped `data` fields, e.g. sandbox exec rechunking an agent's
+/// stream-json) can carry a full 64 KiB inner line with escaping
+/// overhead and framing to spare: the previous 64 KiB ceiling made a
+/// near-ceiling inner line unrecoverable because the WRAPPED line blew
+/// the same bound both layers individually fit in.
+pub const max_effect_line_bytes_ceiling: usize = 256 * 1024;
 /// Maximum collected stdout bytes per `.collect` spawn (whole-stdout
 /// delivery for tools like `gh --json` that emit one giant line); the
 /// overflow is discarded and the exit arrives with
@@ -93,6 +106,8 @@ pub const max_effect_stderr_tail_bytes: usize = 4096;
 comptime {
     // The stderr tail rides in a queue entry's line buffer.
     std.debug.assert(max_effect_stderr_tail_bytes <= max_effect_line_bytes);
+    // File paths ride in a slot's URL storage.
+    std.debug.assert(max_effect_file_path_bytes <= max_effect_url_bytes);
 }
 /// Completion queue depth (lines + exits from all workers combined).
 pub const max_effect_queue_entries: usize = 64;
@@ -119,6 +134,16 @@ pub const max_effect_body_bytes: usize = 256 * 1024;
 /// TLS, headers, and body). Override per fetch with
 /// `FetchOptions.timeout_ms`.
 pub const default_effect_fetch_timeout_ms: u32 = 30_000;
+
+/// Maximum bytes of one file effect's path.
+pub const max_effect_file_path_bytes: usize = 1024;
+/// Maximum file-effect payload: the bytes one `writeFile` writes, and
+/// the most one `readFile` delivers (larger files arrive cut with
+/// outcome `.truncated`). Sized for JSON session snapshots and app
+/// state, not media. An over-bound WRITE is rejected outright — a cut
+/// write would corrupt the file on disk, which truncation flags cannot
+/// undo.
+pub const max_effect_file_bytes: usize = 1024 * 1024;
 
 /// The exit `code` reported for every non-`.exited` reason.
 pub const effect_error_exit_code: i32 = -1;
@@ -253,6 +278,53 @@ pub const EffectResponse = struct {
     dropped_before: u32 = 0,
 };
 
+/// Which file operation a file effect performs.
+pub const EffectFileOp = enum { read, write };
+
+/// The terminal outcome of one file effect. Every started file effect
+/// delivers exactly one Msg carrying one of these — failure is never
+/// silent. `truncated` is a full outcome rather than a flag on `.ok`:
+/// a cut JSON snapshot must not be mistaken for a whole one.
+pub const EffectFileOutcome = enum {
+    /// The operation completed. Reads carry the whole file in `bytes`;
+    /// writes wrote every byte (parent directories created as needed).
+    ok,
+    /// The file does not exist (reads only — writes create the path).
+    not_found,
+    /// The OS refused: permissions, the path names a directory, disk
+    /// errors, an unwritable parent — anything but absence.
+    io_failed,
+    /// The file exceeds `max_effect_file_bytes` (reads only): `bytes`
+    /// is its first bound bytes and the rest was NOT read.
+    truncated,
+    /// The request never ran: all slots busy, a duplicate active key,
+    /// an empty or over-long path, or write bytes over
+    /// `max_effect_file_bytes`.
+    rejected,
+    /// `cancel(key)` ended it before the result was delivered. The
+    /// operation itself may still have completed on disk.
+    cancelled,
+};
+
+/// Payload for file-effect Msg constructors. Exactly one is delivered
+/// per `readFile`/`writeFile` — terminal, nothing for that key after
+/// it. `bytes` is a read's content (binary-safe), valid only during
+/// the `update` call that receives it — copy what the model keeps.
+/// Writes always deliver empty `bytes`.
+pub const EffectFileResult = struct {
+    key: u64,
+    op: EffectFileOp = .read,
+    outcome: EffectFileOutcome = .ok,
+    /// Read contents: the whole file for `.ok`, the first
+    /// `max_effect_file_bytes` for `.truncated`, `""` otherwise (and
+    /// always for writes).
+    bytes: []const u8 = "",
+    /// Loop-side terminal notices evicted from the pending ring to make
+    /// room before this one (only under extreme rejection bursts).
+    /// Never silently zero when something was lost.
+    dropped_before: u32 = 0,
+};
+
 /// Executor selection: `.real` spawns processes on worker threads;
 /// `.fake` records spawn requests for tests to inspect and answer with
 /// `feedLine`/`feedExit` — fully deterministic, no processes, no threads.
@@ -338,6 +410,7 @@ pub fn Effects(comptime Msg: type) type {
         pub const LineMsgFn = *const fn (line: EffectLine) Msg;
         pub const ExitMsgFn = *const fn (exit: EffectExit) Msg;
         pub const ResponseMsgFn = *const fn (response: EffectResponse) Msg;
+        pub const FileMsgFn = *const fn (result: EffectFileResult) Msg;
 
         /// Comptime Msg constructor for `on_line`, following
         /// `canvas.Ui(Msg).inputMsg`: `lineMsg(.agent_line)` builds
@@ -374,6 +447,18 @@ pub fn Effects(comptime Msg: type) type {
             }.make;
         }
 
+        /// Comptime Msg constructor for `on_result` of file effects:
+        /// `fileMsg(.snapshot_saved)` builds
+        /// `Msg{ .snapshot_saved = result }` — the variant's payload
+        /// type must be `zero_native.EffectFileResult`.
+        pub fn fileMsg(comptime tag: std.meta.Tag(Msg)) FileMsgFn {
+            return struct {
+                fn make(result: EffectFileResult) Msg {
+                    return @unionInit(Msg, @tagName(tag), result);
+                }
+            }.make;
+        }
+
         pub const SpawnOptions = struct {
             /// Caller-chosen identity, stored in the model. Must not
             /// collide with another still-running effect.
@@ -391,7 +476,7 @@ pub fn Effects(comptime Msg: type) type {
             /// Line-oriented agent CLIs (`claude -p --output-format
             /// stream-json`) emit whole events as single NDJSON lines
             /// far beyond the 4 KiB default; raise this up to
-            /// `max_effect_line_bytes_ceiling` (64 KiB) to receive them
+            /// `max_effect_line_bytes_ceiling` (256 KiB) to receive them
             /// intact. Requests above the ceiling (or zero) are
             /// rejected through `on_exit`, never silently clamped.
             /// Bounds above the default heap-allocate the spawn's line
@@ -461,15 +546,54 @@ pub fn Effects(comptime Msg: type) type {
             max_line_bytes: usize = max_effect_line_bytes,
         };
 
+        pub const WriteFileOptions = struct {
+            /// Caller-chosen identity, stored in the model. Shares the
+            /// key space and the `max_effects` slots with spawns and
+            /// fetches.
+            key: u64,
+            /// The file to write, at most `max_effect_file_path_bytes`.
+            /// Missing parent directories are created; an existing file
+            /// is replaced whole.
+            path: []const u8,
+            /// The whole file content, at most `max_effect_file_bytes`
+            /// — larger is rejected outright (a partial write would
+            /// corrupt the file; there is no write-side truncation).
+            /// Copied at call time; the caller's buffer may be reused
+            /// immediately.
+            bytes: []const u8,
+            on_result: ?FileMsgFn = null,
+        };
+
+        pub const ReadFileOptions = struct {
+            /// Caller-chosen identity, stored in the model. Shares the
+            /// key space and the `max_effects` slots with spawns and
+            /// fetches.
+            key: u64,
+            /// The file to read, at most `max_effect_file_path_bytes`.
+            path: []const u8,
+            on_result: ?FileMsgFn = null,
+        };
+
+        /// A recorded file request, exposed by the fake executor for
+        /// test assertions. Slices point into slot storage and stay
+        /// valid until the result is fed and drained.
+        pub const FileRequest = struct {
+            key: u64,
+            op: EffectFileOp,
+            path: []const u8,
+            /// The bytes a `writeFile` would write; `""` for reads.
+            bytes: []const u8 = "",
+        };
+
         /// `draining`: the worker is done and the terminal entry is
         /// queued, but the slot still owns a heap buffer (a fetch's body
         /// or a collect spawn's stdout) until the drain delivers (and
         /// thereby retires) it.
         const SlotState = enum(u8) { idle, running, done, draining };
 
-        const SlotKind = enum(u8) { spawn, fetch };
+        const SlotKind = enum(u8) { spawn, fetch, file };
 
-        const EntryKind = enum(u8) { line, exit, response };
+        const EntryKind = enum(u8) { line, exit, response, file };
 
         const Entry = struct {
             kind: EntryKind = .line,
@@ -487,6 +611,12 @@ pub fn Effects(comptime Msg: type) type {
             dropped_lines: u32 = 0,
             status: u16 = 0,
             outcome: EffectFetchOutcome = .ok,
+            /// `.file` entries: the operation and its terminal outcome.
+            /// A read's bytes stay in the slot's heap buffer (taken at
+            /// drain, exactly like a fetch body) with their length in
+            /// `line_len`.
+            file_op: EffectFileOp = .read,
+            file_outcome: EffectFileOutcome = .ok,
             /// `.exit` entries of `.collect` spawns: the collected stdout
             /// stays in the slot's heap buffer (taken at drain, like a
             /// fetch body); the stderr tail rides in `line_bytes` with
@@ -498,6 +628,7 @@ pub fn Effects(comptime Msg: type) type {
             line_fn: ?LineMsgFn = null,
             exit_fn: ?ExitMsgFn = null,
             response_fn: ?ResponseMsgFn = null,
+            file_fn: ?FileMsgFn = null,
             /// `.line` entries whose payload exceeds the inline buffer
             /// (a raised `max_line_bytes` bound): the bytes ride in this
             /// heap allocation instead of `line_bytes`. Owned by the
@@ -513,11 +644,13 @@ pub fn Effects(comptime Msg: type) type {
         const PendingMsg = union(enum) {
             exit: struct { exit: EffectExit, exit_fn: ?ExitMsgFn },
             response: struct { response: EffectResponse, response_fn: ?ResponseMsgFn },
+            file: struct { result: EffectFileResult, file_fn: ?FileMsgFn },
 
             fn addDropped(pending: *PendingMsg, count: u32) void {
                 switch (pending.*) {
                     .exit => |*entry| entry.exit.dropped_lines +|= count,
                     .response => |*entry| entry.response.dropped_before +|= count,
+                    .file => |*entry| entry.result.dropped_before +|= count,
                 }
             }
 
@@ -525,6 +658,7 @@ pub fn Effects(comptime Msg: type) type {
                 return switch (pending.*) {
                     .exit => |entry| entry.exit.dropped_lines,
                     .response => |entry| entry.response.dropped_before,
+                    .file => |entry| entry.result.dropped_before,
                 };
             }
         };
@@ -538,6 +672,7 @@ pub fn Effects(comptime Msg: type) type {
             on_line: ?LineMsgFn = null,
             on_exit: ?ExitMsgFn = null,
             on_response: ?ResponseMsgFn = null,
+            on_file: ?FileMsgFn = null,
             /// Set by `cancel` before any kill attempt; read by the
             /// worker so a cancel that lands before the process spawns
             /// still kills it.
@@ -587,11 +722,15 @@ pub fn Effects(comptime Msg: type) type {
             /// Total stderr bytes seen; beyond the ring capacity means
             /// the tail is truncated.
             stderr_total: usize = 0,
-            // ---- fetch-only fields (kind == .fetch) ----
+            // ---- file-only fields (kind == .file) ----
+            file_op: EffectFileOp = .read,
+            // ---- fetch/file fields ----
             /// `.stream` frames the response body into line entries;
             /// `.buffered` delivers it whole on the terminal entry.
             fetch_response_mode: FetchResponseMode = .buffered,
             method: std.http.Method = .GET,
+            /// A fetch's URL — and a file effect's path (they never
+            /// coexist in one slot; `max_effect_file_path_bytes` fits).
             url_storage: [max_effect_url_bytes]u8 = undefined,
             url_len: usize = 0,
             header_storage: [max_effect_fetch_header_bytes]u8 = undefined,
@@ -600,8 +739,11 @@ pub fn Effects(comptime Msg: type) type {
             timeout_ms: u32 = default_effect_fetch_timeout_ms,
             /// Heap buffer per accepted fetch: request payload copy
             /// followed by `max_effect_body_bytes` of response space.
-            /// Owned by the slot until the drain delivers the response
-            /// (taken into `drain_fetch_body`) or `deinit` sweeps it.
+            /// File effects use it too: a write's payload copy, or a
+            /// read's `max_effect_file_bytes + 1` of content space (the
+            /// spare byte detects over-bound files). Owned by the slot
+            /// until the drain delivers the terminal Msg (taken into
+            /// `drain_fetch_body`) or `deinit` sweeps it.
             fetch_buffer: ?[]u8 = null,
             payload_len: usize = 0,
             /// Terminal fetch state, written by the fetch task before
@@ -634,6 +776,10 @@ pub fn Effects(comptime Msg: type) type {
             fn fetchPayload(slot: *const Slot) []const u8 {
                 const buffer = slot.fetch_buffer orelse return "";
                 return buffer[0..slot.payload_len];
+            }
+
+            fn filePath(slot: *const Slot) []const u8 {
+                return slot.url_storage[0..slot.url_len];
             }
         };
 
@@ -673,9 +819,11 @@ pub fn Effects(comptime Msg: type) type {
         /// while `update` runs (freed when the next line drains, or at
         /// `deinit`).
         drain_heap_line: ?[]u8 = null,
-        /// The fetch buffer of the most recently delivered response,
-        /// keeping `EffectResponse.body` valid while `update` runs
-        /// (freed when the next response drains, or at `deinit`).
+        /// The buffer of the most recently delivered fetch response or
+        /// file result, keeping `EffectResponse.body` /
+        /// `EffectFileResult.bytes` valid while `update` runs (freed
+        /// when the next response or file result drains, or at
+        /// `deinit`).
         drain_fetch_body: ?[]u8 = null,
         /// The collect buffer of the most recently delivered collect
         /// exit, keeping `EffectExit.output` valid while `update` runs
@@ -979,6 +1127,96 @@ pub fn Effects(comptime Msg: type) type {
             thread.detach();
         }
 
+        /// Write a whole file on a worker thread — TEA-friendly
+        /// persistence (session snapshots, app state) without smuggling
+        /// an `Io` handle into `update`. Missing parent directories are
+        /// created; an existing file is replaced whole. Exactly one
+        /// terminal Msg follows through `on_result` — `.ok` means every
+        /// byte is on disk; failure is never silent. Never fails from
+        /// the caller's view: requests that cannot run are reported with
+        /// outcome `.rejected` on the next drain. File effects share the
+        /// `max_effects` slots and the key space with spawns and fetches.
+        pub fn writeFile(self: *Self, options: WriteFileOptions) void {
+            if (options.bytes.len > max_effect_file_bytes) {
+                return self.rejectFile(options.key, .write, options.on_result);
+            }
+            self.startFile(options.key, .write, options.path, options.bytes, options.on_result);
+        }
+
+        /// Read a whole file on a worker thread and deliver it as
+        /// exactly one terminal Msg: `.ok` with the content in
+        /// `EffectFileResult.bytes`, `.not_found`, `.io_failed`, or
+        /// `.truncated` with the first `max_effect_file_bytes` when the
+        /// file is bigger (its own outcome, not a flag — a cut JSON
+        /// snapshot must not parse as whole). The bytes are drain
+        /// scratch: copy what the model keeps.
+        pub fn readFile(self: *Self, options: ReadFileOptions) void {
+            self.startFile(options.key, .read, options.path, "", options.on_result);
+        }
+
+        fn startFile(self: *Self, key: u64, op: EffectFileOp, file_path: []const u8, bytes: []const u8, on_result: ?FileMsgFn) void {
+            self.reclaimSlots();
+            if (file_path.len == 0 or file_path.len > max_effect_file_path_bytes) {
+                return self.rejectFile(key, op, on_result);
+            }
+            if (self.findActiveSlot(key) != null) return self.rejectFile(key, op, on_result);
+            const slot_index = self.findIdleSlot() orelse return self.rejectFile(key, op, on_result);
+
+            const slot = &self.slots[slot_index];
+            // A write's buffer holds its payload copy; a read's holds
+            // the content space plus one spare byte that detects
+            // over-bound files without a stat round trip.
+            const buffer_len = if (op == .write) bytes.len else max_effect_file_bytes + 1;
+            const buffer = self.allocator.alloc(u8, buffer_len) catch {
+                return self.rejectFile(key, op, on_result);
+            };
+            slot.generation = self.next_generation;
+            self.next_generation +%= 1;
+            if (self.next_generation == 0) self.next_generation = 1;
+            slot.key = key;
+            slot.kind = .file;
+            slot.file_op = op;
+            slot.on_line = null;
+            slot.on_exit = null;
+            slot.on_response = null;
+            slot.on_file = on_result;
+            slot.cancel_requested.store(false, .release);
+            // `cancelled_generation` stays sticky, exactly as in `spawn`.
+            slot.child_id = null;
+            slot.reaping = false;
+            slot.dropped_pending = 0;
+            slot.dropped_total = 0;
+            @memcpy(slot.url_storage[0..file_path.len], file_path);
+            slot.url_len = file_path.len;
+            if (slot.line_buffer) |old| {
+                self.allocator.free(old);
+                slot.line_buffer = null;
+            }
+            if (slot.fetch_buffer) |old| self.allocator.free(old);
+            slot.fetch_buffer = buffer;
+            if (op == .write) {
+                @memcpy(buffer[0..bytes.len], bytes);
+                slot.payload_len = bytes.len;
+            } else {
+                slot.payload_len = 0;
+            }
+            slot.body_len = 0;
+            slot.fake = self.executor == .fake;
+            slot.state.store(.running, .release);
+
+            if (slot.fake) return;
+
+            const io = self.ensureIo() catch {
+                self.releaseFetchSlot(slot);
+                return self.rejectFile(key, op, on_result);
+            };
+            const thread = std.Thread.spawn(.{}, fileWorkerMain, .{ self, slot_index, slot.generation, io }) catch {
+                self.releaseFetchSlot(slot);
+                return self.rejectFile(key, op, on_result);
+            };
+            thread.detach();
+        }
+
         /// Cancel a running effect by key. After this returns, no
         /// further `on_line` Msgs for that spawn are dispatched; one
         /// `on_exit` Msg with reason `.cancelled` follows once the
@@ -1010,6 +1248,16 @@ pub fn Effects(comptime Msg: type) type {
                     self.deliverLoopResponse(.{ .key = key_copy, .outcome = .cancelled }, response_fn);
                     return;
                 }
+                if (slot.kind == .file) {
+                    // No IO: retire the slot and surface the terminal
+                    // result now.
+                    const file_fn = slot.on_file;
+                    const op = slot.file_op;
+                    const key_copy = slot.key;
+                    self.releaseFetchSlot(slot);
+                    self.deliverLoopFile(.{ .key = key_copy, .op = op, .outcome = .cancelled }, file_fn);
+                    return;
+                }
                 // No process: retire the slot and surface the exit now.
                 const exit_fn = slot.on_exit;
                 const exit: EffectExit = .{
@@ -1023,7 +1271,9 @@ pub fn Effects(comptime Msg: type) type {
                 return;
             }
             // A real fetch is interrupted by its supervising worker,
-            // which polls `cancel_requested`; there is no child to kill.
+            // which polls `cancel_requested`; a real file op is quick
+            // and simply finishes (the drain rewrites its terminal to
+            // `.cancelled`). Neither has a child to kill.
             if (slot.kind == .spawn) self.killPublishedChild(slot);
         }
 
@@ -1056,6 +1306,10 @@ pub fn Effects(comptime Msg: type) type {
                         .response => |entry| {
                             const response_fn = entry.response_fn orelse continue;
                             return response_fn(entry.response);
+                        },
+                        .file => |entry| {
+                            const file_fn = entry.file_fn orelse continue;
+                            return file_fn(entry.result);
                         },
                     }
                 }
@@ -1153,6 +1407,33 @@ pub fn Effects(comptime Msg: type) type {
                             .status = entry.status,
                             .body = body,
                             .truncated = entry.truncated,
+                            .dropped_before = entry.dropped_before,
+                        });
+                    },
+                    .file => {
+                        // One terminal per file occupancy, mirroring
+                        // `.response`: a mismatched generation means the
+                        // occupant was already retired.
+                        if (entry.generation != slot.generation) continue;
+                        // Take buffer ownership so the slot can be
+                        // reused while `update` still reads the bytes.
+                        if (self.drain_fetch_body) |old| self.allocator.free(old);
+                        self.drain_fetch_body = slot.fetch_buffer;
+                        slot.fetch_buffer = null;
+                        const payload_len = slot.payload_len;
+                        const file_fn = entry.file_fn orelse continue;
+                        if (cancelled) {
+                            return file_fn(.{ .key = entry.key, .op = entry.file_op, .outcome = .cancelled });
+                        }
+                        const bytes: []const u8 = if (self.drain_fetch_body) |buffer|
+                            buffer[payload_len .. payload_len + entry.line_len]
+                        else
+                            "";
+                        return file_fn(.{
+                            .key = entry.key,
+                            .op = entry.file_op,
+                            .outcome = entry.file_outcome,
+                            .bytes = bytes,
                             .dropped_before = entry.dropped_before,
                         });
                     },
@@ -1355,6 +1636,79 @@ pub fn Effects(comptime Msg: type) type {
             self.wakeHost();
         }
 
+        /// Number of recorded (still-active) fake file requests.
+        pub fn pendingFileCount(self: *Self) usize {
+            var count: usize = 0;
+            for (&self.slots) |*slot| {
+                if (slot.fake and slot.kind == .file and slot.state.load(.acquire) == .running) count += 1;
+            }
+            return count;
+        }
+
+        /// The `index`-th recorded fake file request (slot order).
+        pub fn pendingFileAt(self: *Self, index: usize) ?FileRequest {
+            var seen: usize = 0;
+            for (&self.slots) |*slot| {
+                if (!(slot.fake and slot.kind == .file and slot.state.load(.acquire) == .running)) continue;
+                if (seen == index) {
+                    return .{
+                        .key = slot.key,
+                        .op = slot.file_op,
+                        .path = slot.filePath(),
+                        .bytes = if (slot.file_op == .write) slot.fetchPayload() else "",
+                    };
+                }
+                seen += 1;
+            }
+            return null;
+        }
+
+        /// Feed the synthetic terminal for the fake file effect with
+        /// `key`, retiring its slot. `bytes` is a read's content,
+        /// delivered with outcome `.ok` or `.truncated` (over-bound
+        /// content is cut at `max_effect_file_bytes` and the outcome
+        /// rewritten to `.truncated`, mirroring the real reader);
+        /// `bytes` is ignored for writes and for failure outcomes. If
+        /// the completion queue is somehow full, the terminal still
+        /// lands through the pending ring — a read whose bytes were
+        /// lost that way reports `.truncated`, never silently.
+        pub fn feedFileResult(self: *Self, key: u64, outcome: EffectFileOutcome, bytes: []const u8) error{EffectNotFound}!void {
+            const slot_index = self.findActiveFakeSlot(key, .file) orelse return error.EffectNotFound;
+            const slot = &self.slots[slot_index];
+            const buffer = slot.fetch_buffer orelse return error.EffectNotFound;
+            var delivered_len: usize = 0;
+            var delivered_outcome = outcome;
+            if (slot.file_op == .read and (outcome == .ok or outcome == .truncated)) {
+                const capacity = @min(buffer.len, max_effect_file_bytes);
+                delivered_len = @min(bytes.len, capacity);
+                @memcpy(buffer[0..delivered_len], bytes[0..delivered_len]);
+                if (bytes.len > capacity) delivered_outcome = .truncated;
+            }
+            slot.body_len = delivered_len;
+            var entry: Entry = .{
+                .kind = .file,
+                .slot_index = @intCast(slot_index),
+                .generation = slot.generation,
+                .key = slot.key,
+                .line_len = @intCast(delivered_len),
+                .file_op = slot.file_op,
+                .file_outcome = delivered_outcome,
+                .file_fn = slot.on_file,
+            };
+            slot.state.store(.draining, .release);
+            if (!self.enqueue(&entry)) {
+                const file_fn = slot.on_file;
+                const op = slot.file_op;
+                self.releaseFetchSlot(slot);
+                self.deliverLoopFile(.{
+                    .key = entry.key,
+                    .op = op,
+                    .outcome = if (op == .read and delivered_len > 0) .truncated else delivered_outcome,
+                }, file_fn);
+            }
+            self.wakeHost();
+        }
+
         // ---------------------------------------------------------- internals
 
         fn ensureIo(self: *Self) !std.Io {
@@ -1389,6 +1743,14 @@ pub fn Effects(comptime Msg: type) type {
                 .key = options.key,
                 .outcome = .rejected,
             }, options.on_response);
+        }
+
+        fn rejectFile(self: *Self, key: u64, op: EffectFileOp, file_fn: ?FileMsgFn) void {
+            self.deliverLoopFile(.{
+                .key = key,
+                .op = op,
+                .outcome = .rejected,
+            }, file_fn);
         }
 
         /// Free a fetch slot's body and line buffers and return it to
@@ -1434,6 +1796,14 @@ pub fn Effects(comptime Msg: type) type {
         fn deliverLoopResponse(self: *Self, response: EffectResponse, response_fn: ?ResponseMsgFn) void {
             if (response_fn == null) return;
             self.deliverPending(.{ .response = .{ .response = response, .response_fn = response_fn } });
+        }
+
+        /// Queue a terminal file result produced on the loop thread
+        /// (file rejections, fake cancels, feed fallbacks) for the next
+        /// drain. Bytes here are always empty.
+        fn deliverLoopFile(self: *Self, result: EffectFileResult, file_fn: ?FileMsgFn) void {
+            if (file_fn == null) return;
+            self.deliverPending(.{ .file = .{ .result = result, .file_fn = file_fn } });
         }
 
         /// Push onto the loop-side pending ring. When the ring is full
@@ -1989,6 +2359,80 @@ pub fn Effects(comptime Msg: type) type {
                 std.Io.sleep(io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
             }
         }
+
+        // ------------------------------------------------------- file worker
+
+        /// Runs one file effect: the blocking read/write happens right
+        /// here on the worker thread (local file IO is quick — no
+        /// timeout supervision), then exactly one `.file` terminal
+        /// entry posts and the slot parks in `.draining` until the
+        /// drain takes its buffer. `cancel` does not interrupt the OS
+        /// call: it marks the generation and the drain rewrites the
+        /// terminal to `.cancelled` (the operation itself may still
+        /// have completed on disk, as `EffectFileOutcome.cancelled`
+        /// documents).
+        fn fileWorkerMain(self: *Self, slot_index: usize, generation: u32, io: std.Io) void {
+            const slot = &self.slots[slot_index];
+            var read_len: usize = 0;
+            const outcome = runFileOp(slot, io, &read_len);
+            slot.body_len = read_len;
+            self.postFile(slot, @intCast(slot_index), generation, io, outcome, read_len);
+            slot.state.store(.draining, .release);
+            self.wakeHost();
+        }
+
+        fn runFileOp(slot: *Slot, io: std.Io, read_len: *usize) EffectFileOutcome {
+            const cwd = std.Io.Dir.cwd();
+            const file_path = slot.filePath();
+            switch (slot.file_op) {
+                .write => {
+                    if (std.fs.path.dirname(file_path)) |parent| {
+                        cwd.createDirPath(io, parent) catch return .io_failed;
+                    }
+                    cwd.writeFile(io, .{
+                        .sub_path = file_path,
+                        .data = slot.fetchPayload(),
+                    }) catch return .io_failed;
+                    return .ok;
+                },
+                .read => {
+                    var file = cwd.openFile(io, file_path, .{}) catch |err| {
+                        return if (err == error.FileNotFound) .not_found else .io_failed;
+                    };
+                    defer file.close(io);
+                    // The buffer has one byte past the delivery bound:
+                    // filling it proves the file is over-bound.
+                    const buffer = slot.fetch_buffer.?;
+                    const len = file.readPositionalAll(io, buffer, 0) catch return .io_failed;
+                    if (len > max_effect_file_bytes) {
+                        read_len.* = max_effect_file_bytes;
+                        return .truncated;
+                    }
+                    read_len.* = len;
+                    return .ok;
+                },
+            }
+        }
+
+        /// The terminal file result must never be dropped: retry until
+        /// the loop thread drains space, giving up only on shutdown.
+        fn postFile(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io, outcome: EffectFileOutcome, read_len: usize) void {
+            var entry: Entry = .{
+                .kind = .file,
+                .slot_index = slot_index,
+                .generation = generation,
+                .key = slot.key,
+                .line_len = @intCast(read_len),
+                .file_op = slot.file_op,
+                .file_outcome = outcome,
+                .file_fn = slot.on_file,
+            };
+            while (!self.enqueue(&entry)) {
+                if (self.shutdown.load(.acquire)) return;
+                self.wakeHost();
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
+            }
+        }
     };
 }
 
@@ -2009,6 +2453,11 @@ test "effect payload types have documented defaults" {
     try std.testing.expectEqualStrings("", response.body);
     try std.testing.expect(!response.truncated);
     try std.testing.expectEqual(@as(u32, 0), response.dropped_before);
+    const file_result: EffectFileResult = .{ .key = 7 };
+    try std.testing.expectEqual(EffectFileOp.read, file_result.op);
+    try std.testing.expectEqual(EffectFileOutcome.ok, file_result.outcome);
+    try std.testing.expectEqualStrings("", file_result.bytes);
+    try std.testing.expectEqual(@as(u32, 0), file_result.dropped_before);
 }
 
 test "fetch errors map onto the documented taxonomy" {

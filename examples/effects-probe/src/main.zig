@@ -6,6 +6,7 @@
 //! view never spawns anything — effects are update-side only.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const runner = @import("runner");
 const zero_native = @import("zero-native");
 
@@ -37,9 +38,20 @@ pub const stream_key: u64 = 1;
 const max_visible_lines = 24;
 const max_line_bytes = 64;
 
-/// A slow, minutes-long POSIX stream: one line every 200ms. Cancel is
-/// the only way it ends before ~100s.
-pub const stream_argv = [_][]const u8{
+/// A slow, minutes-long stream: Cancel is the only way it ends early.
+/// POSIX emits one line every 200ms through /bin/sh; Windows has no sh,
+/// so cmd's `for /L` paces with the classic `ping -n 2 127.0.0.1` ~1s
+/// delay (`timeout /t` refuses to wait without a console, and Wine's
+/// stub returns immediately, so ping is also what keeps the stream slow
+/// under the Wine effects verification). Two Wine cmd parser quirks shape
+/// the exact spelling: `@(...)` groups are silently dropped (exit 0, no
+/// output; /c lines never echo commands, so `@` is unnecessary anyway),
+/// and a redirect filename directly before `)` swallows the paren,
+/// creating a literal `nul)` file — so ping runs first and echo closes
+/// the group.
+pub const stream_argv = if (builtin.os.tag == .windows) [_][]const u8{
+    "cmd", "/c", "for /L %i in (1,1,500) do (ping -n 2 127.0.0.1 > nul & echo stream line %i)",
+} else [_][]const u8{
     "/bin/sh", "-c", "i=0; while [ $i -lt 500 ]; do i=$((i+1)); echo \"stream line $i\"; sleep 0.2; done",
 };
 

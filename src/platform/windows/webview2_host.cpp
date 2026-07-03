@@ -247,6 +247,10 @@ struct NativeView {
     double gpu_pointer_x = 0;
     double gpu_pointer_y = 0;
     WCHAR gpu_pending_high_surrogate = 0;
+    /* UTF-8 preedit last sent as ime_set_composition; empty = no active
+     * composition. Mirrors gpu_preedit_text in the GTK host and markedText
+     * in the AppKit host. */
+    std::string gpu_ime_preedit;
 };
 
 struct Shortcut {
@@ -1421,9 +1425,20 @@ static void destroyNativeViewsForWindow(Host *host, uint64_t window_id) {
  * the macOS Metal and Linux GTK hosts' event cadence. Mouse, wheel, and
  * key input map onto the same gpu_surface_input kinds the other hosts
  * emit; printable text arrives through WM_CHAR as text_input events while
- * WM_KEYDOWN carries only the key name, so nothing inserts twice. IME
- * composition (WM_IME_*) is not wired yet: composed text still lands as
- * WM_CHAR commits, but ime_set_composition preview events are deferred.
+ * WM_KEYDOWN carries only the key name, so nothing inserts twice.
+ *
+ * IME composition flows through WM_IME_COMPOSITION: GCS_COMPSTR preedit
+ * updates become ime_set_composition events carrying the full preedit
+ * text and a UTF-8 byte cursor (from GCS_CURSORPOS), an emptied preedit
+ * or WM_IME_ENDCOMPOSITION with preedit still pending becomes
+ * ime_cancel_composition, and GCS_RESULTSTR maps exactly like AppKit's
+ * insertText / GTK's im-commit: a result equal to the pending preedit is
+ * ime_commit_composition (the runtime already holds the text), anything
+ * else cancels the composition first and inserts as a plain text_input.
+ * WM_IME_COMPOSITION is fully handled (never forwarded to DefWindowProc)
+ * so the IME does not synthesize duplicate WM_CHARs for the result
+ * string, and WM_IME_SETCONTEXT drops ISC_SHOWUICOMPOSITIONWINDOW so the
+ * canvas draws the preedit inline instead of the IME's floating window.
  */
 
 constexpr int kGpuInputPointerDown = 0;
@@ -1434,6 +1449,9 @@ constexpr int kGpuInputScroll = 4;
 constexpr int kGpuInputKeyDown = 5;
 constexpr int kGpuInputKeyUp = 6;
 constexpr int kGpuInputTextInput = 7;
+constexpr int kGpuInputImeSetComposition = 8;
+constexpr int kGpuInputImeCommitComposition = 9;
+constexpr int kGpuInputImeCancelComposition = 10;
 constexpr int kGpuInputPointerCancel = 11;
 constexpr uint64_t kGpuFrameIntervalNs = 16666667ull;
 constexpr UINT_PTR kGpuFrameTimerId = 1;
@@ -1508,6 +1526,118 @@ static void emitGpuSurfaceInput(Host *host, NativeView &view, int input_kind, do
     event.input_text_len = text ? strlen(text) : 0;
     event.shortcut_modifiers = modifiers;
     emitGpuSurfaceEvent(host, view, event);
+}
+
+/* Text/composition emit variant: no pointer payload, optional byte cursor
+ * into the UTF-8 text (mirrors zero_native_emit_gpu_surface_text_input in
+ * the GTK host and emitTextInputEventWithKind in the AppKit host). */
+static void emitGpuSurfaceTextInput(Host *host, NativeView &view, int input_kind, const std::string &text, bool has_composition_cursor, size_t composition_cursor) {
+    WindowsEvent event = {};
+    event.kind = kGpuSurfaceInput;
+    event.timestamp_ns = gpuTimestampNs();
+    event.input_kind = input_kind;
+    event.key_text = "";
+    event.key_text_len = 0;
+    event.input_text = text.c_str();
+    event.input_text_len = text.size();
+    event.has_composition_cursor = has_composition_cursor ? 1 : 0;
+    event.composition_cursor = has_composition_cursor ? composition_cursor : 0;
+    emitGpuSurfaceEvent(host, view, event);
+}
+
+/* Fetch one composition string (GCS_COMPSTR / GCS_RESULTSTR) from the
+ * input context. ImmGetCompositionStringW returns a byte count for the
+ * sizing call and the data for the filling call; errors return empty. */
+static std::wstring gpuImeCompositionString(HIMC imc, DWORD kind) {
+    const LONG bytes = ImmGetCompositionStringW(imc, kind, nullptr, 0);
+    if (bytes <= 0) return std::wstring();
+    std::wstring value((size_t)bytes / sizeof(WCHAR), L'\0');
+    if (value.empty()) return value;
+    const LONG copied = ImmGetCompositionStringW(imc, kind, value.data(), (DWORD)bytes);
+    if (copied <= 0) return std::wstring();
+    value.resize((size_t)copied / sizeof(WCHAR));
+    return value;
+}
+
+/* Clamp a GCS_CURSORPOS value (UTF-16 code units into the preedit) to a
+ * character boundary and convert it into a UTF-8 byte offset, the cursor
+ * unit the shared gpu_surface contract uses (the GTK host converts Pango's
+ * char offsets the same way). A cursor landing on a low surrogate is
+ * nudged past the pair so the substring below never splits a code point. */
+static size_t gpuImeCursorBytes(const std::wstring &preedit, LONG cursor_units) {
+    size_t units = cursor_units < 0 ? preedit.size() : (size_t)cursor_units;
+    if (units > preedit.size()) units = preedit.size();
+    if (units < preedit.size() && preedit[units] >= 0xDC00 && preedit[units] <= 0xDFFF) units += 1;
+    return narrow(preedit.substr(0, units)).size();
+}
+
+/* How a GCS_RESULTSTR commit maps onto the shared composition events.
+ * Mirrors AppKit insertText / GTK im-commit: committing exactly the
+ * pending preedit is a commit of the composition the runtime already
+ * buffers; committing different text (or with no composition at all)
+ * inserts the result, cancelling any pending preedit first. */
+enum GpuImeCommitAction {
+    kGpuImeCommitComposition = 0,
+    kGpuImeCancelThenInsert = 1,
+    kGpuImeInsertOnly = 2,
+};
+
+static GpuImeCommitAction gpuImeCommitAction(const std::string &pending_preedit, const std::string &result) {
+    if (pending_preedit.empty()) return kGpuImeInsertOnly;
+    return pending_preedit == result ? kGpuImeCommitComposition : kGpuImeCancelThenInsert;
+}
+
+/* WM_IME_COMPOSITION. Handles GCS_RESULTSTR before GCS_COMPSTR: IMEs that
+ * commit one segment and keep composing the next (e.g. Japanese phrase
+ * conversion) pack both into a single message, and the commit belongs to
+ * the old composition. */
+static void gpuSurfaceImeComposition(Host *host, NativeView &view, HWND hwnd, LPARAM lparam) {
+    HIMC imc = ImmGetContext(hwnd);
+    if (!imc) return;
+
+    if (lparam & GCS_RESULTSTR) {
+        const std::string result = narrow(gpuImeCompositionString(imc, GCS_RESULTSTR));
+        const std::string pending = view.gpu_ime_preedit;
+        view.gpu_ime_preedit.clear();
+        if (!result.empty()) {
+            switch (gpuImeCommitAction(pending, result)) {
+                case kGpuImeCommitComposition:
+                    emitGpuSurfaceTextInput(host, view, kGpuInputImeCommitComposition, std::string(), false, 0);
+                    break;
+                case kGpuImeCancelThenInsert:
+                    emitGpuSurfaceTextInput(host, view, kGpuInputImeCancelComposition, std::string(), false, 0);
+                    emitGpuSurfaceTextInput(host, view, kGpuInputTextInput, result, false, 0);
+                    break;
+                case kGpuImeInsertOnly:
+                    emitGpuSurfaceTextInput(host, view, kGpuInputTextInput, result, false, 0);
+                    break;
+            }
+        } else if (!pending.empty()) {
+            emitGpuSurfaceTextInput(host, view, kGpuInputImeCancelComposition, std::string(), false, 0);
+        }
+    }
+
+    /* A cursor-only update (caret moved inside an unchanged preedit)
+     * still re-reads GCS_COMPSTR — the string is current in the context —
+     * and re-emits set_composition so the runtime tracks the caret. */
+    const bool composition_update = (lparam & GCS_COMPSTR) != 0 || ((lparam & GCS_CURSORPOS) != 0 && !view.gpu_ime_preedit.empty());
+    if (composition_update) {
+        const std::wstring preedit_wide = gpuImeCompositionString(imc, GCS_COMPSTR);
+        if (preedit_wide.empty()) {
+            if (!view.gpu_ime_preedit.empty()) {
+                view.gpu_ime_preedit.clear();
+                emitGpuSurfaceTextInput(host, view, kGpuInputImeCancelComposition, std::string(), false, 0);
+            }
+        } else {
+            LONG cursor_units = -1;
+            if (lparam & GCS_CURSORPOS) cursor_units = ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0);
+            const size_t cursor_bytes = gpuImeCursorBytes(preedit_wide, cursor_units);
+            view.gpu_ime_preedit = narrow(preedit_wide);
+            emitGpuSurfaceTextInput(host, view, kGpuInputImeSetComposition, view.gpu_ime_preedit, true, cursor_bytes);
+        }
+    }
+
+    ImmReleaseContext(hwnd, imc);
 }
 
 /* Emit a gpu_surface_resize when the child's logical size or device scale
@@ -1741,6 +1871,44 @@ static LRESULT CALLBACK gpuSurfaceProc(HWND hwnd, UINT message, WPARAM wparam, L
         case WM_CHAR:
             gpuSurfaceCharInput(host, *view, wparam);
             return 0;
+        case WM_IME_SETCONTEXT:
+            /* Keep the IME's candidate list but suppress its floating
+             * composition window: the canvas renders the preedit inline
+             * from ime_set_composition events, like the other hosts. */
+            return DefWindowProcW(hwnd, message, wparam, lparam & ~(LPARAM)ISC_SHOWUICOMPOSITIONWINDOW);
+        case WM_IME_STARTCOMPOSITION:
+            /* No event: the shared contract has no explicit start —
+             * the first ime_set_composition opens the composition.
+             * Returning without DefWindowProc keeps the IME's default
+             * composition window from being created. */
+            return 0;
+        case WM_IME_COMPOSITION:
+            gpuSurfaceImeComposition(host, *view, hwnd, lparam);
+            /* Fully handled: DefWindowProc would have the IME synthesize
+             * WM_CHARs for GCS_RESULTSTR, double-inserting the commit. */
+            return 0;
+        case WM_IME_CHAR:
+            /* Commits already travel through the GCS_RESULTSTR path;
+             * letting DefWindowProc translate WM_IME_CHAR into WM_CHAR
+             * would insert them twice. */
+            return 0;
+        case WM_IME_ENDCOMPOSITION:
+            /* A composition that ends while preedit is still pending was
+             * cancelled (focus loss, Escape); a committed one already
+             * cleared the preedit in the GCS_RESULTSTR path. */
+            if (!view->gpu_ime_preedit.empty()) {
+                view->gpu_ime_preedit.clear();
+                emitGpuSurfaceTextInput(host, *view, kGpuInputImeCancelComposition, std::string(), false, 0);
+            }
+            return 0;
+        case WM_KILLFOCUS:
+            /* Mirror AppKit (unmarkText on resign) and GTK (focus-out
+             * resets the IM context): composition cannot outlive focus. */
+            if (!view->gpu_ime_preedit.empty()) {
+                view->gpu_ime_preedit.clear();
+                emitGpuSurfaceTextInput(host, *view, kGpuInputImeCancelComposition, std::string(), false, 0);
+            }
+            break;
         case WM_GETDLGCODE:
             return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS;
     }

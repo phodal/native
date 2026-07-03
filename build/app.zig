@@ -380,6 +380,7 @@ fn linkPlatform(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.Res
         app_mod.linkSystemLibrary("c++", .{});
         app_mod.linkSystemLibrary("user32", .{});
         app_mod.linkSystemLibrary("gdi32", .{});
+        app_mod.linkSystemLibrary("imm32", .{});
         app_mod.linkSystemLibrary("comctl32", .{});
         app_mod.linkSystemLibrary("ole32", .{});
         app_mod.linkSystemLibrary("oleacc", .{});

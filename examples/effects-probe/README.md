@@ -4,6 +4,8 @@ The minimal effects dogfood: a native-rendered app whose Start button spawns a l
 
 This is the standing proof for the effect system's live path: worker thread → bounded completion queue → `wake_fn` → loop-thread drain → `update` → rebuild.
 
+The stream command is platform-conditional: `/bin/sh` paces one line every 200ms on POSIX; Windows builds use `cmd /c for /L` paced by `ping -n 2 127.0.0.1` (~1 line/s), which also works under Wine — `.github/scripts/windows-effects-smoke.sh` cross-compiles this app for `x86_64-windows-gnu` and proves the spawn/stream/wake/cancel path against the automation snapshot there.
+
 ## Run
 
 ```bash

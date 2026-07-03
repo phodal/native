@@ -1104,6 +1104,48 @@ test "windows gpu surface input maps pointer cancel" {
     try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pointer_cancel, gpuSurfaceInputEventFromWindowsEvent(&event).kind);
 }
 
+test "windows gpu surface input maps ime text and composition events" {
+    // A GCS_COMPSTR preedit update: kind 8 carries the full preedit text
+    // plus a UTF-8 byte cursor (the host converts GCS_CURSORPOS UTF-16
+    // units into bytes before emitting).
+    const preedit = "\xe3\x81\x8b\xe3\x82\x99"; // "か" + combining voiced mark
+    var set_event = std.mem.zeroes(WindowsEvent);
+    set_event.input_kind = 8;
+    set_event.input_text = preedit.ptr;
+    set_event.input_text_len = preedit.len;
+    set_event.has_composition_cursor = 1;
+    set_event.composition_cursor = 3;
+    const set_input = gpuSurfaceInputEventFromWindowsEvent(&set_event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_set_composition, set_input.kind);
+    try std.testing.expectEqualStrings(preedit, set_input.text);
+    try std.testing.expectEqual(@as(?usize, 3), set_input.composition_cursor);
+
+    // A GCS_RESULTSTR commit that differs from the preedit arrives as a
+    // plain text_input with no cursor (the cancel travelled separately).
+    var text_event = std.mem.zeroes(WindowsEvent);
+    text_event.input_kind = 7;
+    const committed = "が";
+    text_event.input_text = committed.ptr;
+    text_event.input_text_len = committed.len;
+    const text_input = gpuSurfaceInputEventFromWindowsEvent(&text_event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.text_input, text_input.kind);
+    try std.testing.expectEqualStrings(committed, text_input.text);
+    try std.testing.expectEqual(@as(?usize, null), text_input.composition_cursor);
+
+    // Commit-of-preedit and cancel are empty-text notifications: the
+    // runtime already buffers the composition text.
+    var commit_event = std.mem.zeroes(WindowsEvent);
+    commit_event.input_kind = 9;
+    const commit_input = gpuSurfaceInputEventFromWindowsEvent(&commit_event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_commit_composition, commit_input.kind);
+    try std.testing.expectEqual(@as(usize, 0), commit_input.text.len);
+    try std.testing.expectEqual(@as(?usize, null), commit_input.composition_cursor);
+
+    var cancel_event = std.mem.zeroes(WindowsEvent);
+    cancel_event.input_kind = 10;
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.ime_cancel_composition, gpuSurfaceInputEventFromWindowsEvent(&cancel_event).kind);
+}
+
 test "windows chromium reports unsupported native surfaces" {
     var system = testPlatformWithEngine(.system);
     try std.testing.expect(WindowsPlatform.supportsFeature(&system, .main_webview));

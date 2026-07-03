@@ -412,6 +412,16 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "setMarkedText:(id)string selectedRange" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-gpu-widget-ime-bridge", "Verify the Windows GPU host routes WM_IME composition onto the shared IME event kinds", &.{
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "case WM_IME_STARTCOMPOSITION:" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "case WM_IME_COMPOSITION:" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "case WM_IME_ENDCOMPOSITION:" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "kGpuInputImeSetComposition = 8" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "kGpuInputImeCommitComposition = 9" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "kGpuInputImeCancelComposition = 10" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "gpuImeCommitAction(pending, result)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "ISC_SHOWUICOMPOSITIONWINDOW" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-text-command-bridge", "Verify AppKit GPU text widgets route native text commands", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)selectAll:(id)sender" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "@selector(selectAll:)" },

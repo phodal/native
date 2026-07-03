@@ -59,8 +59,12 @@ test "start captures the spawn request and streamed lines land in the list" {
     try testing.expectEqual(@as(usize, 1), app_state.effects.pendingSpawnCount());
     const request = app_state.effects.pendingSpawnAt(0).?;
     try testing.expectEqual(main.stream_key, request.key);
-    try testing.expectEqualStrings("/bin/sh", request.argv[0]);
-    try testing.expectEqualStrings("-c", request.argv[1]);
+    // The argv is platform-conditional (/bin/sh on POSIX, cmd /c on
+    // Windows); assert the request captured it verbatim either way.
+    try testing.expectEqual(main.stream_argv.len, request.argv.len);
+    try testing.expectEqualStrings(main.stream_argv[0], request.argv[0]);
+    try testing.expectEqualStrings(main.stream_argv[1], request.argv[1]);
+    try testing.expectEqualStrings(main.stream_argv[2], request.argv[2]);
 
     // Synthetic lines drain into the model through the wake path.
     try app_state.effects.feedLine(main.stream_key, "stream line 1");

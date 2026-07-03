@@ -148,6 +148,26 @@ jobs:
       - name: Build and drive ui-inbox.exe under Wine
         run: .github/scripts/windows-canvas-smoke.sh
 
+  windows-effects-smoke:
+    name: Windows Effects Smoke (Wine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install Wine and Xvfb
+        run: sudo apt-get update && sudo apt-get install -y wine xvfb
+      # Cross-compiles examples/effects-probe for x86_64-windows-gnu and
+      # proves the effect system's live Windows path under Wine: fx.spawn
+      # launches cmd.exe, streamed lines land in the model, the worker's
+      # PostMessageW wake shows up as effects_wake events in the trace
+      # log (frame ticks also drain, so the log is the wake's evidence),
+      # and fx.cancel terminates the child with the line count frozen.
+      - name: Build and drive effects-probe.exe under Wine
+        run: .github/scripts/windows-effects-smoke.sh
+
   frontend-examples:
     name: Frontend Examples
     runs-on: ubuntu-latest

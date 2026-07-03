@@ -149,6 +149,16 @@ pub const Options = runtime_api.Options;
 pub const max_dispatch_errors: usize = 16;
 pub const DispatchError = automation.snapshot.DispatchError;
 
+/// What dispatch does with a caught handler/update error AFTER recording
+/// it in the #38 ring. Production loops always `.degrade`: the app keeps
+/// running and the error stays observable through `dispatchErrors()`,
+/// traces, and snapshots. The TestHarness sets `.propagate` so capacity
+/// errors (e.g. `error.WidgetLayoutListFull` from a view that outgrew
+/// its per-view budget) fail tests instead of leaving silent stale
+/// frames (#56). Automation command dispatch is exempt: driver misuse
+/// always degrades, regardless of policy.
+pub const DispatchErrorPolicy = enum { degrade, propagate };
+
 pub const Runtime = struct {
     options: Options,
     surface: platform.Surface,
@@ -179,6 +189,10 @@ pub const Runtime = struct {
     /// Degraded dispatch errors, oldest first (see `max_dispatch_errors`).
     dispatch_errors: [max_dispatch_errors]DispatchError = [_]DispatchError{.{}} ** max_dispatch_errors,
     dispatch_error_len: usize = 0,
+    /// See `DispatchErrorPolicy`: production loops always degrade (#38);
+    /// the TestHarness propagates so capacity errors fail tests instead
+    /// of leaving silent stale frames (#56).
+    dispatch_error_policy: DispatchErrorPolicy = .degrade,
     /// Lifetime count of degraded dispatch errors (including ones the
     /// bounded ring has since dropped).
     dispatch_error_total: u64 = 0,
@@ -639,6 +653,10 @@ pub fn TestHarness() type {
                 // the app runner threads it from `std.process.Init`.
                 .environ = if (builtin.is_test) std.testing.environ else null,
             });
+            // Tests fail loud on handler/update errors (#56); production
+            // loops keep the degrade default (#38). Tests that exercise
+            // the degrade path set `.degrade` back explicitly.
+            self.runtime.dispatch_error_policy = .propagate;
         }
 
         pub fn start(self: *Self, app: App) anyerror!void {

@@ -4,6 +4,8 @@ const canvas = @import("canvas");
 const app_manifest = @import("app_manifest");
 const core = @import("core.zig");
 const ui_app_model = @import("ui_app.zig");
+const effects_mod = @import("effects.zig");
+const automation = @import("../automation/root.zig");
 
 const canvas_label = "counter-canvas";
 
@@ -299,6 +301,109 @@ test "ui app maps timer events into messages and rebuilds" {
     try harness.runtime.cancelTimer(counter_timer_id);
     try std.testing.expect(harness.null_platform.fireTimer(counter_timer_id, 3_000_000) == null);
     try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+}
+
+// -------------------------------------------------------- transform channel
+
+const SlideModel = struct {
+    tick: u32 = 0,
+};
+
+const SlideMsg = union(enum) {
+    tick,
+};
+
+const SlideApp = ui_app_model.UiApp(SlideModel, SlideMsg);
+
+const slide_timer_id: u64 = 43;
+
+fn slideUpdate(model: *SlideModel, msg: SlideMsg) void {
+    switch (msg) {
+        .tick => model.tick += 1,
+    }
+}
+
+fn slideOffset(tick: u32) f32 {
+    return @as(f32, @floatFromInt(tick)) * 8;
+}
+
+fn slideView(ui: *SlideApp.Ui, model: *const SlideModel) SlideApp.Ui.Node {
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.el(.panel, .{
+            .transform = canvas.Affine.translate(slideOffset(model.tick), 0),
+            .opacity = 0.9,
+            .width = 80,
+            .height = 40,
+        }, .{
+            ui.text(.{}, "Slide"),
+        }),
+    });
+}
+
+fn slideTimer(id: u64, timestamp_ns: u64) ?SlideMsg {
+    _ = timestamp_ns;
+    if (id == slide_timer_id) return .tick;
+    return null;
+}
+
+fn slideOptions() SlideApp.Options {
+    return .{
+        .name = "ui-app-slide",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = slideUpdate,
+        .view = slideView,
+        .on_timer = slideTimer,
+    };
+}
+
+fn retainedPanelTransform(runtime: *core.Runtime) !canvas.Affine {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .panel) return node.widget.transform;
+    }
+    return error.MissingPanel;
+}
+
+test "view-mapped transforms rebuild and invalidate per tick" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(SlideApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = SlideApp.init(std.heap.page_allocator, .{}, slideOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    // Tick 0 authors translate(0, 0): the identity default, so the retained
+    // tree starts untransformed.
+    try std.testing.expectEqualDeep(canvas.Affine.identity(), try retainedPanelTransform(&harness.runtime));
+
+    // Each fired tick maps model state into a fresh view transform: the
+    // rebuilt tree carries it and the dirty machinery schedules a repaint.
+    try harness.runtime.startTimer(slide_timer_id, 16_000_000, true);
+    harness.runtime.invalidated = false;
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(slide_timer_id, 2_000_000).?);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.tick);
+    try std.testing.expectEqualDeep(canvas.Affine.translate(8, 0), try retainedPanelTransform(&harness.runtime));
+    try std.testing.expect(harness.runtime.invalidated);
+
+    harness.runtime.invalidated = false;
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(slide_timer_id, 18_000_000).?);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.tick);
+    try std.testing.expectEqualDeep(canvas.Affine.translate(16, 0), try retainedPanelTransform(&harness.runtime));
+    try std.testing.expect(harness.runtime.invalidated);
 }
 
 // ------------------------------------------------------------------ hooks
@@ -917,4 +1022,167 @@ test "automation set_text routes through the input path so the elm mirror stays 
     for (snapshot.widgets) |widget| {
         if (widget.id == field_id) try std.testing.expectEqualStrings("", widget.text_value);
     }
+}
+
+// -------------------------------------------------- layout capacity (#56)
+
+const CapacityModel = struct {
+    row_count: usize = 4,
+
+    pub fn rows(model: *const CapacityModel, arena: std.mem.Allocator) []const usize {
+        const out = arena.alloc(usize, model.row_count) catch return &.{};
+        for (out, 0..) |*slot, index| slot.* = index;
+        return out;
+    }
+};
+
+const CapacityMsg = union(enum) {
+    start,
+    grew: effects_mod.EffectExit,
+};
+
+const CapacityApp = ui_app_model.UiApp(CapacityModel, CapacityMsg);
+const CapacityEffects = CapacityApp.Effects;
+const capacity_key: u64 = 77;
+
+fn capacityUpdate(model: *CapacityModel, msg: CapacityMsg, fx: *CapacityEffects) void {
+    switch (msg) {
+        .start => fx.spawn(.{
+            .key = capacity_key,
+            .argv = &.{"grow"},
+            .on_exit = CapacityEffects.exitMsg(.grew),
+        }),
+        // The grown roster far exceeds the per-view widget budget.
+        .grew => model.row_count = core.max_canvas_widget_nodes_per_view + 40,
+    }
+}
+
+fn capacityKey(index: *const usize) canvas.UiKey {
+    return canvas.uiKey(@as(u64, index.*));
+}
+
+fn capacityRow(ui: *CapacityApp.Ui, index: *const usize) CapacityApp.Ui.Node {
+    return ui.text(.{}, ui.fmt("Row {d}", .{index.*}));
+}
+
+fn capacityView(ui: *CapacityApp.Ui, model: *const CapacityModel) CapacityApp.Ui.Node {
+    return ui.column(.{ .gap = 2 }, ui.each(model.rows(ui.arena), capacityKey, capacityRow));
+}
+
+test "an effects-wake rebuild past the widget budget fails tests loudly and degrades in production" {
+    // Friction #56: a rebuild that blew max_canvas_widget_nodes_per_view
+    // on an effects-wake drain used to vanish into the #38 ring — the
+    // test saw a passing dispatch and a silently stale frame.
+    // The failing layout warns through std.log (the teaching diagnostic
+    // under test would otherwise fail the build runner's stderr check).
+    const saved_log_level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 2000) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(CapacityApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CapacityApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-capacity",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update_fx = capacityUpdate,
+        .view = capacityView,
+    });
+    defer app_state.deinit();
+    app_state.effects.executor = .fake;
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 2000),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // A fake spawn exit flips the model past the budget; the wake drain's
+    // rebuild fails — and under the harness's `.propagate` default the
+    // error reaches the test instead of leaving a stale frame.
+    try app_state.dispatch(&harness.runtime, 1, .start);
+    try app_state.effects.feedExit(capacity_key, 0);
+    try std.testing.expectError(
+        error.WidgetLayoutListFull,
+        harness.runtime.dispatchPlatformEvent(app, .wake),
+    );
+    // Recording still happened before the propagate.
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqualStrings("effects_wake", harness.runtime.dispatchErrors()[0].event);
+    try std.testing.expectEqualStrings("WidgetLayoutListFull", harness.runtime.dispatchErrors()[0].error_name);
+
+    // Production policy: the same failure degrades — recorded in the #38
+    // ring, never fatal.
+    harness.runtime.dispatch_error_policy = .degrade;
+    app_state.model.row_count = 4;
+    try app_state.dispatch(&harness.runtime, 1, .start);
+    try app_state.effects.feedExit(capacity_key, 0);
+    try harness.runtime.dispatchPlatformEvent(app, .wake);
+    try std.testing.expectEqual(@as(usize, 2), harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqualStrings("WidgetLayoutListFull", harness.runtime.dispatchErrors()[1].error_name);
+}
+
+// ---------------------------------------------- automation degrade (#61)
+
+test "a stale automation widget click degrades instead of killing the frame callback" {
+    // Friction #61: `frame()` used to `try` the consumed automation
+    // command, so a widget-click on an unmounted id escaped the
+    // frame_requested platform callback and stopped the whole app
+    // (CallbackFailed). Automation misuse always degrades — even under
+    // the harness's `.propagate` policy.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, counterOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // Wire a file-backed automation server and inject a click on a
+    // widget id that is not mounted.
+    const io = std.testing.io;
+    const directory = ".zig-cache/test-ui-app-automation-degrade";
+    var cwd = std.Io.Dir.cwd();
+    cwd.deleteTree(io, directory) catch {};
+    try cwd.createDirPath(io, directory);
+    defer cwd.deleteTree(io, directory) catch {};
+    harness.runtime.options.automation = automation.Server.init(io, directory, "Degrade");
+    var command_path_buffer: [128]u8 = undefined;
+    const command_path = try std.fmt.bufPrint(&command_path_buffer, "{s}/command.txt", .{directory});
+    try cwd.writeFile(io, .{ .sub_path = command_path, .data = "widget-click counter-canvas 999999\n" });
+
+    // The frame pump consumes the command without propagating.
+    try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
+    const errors = harness.runtime.dispatchErrors();
+    try std.testing.expectEqual(@as(usize, 1), errors.len);
+    try std.testing.expectEqualStrings("automation.widget_click", errors[0].event);
+    try std.testing.expectEqualStrings("InvalidCommand", errors[0].error_name);
+
+    // The app is still alive: a real click keeps dispatching.
+    const increment_id = findWidgetIdByText(app_state.tree.?, .button, "Increment").?;
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, increment_id });
+    try harness.runtime.dispatchAutomationCommand(app, click);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
 }

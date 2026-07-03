@@ -19,6 +19,7 @@
 //! error from `finalize`, keeping view code free of per-node `try`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 
@@ -29,6 +30,24 @@ const WidgetKind = canvas.WidgetKind;
 const root_id_seed: u64 = 0x5eed_2e70_a11c_e001;
 const global_id_seed: u64 = 0x5eed_2e70_a11c_e002;
 const zero_id_fallback: ObjectId = 0x9e37_79b9_7f4a_7c15;
+
+const ui_log = std.log.scoped(.zero_canvas_ui);
+
+/// Debug-build diagnostic for `gap` on a stacking container: these kinds
+/// give every child the full content box (`widget_layout.zig` routes them
+/// through `stackChildFrame`), so the gap silently does nothing and the
+/// children land on top of each other. Warn and keep building — shipped
+/// apps already carry the mistake, so it must never fail the build.
+/// Markup views get the same lesson as a validation/compile error
+/// (`ui_markup.stack_container_gap_message`).
+fn warnStackContainerGap(kind: WidgetKind, gap: f32) void {
+    if (builtin.mode != .Debug) return;
+    if (gap == 0 or !canvas.widgetKindStacksChildren(kind)) return;
+    ui_log.warn(
+        "gap does nothing on {s}: this container layers its children on top of each other - wrap them in a column (or row) inside it for flow, or drop the gap",
+        .{@tagName(kind)},
+    );
+}
 
 pub const UiKey = union(enum) {
     index: usize,
@@ -126,6 +145,22 @@ pub fn Ui(comptime Msg: type) type {
             /// (kind, global_key) pair is unique within the tree.
             global_key: ?UiKey = null,
             frame: geometry.RectF = .{},
+            /// Subtree opacity multiplier. 1 is free (no wrap emitted);
+            /// values below 1 wrap the widget's commands in an opacity
+            /// group; 0 culls painting entirely. Render-only: an
+            /// opacity-0 widget still hit-tests at its layout frame, so
+            /// pair with `disabled` (or `semantics.hidden`) when fading
+            /// out interactive content.
+            opacity: f32 = 1,
+            /// Render-space affine applied around the widget's emitted
+            /// commands (translate for slide, scale comes free). Identity
+            /// is free (no wrap emitted). Layout is untouched — siblings
+            /// do not reflow — but pointer hit-testing follows the
+            /// transform (points are inverse-mapped into widget space),
+            /// so a translated widget stays interactive at its rendered
+            /// position. Accessibility frames stay at the layout frame.
+            /// Pair with `UiApp.Options.animations` for tweening.
+            transform: canvas.Affine = .{},
             /// Widget text (text-field contents, initial control labels).
             /// Text-bearing sugar methods (`text`, `button`, ...) override
             /// this with their content argument.
@@ -964,9 +999,12 @@ pub fn Ui(comptime Msg: type) type {
         }
 
         fn widgetFromOptions(kind: WidgetKind, options: ElementOptions) Widget {
+            warnStackContainerGap(kind, options.gap);
             return .{
                 .kind = kind,
                 .frame = options.frame,
+                .opacity = options.opacity,
+                .transform = options.transform,
                 .text = options.text,
                 .placeholder = options.placeholder,
                 .image_id = options.image,

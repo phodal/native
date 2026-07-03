@@ -285,6 +285,56 @@ test "a handler on a non-hit-target element reports the attribute position" {
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try fixed_parser.parse()));
 }
 
+test "gap on stacking containers is rejected with the teaching error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Every stack-container element rejects gap at the attribute position.
+    for (markup.known_stack_container_element_names) |name| {
+        const source = try std.fmt.allocPrint(arena, "<column>\n  <{s} gap=\"8\" />\n</column>", .{name});
+        var parser = markup.Parser.init(arena, source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(markup.stack_container_gap_message, info.message);
+        try testing.expectEqual(@as(usize, 2), info.line);
+    }
+
+    // Flow containers keep gap; a column inside a panel is the fix.
+    const valid_sources = [_][]const u8{
+        "<row gap=\"8\">\n  <text>x</text>\n</row>",
+        "<panel>\n  <column gap=\"8\">\n    <text>a</text>\n    <text>b</text>\n  </column>\n</panel>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+}
+
+test "the avatar image attribute validates as one binding, avatar-only" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // One {binding} on avatar is the whole grammar.
+    var parser = markup.Parser.init(arena, "<row>\n  <avatar image=\"{user_image}\">CT</avatar>\n</row>");
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // Runtime image ids are model data, never markup literals.
+        .{ .source = "<row>\n  <avatar image=\"7\">CT</avatar>\n</row>", .message = markup.avatar_image_message },
+        .{ .source = "<row>\n  <avatar image=\"{a == b}\">CT</avatar>\n</row>", .message = markup.avatar_image_message },
+        // Scoped to avatar: the other image elements stay Zig views.
+        .{ .source = "<row>\n  <badge image=\"{user_image}\">3</badge>\n</row>", .message = markup.avatar_image_element_message },
+        .{ .source = "<column>\n  <panel image=\"{user_image}\" />\n</column>", .message = markup.avatar_image_element_message },
+    };
+    for (cases) |case| {
+        var case_parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try case_parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expectEqual(@as(usize, 2), info.line);
+    }
+}
+
 test "wrap and issue-link-base validate as vocabulary with teaching errors" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

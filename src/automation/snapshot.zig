@@ -181,7 +181,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
             },
         );
         if (view.kind == .gpu_surface) {
-            try writer.print(" gpu_size={d}x{d} gpu_scale={d} gpu_backend={s} gpu_pixel_format={s} gpu_present_mode={s} gpu_alpha_mode={s} gpu_color_space={s} gpu_vsync={any} gpu_status={s} gpu_frame={d} gpu_timestamp_ns={d} gpu_frame_interval_ns={d} gpu_input_timestamp_ns={d} gpu_input_latency_ns={d} gpu_input_latency_budget_ns={d} gpu_input_latency_budget_exceeded={d} gpu_input_latency_budget_ok={any} gpu_first_frame_latency_ns={d} gpu_first_frame_latency_budget_ns={d} gpu_first_frame_latency_budget_exceeded={d} gpu_first_frame_latency_budget_ok={any} gpu_nonblank={any} gpu_sample=0x{x:0>8}", .{
+            try writer.print(" gpu_size={d}x{d} gpu_scale={d} gpu_backend={s} gpu_pixel_format={s} gpu_present_mode={s} gpu_alpha_mode={s} gpu_color_space={s} gpu_vsync={any} gpu_status={s} gpu_present_path={s} gpu_frame={d} gpu_timestamp_ns={d} gpu_frame_interval_ns={d} gpu_input_timestamp_ns={d} gpu_input_latency_ns={d} gpu_input_latency_budget_ns={d} gpu_input_latency_budget_exceeded={d} gpu_input_latency_budget_ok={any} gpu_first_frame_latency_ns={d} gpu_first_frame_latency_budget_ns={d} gpu_first_frame_latency_budget_exceeded={d} gpu_first_frame_latency_budget_ok={any} gpu_nonblank={any} gpu_sample=0x{x:0>8}", .{
                 view.gpu_size.width,
                 view.gpu_size.height,
                 view.gpu_scale_factor,
@@ -192,6 +192,7 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 @tagName(view.gpu_color_space),
                 view.gpu_vsync,
                 @tagName(view.gpu_status),
+                @tagName(view.gpu_present_path),
                 view.gpu_frame_index,
                 view.gpu_timestamp_ns,
                 view.gpu_frame_interval_ns,
@@ -580,6 +581,7 @@ test "snapshot emits GPU surface frame proof" {
         .gpu_color_space = .srgb,
         .gpu_vsync = true,
         .gpu_status = .ready,
+        .gpu_present_path = .packet,
         .gpu_frame_index = 4,
         .gpu_timestamp_ns = 99,
         .gpu_frame_interval_ns = 8,
@@ -672,6 +674,7 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_color_space=srgb") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_vsync=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_status=ready") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_present_path=packet") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_frame=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_timestamp_ns=99") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_frame_interval_ns=8") != null);

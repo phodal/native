@@ -610,6 +610,22 @@ fn layoutVirtualVerticalChildren(
     }
 }
 
+/// Widget kinds whose layout gives every child the full content box
+/// (the `stackChildFrame` arm in `layoutWidgetDepth` — keep the two in
+/// lockstep): children layer on top of each other, so `layout.gap` can
+/// never space them. This is the source of truth for the builder's Debug
+/// gap diagnostic and (via a name list kept in sync by a test in
+/// ui_markup_view_tests.zig) the markup validator's stack-container list.
+/// `scroll_view` and `accordion` also stack children but consume `gap`
+/// (virtualized item spacing; header-to-content spacing), so they are
+/// excluded on purpose.
+pub fn widgetKindStacksChildren(kind: widget_model.WidgetKind) bool {
+    return switch (kind) {
+        .stack, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover => true,
+        else => false,
+    };
+}
+
 fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
     const width = if (child.frame.width > 0) child.frame.width else content.width;
     const height = if (child.frame.height > 0) child.frame.height else content.height;

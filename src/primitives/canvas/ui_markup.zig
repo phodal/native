@@ -542,10 +542,10 @@ pub const known_text_leaf_element_names = [_][]const u8{
 };
 
 pub const known_option_attrs = [_][]const u8{
-    "text",       "placeholder", "value", "checked",     "selected",            "disabled",
-    "variant",    "size",        "width", "height",      "grow",                "gap",
-    "padding",    "main",        "cross", "wrap",        "virtualized",         "virtual-item-extent",
-    "key",        "global-key",  "role",  "label",
+    "text",    "placeholder", "value", "checked", "selected",    "disabled",
+    "variant", "size",        "width", "height",  "grow",        "gap",
+    "padding", "main",        "cross", "wrap",    "virtualized", "virtual-item-extent",
+    "key",     "global-key",  "role",  "label",
 };
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
@@ -558,13 +558,32 @@ pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "
 /// widget_access.zig); a test in ui_markup_view_tests.zig keeps this name
 /// list and that predicate in lockstep so drift is impossible.
 pub const known_non_hit_target_element_names = [_][]const u8{
-    "row",          "column",     "stack",      "spacer",       "grid",
-    "list",         "table",      "table-row",  "breadcrumb",   "button-group",
-    "pagination",   "radio-group", "tabs",      "toggle-group", "tooltip",
-    "avatar",       "badge",      "separator",  "skeleton",     "spinner",
+    "row",        "column",      "stack",     "spacer",       "grid",
+    "list",       "table",       "table-row", "breadcrumb",   "button-group",
+    "pagination", "radio-group", "tabs",      "toggle-group", "tooltip",
+    "avatar",     "badge",       "separator", "skeleton",     "spinner",
 };
 
 pub const non_hit_target_handler_message = "on-* handlers never fire here: this element is layout/decoration and is never a hit target - put the handler on a leaf like list-item or text, or on a control (button, checkbox) inside it";
+
+/// Elements whose widget kind layers its children on top of each other
+/// (every child gets the full content box), so `gap` can never space
+/// them. The validator rejects `gap` here instead of letting it silently
+/// do nothing. Derived from the engine's stacking predicate
+/// (`canvas.widgetKindStacksChildren` in widget_layout.zig); a test in
+/// ui_markup_view_tests.zig keeps this name list and that predicate in
+/// lockstep so drift is impossible. (`spacer` shares the stack widget
+/// kind; `scroll` and `accordion` stack children too but consume `gap`,
+/// so they are excluded there and here.)
+pub const known_stack_container_element_names = [_][]const u8{
+    "stack",  "panel",  "card",   "spacer", "alert",
+    "bubble", "dialog", "drawer", "sheet",  "resizable",
+};
+
+pub const stack_container_gap_message = "gap does nothing here: this container layers its children on top of each other - wrap them in a column (or row) inside it for flow, or drop the gap";
+
+pub const avatar_image_message = "image takes one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes) - runtime image ids are model data, not markup literals; 0 renders the initials fallback";
+pub const avatar_image_element_message = "image is only supported on avatar - the other image-bearing widgets (image, icon, icon-button) stay Zig views (ui.image with ElementOptions.image)";
 
 /// Markup attributes that reference a color design token by name. Values
 /// must be literal `ColorTokens` field names (`known_color_token_names`);
@@ -940,6 +959,21 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         return .{ .line = attribute.line, .column = attribute.column, .message = message };
                     }
                     continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "image")) {
+                    // Runtime image binding, avatar-scoped: ids are model
+                    // data the app registered, never markup literals.
+                    if (!std.mem.eql(u8, node.name, "avatar")) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = avatar_image_element_message };
+                    }
+                    const expression = parseAttrExpression(attribute.value);
+                    if (expression == null or expression.? != .binding) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = avatar_image_message };
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "gap") and nameInList(node.name, &known_stack_container_element_names)) {
+                    return .{ .line = attribute.line, .column = attribute.column, .message = stack_container_gap_message };
                 }
                 if (!nameInList(attribute.name, &known_option_attrs)) {
                     return .{ .line = attribute.line, .column = attribute.column, .message = "unknown attribute" };

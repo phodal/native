@@ -38,7 +38,7 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | Markup | Renders as | Notes |
 | --- | --- | --- |
 | `row`, `column` | flex containers | horizontal / vertical main axis |
-| `stack`, `panel`, `card` | overlay containers | children layer on top of each other |
+| `stack`, `panel`, `card` | overlay containers | children layer on top of each other — `gap` can never space them and is a validation error (put a `column`/`row` inside for flow) |
 | `scroll` | scroll view | wrap multiple children in a `column` inside it |
 | `list`, `grid` | list, grid | vertical stack / cell grid |
 | `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination` | row containers | children flow horizontally (tab buttons, toggle-buttons, radios, ...) |
@@ -49,7 +49,7 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text`, wrap in `<if>` to show conditionally |
 | `resizable` | resizable panel | engine-managed drag handle; `width` sets the initial width |
 | `text`, `badge`, `tooltip` | text leaves | `{}` interpolation allowed in content; `text` is single-line unless `wrap="true"` |
-| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | the label is the element content; `select` shows its `placeholder` while empty and dispatches `on-press` |
+| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | the label is the element content; `select` shows its `placeholder` while empty and dispatches `on-press`; `avatar` renders initials, or a runtime image via `image="{binding}"` |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits arrive via `on-input` |
 | `status-bar` | status bar | content only, no children |
@@ -77,9 +77,9 @@ A tab strip, a select trigger, and a table read the way you would guess:
 </table>
 ```
 
-A few widget kinds are deliberately **not** markup elements because their shape does not fit the closed grammar — write these as Zig view functions with `canvas.Ui`: `icon`, `image`, and icon buttons (they reference image pixels by `ImageId` — registered at runtime, see [Images](#images) below — which attribute values cannot carry), `data_grid` (needs per-column cell templates — arbitrary render callbacks), `popover` and `menu_surface` (floating surfaces anchored to runtime geometry; `dropdown-menu` covers the declarative case), and `segmented_control` (a shell-chrome kind; `tabs` and `toggle-group` cover its use cases).
+A few widget kinds are deliberately **not** markup elements because their shape does not fit the closed grammar — write these as Zig view functions with `canvas.Ui`: `icon`, `image`, and icon buttons (they reference image pixels by `ImageId` — registered at runtime, see [Images](#images) below — which attribute values cannot carry), `data_grid` (needs per-column cell templates — arbitrary render callbacks), `popover` and `menu_surface` (floating surfaces anchored to runtime geometry; `dropdown-menu` covers the declarative case), and `segmented_control` (a shell-chrome kind; `tabs` and `toggle-group` cover its use cases). The one image binding markup does carry is the avatar's: `image="{binding}"` names a `u64` `ImageId` model field or function — the id is just model data, never a markup literal, and `0` keeps the initials fallback.
 
-Layout attributes: `gap`, `padding`, `grow`, `width`, `height`, `wrap`, `main`, `cross`, `virtualized`. `width` and `height` are definite sizes: the element is exactly that size, so intrinsic content neither shrinks nor silently overflows it (`resizable` treats `width` as its initial width), and debug builds log a `zero_canvas_layout` diagnostic whenever children's minimum sizes overflow their container. `wrap` applies to `text` only: `wrap="true"` word-wraps the content at the width the element receives and reserves the wrapped height in columns. Appearance: `variant`, `size`, `disabled`, `checked`, `selected`. Semantics: `role`, `label`. Identity: `key` (sibling-scoped) and `global-key` (survives moving between containers — board cards, tab pages).
+Layout attributes: `gap`, `padding`, `grow`, `width`, `height`, `wrap`, `main`, `cross`, `virtualized`. `gap` belongs to flow containers: the stacking kinds (`stack`, `panel`, `card`, and the surface/modal elements) layer their children, so `gap` there is rejected with a teaching error — wrap the children in a `column` (or `row`) inside for flow. `width` and `height` are definite sizes: the element is exactly that size, so intrinsic content neither shrinks nor silently overflows it (`resizable` treats `width` as its initial width), and debug builds log a `zero_canvas_layout` diagnostic whenever children's minimum sizes overflow their container. `wrap` applies to `text` only: `wrap="true"` word-wraps the content at the width the element receives and reserves the wrapped height in columns. Appearance: `variant`, `size`, `disabled`, `checked`, `selected`. Semantics: `role`, `label`. Identity: `key` (sibling-scoped) and `global-key` (survives moving between containers — board cards, tab pages).
 
 ## Styling with design tokens
 
@@ -213,12 +213,17 @@ The fetch-avatar path is one update arm: fetch bytes, decode + register in one c
 ```
 
 ```zig
-// in the view:
+// in a Zig view:
 ui.avatar(.{ .image = model.avatar_image, .semantics = .{ .label = "Octocat" } }, "OC"),
 ui.image(.{ .image = model.chart_image, .width = 120, .height = 80, .semantics = .{ .label = "Chart" } }),
 ```
 
-`fx.registerImage(id, width, height, rgba8)` registers already-decoded pixels (the runtime copies them; your buffer is free on return), `fx.registerImageBytes(id, bytes)` decodes through the platform codec first, and `fx.unregisterImage(id)` frees the slot. Re-registering an id replaces its pixels and every view repaints — GPU caches re-upload off the changed content fingerprint, no invalidation calls. Outside `UiApp`, the same registry is `Runtime.registerCanvasImage`/`registerCanvasImageBytes`/`unregisterCanvasImage`.
+```html
+<!-- in markup, avatars bind the same model id; 0 renders the initials -->
+<avatar image="{avatar_image}" label="Octocat">OC</avatar>
+```
+
+`fx.registerImage(id, width, height, rgba8)` registers already-decoded pixels (the runtime copies them; your buffer is free on return), `fx.registerImageBytes(id, bytes)` decodes through the platform codec first, and `fx.unregisterImage(id)` frees the slot. Re-registering an id replaces its pixels and every view repaints — GPU caches re-upload off the changed content fingerprint, no invalidation calls. For caches, mint fresh ids (effect-key style, monotonically increasing) and unregister the evictee — never re-key different content onto a live id. Outside `UiApp`, the same registry is `Runtime.registerCanvasImage`/`registerCanvasImageBytes`/`unregisterCanvasImage`.
 
 Capacities are fixed and loud (`canvas_limits`): `max_registered_canvas_images` slots (16) of `max_registered_canvas_image_pixel_bytes` each (1 MiB — 512×512 RGBA8, avatar/icon scale), with `error.ImageRegistryFull`, `error.ImageTooLarge`, `error.ImageDecodeFailed`, and `error.UnsupportedService` (a platform without a codec) never silent. Registered images render everywhere the canvas does: live presentation (GPU packet and software paths), `renderCanvasScreenshot`, and automation screenshots. A draw referencing an id that is not (or no longer) registered skips — a pure view cannot fail presentation with a transient loading state. In tests, the null platform's `image_decode` flag enables a deterministic decoder for the strict PNG subset `canvas.png.writeRgba8` emits, so raw RGBA fixtures exercise the full decode→register→draw path without bundling a codec.
 

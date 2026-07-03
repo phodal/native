@@ -200,6 +200,9 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             });
             if (runtimeFindViewIndex(self, window_id, label)) |index| {
                 self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
+                // The platform present call succeeded: this frame painted
+                // through the packet path. A failed attempt never stamps.
+                self.views[index].gpu_present_path = .packet;
             }
             return packet;
         }
@@ -267,6 +270,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                     if (packet_presented) {
                         if (runtimeFindViewIndex(self, window_id, label)) |index| {
                             self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
+                            self.views[index].gpu_present_path = .packet;
                         }
                         return result;
                     }
@@ -325,6 +329,10 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             });
             if (runtimeFindViewIndex(self, window_id, label)) |index| {
                 self.views[index].recordCanvasFramePresentationComplete(record_frame);
+                // The platform present call succeeded: this frame painted
+                // through the pixel path (covers the direct pixel entry
+                // points and the packet-fallback route alike).
+                self.views[index].gpu_present_path = .pixels;
             }
         }
 

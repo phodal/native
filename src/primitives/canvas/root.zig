@@ -462,6 +462,11 @@ pub const cursorForWidgetTarget = widget_runtime.cursorForWidgetTarget;
 /// the single source of truth the runtime, both markup engines, and the
 /// markup validator's element list all derive from).
 pub const widgetKindHitTarget = @import("widget_access.zig").widgetKindHitTarget;
+/// Whether widgets of this kind layer their children on top of each other
+/// (widget_layout.zig — the source of truth the builder's Debug gap
+/// diagnostic, both markup engines, and the markup validator's
+/// stack-container list all derive from).
+pub const widgetKindStacksChildren = @import("widget_layout.zig").widgetKindStacksChildren;
 pub const WidgetTextGeometry = widget_runtime.WidgetTextGeometry;
 pub const textGeometryForWidget = widget_runtime.textGeometryForWidget;
 pub const virtualWidgetScrollContentExtent = widget_runtime.virtualWidgetScrollContentExtent;

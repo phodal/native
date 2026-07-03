@@ -880,6 +880,9 @@ test "a handler error degrades: dispatch continues, the error ring records it, s
 
     const harness = try TestHarness().create(std.testing.allocator, .{});
     defer harness.destroy(std.testing.allocator);
+    // This test exercises the production degrade-not-die path (#38); the
+    // harness defaults to `.propagate` (#56).
+    harness.runtime.dispatch_error_policy = .degrade;
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);
@@ -935,6 +938,9 @@ test "the dispatch error ring stays bounded and keeps the newest records plus th
 
     const harness = try TestHarness().create(std.testing.allocator, .{});
     defer harness.destroy(std.testing.allocator);
+    // Exercises the production degrade-not-die path (#38); the harness
+    // defaults to `.propagate` (#56).
+    harness.runtime.dispatch_error_policy = .degrade;
     var app_state: TestApp = .{};
     const app = app_state.app();
     try harness.start(app);

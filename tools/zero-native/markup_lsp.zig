@@ -308,6 +308,10 @@ pub const Server = struct {
                     for (timeline_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline attribute", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "timeline-item")) {
                     for (timeline_item_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline-item attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "avatar")) {
+                    for (avatar_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "avatar attribute", doc.doc);
+                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
+                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
                 } else {
                     for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
                     for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
@@ -597,7 +601,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "drawer", .doc = "Drawer surface rendered in place; title via text, wrap in an if to show conditionally." },
     .{ .name = "sheet", .doc = "Sheet surface rendered in place; title via text, wrap in an if to show conditionally." },
     .{ .name = "resizable", .doc = "Resizable panel with an engine-managed drag handle; width sets the initial width." },
-    .{ .name = "avatar", .doc = "Avatar leaf; the text content renders as initials." },
+    .{ .name = "avatar", .doc = "Avatar leaf; the text content renders as initials, image takes one {binding} to a runtime-registered ImageId (0 keeps the initials)." },
     .{ .name = "select", .doc = "Select trigger; content is the current value, placeholder while empty, dispatch with on-press." },
     .{ .name = "switch", .doc = "Switch control; label is the text content, bind checked, dispatch with on-toggle." },
     .{ .name = "toggle-button", .doc = "Pressed-state toggle button; label is the text content, dispatch with on-toggle." },
@@ -633,7 +637,7 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "width", .doc = "Definite width (plain number): the element is exactly this wide; content neither shrinks nor overflows it. On resizable it is the initial width." },
     .{ .name = "height", .doc = "Definite height (plain number): the element is exactly this tall; content neither shrinks nor overflows it." },
     .{ .name = "grow", .doc = "Flex grow factor; give spacer one." },
-    .{ .name = "gap", .doc = "Spacing between children (plain number)." },
+    .{ .name = "gap", .doc = "Spacing between children (plain number). Rejected on stacking containers (stack, panel, card, the modal surfaces) — they layer children; put a column (or row) inside for flow." },
     .{ .name = "padding", .doc = "Uniform padding (plain number)." },
     .{ .name = "main", .doc = "Main-axis alignment: start|center|end|space_between." },
     .{ .name = "cross", .doc = "Cross-axis alignment: stretch|start|center|end." },
@@ -705,6 +709,10 @@ pub const timeline_item_attr_docs = [_]Doc{
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
 };
 
+pub const avatar_attr_docs = [_]Doc{
+    .{ .name = "image", .doc = "avatar: one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes); 0 renders the initials fallback." },
+};
+
 pub const event_docs = [_]Doc{
     .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Hit-target elements only — never on layout containers (row, column, stack, ...); put it on a leaf like list-item or text, or on a control." },
     .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}. Hit-target elements only (checkbox, toggle, toggle-button, switch, accordion, ...)." },
@@ -727,6 +735,7 @@ pub fn attributeDoc(name: []const u8) ?[]const u8 {
     if (findDoc(&stepper_attr_docs, name)) |doc| return doc;
     if (findDoc(&timeline_attr_docs, name)) |doc| return doc;
     if (findDoc(&timeline_item_attr_docs, name)) |doc| return doc;
+    if (findDoc(&avatar_attr_docs, name)) |doc| return doc;
     return findDoc(&if_attr_docs, name);
 }
 
@@ -782,6 +791,10 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{" ++
         "\"uri\":\"file:///tmp/app.zml\",\"version\":2},\"contentChanges\":[{" ++
         "\"text\":\"<row gap=\\\"8\\\"><text>hi</text></row>\"}]}}";
+    const avatar_doc =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{" ++
+        "\"uri\":\"file:///tmp/app.zml\",\"version\":3},\"contentChanges\":[{" ++
+        "\"text\":\"<avatar >CT</avatar>\"}]}}";
 
     var input: std.Io.Writer.Allocating = .init(arena);
     for ([_][]const u8{
@@ -791,7 +804,9 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
         valid_doc,
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":5}}}",
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":2}}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\"}",
+        avatar_doc,
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":8}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"shutdown\"}",
         "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
     }) |body| {
         const framed = try frame(arena, body);
@@ -815,8 +830,9 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
         try bodies.append(arena, body);
     }
     // initialize response, diagnostics (broken), diagnostics (clean),
-    // completion, hover, shutdown.
-    try testing.expectEqual(@as(usize, 6), bodies.items.len);
+    // completion, hover, diagnostics (avatar), avatar completion,
+    // shutdown.
+    try testing.expectEqual(@as(usize, 8), bodies.items.len);
 
     try testing.expect(std.mem.indexOf(u8, bodies.items[0], "\"id\":1") != null);
     try testing.expect(std.mem.indexOf(u8, bodies.items[0], "\"capabilities\"") != null);
@@ -846,9 +862,15 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
     // Hover over `row` returns the element doc.
     try testing.expect(std.mem.indexOf(u8, bodies.items[4], "Flex container") != null);
 
+    // Completion inside `<avatar ` offers the image binding alongside the
+    // generic attributes and events.
+    try testing.expect(std.mem.indexOf(u8, bodies.items[6], "\"label\":\"image\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bodies.items[6], "\"label\":\"label\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bodies.items[6], "\"label\":\"on-press\"") != null);
+
     // Shutdown response.
-    try testing.expect(std.mem.indexOf(u8, bodies.items[5], "\"id\":4") != null);
-    try testing.expect(std.mem.indexOf(u8, bodies.items[5], "\"result\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, bodies.items[7], "\"id\":5") != null);
+    try testing.expect(std.mem.indexOf(u8, bodies.items[7], "\"result\":null") != null);
 }
 
 test "analyze reports parser and validation findings with positions" {
@@ -879,6 +901,21 @@ test "analyze reports parser and validation findings with positions" {
     try testing.expectEqual(@as(usize, 2), dead_handler.line);
     try testing.expectEqual(@as(usize, 8), dead_handler.column);
     try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><list-item on-press=\"select\">x</list-item></row>"));
+
+    // gap on a stacking container gets the teaching diagnostic at the
+    // attribute; a flow container inside keeps its gap.
+    const dead_gap = analyze(arena, "<column>\n  <panel gap=\"8\">\n    <text>x</text>\n  </panel>\n</column>").?;
+    try testing.expectEqualStrings(ui_markup.stack_container_gap_message, dead_gap.message);
+    try testing.expectEqual(@as(usize, 2), dead_gap.line);
+    try testing.expectEqual(@as(usize, 10), dead_gap.column);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<panel><column gap=\"8\"><text>x</text></column></panel>"));
+
+    // avatar image misuse surfaces the validator's teaching messages.
+    const literal_image = analyze(arena, "<row>\n  <avatar image=\"7\">CT</avatar>\n</row>").?;
+    try testing.expectEqualStrings(ui_markup.avatar_image_message, literal_image.message);
+    const misplaced_image = analyze(arena, "<row>\n  <badge image=\"{user_image}\">3</badge>\n</row>").?;
+    try testing.expectEqualStrings(ui_markup.avatar_image_element_message, misplaced_image.message);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><avatar image=\"{user_image}\">CT</avatar></row>"));
 }
 
 test "completionContext classifies positions" {
@@ -935,7 +972,7 @@ test "doc tables cover every known element, attribute, and event" {
     for ([_][]const u8{ "source", "on-link", "on-details", "details-expanded", "issue-link-base" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
-    for ([_][]const u8{ "active", "title", "description", "meta", "indicator", "connector" }) |name| {
+    for ([_][]const u8{ "active", "title", "description", "meta", "indicator", "connector", "image" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

@@ -60,7 +60,7 @@ With both set (dev), the compiled view renders until the watched file first chan
 | Markup | Widget | Notes |
 | --- | --- | --- |
 | `row`, `column` | flex containers | main axis horizontal / vertical |
-| `stack`, `panel`, `card` | overlay containers | children stack on top of each other |
+| `stack`, `panel`, `card` | overlay containers | children stack on top of each other — `gap` can never space them and is a validation error (put a `column`/`row` inside for flow) |
 | `scroll` | scroll_view | wrap multiple children in a `column` inside it |
 | `list`, `grid` | list, grid | vertical stack / cell grid |
 | `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination` | row containers | children flow horizontally (tab buttons, toggle-buttons, radios, ...) |
@@ -71,7 +71,7 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text` attr, wrap in `<if>` to show conditionally |
 | `resizable` | resizable | engine-managed drag handle; `width` sets the initial width |
 | `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed; `text` is single-line unless `wrap="true"` |
-| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials |
+| `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials, or a runtime image via `image="{binding}"` (see the Images section) |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits via `on-input`, enter via `on-submit` |
 | `status-bar` | status bar | text leaf: content only, no children |
@@ -81,18 +81,19 @@ With both set (dev), the compiled view renders until the watched file first chan
 | `stepper` > `step` | composite stage track | `active="{index}"` (required) derives each step's completed/active/pending state; steps are text leaves (no attributes) joined by connectors; stepper also takes `key`, `global-key`, `label` |
 | `timeline` > `timeline-item` | composite ledger list | items only inside a timeline (for/if fine); items are leaves — `title` (required), `description`, `meta`, `indicator`, `variant`, `connector="false"` on the last item, `selected`; `on-press` makes the whole item pressable with a trailing chevron |
 
-Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need `ImageId` pixel references, runtime-registered — see the Images section), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`). An `avatar` with an image is likewise Zig-only (`ui.avatar(.{ .image = id }, "ZN")`); the markup element renders initials.
+Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `icon`, `image`, and icon buttons (need `ImageId` pixel references, runtime-registered — see the Images section), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`). The one image binding markup DOES carry is the avatar's: `<avatar image="{user_image}">CT</avatar>` binds a `u64` ImageId model field/fn (the id is just model data; 0 keeps the initials fallback) — the embedded-asset exclusion stays.
 
 ## Attributes
 
-Layout: `gap`, `padding` (uniform), `grow`, `width`, `height` (definite: the element is exactly that size — intrinsic content neither shrinks nor silently overflows it; `resizable` treats `width` as the initial width), `wrap` (`text` only: `wrap="true"` word-wraps at the width the element receives and reserves the wrapped height in columns; default is single-line), `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`.
+Layout: `gap` (flow containers only — stacking containers `stack`/`panel`/`card`/`alert`/`bubble`/`dialog`/`drawer`/`sheet`/`resizable` layer their children, so `gap` there is a validation error, not silence: wrap the children in a `column`/`row` inside), `padding` (uniform), `grow`, `width`, `height` (definite: the element is exactly that size — intrinsic content neither shrinks nor silently overflows it; `resizable` treats `width` as the initial width), `wrap` (`text` only: `wrap="true"` word-wraps at the width the element receives and reserves the wrapped height in columns; default is single-line), `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`.
 Appearance/state: `variant` (default|primary|secondary|outline|ghost|destructive), `size` (default|sm|lg|icon), `disabled`, `checked`, `selected`, `value`, `placeholder`.
 Semantics: `role` (listitem, button, ...), `label` (accessible name).
 Identity: `key` (sibling-scoped), `global-key` (parent-independent — use for items that move between containers, e.g. board cards; ids then survive reparenting).
+Render channel (Zig-only, no markup attributes): `ElementOptions.opacity` and `ElementOptions.transform` wrap the element's emitted commands without reflowing siblings — the defaults (1, identity) emit nothing, opacity 0 culls painting (pair with `disabled` when fading interactive content), and a transform moves both rendering and pointer hit-testing while accessibility frames stay at the layout frame. Pair with `UiApp.Options.animations` for tweening.
 
 Numbers are plain (`gap="12"`), booleans are `true`/`false` or a binding.
 
-When children's minimum sizes exceed their container, debug builds log a `zero_canvas_layout` diagnostic naming the container, axis, and overflow in pixels — flex overflow is never silent.
+When children's minimum sizes exceed their container, debug builds log a `zero_canvas_layout` diagnostic naming the container, axis, and overflow in pixels — flex overflow is never silent. In Zig views, `.gap` on a stacking kind (`ui.panel(.{ .gap = 8 }, ...)`) logs a `zero_canvas_ui` warning in debug builds with the same lesson — it never fails the build.
 
 ## Style token attributes
 
@@ -366,6 +367,28 @@ File rules:
 - Writes replace the file whole; `writeFile` bytes are copied at call time so the caller's buffer is immediately reusable. Reads deliver drain-scratch bytes — copy what the model keeps.
 - In the fake executor: `pendingFileAt(0)` records `key`/`op`/`path`/`bytes` for assertions; `feedFileResult(key, .ok, "{...}")` answers a read (over-bound content is cut and rewritten to `.truncated`, mirroring the real reader), `feedFileResult(key, .ok, "")` acknowledges a write; failure outcomes pass through as fed.
 
+`fx.startTimer` / `fx.cancelTimer` are key-based timers on the same channel — an auto-refresh, a poll, a debounce — one-shot or repeating, each fire delivered as one `on_fire` Msg. Timers are their own fixed table (16, `max_effect_timers`) and their own key namespace: they consume none of the 16 effect slots and never collide with spawn/fetch/file keys:
+
+```zig
+pub const Msg = union(enum) {
+    tick: zero_native.EffectTimer,    // the fixed payload type
+    ...
+};
+
+fx.startTimer(.{
+    .key = refresh_key,
+    .interval_ms = 30_000,
+    .mode = .repeating,               // .one_shot (default) fires once, then retires
+    .on_fire = Effects.timerMsg(.tick),
+}),
+.tick => |timer| switch (timer.outcome) {
+    .fired => model.refresh(),        // timer.timestamp_ns is the platform fire time
+    .rejected => model.noteTimerRejected(timer.key),
+},
+```
+
+Timer rules: starting a key that is already an active timer REPLACES it (interval/mode/`on_fire` update in place — the friendly behavior for an auto-refresh whose cadence changes); `fx.cancelTimer(key)` stops it, unknown keys are a no-op; rejection is never silent — a full timer table, a zero `interval_ms`, or a platform without a timer service delivers exactly one Msg with outcome `.rejected`. In the fake executor, `pendingTimerAt(0)` records `key`/`interval_ms`/`mode` and `fireTimer(key)` fires by hand (one-shot slots retire after the fire), draining through the same `.wake` path as `feedExit`.
+
 Test effects with the fake executor — deterministic, no processes, no network:
 
 ```zig
@@ -432,15 +455,21 @@ Image pixels are runtime-registered resources keyed by a caller-chosen `ImageId`
 ```
 
 ```zig
-// Zig views (image content is markup-excluded):
+// Zig views (image and icon content is markup-excluded):
 ui.avatar(.{ .image = model.avatar_image, .semantics = .{ .label = "Octocat" } }, "OC"),
 ui.image(.{ .image = model.chart_image, .width = 120, .height = 80, .semantics = .{ .label = "Chart" } }),
+```
+
+```html
+<!-- Markup avatars bind the same model id: one {binding} to the u64 ImageId
+     (a field or pub fn — never a literal); 0 renders the initials fallback. -->
+<avatar image="{avatar_image}" label="Octocat">OC</avatar>
 ```
 
 Rules:
 
 - `fx.registerImage(id, w, h, rgba8)` takes already-decoded straight-alpha RGBA8 (exactly `w*h*4` bytes; the runtime copies — your buffer is free on return). `fx.registerImageBytes(id, bytes)` decodes first. `fx.unregisterImage(id)` frees the slot. Outside UiApp: `Runtime.registerCanvasImage` / `registerCanvasImageBytes` / `unregisterCanvasImage`.
-- Re-registering an id replaces the pixels; every view repaints and GPU caches re-upload off the changed content fingerprint — no invalidation calls.
+- Re-registering an id replaces the pixels; every view repaints and GPU caches re-upload off the changed content fingerprint — no invalidation calls. For caches, mint fresh ids (effect-key style, monotonically increasing) and `unregisterImage` the evictee — never re-key different content onto a live id.
 - Bounded and loud (`canvas_limits`): 16 slots (`max_registered_canvas_images`), 1 MiB per image (`max_registered_canvas_image_pixel_bytes`, 512×512 RGBA8 — avatar/icon scale). Errors: `error.ImageRegistryFull`, `error.ImageTooLarge`, `error.ImageDecodeFailed`, `error.InvalidImageId`/`InvalidImageDimensions`, `error.UnsupportedService` (codec-less platform).
 - A draw referencing an unregistered id skips — a transient loading state can never fail presentation. `ui.avatar` clips a set image to the circle (`cover` fit) and renders the initials argument otherwise.
 - Registered images render in live presentation AND `renderCanvasScreenshot`/automation screenshots, so goldens can assert on them.

@@ -427,6 +427,19 @@ pub const GpuSurfacePresentMode = enum {
     timer,
 };
 
+/// Which presentation path last painted a gpu_surface view: the GPU
+/// packet presenter (`presentGpuSurfacePacket`) or the CPU
+/// reference-rendered pixel fallback (`presentGpuSurfacePixels`).
+/// `.none` until the first successful present. Stamped only after the
+/// platform present call returned success — a failed packet attempt
+/// that fell back to pixels reports `.pixels`, and idle skipped frames
+/// (no repaint needed) keep the previous value.
+pub const GpuPresentPath = enum {
+    none,
+    packet,
+    pixels,
+};
+
 pub const GpuSurfaceAlphaMode = enum {
     none,
     @"opaque",
@@ -561,6 +574,8 @@ pub const ViewInfo = struct {
     gpu_color_space: GpuSurfaceColorSpace = .none,
     gpu_vsync: bool = false,
     gpu_status: GpuSurfaceStatus = .unavailable,
+    /// The path that last painted this surface (see `GpuPresentPath`).
+    gpu_present_path: GpuPresentPath = .none,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,

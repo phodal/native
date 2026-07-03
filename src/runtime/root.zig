@@ -73,6 +73,11 @@ pub const EffectFileOutcome = runtime_effects.EffectFileOutcome;
 pub const EffectFileResult = runtime_effects.EffectFileResult;
 pub const max_effect_file_path_bytes = runtime_effects.max_effect_file_path_bytes;
 pub const max_effect_file_bytes = runtime_effects.max_effect_file_bytes;
+pub const TimerMode = runtime_effects.TimerMode;
+pub const EffectTimer = runtime_effects.EffectTimer;
+pub const EffectTimerOutcome = runtime_effects.EffectTimerOutcome;
+pub const max_effect_timers = runtime_effects.max_effect_timers;
+pub const effect_timer_platform_id_base = runtime_effects.effect_timer_platform_id_base;
 
 const runtime_clock = @import("clock.zig");
 pub const Clock = runtime_clock.Clock;

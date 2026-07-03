@@ -638,6 +638,48 @@ test "compiled template expansion keeps ids per use site and re-resolves tokens"
     try expectSameStyles(dark_interpreted.root, dark.root);
 }
 
+// ------------------------------------------- avatar image binding parity
+
+const AvatarUi = fixture.AvatarUi;
+const AvatarInterpreter = markup_view.MarkupView(fixture.AvatarModel, fixture.AvatarMsg);
+const AvatarCompiled = canvas.CompiledMarkupView(fixture.AvatarModel, fixture.AvatarMsg, fixture.avatar_markup_source);
+
+test "compiled avatar image binding matches the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.AvatarModel{ .user_image = 7 };
+
+    var view = try AvatarInterpreter.init(arena, fixture.avatar_markup_source);
+    var interpreted_ui = AvatarUi.init(arena);
+    const interpreted = try interpreted_ui.finalize(try view.build(&interpreted_ui, &model));
+
+    var compiled_ui = AvatarUi.init(arena);
+    const compiled = try compiled_ui.finalize(AvatarCompiled.build(&compiled_ui, &model));
+
+    var hand_ui = AvatarUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handAvatarView(&hand_ui, &model));
+
+    try expectSameTree(fixture.AvatarMsg, hand, interpreted);
+    try expectSameTree(fixture.AvatarMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // The field binding and the fn binding both resolve to the widget's
+    // image id at comptime-unrolled access, with the Ui.avatar cover fit.
+    const field_avatar = fixture.findByText(compiled.root, .avatar, "CT").?;
+    try testing.expectEqual(@as(canvas.ImageId, 7), field_avatar.image_id);
+    try testing.expectEqual(canvas.ImageFit.cover, field_avatar.image_fit);
+    try testing.expectEqual(@as(canvas.ImageId, 8), fixture.findByText(compiled.root, .avatar, "ZN").?.image_id);
+
+    // 0 keeps the initials fallback in both engines.
+    const empty_model = fixture.AvatarModel{};
+    var empty_ui = AvatarUi.init(arena);
+    const empty = try empty_ui.finalize(AvatarCompiled.build(&empty_ui, &empty_model));
+    try testing.expectEqual(@as(canvas.ImageId, 0), fixture.findByText(empty.root, .avatar, "CT").?.image_id);
+    try testing.expectEqualStrings("CT", fixture.findByText(empty.root, .avatar, "CT").?.text);
+}
+
 // ------------------------------------------------------ text wrap parity
 
 const WrapUi = fixture.WrapUi;

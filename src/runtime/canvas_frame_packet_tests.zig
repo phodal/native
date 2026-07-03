@@ -181,6 +181,9 @@ test "runtime presents next canvas GPU packet" {
     } }};
     _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
 
+    // Nothing has painted yet: the present path is unstamped.
+    try std.testing.expectEqual(platform.GpuPresentPath.none, harness.runtime.views[0].gpu_present_path);
+
     var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
     var packet_json_buffer: [16 * 1024]u8 = undefined;
     const packet = try harness.runtime.presentNextCanvasGpuPacket(1, "canvas", .{
@@ -191,6 +194,8 @@ test "runtime presents next canvas GPU packet" {
     }, canvasFrameScratchStorage(&harness.runtime), canvas.Color.rgb8(247, 249, 252), &gpu_commands, &packet_json_buffer);
 
     try std.testing.expect(packet.requiresRender());
+    // The successful packet present stamped the path proof (#60).
+    try std.testing.expectEqual(platform.GpuPresentPath.packet, harness.runtime.views[0].gpu_present_path);
     try std.testing.expectEqual(@as(usize, 1), packet.commandCount());
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
     try std.testing.expectEqualStrings("canvas", harness.null_platform.gpu_surface_packet_present_label_storage[0..harness.null_platform.gpu_surface_packet_present_label_len]);
@@ -212,6 +217,66 @@ test "runtime presents next canvas GPU packet" {
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
     try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
     try std.testing.expect(presented_frame.canvas_frame_dirty_bounds == null);
+}
+
+test "widget-authored transform and opacity survive into the presented packet JSON" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-packet-transform", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    // Author the transform/opacity through the Ui builder so the packet
+    // carries the same channel a view function feeds: builder options ->
+    // widget -> push_opacity/transform display list wrap -> per-command
+    // packet state.
+    const SlideMsg = union(enum) { none };
+    const SlideUi = canvas.Ui(SlideMsg);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var ui = SlideUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.el(.panel, .{
+        .frame = geometry.RectF.init(8, 6, 48, 24),
+        .transform = canvas.Affine.translate(8, 4),
+        .opacity = 0.5,
+    }, .{}));
+
+    var widget_commands: [8]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&widget_commands);
+    try canvas.emitWidgetTree(&builder, tree.root, .{});
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", builder.displayList());
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_json_buffer: [16 * 1024]u8 = undefined;
+    const packet = try harness.runtime.presentNextCanvasGpuPacket(1, "canvas", .{
+        .frame_index = 5,
+        .timestamp_ns = 21_000,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .scale = 2,
+    }, canvasFrameScratchStorage(&harness.runtime), canvas.Color.rgb8(247, 249, 252), &gpu_commands, &packet_json_buffer);
+
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expect(packet.fullyRepresentable());
+    try std.testing.expect(packet.commandCount() > 0);
+    try std.testing.expectEqual(@as(f32, 0.5), packet.commands[0].opacity);
+    try std.testing.expectEqualDeep(canvas.Affine.translate(8, 4), packet.commands[0].transform);
+
+    const packet_json = packet_json_buffer[0..harness.null_platform.gpu_surface_packet_present_json_len];
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"opacity\":0.5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"transform\":[1,0,0,1,8,4]") != null);
 }
 
 test "runtime presents canvas GPU packet with separate presentation scale" {
@@ -432,6 +497,9 @@ test "runtime falls back to pixels when packet JSON buffer is too small" {
     try std.testing.expectEqual(CanvasPresentationMode.pixels, result.mode);
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_count);
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    // The FAILED packet attempt never stamped `.packet`: only the pixel
+    // present that actually painted did (#60).
+    try std.testing.expectEqual(platform.GpuPresentPath.pixels, harness.runtime.views[0].gpu_present_path);
 }
 
 test "runtime falls back to pixel presentation when packet presenter is unavailable" {
@@ -479,6 +547,9 @@ test "runtime falls back to pixel presentation when packet presenter is unavaila
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
     const presented_frame = try harness.runtime.gpuSurfaceFrame(1, "canvas");
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
+    // Snapshot-visible proof that the pixel path painted (#60).
+    try std.testing.expectEqual(platform.GpuPresentPath.pixels, harness.runtime.views[0].gpu_present_path);
+    try std.testing.expectEqual(platform.GpuPresentPath.pixels, harness.runtime.views[0].info().gpu_present_path);
 }
 
 test "runtime pixel fallback honors presentation scale without invalidating retained frame" {
@@ -624,6 +695,8 @@ test "runtime keeps frames with registered images on the packet path" {
     }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, packet_json_buffer, pixels, scratch, canvas.Color.rgb8(0, 0, 0), null);
     try std.testing.expectEqual(CanvasPresentationMode.skipped, second.mode);
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_image_upload_count);
+    // An idle skip keeps the last painted path: still `.packet` (#60).
+    try std.testing.expectEqual(platform.GpuPresentPath.packet, harness.runtime.views[0].gpu_present_path);
 }
 
 test "runtime re-registration and unregister drive the image upload side-channel" {

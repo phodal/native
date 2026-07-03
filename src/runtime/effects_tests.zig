@@ -5,6 +5,7 @@ const app_manifest = @import("app_manifest");
 const core = @import("core.zig");
 const ui_app_model = @import("ui_app.zig");
 const effects_mod = @import("effects.zig");
+const platform_mod = @import("../platform/root.zig");
 
 const canvas_label = "stream-canvas";
 
@@ -978,6 +979,261 @@ test "real executor collect mode truncates past the collect bound with the flag 
     try std.testing.expectEqual(effects_mod.max_effect_collect_bytes, h.app_state.model.output_len);
     try std.testing.expect(h.app_state.model.output_truncated);
     try std.testing.expectEqualStrings("done\n", h.app_state.model.stderrPrefix());
+}
+
+// ------------------------------------------------------------- fx timers
+
+const TimerModel = struct {
+    fired: u32 = 0,
+    rejected: u32 = 0,
+    last_fired_key: u64 = 0,
+    last_rejected_key: u64 = 0,
+};
+
+const TimerMsg = union(enum) {
+    start_repeating,
+    start_one_shot,
+    start_zero_interval,
+    start_many,
+    replace,
+    stop,
+    tick: effects_mod.EffectTimer,
+};
+
+const TimerApp = ui_app_model.UiApp(TimerModel, TimerMsg);
+const TimerEffects = TimerApp.Effects;
+
+const tick_key: u64 = 9001;
+
+fn timerUpdate(model: *TimerModel, msg: TimerMsg, fx: *TimerEffects) void {
+    switch (msg) {
+        .start_repeating => fx.startTimer(.{
+            .key = tick_key,
+            .interval_ms = 250,
+            .mode = .repeating,
+            .on_fire = TimerEffects.timerMsg(.tick),
+        }),
+        .start_one_shot => fx.startTimer(.{
+            .key = tick_key,
+            .interval_ms = 100,
+            .on_fire = TimerEffects.timerMsg(.tick),
+        }),
+        .start_zero_interval => fx.startTimer(.{
+            .key = tick_key,
+            .interval_ms = 0,
+            .on_fire = TimerEffects.timerMsg(.tick),
+        }),
+        .start_many => {
+            var key: u64 = 1;
+            while (key <= effects_mod.max_effect_timers + 1) : (key += 1) {
+                fx.startTimer(.{
+                    .key = key,
+                    .interval_ms = 100,
+                    .mode = .repeating,
+                    .on_fire = TimerEffects.timerMsg(.tick),
+                });
+            }
+        },
+        .replace => fx.startTimer(.{
+            .key = tick_key,
+            .interval_ms = 500,
+            .mode = .one_shot,
+            .on_fire = TimerEffects.timerMsg(.tick),
+        }),
+        .stop => fx.cancelTimer(tick_key),
+        .tick => |timer| switch (timer.outcome) {
+            .fired => {
+                model.fired += 1;
+                model.last_fired_key = timer.key;
+            },
+            .rejected => {
+                model.rejected += 1;
+                model.last_rejected_key = timer.key;
+            },
+        },
+    }
+}
+
+fn timerBootInit(model: *TimerModel, fx: *TimerEffects) void {
+    _ = model;
+    fx.startTimer(.{
+        .key = tick_key,
+        .interval_ms = 250,
+        .mode = .repeating,
+        .on_fire = TimerEffects.timerMsg(.tick),
+    });
+}
+
+fn timerView(ui: *TimerApp.Ui, model: *const TimerModel) TimerApp.Ui.Node {
+    return ui.text(.{}, ui.fmt("{d} ticks", .{model.fired}));
+}
+
+const TimerHarness = struct {
+    harness: *core.TestHarness(),
+    app_state: *TimerApp,
+    app: core.App,
+
+    fn create(init_fx: ?*const fn (model: *TimerModel, fx: *TimerEffects) void) !TimerHarness {
+        const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+        errdefer harness.destroy(std.testing.allocator);
+        harness.null_platform.gpu_surfaces = true;
+        const app_state = try std.testing.allocator.create(TimerApp);
+        errdefer std.testing.allocator.destroy(app_state);
+        app_state.* = TimerApp.init(std.heap.page_allocator, .{}, .{
+            .name = "effects-timers",
+            .scene = stream_scene,
+            .canvas_label = canvas_label,
+            .update_fx = timerUpdate,
+            .init_fx = init_fx,
+            .view = timerView,
+        });
+        const app = app_state.app();
+        try harness.start(app);
+        try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+            .label = canvas_label,
+            .size = geometry.SizeF.init(400, 300),
+            .scale_factor = 1,
+            .frame_index = 1,
+            .timestamp_ns = 1_000_000,
+            .nonblank = true,
+        } });
+        try std.testing.expect(app_state.installed);
+        return .{ .harness = harness, .app_state = app_state, .app = app };
+    }
+
+    fn destroy(self: *TimerHarness) void {
+        self.app_state.deinit();
+        std.testing.allocator.destroy(self.app_state);
+        self.harness.destroy(std.testing.allocator);
+    }
+
+    fn drainWakes(self: *TimerHarness) !void {
+        var nudged = false;
+        while (self.harness.null_platform.takeWake()) |_| nudged = true;
+        if (nudged) try self.harness.runtime.dispatchPlatformEvent(self.app, .wake);
+    }
+};
+
+test "fake executor records fx timers and fires them by hand" {
+    var h = try TimerHarness.create(null);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    // Firing a key that was never started reports EffectNotFound.
+    try std.testing.expectError(error.EffectNotFound, fx.fireTimer(tick_key));
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start_repeating);
+    try std.testing.expectEqual(@as(usize, 1), fx.pendingTimerCount());
+    const request = fx.pendingTimerAt(0).?;
+    try std.testing.expectEqual(tick_key, request.key);
+    try std.testing.expectEqual(@as(u64, 250), request.interval_ms);
+    try std.testing.expectEqual(effects_mod.TimerMode.repeating, request.mode);
+    // Timers never consume the effect slots.
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
+    // The recording never touched the platform timer service.
+    try std.testing.expectEqual(@as(usize, 0), h.harness.null_platform.timerStartCount());
+
+    // A repeating timer fires as many times as the test says and stays
+    // armed; each fire drains as one Msg through the wake path.
+    try fx.fireTimer(tick_key);
+    try h.drainWakes();
+    try fx.fireTimer(tick_key);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(u32, 2), h.app_state.model.fired);
+    try std.testing.expectEqual(tick_key, h.app_state.model.last_fired_key);
+    try std.testing.expectEqual(@as(usize, 1), fx.pendingTimerCount());
+    try std.testing.expect(try retainedTextExists(&h.harness.runtime, "2 ticks"));
+
+    // cancelTimer stops it; the retired key no longer fires.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+    try std.testing.expectEqual(@as(usize, 0), fx.pendingTimerCount());
+    try std.testing.expectError(error.EffectNotFound, fx.fireTimer(tick_key));
+    // Cancelling an unknown key is a no-op.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+
+    // A one-shot retires after its single fire.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start_one_shot);
+    try std.testing.expectEqual(effects_mod.TimerMode.one_shot, fx.pendingTimerAt(0).?.mode);
+    try fx.fireTimer(tick_key);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(u32, 3), h.app_state.model.fired);
+    try std.testing.expectEqual(@as(usize, 0), fx.pendingTimerCount());
+    try std.testing.expectError(error.EffectNotFound, fx.fireTimer(tick_key));
+}
+
+test "fx timer capacity and zero intervals reject loudly" {
+    var h = try TimerHarness.create(null);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    // One more timer than the table holds: exactly one rejection Msg.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start_many);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(u32, 1), h.app_state.model.rejected);
+    try std.testing.expectEqual(@as(u64, effects_mod.max_effect_timers + 1), h.app_state.model.last_rejected_key);
+    try std.testing.expectEqual(effects_mod.max_effect_timers, fx.pendingTimerCount());
+
+    // A zero interval is rejected without claiming a slot (the table is
+    // full here, but the rejection is the interval's, delivered first).
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start_zero_interval);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(u32, 2), h.app_state.model.rejected);
+    try std.testing.expectEqual(tick_key, h.app_state.model.last_rejected_key);
+    try std.testing.expectEqual(effects_mod.max_effect_timers, fx.pendingTimerCount());
+}
+
+test "starting an active fx timer key replaces it in place" {
+    var h = try TimerHarness.create(null);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start_repeating);
+    try h.app_state.dispatch(&h.harness.runtime, 1, .replace);
+    try h.drainWakes();
+
+    // No rejection, no second slot: the same key restarted.
+    try std.testing.expectEqual(@as(u32, 0), h.app_state.model.rejected);
+    try std.testing.expectEqual(@as(usize, 1), fx.pendingTimerCount());
+    const request = fx.pendingTimerAt(0).?;
+    try std.testing.expectEqual(tick_key, request.key);
+    try std.testing.expectEqual(@as(u64, 500), request.interval_ms);
+    try std.testing.expectEqual(effects_mod.TimerMode.one_shot, request.mode);
+
+    // The replacement's one-shot semantics hold: one fire, then retired.
+    try fx.fireTimer(tick_key);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(u32, 1), h.app_state.model.fired);
+    try std.testing.expectEqual(@as(usize, 0), fx.pendingTimerCount());
+}
+
+test "real-mode fx timers arm reserved platform timers and route fires back into update" {
+    var h = try TimerHarness.create(timerBootInit);
+    defer h.destroy();
+    // Default `.real` executor against the null platform: init_fx armed
+    // the boot timer on the installing frame, through the bound services.
+    try std.testing.expectEqual(@as(usize, 1), h.harness.null_platform.timerStartCount());
+    const platform_id = effects_mod.effect_timer_platform_id_base;
+    const armed = h.harness.null_platform.startedTimer(platform_id).?;
+    try std.testing.expect(armed.active);
+    try std.testing.expect(armed.repeats);
+    try std.testing.expectEqual(@as(u64, 250 * std.time.ns_per_ms), armed.interval_ns);
+    try std.testing.expect(platform_id >= platform_mod.reserved_timer_id_base);
+
+    // A fired platform timer routes through UiApp.handleTimer back into
+    // update — never through Options.on_timer.
+    try h.harness.runtime.dispatchPlatformEvent(h.app, h.harness.null_platform.fireTimer(platform_id, 5_000_000).?);
+    try std.testing.expectEqual(@as(u32, 1), h.app_state.model.fired);
+    try std.testing.expectEqual(tick_key, h.app_state.model.last_fired_key);
+    try std.testing.expect(try retainedTextExists(&h.harness.runtime, "1 ticks"));
+
+    // fx.cancelTimer reaches the platform cancel arm and disarms it.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+    try std.testing.expectEqual(@as(usize, 1), h.harness.null_platform.timerCancelCount());
+    try std.testing.expect(!h.harness.null_platform.startedTimer(platform_id).?.active);
+    try std.testing.expect(h.harness.null_platform.fireTimer(platform_id, 6_000_000) == null);
 }
 
 test "real executor reports unspawnable binaries as spawn_failed" {

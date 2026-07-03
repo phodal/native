@@ -563,6 +563,32 @@ test "handlers on non-hit-target elements fail the build with the teaching messa
     _ = try view.build(&ui, &model);
 }
 
+test "gap on stacking containers fails the build with the teaching message" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    // A plain overlay container and a modal surface kind: both layer
+    // their children, so the gap could never space them.
+    const sources = [_][]const u8{
+        "<column>\n  <panel gap=\"8\">\n    <text>a</text>\n    <text>b</text>\n  </panel>\n</column>",
+        "<column>\n  <sheet text=\"Share\" gap=\"8\">\n    <text>a</text>\n  </sheet>\n</column>",
+    };
+    for (sources) |source| {
+        var view = try InboxMarkup.init(arena, source);
+        var ui = InboxUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(canvas.ui_markup.stack_container_gap_message, view.diagnostic.message);
+        try testing.expectEqual(@as(usize, 2), view.diagnostic.line);
+    }
+
+    // gap on flow containers stays fine, including inside a panel.
+    var view = try InboxMarkup.init(arena, "<panel>\n  <column gap=\"8\">\n    <text>a</text>\n    <text>b</text>\n  </column>\n</panel>");
+    var ui = InboxUi.init(arena);
+    _ = try view.build(&ui, &model);
+}
+
 test "the validator's element list matches the interpreter" {
     for (canvas.ui_markup.known_element_names) |name| {
         try testing.expect(markup_view.elementKind(name) != null);
@@ -583,6 +609,25 @@ test "the validator's non-hit-target element list matches the engine's hit-targe
     }
     // Every listed non-hit-target name is a known element.
     for (canvas.ui_markup.known_non_hit_target_element_names) |name| {
+        try testing.expect(nameListed(name, &canvas.ui_markup.known_element_names));
+    }
+}
+
+test "the validator's stack-container element list matches the engine's stacking predicate" {
+    // The engine predicate (canvas.widgetKindStacksChildren, which the
+    // layout pass, the builder's Debug gap diagnostic, and both markup
+    // engines use) is the source of truth; the validator's std-only name
+    // list must mirror it exactly so an element can never accept a gap
+    // the layout would never apply.
+    for (canvas.ui_markup.known_element_names) |name| {
+        const kind = markup_view.elementKind(name).?;
+        try testing.expectEqual(
+            canvas.widgetKindStacksChildren(kind),
+            nameListed(name, &canvas.ui_markup.known_stack_container_element_names),
+        );
+    }
+    // Every listed stack-container name is a known element.
+    for (canvas.ui_markup.known_stack_container_element_names) |name| {
         try testing.expect(nameListed(name, &canvas.ui_markup.known_element_names));
     }
 }
@@ -1499,4 +1544,113 @@ test "the wrap attribute builds the hand-written wrapped text leaf" {
     // The definite column width is both floor and cap.
     try testing.expectEqual(@as(f32, 360), markup_tree.root.layout.min_size.width);
     try testing.expectEqual(@as(f32, 360), markup_tree.root.layout.max_size.width);
+}
+
+// -------------------------------------------- avatar image binding fixture
+
+pub const AvatarMsg = union(enum) { refresh };
+
+pub const AvatarModel = struct {
+    /// Runtime-registered ImageId kept in the model (0 = no image, the
+    /// initials fallback) — the id only lands here on successful
+    /// `fx.registerImageBytes`.
+    user_image: canvas.ImageId = 0,
+    user_name: []const u8 = "Chris Tate",
+
+    /// A pub fn producing an ImageId binds like a field.
+    pub fn teammateImage(model: *const AvatarModel) canvas.ImageId {
+        return model.user_image + 1;
+    }
+};
+
+pub const avatar_markup_source =
+    \\<row gap="8" cross="center">
+    \\  <avatar image="{user_image}" label="{user_name}">CT</avatar>
+    \\  <avatar image="{teammateImage}">ZN</avatar>
+    \\</row>
+;
+
+pub const AvatarUi = canvas.Ui(AvatarMsg);
+
+/// The hand-written equivalent of the avatar markup: `ui.avatar` with
+/// `ElementOptions.image`, so parity covers the cover-fit clip too.
+pub fn handAvatarView(ui: *AvatarUi, model: *const AvatarModel) AvatarUi.Node {
+    return ui.row(.{ .gap = 8, .cross = .center }, .{
+        ui.avatar(.{ .image = model.user_image, .semantics = .{ .label = model.user_name } }, "CT"),
+        ui.avatar(.{ .image = model.teammateImage() }, "ZN"),
+    });
+}
+
+test "the avatar image binding resolves model fields and fns to the widget image id" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const AvatarMarkup = markup_view.MarkupView(AvatarModel, AvatarMsg);
+    const model = AvatarModel{ .user_image = 7 };
+
+    var view = try AvatarMarkup.init(arena, avatar_markup_source);
+    var markup_ui = AvatarUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = AvatarUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handAvatarView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+
+    // The field binding and the fn binding both land in image_id; the
+    // initials stay the text content and the image clips like Ui.avatar.
+    const field_avatar = findByText(markup_tree.root, .avatar, "CT").?;
+    try testing.expectEqual(@as(canvas.ImageId, 7), field_avatar.image_id);
+    try testing.expectEqual(canvas.ImageFit.cover, field_avatar.image_fit);
+    try testing.expectEqualStrings("Chris Tate", field_avatar.semantics.label);
+    const fn_avatar = findByText(markup_tree.root, .avatar, "ZN").?;
+    try testing.expectEqual(@as(canvas.ImageId, 8), fn_avatar.image_id);
+
+    // 0 is the "no image" sentinel: the widget stays on the initials
+    // fallback path.
+    const empty_model = AvatarModel{};
+    var empty_ui = AvatarUi.init(arena);
+    const empty_tree = try empty_ui.finalize(try view.build(&empty_ui, &empty_model));
+    try testing.expectEqual(@as(canvas.ImageId, 0), findByText(empty_tree.root, .avatar, "CT").?.image_id);
+    try testing.expectEqualStrings("CT", findByText(empty_tree.root, .avatar, "CT").?.text);
+}
+
+test "avatar image misuse fails the build with the teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = AvatarModel{};
+    const AvatarMarkup = markup_view.MarkupView(AvatarModel, AvatarMsg);
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            // A literal id is not model data.
+            .source = "<row>\n  <avatar image=\"7\">CT</avatar>\n</row>",
+            .message = canvas.ui_markup.avatar_image_message,
+        },
+        .{
+            // The binding must produce an integer ImageId (user_name is text).
+            .source = "<row>\n  <avatar image=\"{user_name}\">CT</avatar>\n</row>",
+            .message = canvas.ui_markup.avatar_image_message,
+        },
+        .{
+            // Scoped to avatar: the other image elements stay Zig views.
+            .source = "<row>\n  <badge image=\"{user_image}\">3</badge>\n</row>",
+            .message = canvas.ui_markup.avatar_image_element_message,
+        },
+    };
+    for (cases) |case| {
+        var view = try AvatarMarkup.init(arena, case.source);
+        var ui = AvatarUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(case.message, view.diagnostic.message);
+        try testing.expect(view.diagnostic.line > 0);
+    }
 }

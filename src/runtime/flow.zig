@@ -288,7 +288,13 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             // callback, set `failed`, and exit the whole app. The tag
             // name (not `Event.name()`, which for commands aliases
             // transient command-name storage) keeps ring records static.
-            app.event(self, event_value) catch |err| recordDispatchError(self, @tagName(event_value), err);
+            // Under the TestHarness's `.propagate` policy the recorded
+            // error additionally returns, so capacity errors fail tests
+            // instead of leaving silent stale frames (#56).
+            app.event(self, event_value) catch |err| {
+                recordDispatchError(self, @tagName(event_value), err);
+                if (self.dispatch_error_policy == .propagate) return err;
+            };
 
             switch (event_value) {
                 .command => {
@@ -345,7 +351,10 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 trace.uint("frame", self.frame_index),
                 trace.uint("dirty_regions", self.last_diagnostics.dirty_region_count),
             });
-            app.event(self, .{ .lifecycle = .frame }) catch |err| recordDispatchError(self, "lifecycle", err);
+            app.event(self, .{ .lifecycle = .frame }) catch |err| {
+                recordDispatchError(self, "lifecycle", err);
+                if (self.dispatch_error_policy == .propagate) return err;
+            };
         }
 
         fn AutomationSnapshotMethods() type {
@@ -578,8 +587,35 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
         fn consumeAutomationCommand(self: *Runtime, app: App) anyerror!void {
             const server = self.options.automation orelse return;
             var buffer: [automation.protocol.max_command_bytes]u8 = undefined;
-            const command = try server.takeCommand(&buffer) orelse return;
-            try dispatchAutomationProtocolCommand(self, app, command);
+            // Automation command errors ALWAYS degrade, regardless of
+            // `dispatch_error_policy` (#61): a stale widget target or a
+            // malformed command is driver misuse, not an app fault —
+            // propagating would escape the frame_requested platform
+            // callback and kill the whole app under test, and the
+            // TestHarness's `.propagate` policy is for app errors. The
+            // record invalidates state, so the next published snapshot
+            // carries the error where the driver can see it.
+            const command = (server.takeCommand(&buffer) catch |err| {
+                recordDispatchError(self, "automation.command", err);
+                return;
+            }) orelse return;
+            dispatchAutomationProtocolCommand(self, app, command) catch |err| {
+                recordDispatchError(self, automationCommandEventName(command.action), err);
+            };
+        }
+
+        /// Stable static event names for degraded automation command
+        /// errors (#61) — one per widget action, a generic fallback for
+        /// the rest (parse errors included).
+        fn automationCommandEventName(action: automation.protocol.Action) []const u8 {
+            return switch (action) {
+                .widget_click => "automation.widget_click",
+                .widget_action => "automation.widget_action",
+                .widget_drag => "automation.widget_drag",
+                .widget_wheel => "automation.widget_wheel",
+                .widget_key => "automation.widget_key",
+                else => "automation.command",
+            };
         }
 
         fn dispatchAutomationProtocolCommand(self: *Runtime, app: App, command: automation.protocol.Command) anyerror!void {

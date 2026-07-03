@@ -159,6 +159,16 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         }
                     }
                 }
+                // Interpreter parity: stacking kinds give every child the
+                // full content box, so a gap can never space them — dead
+                // layout data is a compile error here.
+                if (canvas.widgetKindStacksChildren(kind)) {
+                    for (node.attrs) |attribute| {
+                        if (std.mem.eql(u8, attribute.name, "gap")) {
+                            fail(node, markup.stack_container_gap_message);
+                        }
+                    }
+                }
             }
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);
@@ -166,6 +176,10 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             if (comptime interpreter.elementTakesText(kind)) {
                 var built = ui.el(kind, options, .{});
                 built.widget.text = interpolatedText(node, entries, ui, model, scope);
+                // Avatars clip their runtime image to the avatar circle,
+                // exactly like `Ui.avatar` and the interpreter (a no-op
+                // while the id is 0 and the initials fallback renders).
+                if (comptime (kind == .avatar)) built.widget.image_fit = .cover;
                 return built;
             }
 
@@ -800,6 +814,8 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         .string => |text| text,
                         else => runtimeFail([]const u8, ui),
                     };
+                } else if (comptime std.mem.eql(u8, attribute.name, "image")) {
+                    applyImageAttr(node, attribute.value, entries, ui, model, scope, options);
                 } else if (comptime (colorStyleField(attribute.name) != null)) {
                     // Style token refs resolve entirely at comptime: a typo
                     // in a token name is a compile error.
@@ -811,6 +827,25 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     setOption(node, comptime optionFieldName(node, attribute.name), attribute.value, entries, ui, model, scope, options);
                 }
             }
+        }
+
+        /// Comptime mirror of the interpreter's `applyImageAttr`:
+        /// `image="{binding}"` on avatar resolves to a `u64` ImageId the
+        /// app registered at runtime — avatar-only, binding-only, and the
+        /// binding must produce an integer, all checked at comptime with
+        /// the interpreter's messages.
+        fn applyImageAttr(comptime node: markup.MarkupNode, comptime raw: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: *Ui.ElementOptions) void {
+            comptime {
+                if (!std.mem.eql(u8, node.name, "avatar")) fail(node, markup.avatar_image_element_message);
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.avatar_image_message);
+                if (expression != .binding) fail(node, markup.avatar_image_message);
+            }
+            const path = comptime markup.parseAttrExpression(raw).?.binding;
+            comptime requireVariant(pathVariant(node, entries, path, true), &.{.integer}, node, markup.avatar_image_message);
+            options.image = switch (bindingValue(node, entries, path, ui, model, scope, true)) {
+                .integer => |int| @intCast(int),
+                else => runtimeFail(canvas.ImageId, ui),
+            };
         }
 
         fn colorStyleField(comptime attr_name: []const u8) ?[]const u8 {

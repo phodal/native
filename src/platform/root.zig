@@ -77,6 +77,7 @@ pub const ViewKind = types.ViewKind;
 pub const GpuSurfaceBackend = types.GpuSurfaceBackend;
 pub const GpuSurfacePixelFormat = types.GpuSurfacePixelFormat;
 pub const GpuSurfacePresentMode = types.GpuSurfacePresentMode;
+pub const GpuPresentPath = types.GpuPresentPath;
 pub const GpuSurfaceAlphaMode = types.GpuSurfaceAlphaMode;
 pub const GpuSurfaceColorSpace = types.GpuSurfaceColorSpace;
 pub const GpuSurfaceStatus = types.GpuSurfaceStatus;

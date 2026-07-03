@@ -173,7 +173,7 @@ test "global keys keep ids across reparenting, sibling keys do not" {
     const Board = struct {
         fn view(ui: *InboxUi, in_first_column: bool) InboxUi.Node {
             const movable = [_]InboxUi.Node{
-                ui.el(.card, .{ .global_key = ui_model.uiKey(@as(u32, 7)), .gap = 4 }, .{
+                ui.el(.card, .{ .global_key = ui_model.uiKey(@as(u32, 7)), .padding = 4 }, .{
                     ui.checkbox(.{ .on_toggle = Msg{ .toggle = 7 } }),
                 }),
                 ui.text(.{ .key = ui_model.uiKey(@as(u32, 8)) }, "Sibling-keyed"),
@@ -541,6 +541,62 @@ test "explicit sizes are definite except on resizable" {
     try testing.expectEqual(@as(f32, 0), resizable.layout.max_size.width);
 }
 
+test "opacity and transform flow to the widget with identity defaults" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.column(.{}, .{
+        ui.el(.panel, .{ .transform = canvas.Affine.translate(8, 4), .opacity = 0.5 }, .{
+            ui.text(.{}, "Slide"),
+        }),
+        ui.el(.panel, .{}, .{}),
+    }));
+
+    const moved = tree.root.children[0];
+    try testing.expectEqualDeep(canvas.Affine.translate(8, 4), moved.transform);
+    try testing.expectEqual(@as(f32, 0.5), moved.opacity);
+
+    const still = tree.root.children[1];
+    try testing.expectEqualDeep(canvas.Affine.identity(), still.transform);
+    try testing.expectEqual(@as(f32, 1), still.opacity);
+}
+
+test "builder transform and opacity wrap the emitted display list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(
+        ui.el(.stack, .{ .transform = canvas.Affine.translate(8, 4), .opacity = 0.5 }, .{
+            ui.text(.{ .frame = geometry.RectF.init(0, 0, 80, 20) }, "Slide"),
+        }),
+    );
+
+    var commands: [8]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try canvas.emitWidgetTree(&builder, tree.root, .{});
+    const display_list = builder.displayList();
+    try testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    switch (display_list.commands[0]) {
+        .push_opacity => |opacity| try testing.expectEqual(@as(f32, 0.5), opacity),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .transform => |transform| try testing.expectEqualDeep(canvas.Affine.translate(8, 4), transform),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| try testing.expectEqualStrings("Slide", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[3]) {
+        .transform => |transform| try testing.expectEqualDeep(canvas.Affine.translate(-8, -4), transform),
+        else => return error.TestUnexpectedResult,
+    }
+    try testing.expect(display_list.commands[4] == .pop_opacity);
+}
+
 // ------------------------------------------------------------ components
 
 fn countKindIn(widget: canvas.Widget, kind: canvas.WidgetKind) usize {
@@ -727,4 +783,30 @@ test "nav mounts the active page with stable position-derived identity" {
     var clamped_ui = InboxUi.init(arena);
     const clamped = try clamped_ui.finalize(Pane.view(&clamped_ui, 9, false));
     try testing.expect(findTextContaining(clamped.root, "transcript") != null);
+}
+
+test "gap on a stacking container warns in Debug but never fails the build" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The warning content cannot be captured here (std.log has no test
+    // seam); the predicate it keys on (canvas.widgetKindStacksChildren)
+    // is kept honest by the lockstep test in ui_markup_view_tests.zig.
+    // This test pins the compat contract: the diagnostic path runs and
+    // the build still succeeds — shipped apps carry this mistake, so it
+    // must stay a warning, never a failure. Raise the test log threshold
+    // so the intentional warn stays out of the test output.
+    const saved_log_level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = saved_log_level;
+
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(ui.panel(.{ .gap = 8 }, .{
+        ui.text(.{}, "a"),
+        ui.text(.{}, "b"),
+    }));
+    try testing.expectEqual(canvas.WidgetKind.panel, tree.root.kind);
+    try testing.expectEqual(@as(f32, 8), tree.root.layout.gap);
+    try testing.expectEqual(@as(usize, 2), tree.root.children.len);
 }

@@ -33,6 +33,8 @@ const Runtime = core.Runtime;
 const App = core.App;
 const Event = core.Event;
 
+const ui_app_log = std.log.scoped(.zero_ui_app);
+
 /// Comptime feature selection for `UiAppWithFeatures`.
 pub const UiAppFeatures = struct {
     /// Ship the runtime markup engine (parser + interpreter) in the app.
@@ -151,7 +153,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// Optional mapping from runtime timer events (started via
             /// `runtime.startTimer`) into messages. Framework-reserved timer
             /// ids (>= `platform.reserved_timer_id_base`) are handled
-            /// internally and never reach this callback.
+            /// internally and never reach this callback — that includes fx
+            /// timers (`fx.startTimer`), which deliver their own `on_fire`
+            /// Msgs through the update path instead.
             on_timer: ?*const fn (id: u64, timestamp_ns: u64) ?MsgT = null,
             /// Optional mapping from system appearance changes into
             /// messages so the model can own color scheme, contrast, and
@@ -329,7 +333,17 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // canvas itself stays surface-sized so chrome and the clear
             // color still paint edge to edge under notches and bars.
             const bounds = geometry.RectF.fromSize(self.canvas_size).deflate(runtime.viewportInsetsForWindow(window_id));
-            const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, bounds, tokens, &self.layout_nodes);
+            const layout = canvas.layoutWidgetTreeWithTokens(tree.root, bounds, tokens, &self.layout_nodes) catch |err| {
+                // Teach the fix at the failure site (#56): the error name
+                // alone never says which budget or where to trim.
+                if (err == error.WidgetLayoutListFull) {
+                    ui_app_log.warn(
+                        "widget layout capacity exceeded for view '{s}': the per-view budget is {d} nodes (canvas_limits.max_canvas_widget_nodes_per_view) - reduce always-mounted widgets or virtualize lists",
+                        .{ self.options.canvas_label, canvas_limits.max_canvas_widget_nodes_per_view },
+                    );
+                }
+                return err;
+            };
 
             if (self.options.chrome) |chrome| {
                 try self.installChromeDisplayList(runtime, window_id, chrome, layout, tokens);
@@ -509,6 +523,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         fn handleTimer(self: *Self, runtime: *Runtime, timer_event: platform.TimerEvent) anyerror!void {
             if (timer_event.id == markup_watch_timer_id) {
                 self.pollMarkupWatch(runtime, self.canvas_window_id);
+                return;
+            }
+            // Fired fx timers (`fx.startTimer`) map back to their
+            // `on_fire` Msgs; their reserved-range ids never reach
+            // `on_timer` (takeTimerMsg ignores ids outside the fx range).
+            if (self.effects.takeTimerMsg(timer_event.id, timer_event.timestamp_ns)) |msg| {
+                try self.dispatch(runtime, self.canvas_window_id, msg);
                 return;
             }
             if (timer_event.id >= platform.reserved_timer_id_base) return;

@@ -343,6 +343,40 @@ pub const EffectFileResult = struct {
     dropped_before: u32 = 0,
 };
 
+/// Maximum concurrently armed fx timers per app. Timers are their own
+/// fixed table: they do NOT consume `max_effects` slots or worker
+/// threads (a timer is a platform service arm, not a blocking effect),
+/// and timer keys are their own namespace — an fx timer key never
+/// collides with a spawn/fetch/file key.
+pub const max_effect_timers: usize = 16;
+
+/// Whether an fx timer fires once and retires or keeps firing until
+/// `cancelTimer`.
+pub const TimerMode = enum { one_shot, repeating };
+
+/// How an fx timer Msg came to be. Rejection is never silent: a full
+/// timer table, a zero interval, or a missing platform timer service
+/// delivers exactly one Msg with outcome `.rejected`.
+pub const EffectTimerOutcome = enum { fired, rejected };
+
+/// Payload for `on_fire` Msg constructors of fx timers. `timestamp_ns`
+/// is the platform's fire timestamp (0 from the fake executor's
+/// `fireTimer`, which has no clock).
+pub const EffectTimer = struct {
+    key: u64,
+    timestamp_ns: u64 = 0,
+    outcome: EffectTimerOutcome = .fired,
+};
+
+/// Base platform timer id for fx timers: slot N arms the platform timer
+/// `effect_timer_platform_id_base + N`. Lives in the framework-reserved
+/// id range (`platform.reserved_timer_id_base`) with an `0x00f7_0000`
+/// ("eff") offset, distinct from the ui-app markup watch id
+/// (`0xffff_ffff_2e70_a11c`) — `UiApp.handleTimer` routes ids in this
+/// range back through `Effects.takeTimerMsg` and they never reach the
+/// app's `on_timer` callback.
+pub const effect_timer_platform_id_base: u64 = platform.reserved_timer_id_base | 0x00f7_0000;
+
 /// Executor selection: `.real` spawns processes on worker threads;
 /// `.fake` records spawn requests for tests to inspect and answer with
 /// `feedLine`/`feedExit` — fully deterministic, no processes, no threads.
@@ -429,6 +463,7 @@ pub fn Effects(comptime Msg: type) type {
         pub const ExitMsgFn = *const fn (exit: EffectExit) Msg;
         pub const ResponseMsgFn = *const fn (response: EffectResponse) Msg;
         pub const FileMsgFn = *const fn (result: EffectFileResult) Msg;
+        pub const TimerMsgFn = *const fn (timer: EffectTimer) Msg;
 
         /// Comptime Msg constructor for `on_line`, following
         /// `canvas.Ui(Msg).inputMsg`: `lineMsg(.agent_line)` builds
@@ -473,6 +508,18 @@ pub fn Effects(comptime Msg: type) type {
             return struct {
                 fn make(result: EffectFileResult) Msg {
                     return @unionInit(Msg, @tagName(tag), result);
+                }
+            }.make;
+        }
+
+        /// Comptime Msg constructor for `on_fire` of fx timers:
+        /// `timerMsg(.refresh_tick)` builds
+        /// `Msg{ .refresh_tick = timer }` — the variant's payload type
+        /// must be `zero_native.EffectTimer`.
+        pub fn timerMsg(comptime tag: std.meta.Tag(Msg)) TimerMsgFn {
+            return struct {
+                fn make(timer: EffectTimer) Msg {
+                    return @unionInit(Msg, @tagName(tag), timer);
                 }
             }.make;
         }
@@ -603,6 +650,41 @@ pub fn Effects(comptime Msg: type) type {
             bytes: []const u8 = "",
         };
 
+        pub const StartTimerOptions = struct {
+            /// Caller-chosen identity, stored in the model. Timer keys
+            /// are their own namespace: they never collide with (and are
+            /// never checked against) spawn/fetch/file keys. Starting a
+            /// key that is already an active timer REPLACES it — the
+            /// interval, mode, and `on_fire` update in place and the
+            /// same platform timer re-arms, the friendly behavior for an
+            /// auto-refresh whose cadence the model changes.
+            key: u64,
+            /// Fire interval in milliseconds. Zero is rejected (one Msg
+            /// with outcome `.rejected`), never silently clamped.
+            interval_ms: u64,
+            /// `.one_shot` (default) fires once and retires the timer;
+            /// `.repeating` fires until `cancelTimer(key)`.
+            mode: TimerMode = .one_shot,
+            on_fire: ?TimerMsgFn = null,
+        };
+
+        /// A recorded fx timer, exposed by the fake executor for test
+        /// assertions.
+        pub const TimerRequest = struct {
+            key: u64,
+            interval_ms: u64,
+            mode: TimerMode,
+        };
+
+        const TimerSlot = struct {
+            active: bool = false,
+            fake: bool = false,
+            key: u64 = 0,
+            mode: TimerMode = .one_shot,
+            interval_ms: u64 = 0,
+            on_fire: ?TimerMsgFn = null,
+        };
+
         /// `draining`: the worker is done and the terminal entry is
         /// queued, but the slot still owns a heap buffer (a fetch's body
         /// or a collect spawn's stdout) until the drain delivers (and
@@ -663,12 +745,16 @@ pub fn Effects(comptime Msg: type) type {
             exit: struct { exit: EffectExit, exit_fn: ?ExitMsgFn },
             response: struct { response: EffectResponse, response_fn: ?ResponseMsgFn },
             file: struct { result: EffectFileResult, file_fn: ?FileMsgFn },
+            timer: struct { timer: EffectTimer, timer_fn: ?TimerMsgFn },
 
             fn addDropped(pending: *PendingMsg, count: u32) void {
                 switch (pending.*) {
                     .exit => |*entry| entry.exit.dropped_lines +|= count,
                     .response => |*entry| entry.response.dropped_before +|= count,
                     .file => |*entry| entry.result.dropped_before +|= count,
+                    // EffectTimer carries no drop counter; a repeating
+                    // timer's next fire replaces the lost one anyway.
+                    .timer => {},
                 }
             }
 
@@ -677,6 +763,7 @@ pub fn Effects(comptime Msg: type) type {
                     .exit => |entry| entry.exit.dropped_lines,
                     .response => |entry| entry.response.dropped_before,
                     .file => |entry| entry.result.dropped_before,
+                    .timer => 0,
                 };
             }
         };
@@ -821,6 +908,9 @@ pub fn Effects(comptime Msg: type) type {
         shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         next_generation: u32 = 1,
         slots: [max_effects]Slot = [_]Slot{.{}} ** max_effects,
+        /// Fixed fx timer table (see `max_effect_timers`): timers live
+        /// beside the effect slots, never in them. Loop-thread only.
+        timer_slots: [max_effect_timers]TimerSlot = [_]TimerSlot{.{}} ** max_effect_timers,
         queue_mutex: SpinMutex = .{},
         queue: [max_effect_queue_entries]Entry = undefined,
         queue_head: usize = 0,
@@ -861,6 +951,15 @@ pub fn Effects(comptime Msg: type) type {
         /// io. Bounded: gives up waiting after ~5s.
         pub fn deinit(self: *Self) void {
             self.shutdown.store(true, .release);
+            // Disarm live platform timers (best effort) and clear the table.
+            for (&self.timer_slots, 0..) |*timer_slot, index| {
+                if (timer_slot.active and !timer_slot.fake) {
+                    if (self.services) |services| {
+                        services.cancelTimer(effectTimerPlatformId(index)) catch {};
+                    }
+                }
+                timer_slot.* = .{};
+            }
             for (&self.slots) |*slot| {
                 if (slot.state.load(.acquire) == .running and !slot.fake) {
                     slot.cancel_requested.store(true, .release);
@@ -1341,6 +1440,76 @@ pub fn Effects(comptime Msg: type) type {
             if (slot.kind == .spawn) self.killPublishedChild(slot);
         }
 
+        /// Start (or replace) a key-based timer on the effects channel:
+        /// TEA's way to tick — an auto-refresh, a poll, a debounce —
+        /// without reaching for the runtime. Each fire is delivered as
+        /// one `on_fire` Msg through the ordinary update path. Key
+        /// discipline mirrors `PlatformServices.startTimer`: starting a
+        /// key that is already an active timer REPLACES it (interval,
+        /// mode, and `on_fire` update; the same platform timer re-arms).
+        /// Timer keys are their own namespace and never collide with
+        /// spawn/fetch/file keys; timers consume none of the
+        /// `max_effects` slots and no worker threads. Never fails from
+        /// the caller's view — rejection is never silent: a full timer
+        /// table (`max_effect_timers`), a zero `interval_ms`, or a
+        /// platform without a timer service delivers exactly one Msg
+        /// with outcome `.rejected` on the next drain.
+        pub fn startTimer(self: *Self, options: StartTimerOptions) void {
+            if (options.interval_ms == 0) return self.rejectTimer(options);
+            const fake = self.executor == .fake;
+            // Services are bound before init_fx/update ever run; a null
+            // here means a host without the platform timer arm.
+            if (!fake and self.services == null) return self.rejectTimer(options);
+            const index = self.findActiveTimerIndex(options.key) orelse
+                (self.findIdleTimerIndex() orelse return self.rejectTimer(options));
+            const slot = &self.timer_slots[index];
+            slot.key = options.key;
+            slot.mode = options.mode;
+            slot.interval_ms = options.interval_ms;
+            slot.on_fire = options.on_fire;
+            slot.fake = fake;
+            slot.active = true;
+            if (fake) return;
+            self.services.?.startTimer(
+                effectTimerPlatformId(index),
+                options.interval_ms * std.time.ns_per_ms,
+                options.mode == .repeating,
+            ) catch {
+                slot.active = false;
+                return self.rejectTimer(options);
+            };
+        }
+
+        /// Cancel the fx timer with `key`: no further `on_fire` Msgs for
+        /// it are dispatched. Unknown keys are a no-op (a one-shot that
+        /// already fired counts as unknown).
+        pub fn cancelTimer(self: *Self, key: u64) void {
+            const index = self.findActiveTimerIndex(key) orelse return;
+            const slot = &self.timer_slots[index];
+            slot.active = false;
+            if (slot.fake) return;
+            const services = self.services orelse return;
+            services.cancelTimer(effectTimerPlatformId(index)) catch {};
+        }
+
+        /// Route a fired platform timer back into an fx-timer Msg: the
+        /// on_fire Msg for the slot the reserved `platform_id` maps to,
+        /// or null when the id is not an fx timer (or its slot has no
+        /// `on_fire`). One-shot slots retire here — platform one-shot
+        /// timers self-stop (macOS invalidates its NSTimer, the null
+        /// platform deactivates on fire), so no cancel round trip is
+        /// needed. Loop-thread only; called by `UiApp.handleTimer`.
+        pub fn takeTimerMsg(self: *Self, platform_id: u64, timestamp_ns: u64) ?Msg {
+            const index = timerIndexForPlatformId(platform_id) orelse return null;
+            const slot = &self.timer_slots[index];
+            if (!slot.active) return null;
+            const on_fire = slot.on_fire;
+            const key = slot.key;
+            if (slot.mode == .one_shot) slot.active = false;
+            const fire_fn = on_fire orelse return null;
+            return fire_fn(.{ .key = key, .timestamp_ns = timestamp_ns, .outcome = .fired });
+        }
+
         /// Number of effects currently in flight (running slots).
         pub fn activeCount(self: *Self) usize {
             self.reclaimSlots();
@@ -1374,6 +1543,10 @@ pub fn Effects(comptime Msg: type) type {
                         .file => |entry| {
                             const file_fn = entry.file_fn orelse continue;
                             return file_fn(entry.result);
+                        },
+                        .timer => |entry| {
+                            const timer_fn = entry.timer_fn orelse continue;
+                            return timer_fn(entry.timer);
                         },
                     }
                 }
@@ -1773,6 +1946,48 @@ pub fn Effects(comptime Msg: type) type {
             self.wakeHost();
         }
 
+        /// Number of recorded (still-armed) fake fx timers.
+        pub fn pendingTimerCount(self: *Self) usize {
+            var count: usize = 0;
+            for (&self.timer_slots) |*slot| {
+                if (slot.active and slot.fake) count += 1;
+            }
+            return count;
+        }
+
+        /// The `index`-th recorded fake fx timer (slot order).
+        pub fn pendingTimerAt(self: *Self, index: usize) ?TimerRequest {
+            var seen: usize = 0;
+            for (&self.timer_slots) |*slot| {
+                if (!(slot.active and slot.fake)) continue;
+                if (seen == index) {
+                    return .{
+                        .key = slot.key,
+                        .interval_ms = slot.interval_ms,
+                        .mode = slot.mode,
+                    };
+                }
+                seen += 1;
+            }
+            return null;
+        }
+
+        /// Fire the fake fx timer with `key` by hand: its `on_fire` Msg
+        /// (timestamp 0 — the fake executor has no clock) lands through
+        /// the pending ring and drains on the next `.effects_wake`
+        /// dispatch or frame pump, exactly like `feedExit`. One-shot
+        /// timers retire after the fire; repeating timers stay armed.
+        pub fn fireTimer(self: *Self, key: u64) error{EffectNotFound}!void {
+            const index = self.findActiveTimerIndex(key) orelse return error.EffectNotFound;
+            const slot = &self.timer_slots[index];
+            if (!slot.fake) return error.EffectNotFound;
+            const on_fire = slot.on_fire;
+            const key_copy = slot.key;
+            if (slot.mode == .one_shot) slot.active = false;
+            self.deliverLoopTimer(.{ .key = key_copy, .timestamp_ns = 0 }, on_fire);
+            self.wakeHost();
+        }
+
         // ---------------------------------------------------------- internals
 
         fn ensureIo(self: *Self) !std.Io {
@@ -1815,6 +2030,45 @@ pub fn Effects(comptime Msg: type) type {
                 .op = op,
                 .outcome = .rejected,
             }, file_fn);
+        }
+
+        fn rejectTimer(self: *Self, options: StartTimerOptions) void {
+            self.deliverLoopTimer(.{
+                .key = options.key,
+                .outcome = .rejected,
+            }, options.on_fire);
+        }
+
+        /// Queue an fx-timer Msg produced on the loop thread (rejections
+        /// and fake-executor fires) for the next drain.
+        fn deliverLoopTimer(self: *Self, timer: EffectTimer, timer_fn: ?TimerMsgFn) void {
+            if (timer_fn == null) return;
+            self.deliverPending(.{ .timer = .{ .timer = timer, .timer_fn = timer_fn } });
+        }
+
+        fn effectTimerPlatformId(slot_index: usize) u64 {
+            return effect_timer_platform_id_base + @as(u64, slot_index);
+        }
+
+        fn timerIndexForPlatformId(platform_id: u64) ?usize {
+            if (platform_id < effect_timer_platform_id_base) return null;
+            const index = platform_id - effect_timer_platform_id_base;
+            if (index >= max_effect_timers) return null;
+            return @intCast(index);
+        }
+
+        fn findActiveTimerIndex(self: *Self, key: u64) ?usize {
+            for (&self.timer_slots, 0..) |*slot, index| {
+                if (slot.active and slot.key == key) return index;
+            }
+            return null;
+        }
+
+        fn findIdleTimerIndex(self: *Self) ?usize {
+            for (&self.timer_slots, 0..) |*slot, index| {
+                if (!slot.active) return index;
+            }
+            return null;
         }
 
         /// Free a fetch slot's body and line buffers and return it to
@@ -2522,6 +2776,14 @@ test "effect payload types have documented defaults" {
     try std.testing.expectEqual(EffectFileOutcome.ok, file_result.outcome);
     try std.testing.expectEqualStrings("", file_result.bytes);
     try std.testing.expectEqual(@as(u32, 0), file_result.dropped_before);
+    const timer: EffectTimer = .{ .key = 7 };
+    try std.testing.expectEqual(@as(u64, 0), timer.timestamp_ns);
+    try std.testing.expectEqual(EffectTimerOutcome.fired, timer.outcome);
+}
+
+test "fx timer platform ids stay inside the reserved range and clear of the markup watch id" {
+    try std.testing.expect(effect_timer_platform_id_base >= platform.reserved_timer_id_base);
+    try std.testing.expect(effect_timer_platform_id_base + max_effect_timers - 1 < 0xffff_ffff_2e70_a11c);
 }
 
 test "fetch errors map onto the documented taxonomy" {

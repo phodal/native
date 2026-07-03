@@ -92,6 +92,13 @@ pub const RuntimeView = struct {
     gpu_color_space: platform.GpuSurfaceColorSpace = .none,
     gpu_vsync: bool = false,
     gpu_status: platform.GpuSurfaceStatus = .unavailable,
+    /// The presentation path that last painted this surface: `.packet`
+    /// after a successful `presentGpuSurfacePacket`, `.pixels` after a
+    /// successful `presentGpuSurfacePixels`, `.none` before the first
+    /// present. Stamped only on platform present success — a failed
+    /// packet attempt that fell back to pixels reports `.pixels`, and
+    /// idle skips (no repaint needed) keep the previous value.
+    gpu_present_path: platform.GpuPresentPath = .none,
     canvas_commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined,
     canvas_command_count: usize = 0,
     canvas_revision: u64 = 0,
@@ -396,6 +403,7 @@ pub const RuntimeView = struct {
             .gpu_color_space = self.gpu_color_space,
             .gpu_vsync = self.gpu_vsync,
             .gpu_status = self.gpu_status,
+            .gpu_present_path = self.gpu_present_path,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
             .canvas_frame_requires_render = self.canvas_frame_requires_render,

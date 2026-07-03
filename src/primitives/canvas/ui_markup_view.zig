@@ -173,6 +173,18 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     }
                 }
             }
+            // Stacking kinds give every child the full content box, so a
+            // gap can never space them; reject the dead layout data
+            // instead of silently stacking children on top of each other.
+            // Mirrors the validator and the compiled engine's compile
+            // error.
+            if (canvas.widgetKindStacksChildren(kind)) {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "gap")) {
+                        return self.failNode(node, markup.stack_container_gap_message);
+                    }
+                }
+            }
             var options: Ui.ElementOptions = .{};
             try self.applyAttrs(scope, node, &options);
 
@@ -180,6 +192,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 const text = try self.interpolatedText(ui, scope, node);
                 var built = ui.el(kind, options, .{});
                 built.widget.text = text;
+                // Avatars clip their runtime image to the avatar circle,
+                // exactly like `Ui.avatar` (a no-op while the id is 0 and
+                // the initials fallback renders).
+                if (kind == .avatar) built.widget.image_fit = .cover;
                 return built;
             }
 
@@ -738,6 +754,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     };
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "image")) {
+                    try self.applyImageAttr(scope, node, options, attribute.value);
+                    continue;
+                }
                 if (try self.applyStyleTokenAttr(node, options, attribute)) continue;
                 if (!try self.applyOptionAttr(scope, node, options, attribute)) {
                     return self.failVoid(node, "unknown attribute for this element");
@@ -774,6 +794,27 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             };
             if (expression != .literal) return self.failPayload(node, markup.style_token_literal_message);
             return expression.literal;
+        }
+
+        /// `image="{binding}"` on avatar: one binding producing a `u64`
+        /// `canvas.ImageId` the app registered at runtime
+        /// (`fx.registerImageBytes`) — the id is model data, never a
+        /// markup literal, and 0 keeps the initials fallback. Scoped to
+        /// avatar; the other image-bearing widgets (image, icon,
+        /// icon-button) stay Zig views.
+        fn applyImageAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, raw: []const u8) BuildError!void {
+            if (!std.mem.eql(u8, node.name, "avatar")) {
+                return self.failVoid(node, markup.avatar_image_element_message);
+            }
+            const expression = markup.parseAttrExpression(raw) orelse {
+                return self.failVoid(node, markup.avatar_image_message);
+            };
+            if (expression != .binding) return self.failVoid(node, markup.avatar_image_message);
+            const value = try self.evalBinding(scope, node, expression.binding, true);
+            options.image = switch (value) {
+                .integer => |int| @intCast(int),
+                else => return self.failVoid(node, markup.avatar_image_message),
+            };
         }
 
         fn applyOptionAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!bool {

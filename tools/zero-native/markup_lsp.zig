@@ -664,9 +664,9 @@ pub const markdown_attr_docs = [_]Doc{
 };
 
 pub const event_docs = [_]Doc{
-    .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}." },
-    .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}." },
-    .{ .name = "on-change", .doc = "Dispatch a Msg on change: tag or tag:{payload}." },
+    .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Hit-target elements only — never on layout containers (row, column, stack, ...); put it on a leaf like list-item or text, or on a control." },
+    .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}. Hit-target elements only (checkbox, toggle, toggle-button, switch, accordion, ...)." },
+    .{ .name = "on-change", .doc = "Dispatch a Msg on change: tag or tag:{payload}. Hit-target elements only (slider, ...)." },
     .{ .name = "on-submit", .doc = "Dispatch a Msg on enter in a text field: tag or tag:{payload}." },
     .{ .name = "on-input", .doc = "Names a Msg variant with canvas.TextInputEvent payload; delivers each text edit." },
 };
@@ -826,6 +826,14 @@ test "analyze reports parser and validation findings with positions" {
     try testing.expectEqualStrings(ui_markup.markdown_source_message, missing_source.message);
     try testing.expectEqual(@as(usize, 2), missing_source.line);
     try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><markdown source=\"{body}\" /></row>"));
+
+    // A handler on a non-hit-target element gets the teaching diagnostic,
+    // positioned at the attribute.
+    const dead_handler = analyze(arena, "<column>\n  <row on-press=\"select\">\n    <text>x</text>\n  </row>\n</column>").?;
+    try testing.expectEqualStrings(ui_markup.non_hit_target_handler_message, dead_handler.message);
+    try testing.expectEqual(@as(usize, 2), dead_handler.line);
+    try testing.expectEqual(@as(usize, 8), dead_handler.column);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><list-item on-press=\"select\">x</list-item></row>"));
 }
 
 test "completionContext classifies positions" {

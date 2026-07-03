@@ -134,6 +134,8 @@ draft: canvas.TextBuffer(64) = .{},
 .add => { model.addTask(model.draft.text()); model.draft.clear(); },
 ```
 
+Handlers belong on hit-target elements only. Layout containers (`row`, `column`, `stack`, `grid`, `tabs`, `toggle-group`, ...) and decoration leaves (`badge`, `avatar`, `tooltip`, `separator`, ...) are never hit-tested, so an `on-*` on one could never fire — the validator, both engines, and the LSP reject it with a teaching error instead of accepting a dead handler. Put the handler on a leaf like `list-item` or `text`, or on a control inside the container.
+
 ## Effects
 
 For anything asynchronous — running `gh`, streaming an agent's stdout — `update` takes a third parameter, the effects channel. Declare `.update_fx` instead of `.update` (two-argument apps are unchanged):
@@ -158,6 +160,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
 The process runs on a worker thread the runtime owns; results post to a bounded queue, the platform loop is nudged, and Msgs dispatch on the loop thread — the model is never touched off-thread. Views never spawn: a button dispatches a Msg, and that Msg's update arm spawns.
 
+Boot-time effects go in `.init_fx`, TEA's init command: it runs exactly once on the installing frame, before the first view build, so a loading flag set there is in the very first paint and the boot fetch is already in flight when the window appears. Results arrive as ordinary Msgs; it works with either update form.
+
+Line streaming truncates single-line JSON at the 4 KiB line cap, so tools like `gh --json` use collect mode instead: spawn with `.output = .collect` and whole stdout (up to 512 KiB) arrives once on the exit Msg as `exit.output`, together with the child's stderr tail (last 4 KiB) in `exit.stderr_tail` — check it when `exit.code != 0`. No line Msgs fire for a collect spawn, overflow arrives cut with `output_truncated`/`stderr_truncated` set (never silently), and both slices die with the update call — copy what the model keeps.
+
 HTTP requests ride the same channel: `fx.fetch` runs one request on a worker thread and delivers its terminal outcome as exactly one Msg — a real response (any status, non-2xx included), a classified failure (`rejected`, `connect_failed`, `tls_failed`, `protocol_failed`, `timed_out`), or `cancelled`:
 
 ```zig
@@ -172,7 +178,7 @@ HTTP requests ride the same channel: `fx.fetch` runs one request on a worker thr
 
 Response bodies are binary-safe and bounded (256 KiB; longer arrives cut with `truncated = true`), the whole exchange honors a per-fetch timeout (default 30 s), and cancelling a fetch delivers exactly one `cancelled` Msg with nothing after it.
 
-Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, and a fetch that cannot run delivers a response Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn and fetch requests and feed synthetic lines, exits, and responses back deterministically — see `examples/effects-probe`.
+Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, and a fetch that cannot run delivers a response Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn and fetch requests and feed synthetic lines, stderr (`feedStderr`, collect spawns), exits, and responses back deterministically — set it before the first frame and `init_fx` boot spawns are recorded too. See `examples/effects-probe`.
 
 ## Rich text: inline spans and markdown
 

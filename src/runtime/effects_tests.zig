@@ -22,6 +22,7 @@ const stream_scene: app_manifest.ShellConfig = .{ .windows = &stream_windows };
 
 const max_recorded_lines = 32;
 const max_recorded_line_bytes = 96;
+const max_recorded_output_bytes = 128;
 
 const StreamModel = struct {
     line_storage: [max_recorded_lines][max_recorded_line_bytes]u8 = undefined,
@@ -33,6 +34,19 @@ const StreamModel = struct {
     exit_code: i32 = 0,
     exit_reason: ?effects_mod.EffectExitReason = null,
     exit_dropped_lines: u32 = 0,
+    // Collect-mode exit payloads: lengths and hashes for big outputs,
+    // bounded prefixes for exact-content assertions on small ones (the
+    // slices are drain scratch, so the model copies what it keeps).
+    output_len: usize = 0,
+    output_hash: u64 = 0,
+    output_truncated: bool = false,
+    output_prefix: [max_recorded_output_bytes]u8 = undefined,
+    output_prefix_len: usize = 0,
+    stderr_len: usize = 0,
+    stderr_hash: u64 = 0,
+    stderr_truncated: bool = false,
+    stderr_prefix: [max_recorded_output_bytes]u8 = undefined,
+    stderr_prefix_len: usize = 0,
 
     fn recordLine(model: *StreamModel, line: effects_mod.EffectLine) void {
         model.dropped_before_total += line.dropped_before;
@@ -46,6 +60,31 @@ const StreamModel = struct {
 
     fn lineAt(model: *const StreamModel, index: usize) []const u8 {
         return model.line_storage[index][0..model.line_lens[index]];
+    }
+
+    fn recordExit(model: *StreamModel, exit: effects_mod.EffectExit) void {
+        model.exit_count += 1;
+        model.exit_code = exit.code;
+        model.exit_reason = exit.reason;
+        model.exit_dropped_lines = exit.dropped_lines;
+        model.output_len = exit.output.len;
+        model.output_hash = std.hash.Wyhash.hash(0, exit.output);
+        model.output_truncated = exit.output_truncated;
+        model.output_prefix_len = @min(exit.output.len, max_recorded_output_bytes);
+        @memcpy(model.output_prefix[0..model.output_prefix_len], exit.output[0..model.output_prefix_len]);
+        model.stderr_len = exit.stderr_tail.len;
+        model.stderr_hash = std.hash.Wyhash.hash(0, exit.stderr_tail);
+        model.stderr_truncated = exit.stderr_truncated;
+        model.stderr_prefix_len = @min(exit.stderr_tail.len, max_recorded_output_bytes);
+        @memcpy(model.stderr_prefix[0..model.stderr_prefix_len], exit.stderr_tail[0..model.stderr_prefix_len]);
+    }
+
+    fn outputPrefix(model: *const StreamModel) []const u8 {
+        return model.output_prefix[0..model.output_prefix_len];
+    }
+
+    fn stderrPrefix(model: *const StreamModel) []const u8 {
+        return model.stderr_prefix[0..model.stderr_prefix_len];
     }
 };
 
@@ -77,12 +116,26 @@ fn streamUpdate(model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void {
         }),
         .stop => fx.cancel(stream_key),
         .line => |line| model.recordLine(line),
-        .done => |exit| {
-            model.exit_count += 1;
-            model.exit_code = exit.code;
-            model.exit_reason = exit.reason;
-            model.exit_dropped_lines = exit.dropped_lines;
-        },
+        .done => |exit| model.recordExit(exit),
+    }
+}
+
+/// The collect-mode twin of `streamUpdate`: same Msg shape, spawns with
+/// `.output = .collect`. `on_line` stays wired to prove collect spawns
+/// never dispatch line Msgs.
+fn collectUpdate(model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void {
+    switch (msg) {
+        .start => fx.spawn(.{
+            .key = stream_key,
+            .argv = test_argv,
+            .stdin = test_stdin,
+            .output = .collect,
+            .on_line = StreamEffects.lineMsg(.line),
+            .on_exit = StreamEffects.exitMsg(.done),
+        }),
+        .stop => fx.cancel(stream_key),
+        .line => |line| model.recordLine(line),
+        .done => |exit| model.recordExit(exit),
     }
 }
 
@@ -94,12 +147,12 @@ fn streamView(ui: *StreamApp.Ui, model: *const StreamModel) StreamApp.Ui.Node {
     });
 }
 
-fn streamOptions() StreamApp.Options {
+fn streamOptions(update_fx: *const fn (model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void) StreamApp.Options {
     return .{
         .name = "effects-stream",
         .scene = stream_scene,
         .canvas_label = canvas_label,
-        .update_fx = streamUpdate,
+        .update_fx = update_fx,
         .view = streamView,
     };
 }
@@ -110,12 +163,16 @@ const Harness = struct {
     app: core.App,
 
     fn create() !Harness {
+        return createWith(streamUpdate);
+    }
+
+    fn createWith(update_fx: *const fn (model: *StreamModel, msg: StreamMsg, fx: *StreamEffects) void) !Harness {
         const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
         errdefer harness.destroy(std.testing.allocator);
         harness.null_platform.gpu_surfaces = true;
         const app_state = try std.testing.allocator.create(StreamApp);
         errdefer std.testing.allocator.destroy(app_state);
-        app_state.* = StreamApp.init(std.heap.page_allocator, .{}, streamOptions());
+        app_state.* = StreamApp.init(std.heap.page_allocator, .{}, streamOptions(update_fx));
         const app = app_state.app();
         try harness.start(app);
         try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
@@ -329,6 +386,115 @@ test "queue overflow drops lines loudly and truncates over-long lines" {
     try std.testing.expectEqual(@as(u32, 3), h.app_state.model.exit_dropped_lines);
 }
 
+test "fake executor collect mode accumulates output and delivers it on the exit" {
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_argv = &.{ "gh", "issue", "list", "--json", "number,title" };
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    const request = fx.pendingSpawnAt(0).?;
+    try std.testing.expectEqual(effects_mod.EffectOutputMode.collect, request.output);
+
+    // Fed lines accumulate (with their newlines) instead of dispatching
+    // on_line Msgs; stderr accumulates into the tail.
+    try fx.feedLine(stream_key, "{\"number\":1,");
+    try fx.feedLine(stream_key, "\"title\":\"giant single-line json\"}");
+    try fx.feedStderr(stream_key, "warning: rate limited\n");
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.exit_count);
+
+    try fx.feedExit(stream_key, 2);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.exit_count);
+    try std.testing.expectEqual(@as(i32, 2), h.app_state.model.exit_code);
+    try std.testing.expectEqualStrings(
+        "{\"number\":1,\n\"title\":\"giant single-line json\"}\n",
+        h.app_state.model.outputPrefix(),
+    );
+    try std.testing.expect(!h.app_state.model.output_truncated);
+    try std.testing.expectEqualStrings("warning: rate limited\n", h.app_state.model.stderrPrefix());
+    try std.testing.expect(!h.app_state.model.stderr_truncated);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.line_count);
+
+    // The slot retires once the drain took the output buffer.
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
+    try std.testing.expectError(error.EffectNotFound, fx.feedLine(stream_key, "late"));
+}
+
+test "fake executor collect mode truncates over-bound output and stderr loudly" {
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_argv = &.{"firehose"};
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+
+    // One giant "line" past the collect bound: kept up to the bound, the
+    // overflow discarded and flagged — never silently.
+    const big = try std.testing.allocator.alloc(u8, effects_mod.max_effect_collect_bytes + 16);
+    defer std.testing.allocator.free(big);
+    @memset(big, 'x');
+    try fx.feedLine(stream_key, big);
+
+    // Stderr past the tail capacity keeps the LAST bytes and flags it.
+    var noisy: [effects_mod.max_effect_stderr_tail_bytes + 904]u8 = undefined;
+    for (&noisy, 0..) |*byte, index| byte.* = 'a' + @as(u8, @intCast(index % 26));
+    try fx.feedStderr(stream_key, &noisy);
+
+    try fx.feedExit(stream_key, 0);
+    try h.drainWakes();
+    try std.testing.expectEqual(effects_mod.max_effect_collect_bytes, h.app_state.model.output_len);
+    try std.testing.expect(h.app_state.model.output_truncated);
+    try std.testing.expectEqual(effects_mod.max_effect_stderr_tail_bytes, h.app_state.model.stderr_len);
+    try std.testing.expect(h.app_state.model.stderr_truncated);
+    // The tail is the last max_effect_stderr_tail_bytes of the fed
+    // pattern, oldest kept byte first.
+    const expected_first: u8 = 'a' + @as(u8, @intCast(904 % 26));
+    try std.testing.expectEqual(expected_first, h.app_state.model.stderrPrefix()[0]);
+    const expected_hash = std.hash.Wyhash.hash(0, noisy[904..]);
+    try std.testing.expectEqual(expected_hash, h.app_state.model.stderr_hash);
+}
+
+test "feedStderr on a lines-mode spawn reports EffectNotFound" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_argv = &.{"stream"};
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try std.testing.expectError(error.EffectNotFound, fx.feedStderr(stream_key, "nope"));
+    try fx.feedExit(stream_key, 0);
+    try h.drainWakes();
+}
+
+test "cancelling a fake collect spawn delivers a cancelled exit with empty payloads" {
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    test_argv = &.{"doomed"};
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try fx.feedLine(stream_key, "collected but never delivered");
+    try h.app_state.dispatch(&h.harness.runtime, 1, .stop);
+    try h.drainWakes();
+
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.exit_count);
+    try std.testing.expectEqual(effects_mod.EffectExitReason.cancelled, h.app_state.model.exit_reason.?);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.output_len);
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.stderr_len);
+    try std.testing.expectEqual(@as(usize, 0), fx.activeCount());
+}
+
 const RejectModel = struct {
     rejected: u32 = 0,
     exited: u32 = 0,
@@ -427,6 +593,109 @@ test "capacity limits reject loudly: slots, duplicate keys, oversized argv" {
     try harness.runtime.dispatchPlatformEvent(app, .wake);
     try std.testing.expectEqual(@as(u32, 3), app_state.model.rejected);
     try std.testing.expectEqual(@as(usize, 0), app_state.effects.activeCount());
+}
+
+// ------------------------------------------------------------- init_fx
+
+const BootModel = struct {
+    init_runs: u32 = 0,
+    line_count: u32 = 0,
+    exit_code: i32 = -999,
+};
+
+const BootMsg = union(enum) {
+    line: effects_mod.EffectLine,
+    done: effects_mod.EffectExit,
+};
+
+const BootApp = ui_app_model.UiApp(BootModel, BootMsg);
+const BootEffects = BootApp.Effects;
+
+const boot_key: u64 = 7;
+
+fn bootInit(model: *BootModel, fx: *BootEffects) void {
+    model.init_runs += 1;
+    fx.spawn(.{
+        .key = boot_key,
+        .argv = &.{ "gh", "issue", "list", "--json", "number,title" },
+        .on_line = BootEffects.lineMsg(.line),
+        .on_exit = BootEffects.exitMsg(.done),
+    });
+}
+
+fn bootUpdate(model: *BootModel, msg: BootMsg, fx: *BootEffects) void {
+    _ = fx;
+    switch (msg) {
+        .line => model.line_count += 1,
+        .done => |exit| model.exit_code = exit.code,
+    }
+}
+
+fn bootView(ui: *BootApp.Ui, model: *const BootModel) BootApp.Ui.Node {
+    return ui.text(.{}, ui.fmt("{d} lines", .{model.line_count}));
+}
+
+test "init_fx runs exactly once on install and the fake executor records the boot spawn" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    const app_state = try std.testing.allocator.create(BootApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = BootApp.init(std.heap.page_allocator, .{}, .{
+        .name = "effects-boot",
+        .scene = stream_scene,
+        .canvas_label = canvas_label,
+        .update_fx = bootUpdate,
+        .init_fx = bootInit,
+        .view = bootView,
+    });
+    defer app_state.deinit();
+    // Set before the installing frame: the boot spawn must be recorded,
+    // not executed.
+    app_state.effects.executor = .fake;
+    const app = app_state.app();
+    try harness.start(app);
+    try std.testing.expectEqual(@as(u32, 0), app_state.model.init_runs);
+
+    // The installing frame runs the init command before the first build.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.init_runs);
+    try std.testing.expectEqual(@as(usize, 1), app_state.effects.pendingSpawnCount());
+    const request = app_state.effects.pendingSpawnAt(0).?;
+    try std.testing.expectEqual(boot_key, request.key);
+    try std.testing.expectEqualStrings("gh", request.argv[0]);
+
+    // Later frames and resizes never rerun it.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 2_000_000,
+        .nonblank = true,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .label = canvas_label,
+        .window_id = 1,
+        .frame = geometry.RectF.init(0, 0, 500, 400),
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.init_runs);
+    try std.testing.expectEqual(@as(usize, 1), app_state.effects.pendingSpawnCount());
+
+    // Boot results land through the ordinary drain path.
+    try app_state.effects.feedLine(boot_key, "issue 1");
+    try app_state.effects.feedExit(boot_key, 0);
+    try harness.runtime.dispatchPlatformEvent(app, .wake);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.line_count);
+    try std.testing.expectEqual(@as(i32, 0), app_state.model.exit_code);
 }
 
 fn waitForRealCompletion(h: *Harness, condition: *const fn (model: *const StreamModel) bool) !void {
@@ -537,6 +806,68 @@ test "real executor children inherit the parent environment" {
     try std.testing.expect(std.mem.startsWith(u8, h.app_state.model.lineAt(0), "HOME="));
     try std.testing.expect(h.app_state.model.lineAt(1).len > "PATH=".len);
     try std.testing.expect(std.mem.startsWith(u8, h.app_state.model.lineAt(1), "PATH="));
+}
+
+test "real executor collect mode delivers a giant single-line stdout intact" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+
+    // One 100 KB line with no newline until the very end — 25x the line
+    // cap that used to force fold-wrappers around `gh --json`.
+    // POSIX-portable across the macOS and ubuntu runners.
+    test_argv = &.{ "/bin/sh", "-c", "dd if=/dev/zero bs=1000 count=100 2>/dev/null | tr '\\0' 'x'; printf 'END\\n'" };
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForRealCompletion(&h, sawExit);
+
+    try std.testing.expectEqual(@as(i32, 0), h.app_state.model.exit_code);
+    try std.testing.expectEqual(effects_mod.EffectExitReason.exited, h.app_state.model.exit_reason.?);
+    try std.testing.expectEqual(@as(usize, 100_004), h.app_state.model.output_len);
+    try std.testing.expect(!h.app_state.model.output_truncated);
+    // Byte-exact delivery, verified by hash against the known content.
+    const expected = try std.testing.allocator.alloc(u8, 100_004);
+    defer std.testing.allocator.free(expected);
+    @memset(expected[0..100_000], 'x');
+    @memcpy(expected[100_000..], "END\n");
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, expected), h.app_state.model.output_hash);
+    // No line framing: on_line never fired despite being wired.
+    try std.testing.expectEqual(@as(usize, 0), h.app_state.model.line_count);
+    try std.testing.expectEqual(@as(u32, 0), h.app_state.model.exit_dropped_lines);
+}
+
+test "real executor collect mode delivers the stderr tail on failure" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+
+    test_argv = &.{ "/bin/sh", "-c", "printf 'partial out\\n'; printf 'error: not logged in\\nrun gh auth login\\n' >&2; exit 4" };
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForRealCompletion(&h, sawExit);
+
+    try std.testing.expectEqual(@as(i32, 4), h.app_state.model.exit_code);
+    try std.testing.expectEqualStrings("partial out\n", h.app_state.model.outputPrefix());
+    try std.testing.expectEqualStrings("error: not logged in\nrun gh auth login\n", h.app_state.model.stderrPrefix());
+    try std.testing.expect(!h.app_state.model.stderr_truncated);
+}
+
+test "real executor collect mode truncates past the collect bound with the flag set" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var h = try Harness.createWith(collectUpdate);
+    defer h.destroy();
+
+    // 600 KB of stdout against the 512 KiB bound; a chatty stderr rides
+    // along to prove the concurrent drain never deadlocks.
+    test_argv = &.{ "/bin/sh", "-c", "dd if=/dev/zero bs=1000 count=600 2>/dev/null | tr '\\0' 'y'; printf 'done\\n' >&2" };
+    test_stdin = null;
+    try h.app_state.dispatch(&h.harness.runtime, 1, .start);
+    try waitForRealCompletion(&h, sawExit);
+
+    try std.testing.expectEqual(@as(i32, 0), h.app_state.model.exit_code);
+    try std.testing.expectEqual(effects_mod.max_effect_collect_bytes, h.app_state.model.output_len);
+    try std.testing.expect(h.app_state.model.output_truncated);
+    try std.testing.expectEqualStrings("done\n", h.app_state.model.stderrPrefix());
 }
 
 test "real executor reports unspawnable binaries as spawn_failed" {

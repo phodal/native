@@ -37,6 +37,7 @@ pub const Effects = runtime.Effects;
 pub const EffectLine = runtime.EffectLine;
 pub const EffectExit = runtime.EffectExit;
 pub const EffectExitReason = runtime.EffectExitReason;
+pub const EffectOutputMode = runtime.EffectOutputMode;
 pub const EffectResponse = runtime.EffectResponse;
 pub const EffectFetchOutcome = runtime.EffectFetchOutcome;
 pub const effect_error_exit_code = runtime.effect_error_exit_code;

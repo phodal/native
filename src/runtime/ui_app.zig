@@ -123,6 +123,16 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// `fx.cancel(key)`). Effects are update-side only — views
             /// never spawn.
             update_fx: ?*const fn (model: *ModelT, msg: MsgT, fx: *Effects) void = null,
+            /// TEA's init command: runs exactly once, on the installing
+            /// frame, after the effects channel is bound and before the
+            /// first view build — so a boot-time `fx.spawn`/`fx.fetch`
+            /// starts before anything renders and any loading state it
+            /// sets is in the very first paint. Results arrive as Msgs
+            /// through the ordinary update path (either update form).
+            /// This replaces the guarded-`on_frame` idiom for startup
+            /// effects; `on_frame` remains the per-frame hook for frame
+            /// diagnostics and presented-frame reactions.
+            init_fx: ?*const fn (model: *ModelT, fx: *Effects) void = null,
             /// Hand-written or comptime-compiled view
             /// (`canvas.CompiledMarkupView(Model, Msg, source).build` slots
             /// in directly). At least one of `view` and `markup` must be
@@ -165,6 +175,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         canvas_size: geometry.SizeF = .{ .width = 1, .height = 1 },
         canvas_window_id: platform.WindowId = 1,
         installed: bool = false,
+        /// Exactly-once guard for `Options.init_fx`, independent of
+        /// `installed` so a failed install rebuild cannot rerun it.
+        init_fx_ran: bool = false,
         pixel_snap_scale: f32 = 1,
         frame_timestamp_ns: u64 = 0,
         markup_arenas: [2]std.heap.ArenaAllocator,
@@ -515,6 +528,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 installing = true;
                 self.canvas_size = frame_event.size;
                 self.pixel_snap_scale = scale;
+                if (self.options.init_fx) |init_fx| {
+                    if (!self.init_fx_ran) {
+                        self.init_fx_ran = true;
+                        self.effects.bindServices(&runtime.options.platform.services);
+                        self.effects.bindEnviron(runtime.options.environ);
+                        init_fx(&self.model, &self.effects);
+                    }
+                }
                 try self.rebuild(runtime, frame_event.window_id);
                 if (self.options.chrome == null) {
                     _ = try runtime.emitCanvasWidgetDisplayList(frame_event.window_id, self.options.canvas_label, runtime.tokensWithTextMeasure(self.effectiveTokens()));

@@ -149,6 +149,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
+            // Handlers on non-hit-target kinds can never fire (the engine
+            // hit-tests through layout/decoration widgets); reject instead
+            // of silently accepting a dead handler. Mirrors the validator
+            // and the compiled engine's compile error.
+            if (!canvas.widgetKindHitTarget(kind)) {
+                for (node.attrs) |attribute| {
+                    if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                        return self.failNode(node, markup.non_hit_target_handler_message);
+                    }
+                }
+            }
             var options: Ui.ElementOptions = .{};
             try self.applyAttrs(scope, node, &options);
 

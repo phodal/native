@@ -442,6 +442,10 @@ pub const clampedTextInputScrollOffsetForWidget = widget_runtime.clampedTextInpu
 pub const intrinsicWidgetSize = widget_runtime.intrinsicWidgetSize;
 pub const cursorForWidgetHit = widget_runtime.cursorForWidgetHit;
 pub const cursorForWidgetTarget = widget_runtime.cursorForWidgetTarget;
+/// Whether the engine hit-tests widgets of this kind (widget_access.zig —
+/// the single source of truth the runtime, both markup engines, and the
+/// markup validator's element list all derive from).
+pub const widgetKindHitTarget = @import("widget_access.zig").widgetKindHitTarget;
 pub const WidgetTextGeometry = widget_runtime.WidgetTextGeometry;
 pub const textGeometryForWidget = widget_runtime.textGeometryForWidget;
 pub const virtualWidgetScrollContentExtent = widget_runtime.virtualWidgetScrollContentExtent;

@@ -193,6 +193,8 @@ For `<if test>`, prefer an explicit boolean predicate method over numeric truthi
 
 `on-press`, `on-toggle`, `on-change`, `on-submit` (enter in a text field) take `tag` or `tag:{payload}`. The tag must be a variant of your `Msg` union; payload bindings coerce to the variant's payload type: integers, floats, enums (from tag names), `[]const u8`, bool. `on-input` is special: name a `Msg` variant whose payload is `canvas.TextInputEvent` and the runtime delivers each text edit in it.
 
+Handlers only work on HIT-TARGET elements. Layout containers (`row`, `column`, `stack`, `spacer`, `grid`, `list`, `table`, `table-row`, `tabs`, `toggle-group`, `button-group`, `radio-group`, `breadcrumb`, `pagination`) and decoration leaves (`badge`, `avatar`, `tooltip`, `separator`, `skeleton`, `spinner`) are never hit-tested — the engine routes pointer events through them to what they contain, so an `on-*` there could never fire. Both engines and `markup check` reject it with a teaching error instead of accepting a dead handler: put the handler on a leaf like `list-item` or `text`, or on a control inside the container. (A whole-row press target is a `list-item`; surfaces like `card`, `panel`, `scroll`, and the modal kinds ARE hit targets.)
+
 ## Text fields: the elm-style mirror pattern
 
 The model applies every edit event and is the source of truth; the runtime keeps caret/selection while your source text matches, and a source-side change (like clearing on submit) wins:
@@ -219,6 +221,21 @@ const Effects = App.Effects;
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void { ... }
 // options: .update_fx = update,
+```
+
+Boot-time effects — fetching the data the app opens with — go in `.init_fx`, TEA's init command. It runs exactly once, on the installing frame, before the first view build, so a loading flag set there is in the very first paint; results arrive as ordinary Msgs. This is THE way to boot-fetch — never a guarded `on_frame` (`on_frame` is the per-frame hook for renderer diagnostics and presented-frame reactions, and unguarded spawning from it refires forever):
+
+```zig
+fn boot(model: *Model, fx: *Effects) void {
+    model.loading = true;
+    fx.spawn(.{
+        .key = issues_key,
+        .argv = &.{ "gh", "issue", "list", "--json", "number,title" },
+        .output = .collect,                        // whole JSON on the exit Msg
+        .on_exit = Effects.exitMsg(.issues_loaded),
+    });
+}
+// options: .init_fx = boot,   (works with either update form)
 ```
 
 `fx.spawn` runs a subprocess on a runtime-owned worker thread and streams each stdout line back as a typed Msg; the exit arrives as one more Msg. Keys are caller-chosen `u64`s you keep in the model — no handles:
@@ -251,6 +268,7 @@ Rules that keep this honest:
 - One `on_exit` Msg per spawn, always. A spawn that cannot run (all `max_effects = 16` slots busy, duplicate active key, argv over capacity) still delivers it, with reason `.rejected`. Reasons: `exited` (code is real), `signaled`, `cancelled`, `rejected`, `spawn_failed`.
 - After `fx.cancel(key)` returns, no further `on_line` Msgs for that spawn arrive; exactly one `.cancelled` exit follows. The process is killed and reaped — no zombies. Streaming a chat agent's stdout for minutes and cancelling mid-stream is the designed-for case.
 - Overflow is never silent: a full completion queue drops lines but the next delivered line's `dropped_before` and the exit's `dropped_lines` carry the count; over-long lines arrive truncated with `truncated = true`. Capacities: 16 in-flight effects, 4 KiB per line, 64 queued completions.
+- JSON-over-stdout (`gh --json`, `jq -c`, `curl`) emits one giant line the 4 KiB line cap would destroy. Spawn with `.output = .collect` instead of the default `.lines`: whole stdout (up to 512 KiB) arrives ONCE on the exit Msg as `exit.output`, plus the child's stderr tail (last 4 KiB) in `exit.stderr_tail` — check it when `exit.code != 0` (auth errors, usage messages). No `on_line` Msgs fire for a collect spawn; overflow arrives cut with `output_truncated`/`stderr_truncated` set, never silently. COPY `exit.output`/`exit.stderr_tail` in update — drain scratch like `line.line`; the scalar exit fields stay plain data, safe to store. (`.lines` mode still ignores stderr entirely; use `.collect`, or an sh `2>&1` re-route if you truly need interleaved streaming.)
 
 `fx.fetch` runs one HTTP(S) request on a worker thread and delivers its terminal outcome — response, classified failure, timeout, or cancel — as exactly ONE Msg:
 
@@ -284,12 +302,20 @@ Fetch rules:
 Test effects with the fake executor — deterministic, no processes, no network:
 
 ```zig
-app_state.effects.executor = .fake;             // before dispatching
+app_state.effects.executor = .fake;             // before dispatching (and before
+                                                // the first frame if using init_fx —
+                                                // the boot spawn is then recorded too)
 try app_state.dispatch(&harness.runtime, 1, .start);
-const request = app_state.effects.pendingSpawnAt(0).?;   // assert key/argv
+const request = app_state.effects.pendingSpawnAt(0).?;   // assert key/argv/output mode
 try app_state.effects.feedLine(stream_key, "stream line 1");
 try app_state.effects.feedExit(stream_key, 0);
 try harness.runtime.dispatchPlatformEvent(app, .wake);   // drain -> update
+
+// .collect spawns: feedLine accumulates (bytes + newline, like a real child
+// printing that line), feedStderr fills the tail, feedExit delivers both.
+try app_state.effects.feedLine(issues_key, "{\"number\":1}");   // no on_line Msg
+try app_state.effects.feedStderr(issues_key, "warning: slow\n");
+try app_state.effects.feedExit(issues_key, 0);                  // exit.output + exit.stderr_tail
 
 const fetch_req = app_state.effects.pendingFetchAt(0).?; // assert key/method/url/headers/body
 try app_state.effects.feedResponse(search_key, 200, "{\"ok\":true}");

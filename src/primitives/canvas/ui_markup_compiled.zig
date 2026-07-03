@@ -136,6 +136,17 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 return buildMarkdown(node, entries, ui, model, scope);
             }
             const kind = comptime (interpreter.elementKind(node.name) orelse fail(node, "unknown element"));
+            comptime {
+                // Interpreter parity: handlers on non-hit-target kinds can
+                // never fire, so a dead handler is a compile error here.
+                if (!canvas.widgetKindHitTarget(kind)) {
+                    for (node.attrs) |attribute| {
+                        if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                            fail(node, markup.non_hit_target_handler_message);
+                        }
+                    }
+                }
+            }
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);
 

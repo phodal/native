@@ -550,6 +550,22 @@ pub const known_option_attrs = [_][]const u8{
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input" };
 
+/// Elements whose widget kind the engine never hit-tests: layout and
+/// decoration only, so pointer events pass through them and an `on-*`
+/// handler on one can never fire. The validator rejects handlers here
+/// instead of letting them silently do nothing. Derived from the engine's
+/// hit-target predicate (`canvas.widgetKindHitTarget` in
+/// widget_access.zig); a test in ui_markup_view_tests.zig keeps this name
+/// list and that predicate in lockstep so drift is impossible.
+pub const known_non_hit_target_element_names = [_][]const u8{
+    "row",          "column",     "stack",      "spacer",       "grid",
+    "list",         "table",      "table-row",  "breadcrumb",   "button-group",
+    "pagination",   "radio-group", "tabs",      "toggle-group", "tooltip",
+    "avatar",       "badge",      "separator",  "skeleton",     "spinner",
+};
+
+pub const non_hit_target_handler_message = "on-* handlers never fire here: this element is layout/decoration and is never a hit target - put the handler on a leaf like list-item or text, or on a control (button, checkbox) inside it";
+
 /// Markup attributes that reference a color design token by name. Values
 /// must be literal `ColorTokens` field names (`known_color_token_names`);
 /// the builder resolves them against live tokens in `finalizeWithTokens`.
@@ -747,6 +763,9 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {
                     if (!nameInList(attribute.name[3..], &known_events)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = "unknown event attribute" };
+                    }
+                    if (nameInList(node.name, &known_non_hit_target_element_names)) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = non_hit_target_handler_message };
                     }
                     if (parseMessageExpression(attribute.value) == null) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")" };

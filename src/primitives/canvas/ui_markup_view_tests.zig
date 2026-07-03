@@ -518,6 +518,7 @@ test "markup build failures carry position and message" {
         "<column>\n  <button on-press=\"toggle\">X</button>\n</column>",
         "<column>\n  <for each=\"nope\" as=\"t\"><text>{t}</text></for>\n</column>",
         "<column bogus-attr=\"1\" />",
+        "<column on-press=\"add\">\n  <text>dead handler</text>\n</column>",
     };
     for (cases) |source| {
         var view = try InboxMarkup.init(arena, source);
@@ -528,9 +529,53 @@ test "markup build failures carry position and message" {
     }
 }
 
+test "handlers on non-hit-target elements fail the build with the teaching message" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    // Both a pointer handler on a layout container and a toggle handler on
+    // a row container are dead — the engine never hit-tests those kinds.
+    const sources = [_][]const u8{
+        "<column>\n  <row on-press=\"add\">\n    <text>press me</text>\n  </row>\n</column>",
+        "<column>\n  <toggle-group on-toggle=\"add\">\n    <toggle-button>A</toggle-button>\n  </toggle-group>\n</column>",
+    };
+    for (sources) |source| {
+        var view = try InboxMarkup.init(arena, source);
+        var ui = InboxUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(canvas.ui_markup.non_hit_target_handler_message, view.diagnostic.message);
+        try testing.expectEqual(@as(usize, 2), view.diagnostic.line);
+    }
+
+    // The same handler on a hit-target leaf builds fine.
+    var view = try InboxMarkup.init(arena, "<column>\n  <list-item on-press=\"add\">press me</list-item>\n</column>");
+    var ui = InboxUi.init(arena);
+    _ = try view.build(&ui, &model);
+}
+
 test "the validator's element list matches the interpreter" {
     for (canvas.ui_markup.known_element_names) |name| {
         try testing.expect(markup_view.elementKind(name) != null);
+    }
+}
+
+test "the validator's non-hit-target element list matches the engine's hit-target predicate" {
+    // The engine predicate (canvas.widgetKindHitTarget, which the runtime's
+    // pointer dispatch and both markup engines use) is the source of truth;
+    // the validator's std-only name list must mirror it exactly so an
+    // element can never accept a handler the runtime would never fire.
+    for (canvas.ui_markup.known_element_names) |name| {
+        const kind = markup_view.elementKind(name).?;
+        try testing.expectEqual(
+            !canvas.widgetKindHitTarget(kind),
+            nameListed(name, &canvas.ui_markup.known_non_hit_target_element_names),
+        );
+    }
+    // Every listed non-hit-target name is a known element.
+    for (canvas.ui_markup.known_non_hit_target_element_names) |name| {
+        try testing.expect(nameListed(name, &canvas.ui_markup.known_element_names));
     }
 }
 

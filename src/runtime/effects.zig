@@ -2,12 +2,13 @@
 //!
 //! `Effects(Msg)` runs subprocesses and HTTP fetches on worker threads
 //! owned by the app loop, streams subprocess stdout lines back as typed
-//! `Msg` values, reports process exits the same way, and delivers each
-//! fetch's terminal outcome as exactly one `Msg`. The model is never
-//! touched off-thread: workers post fixed-size completion records into a
-//! bounded MPSC queue, nudge the platform loop through
-//! `PlatformServices.wake_fn`, and the loop thread drains the queue and
-//! dispatches Msgs through the app's `update`.
+//! `Msg` values (or, in `.collect` mode, accumulates whole stdout plus a
+//! stderr tail and delivers both on the exit Msg), reports process exits
+//! the same way, and delivers each fetch's terminal outcome as exactly
+//! one `Msg`. The model is never touched off-thread: workers post
+//! fixed-size completion records into a bounded MPSC queue, nudge the
+//! platform loop through `PlatformServices.wake_fn`, and the loop thread
+//! drains the queue and dispatches Msgs through the app's `update`.
 //!
 //! Design points, mirroring the framework's fixed-capacity philosophy:
 //!
@@ -27,7 +28,10 @@
 //!   full queue is counted into the next delivered line's
 //!   `dropped_before` and the exit's `dropped_lines`; an over-long line
 //!   is delivered truncated with `truncated = true`; a response body over
-//!   `max_effect_body_bytes` arrives truncated with `truncated = true`.
+//!   `max_effect_body_bytes` arrives truncated with `truncated = true`;
+//!   collected stdout over `max_effect_collect_bytes` and a stderr tail
+//!   over `max_effect_stderr_tail_bytes` arrive cut with
+//!   `output_truncated`/`stderr_truncated` set.
 //! - Spawned children inherit the host process environment (HOME, PATH,
 //!   ...): the app runner threads it from `std.process.Init` through
 //!   `Runtime.Options.environ` into `bindEnviron`; hosts without a
@@ -40,10 +44,10 @@
 //!   promise: exactly one `on_response` Msg with outcome `.cancelled`,
 //!   and nothing for that fetch after it.
 //!
-//! Payload lifetime: `EffectLine.line` and `EffectResponse.body` point
-//! into drain scratch that is recycled on the next drained Msg — `update`
-//! must copy what it keeps, exactly like `canvas.TextInputEvent`
-//! payloads.
+//! Payload lifetime: `EffectLine.line`, `EffectResponse.body`,
+//! `EffectExit.output`, and `EffectExit.stderr_tail` point into drain
+//! scratch that is recycled on the next drained Msg — `update` must copy
+//! what it keeps, exactly like `canvas.TextInputEvent` payloads.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -58,8 +62,25 @@ pub const max_effect_argv_bytes: usize = 2048;
 /// Maximum stdin payload per spawn (written once, then closed).
 pub const max_effect_stdin_bytes: usize = 4096;
 /// Maximum bytes per delivered stdout line; longer lines are truncated
-/// (delivered with `truncated = true`, the remainder discarded).
+/// (delivered with `truncated = true`, the remainder discarded). Applies
+/// to `.lines` spawns only — `.collect` spawns have no line framing.
 pub const max_effect_line_bytes: usize = 4096;
+/// Maximum collected stdout bytes per `.collect` spawn (whole-stdout
+/// delivery for tools like `gh --json` that emit one giant line); the
+/// overflow is discarded and the exit arrives with
+/// `output_truncated = true`. Heap-allocated per accepted collect spawn,
+/// like a fetch's body buffer.
+pub const max_effect_collect_bytes: usize = 512 * 1024;
+/// Stderr tail bytes kept per `.collect` spawn: the LAST bytes the child
+/// wrote, delivered on the exit Msg (diagnose failures without an sh
+/// re-route). Earlier bytes are discarded and flagged through
+/// `stderr_truncated`. `.lines` spawns ignore stderr entirely.
+pub const max_effect_stderr_tail_bytes: usize = 4096;
+
+comptime {
+    // The stderr tail rides in a queue entry's line buffer.
+    std.debug.assert(max_effect_stderr_tail_bytes <= max_effect_line_bytes);
+}
 /// Completion queue depth (lines + exits from all workers combined).
 pub const max_effect_queue_entries: usize = 64;
 /// Main-thread pending-exit ring (spawn rejections, fake-executor exits
@@ -88,6 +109,15 @@ pub const default_effect_fetch_timeout_ms: u32 = 30_000;
 
 /// The exit `code` reported for every non-`.exited` reason.
 pub const effect_error_exit_code: i32 = -1;
+
+/// How a spawn's stdout comes back. `.lines` streams each line as an
+/// `on_line` Msg as it arrives (the default; long-running streams).
+/// `.collect` accumulates whole stdout — single-line JSON far beyond the
+/// line cap included — and delivers it once, on the exit Msg
+/// (`EffectExit.output`), together with the child's stderr tail; collect
+/// spawns dispatch no `on_line` Msgs. Both bounded, both flag truncation,
+/// neither is ever silent.
+pub const EffectOutputMode = enum { lines, collect };
 
 pub const EffectExitReason = enum {
     /// The process exited on its own; `code` is its exit code.
@@ -120,13 +150,31 @@ pub const EffectLine = struct {
 
 /// Payload for `on_exit` Msg constructors. Exactly one is delivered per
 /// accepted spawn, and one per rejected spawn (reason `.rejected`).
+/// `output` and `stderr_tail` are drain scratch, valid only during the
+/// `update` call that receives them — copy what the model keeps (the
+/// scalar fields are plain data and safe to store whole for `.lines`
+/// spawns, whose slices are always empty).
 pub const EffectExit = struct {
     key: u64,
     code: i32 = effect_error_exit_code,
     reason: EffectExitReason = .exited,
     /// Total stdout lines dropped over the effect's lifetime (full
-    /// completion queue). Zero means every line was delivered.
+    /// completion queue). Zero means every line was delivered. Always
+    /// zero for `.collect` spawns (no line framing, nothing to drop).
     dropped_lines: u32 = 0,
+    /// Whole collected stdout for `.collect` spawns; `""` for `.lines`
+    /// spawns and for cancelled/rejected exits.
+    output: []const u8 = "",
+    /// stdout exceeded `max_effect_collect_bytes`: `output` is its first
+    /// bytes and the rest was discarded. Never silent.
+    output_truncated: bool = false,
+    /// The last `max_effect_stderr_tail_bytes` of the child's stderr for
+    /// `.collect` spawns (`""` for `.lines`, whose stderr is ignored).
+    /// Delivered on every collect exit — check it when `code != 0`.
+    stderr_tail: []const u8 = "",
+    /// stderr exceeded the tail capacity: `stderr_tail` is its LAST
+    /// bytes and earlier output was discarded.
+    stderr_truncated: bool = false,
 };
 
 /// The terminal outcome of one fetch. Every started fetch delivers
@@ -303,6 +351,12 @@ pub fn Effects(comptime Msg: type) type {
             argv: []const []const u8,
             /// Written to the child's stdin once, then stdin closes.
             stdin: ?[]const u8 = null,
+            /// `.lines` (default) streams stdout through `on_line`;
+            /// `.collect` accumulates whole stdout (up to
+            /// `max_effect_collect_bytes`) plus the stderr tail and
+            /// delivers both on the exit Msg — `on_line` is never called
+            /// for a collect spawn.
+            output: EffectOutputMode = .lines,
             on_line: ?LineMsgFn = null,
             on_exit: ?ExitMsgFn = null,
         };
@@ -314,6 +368,7 @@ pub fn Effects(comptime Msg: type) type {
             key: u64,
             argv: []const []const u8,
             stdin: []const u8,
+            output: EffectOutputMode = .lines,
         };
 
         pub const FetchOptions = struct {
@@ -347,9 +402,10 @@ pub fn Effects(comptime Msg: type) type {
             body: []const u8,
         };
 
-        /// `draining` is fetch-only: the worker is done and the terminal
-        /// response entry is queued, but the slot still owns the body
-        /// buffer until the drain delivers (and thereby retires) it.
+        /// `draining`: the worker is done and the terminal entry is
+        /// queued, but the slot still owns a heap buffer (a fetch's body
+        /// or a collect spawn's stdout) until the drain delivers (and
+        /// thereby retires) it.
         const SlotState = enum(u8) { idle, running, done, draining };
 
         const SlotKind = enum(u8) { spawn, fetch };
@@ -372,6 +428,14 @@ pub fn Effects(comptime Msg: type) type {
             dropped_lines: u32 = 0,
             status: u16 = 0,
             outcome: EffectFetchOutcome = .ok,
+            /// `.exit` entries of `.collect` spawns: the collected stdout
+            /// stays in the slot's heap buffer (taken at drain, like a
+            /// fetch body); the stderr tail rides in `line_bytes` with
+            /// its length in `line_len`.
+            collect: bool = false,
+            collect_len: u32 = 0,
+            collect_truncated: bool = false,
+            stderr_truncated: bool = false,
             line_fn: ?LineMsgFn = null,
             exit_fn: ?ExitMsgFn = null,
             response_fn: ?ResponseMsgFn = null,
@@ -433,6 +497,22 @@ pub fn Effects(comptime Msg: type) type {
             argv_storage: [max_effect_argv_bytes]u8 = undefined,
             stdin_storage: [max_effect_stdin_bytes]u8 = undefined,
             stdin_len: usize = 0,
+            // ---- collect-mode fields (kind == .spawn, output == .collect) ----
+            output_mode: EffectOutputMode = .lines,
+            /// Heap buffer per accepted `.collect` spawn
+            /// (`max_effect_collect_bytes` of stdout space). Owned by the
+            /// slot until the drain delivers the exit (taken into
+            /// `drain_collect_output`) or `deinit` sweeps it.
+            collect_buffer: ?[]u8 = null,
+            collect_len: usize = 0,
+            collect_truncated: bool = false,
+            /// Ring of the child's most recent stderr bytes. Written by
+            /// the stderr reader (worker-side thread in real mode, loop
+            /// thread in fake mode); read only after the child is done.
+            stderr_ring: [max_effect_stderr_tail_bytes]u8 = undefined,
+            /// Total stderr bytes seen; beyond the ring capacity means
+            /// the tail is truncated.
+            stderr_total: usize = 0,
             // ---- fetch-only fields (kind == .fetch) ----
             method: std.http.Method = .GET,
             url_storage: [max_effect_url_bytes]u8 = undefined,
@@ -515,6 +595,10 @@ pub fn Effects(comptime Msg: type) type {
         /// keeping `EffectResponse.body` valid while `update` runs
         /// (freed when the next response drains, or at `deinit`).
         drain_fetch_body: ?[]u8 = null,
+        /// The collect buffer of the most recently delivered collect
+        /// exit, keeping `EffectExit.output` valid while `update` runs
+        /// (freed when the next collect exit drains, or at `deinit`).
+        drain_collect_output: ?[]u8 = null,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{ .allocator = allocator };
@@ -561,10 +645,18 @@ pub fn Effects(comptime Msg: type) type {
                     self.allocator.free(buffer);
                     slot.fetch_buffer = null;
                 }
+                if (slot.collect_buffer) |buffer| {
+                    self.allocator.free(buffer);
+                    slot.collect_buffer = null;
+                }
             }
             if (self.drain_fetch_body) |buffer| {
                 self.allocator.free(buffer);
                 self.drain_fetch_body = null;
+            }
+            if (self.drain_collect_output) |buffer| {
+                self.allocator.free(buffer);
+                self.drain_collect_output = null;
             }
         }
 
@@ -631,17 +723,30 @@ pub fn Effects(comptime Msg: type) type {
             }
             @memcpy(slot.stdin_storage[0..stdin_bytes.len], stdin_bytes);
             slot.stdin_len = stdin_bytes.len;
+            slot.output_mode = options.output;
+            slot.collect_len = 0;
+            slot.collect_truncated = false;
+            slot.stderr_total = 0;
+            if (slot.collect_buffer) |old| {
+                self.allocator.free(old);
+                slot.collect_buffer = null;
+            }
+            if (options.output == .collect) {
+                slot.collect_buffer = self.allocator.alloc(u8, max_effect_collect_bytes) catch {
+                    return self.reject(options);
+                };
+            }
             slot.fake = self.executor == .fake;
             slot.state.store(.running, .release);
 
             if (slot.fake) return;
 
             const io = self.ensureIo() catch {
-                slot.state.store(.idle, .release);
+                self.releaseSpawnSlot(slot);
                 return self.reject(options);
             };
             const thread = std.Thread.spawn(.{}, workerMain, .{ self, slot_index, slot.generation, io }) catch {
-                slot.state.store(.idle, .release);
+                self.releaseSpawnSlot(slot);
                 return self.reject(options);
             };
             thread.detach();
@@ -777,7 +882,7 @@ pub fn Effects(comptime Msg: type) type {
                     .reason = .cancelled,
                     .dropped_lines = slot.dropped_total,
                 };
-                slot.state.store(.idle, .release);
+                self.releaseSpawnSlot(slot);
                 self.deliverLoopExit(exit, exit_fn);
                 return;
             }
@@ -834,12 +939,40 @@ pub fn Effects(comptime Msg: type) type {
                         });
                     },
                     .exit => {
+                        // Collect exits own a heap stdout buffer: take it
+                        // before any early-out so the slot retires even
+                        // when the handler is absent. A mismatched
+                        // generation means the occupant was already
+                        // retired (and its buffer freed on slot reuse).
+                        var output: []const u8 = "";
+                        if (entry.collect and entry.generation == slot.generation) {
+                            if (self.drain_collect_output) |old| self.allocator.free(old);
+                            self.drain_collect_output = slot.collect_buffer;
+                            slot.collect_buffer = null;
+                            if (!cancelled) {
+                                if (self.drain_collect_output) |buffer| output = buffer[0..entry.collect_len];
+                            }
+                        }
                         const exit_fn = entry.exit_fn orelse continue;
+                        if (cancelled) {
+                            // Cancelled exits mirror cancelled fetches:
+                            // no payload, just the terminal notice.
+                            return exit_fn(.{
+                                .key = entry.key,
+                                .code = effect_error_exit_code,
+                                .reason = .cancelled,
+                                .dropped_lines = entry.dropped_lines,
+                            });
+                        }
                         return exit_fn(.{
                             .key = entry.key,
-                            .code = if (cancelled) effect_error_exit_code else entry.code,
-                            .reason = if (cancelled) .cancelled else entry.reason,
+                            .code = entry.code,
+                            .reason = entry.reason,
                             .dropped_lines = entry.dropped_lines,
+                            .output = output,
+                            .output_truncated = entry.collect_truncated,
+                            .stderr_tail = if (entry.collect) entry.line_bytes[0..entry.line_len] else "",
+                            .stderr_truncated = entry.stderr_truncated,
                         });
                     },
                     .response => {
@@ -891,7 +1024,7 @@ pub fn Effects(comptime Msg: type) type {
             for (&self.slots) |*slot| {
                 if (!(slot.fake and slot.kind == .spawn and slot.state.load(.acquire) == .running)) continue;
                 if (seen == index) {
-                    return .{ .key = slot.key, .argv = slot.argv(), .stdin = slot.stdinBytes() };
+                    return .{ .key = slot.key, .argv = slot.argv(), .stdin = slot.stdinBytes(), .output = slot.output_mode };
                 }
                 seen += 1;
             }
@@ -927,16 +1060,41 @@ pub fn Effects(comptime Msg: type) type {
         }
 
         /// Feed one synthetic stdout line to the fake effect with `key`.
-        /// Mirrors real overflow behavior: a full queue counts a drop
-        /// instead of delivering.
+        /// Mirrors the real executor per output mode: a `.lines` spawn
+        /// queues one `on_line` Msg (a full queue counts a drop instead
+        /// of delivering); a `.collect` spawn accumulates the bytes plus
+        /// their newline into the collected output (truncating over the
+        /// collect bound with the flag set, exactly like a real child
+        /// that printed that line).
         pub fn feedLine(self: *Self, key: u64, bytes: []const u8) error{EffectNotFound}!void {
             const slot_index = self.findActiveFakeSlot(key, .spawn) orelse return error.EffectNotFound;
             const slot = &self.slots[slot_index];
+            if (slot.output_mode == .collect) {
+                appendCollected(slot, bytes);
+                appendCollected(slot, "\n");
+                return;
+            }
             self.produceLine(slot, @intCast(slot_index), slot.generation, bytes, bytes.len > max_effect_line_bytes);
         }
 
+        /// Feed synthetic stderr bytes to the fake `.collect` effect with
+        /// `key`. Mirrors the real tail: only the last
+        /// `max_effect_stderr_tail_bytes` are kept and earlier bytes are
+        /// flagged through `stderr_truncated`. `.lines` spawns ignore
+        /// stderr, so feeding one reports EffectNotFound.
+        pub fn feedStderr(self: *Self, key: u64, bytes: []const u8) error{EffectNotFound}!void {
+            const slot_index = self.findActiveFakeSlot(key, .spawn) orelse return error.EffectNotFound;
+            const slot = &self.slots[slot_index];
+            if (slot.output_mode != .collect) return error.EffectNotFound;
+            appendStderrTail(slot, bytes);
+        }
+
         /// Feed the synthetic exit for the fake effect with `key`,
-        /// retiring its slot.
+        /// retiring its slot. A `.collect` exit carries the accumulated
+        /// output and stderr tail, exactly like a real collect exit; if
+        /// the completion queue is somehow full, the terminal still lands
+        /// through the pending ring — with empty payloads and the
+        /// truncation flags set, never silently.
         pub fn feedExit(self: *Self, key: u64, code: i32) error{EffectNotFound}!void {
             const slot_index = self.findActiveFakeSlot(key, .spawn) orelse return error.EffectNotFound;
             const slot = &self.slots[slot_index];
@@ -951,6 +1109,23 @@ pub fn Effects(comptime Msg: type) type {
                 .exit_fn = slot.on_exit,
             };
             const exit_fn = slot.on_exit;
+            if (slot.output_mode == .collect) {
+                stampCollectExit(slot, &entry);
+                slot.state.store(.draining, .release);
+                if (!self.enqueue(&entry)) {
+                    self.releaseSpawnSlot(slot);
+                    self.deliverLoopExit(.{
+                        .key = entry.key,
+                        .code = code,
+                        .reason = .exited,
+                        .dropped_lines = entry.dropped_lines,
+                        .output_truncated = true,
+                        .stderr_truncated = true,
+                    }, exit_fn);
+                }
+                self.wakeHost();
+                return;
+            }
             const delivered = self.enqueue(&entry);
             slot.state.store(.idle, .release);
             if (!delivered) {
@@ -1052,6 +1227,17 @@ pub fn Effects(comptime Msg: type) type {
             slot.state.store(.idle, .release);
         }
 
+        /// Free a spawn slot's collect buffer (if any) and return it to
+        /// `.idle` (spawn-time failures, fake cancels, and feed
+        /// fallbacks). Loop-thread only.
+        fn releaseSpawnSlot(self: *Self, slot: *Slot) void {
+            if (slot.collect_buffer) |buffer| {
+                self.allocator.free(buffer);
+                slot.collect_buffer = null;
+            }
+            slot.state.store(.idle, .release);
+        }
+
         /// Queue an exit produced on the loop thread (rejections, fake
         /// cancel/exit fallbacks) for the next drain.
         fn deliverLoopExit(self: *Self, exit: EffectExit, exit_fn: ?ExitMsgFn) void {
@@ -1134,9 +1320,10 @@ pub fn Effects(comptime Msg: type) type {
             for (&self.slots) |*slot| {
                 switch (slot.state.load(.acquire)) {
                     .done => slot.state.store(.idle, .release),
-                    // A draining fetch slot is reusable once the drain
-                    // took its body buffer (the response was delivered).
-                    .draining => if (slot.fetch_buffer == null) slot.state.store(.idle, .release),
+                    // A draining slot is reusable once the drain took its
+                    // heap buffer (fetch body or collected stdout — the
+                    // terminal Msg was delivered).
+                    .draining => if (slot.fetch_buffer == null and slot.collect_buffer == null) slot.state.store(.idle, .release),
                     else => {},
                 }
             }
@@ -1162,6 +1349,49 @@ pub fn Effects(comptime Msg: type) type {
             self.queue_len -= 1;
             self.queue_count.store(self.queue_len, .release);
             return true;
+        }
+
+        /// Append stdout bytes to a collect spawn's buffer, truncating at
+        /// the collect bound with the flag set. Single-writer: the worker
+        /// in real mode, the loop thread (feedLine) in fake mode.
+        fn appendCollected(slot: *Slot, bytes: []const u8) void {
+            const buffer = slot.collect_buffer orelse return;
+            const remaining = buffer.len - slot.collect_len;
+            const take = @min(bytes.len, remaining);
+            @memcpy(buffer[slot.collect_len..][0..take], bytes[0..take]);
+            slot.collect_len += take;
+            if (take < bytes.len) slot.collect_truncated = true;
+        }
+
+        /// Append stderr bytes to a collect spawn's tail ring (the last
+        /// `max_effect_stderr_tail_bytes` win). Single-writer, like
+        /// `appendCollected`.
+        fn appendStderrTail(slot: *Slot, bytes: []const u8) void {
+            for (bytes) |byte| {
+                slot.stderr_ring[slot.stderr_total % max_effect_stderr_tail_bytes] = byte;
+                slot.stderr_total += 1;
+            }
+        }
+
+        /// Stamp a collect spawn's terminal payload onto its exit entry:
+        /// the output length/flag (bytes stay in the slot buffer until
+        /// the drain takes them) and the linearized stderr tail (oldest
+        /// kept byte first) into the entry's line buffer.
+        fn stampCollectExit(slot: *const Slot, entry: *Entry) void {
+            entry.collect = true;
+            entry.collect_len = @intCast(slot.collect_len);
+            entry.collect_truncated = slot.collect_truncated;
+            const tail_len = @min(slot.stderr_total, max_effect_stderr_tail_bytes);
+            entry.stderr_truncated = slot.stderr_total > max_effect_stderr_tail_bytes;
+            const start = if (slot.stderr_total > max_effect_stderr_tail_bytes)
+                slot.stderr_total % max_effect_stderr_tail_bytes
+            else
+                0;
+            var index: usize = 0;
+            while (index < tail_len) : (index += 1) {
+                entry.line_bytes[index] = slot.stderr_ring[(start + index) % max_effect_stderr_tail_bytes];
+            }
+            entry.line_len = @intCast(tail_len);
         }
 
         /// Producer-side line delivery with drop accounting. `truncated`
@@ -1216,7 +1446,9 @@ pub fn Effects(comptime Msg: type) type {
             self.runChild(slot, @intCast(slot_index), generation, io, &exit);
             exit.dropped_lines = slot.dropped_total;
             self.postExit(slot, @intCast(slot_index), generation, io, exit);
-            slot.state.store(.done, .release);
+            // A collect slot still owns its stdout buffer; park it in
+            // `.draining` until the drain takes the buffer (fetch-style).
+            slot.state.store(if (slot.output_mode == .collect) .draining else .done, .release);
             self.wakeHost();
         }
 
@@ -1225,7 +1457,7 @@ pub fn Effects(comptime Msg: type) type {
                 .argv = slot.argv(),
                 .stdin = if (slot.stdin_len > 0) .pipe else .ignore,
                 .stdout = .pipe,
-                .stderr = .ignore,
+                .stderr = if (slot.output_mode == .collect) .pipe else .ignore,
             }) catch return;
 
             slot.child_mutex.lock();
@@ -1234,6 +1466,18 @@ pub fn Effects(comptime Msg: type) type {
             // A cancel that raced the spawn still lands.
             if (slot.cancel_requested.load(.acquire)) self.killPublishedChild(slot);
 
+            // Collect mode drains stderr concurrently so a chatty child
+            // can never deadlock against a full stderr pipe while we read
+            // stdout. The reader ends at stderr EOF (the child exiting),
+            // and the join below runs before the exit is assembled, so
+            // the tail ring is complete and single-threaded again by the
+            // time it is read.
+            var stderr_thread: ?std.Thread = null;
+            defer if (stderr_thread) |thread| thread.join();
+            if (child.stderr) |stderr_file| {
+                stderr_thread = std.Thread.spawn(.{}, stderrTailMain, .{ slot, io, stderr_file }) catch null;
+            }
+
             if (child.stdin) |stdin_file| {
                 stdin_file.writeStreamingAll(io, slot.stdinBytes()) catch {};
                 stdin_file.close(io);
@@ -1241,7 +1485,18 @@ pub fn Effects(comptime Msg: type) type {
             }
 
             if (child.stdout) |stdout_file| {
-                self.streamLines(slot, slot_index, generation, io, stdout_file);
+                if (slot.output_mode == .collect) {
+                    collectStdout(slot, io, stdout_file);
+                } else {
+                    self.streamLines(slot, slot_index, generation, io, stdout_file);
+                }
+            }
+
+            // Thread-spawn failure fallback: drain stderr inline after
+            // stdout closed (before reaping, so a child blocked on a full
+            // stderr pipe still finishes).
+            if (stderr_thread == null) {
+                if (child.stderr) |stderr_file| collectStderrTail(slot, io, stderr_file);
             }
 
             slot.child_mutex.lock();
@@ -1284,6 +1539,34 @@ pub fn Effects(comptime Msg: type) type {
             }
             if (line_len > 0 or truncated) {
                 self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
+            }
+        }
+
+        /// Collect-mode stdout: raw bytes into the slot's heap buffer,
+        /// no line framing, bounded by `max_effect_collect_bytes`.
+        fn collectStdout(slot: *Slot, io: std.Io, stdout_file: std.Io.File) void {
+            var read_buffer: [4096]u8 = undefined;
+            while (true) {
+                const read_slices: [1][]u8 = .{&read_buffer};
+                const count = stdout_file.readStreaming(io, &read_slices) catch break;
+                if (count == 0) break;
+                appendCollected(slot, read_buffer[0..count]);
+            }
+        }
+
+        fn stderrTailMain(slot: *Slot, io: std.Io, stderr_file: std.Io.File) void {
+            collectStderrTail(slot, io, stderr_file);
+        }
+
+        /// Collect-mode stderr: keep the last
+        /// `max_effect_stderr_tail_bytes` bytes in the slot's tail ring.
+        fn collectStderrTail(slot: *Slot, io: std.Io, stderr_file: std.Io.File) void {
+            var read_buffer: [1024]u8 = undefined;
+            while (true) {
+                const read_slices: [1][]u8 = .{&read_buffer};
+                const count = stderr_file.readStreaming(io, &read_slices) catch break;
+                if (count == 0) break;
+                appendStderrTail(slot, read_buffer[0..count]);
             }
         }
 
@@ -1442,6 +1725,7 @@ pub fn Effects(comptime Msg: type) type {
                 .dropped_lines = exit.dropped_lines,
                 .exit_fn = slot.on_exit,
             };
+            if (slot.output_mode == .collect) stampCollectExit(slot, &entry);
             while (!self.enqueue(&entry)) {
                 if (self.shutdown.load(.acquire)) return;
                 self.wakeHost();
@@ -1458,6 +1742,10 @@ test "effect payload types have documented defaults" {
     const exit: EffectExit = .{ .key = 7 };
     try std.testing.expectEqual(EffectExitReason.exited, exit.reason);
     try std.testing.expectEqual(@as(u32, 0), exit.dropped_lines);
+    try std.testing.expectEqualStrings("", exit.output);
+    try std.testing.expect(!exit.output_truncated);
+    try std.testing.expectEqualStrings("", exit.stderr_tail);
+    try std.testing.expect(!exit.stderr_truncated);
     const response: EffectResponse = .{ .key = 7 };
     try std.testing.expectEqual(EffectFetchOutcome.ok, response.outcome);
     try std.testing.expectEqual(@as(u16, 0), response.status);

@@ -181,10 +181,10 @@ pub fn canvasWidgetClipsContent(widget: canvas.Widget) bool {
 
 pub fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
-    return switch (widget.kind) {
-        .row, .column, .grid, .data_grid, .table, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
-        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .text, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
-    };
+    // Kind-level hit-target-ness lives in one place (canvas
+    // widget_access.zig) so the runtime, the engines' hit test, and the
+    // markup validation of pointer handlers can never drift.
+    return canvas.widgetKindHitTarget(widget.kind);
 }
 
 pub fn canvasWidgetDismissibleSurfaceKind(kind: canvas.WidgetKind) bool {

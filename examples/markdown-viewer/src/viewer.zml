@@ -2,12 +2,15 @@
      Embedded into the binary and hot-reloaded in dev: edit this file while
      the app runs and the window updates without losing document state. -->
 <column background="background">
-  <!-- The toolbar IS the titlebar (hidden-inset chrome): window-drag makes
-       its background move the window — the buttons inside stay buttons,
-       a double-click zooms — and the leading spacer pads past the traffic
-       lights by the live chrome inset the model receives via on_chrome
-       (zero in fullscreen, so the toolbar reclaims the space). -->
-  <row gap="8" padding="10" cross="center" background="surface" window-drag="true" label="Toolbar">
+  <!-- The toolbar IS the titlebar (tall hidden-inset chrome): window-drag
+       makes its background move the window — the buttons inside stay
+       buttons, a double-click zooms — the leading spacer pads past the
+       traffic lights by the live chrome inset the model receives via
+       on_chrome, and the row matches its height to the tall titlebar band
+       so cross-centering puts its controls on the traffic lights'
+       centerline (both fall back — zero inset, natural height — in
+       fullscreen, so the toolbar reclaims the space). -->
+  <row gap="8" padding="10" height="{toolbar_height}" cross="center" background="surface" window-drag="true" label="Toolbar">
     <spacer width="{chrome_leading}" />
     <!-- The sample picker: a REAL select — the trigger shows the current
          document, and the options are an anchored dropdown that floats

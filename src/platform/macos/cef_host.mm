@@ -466,6 +466,10 @@ static const char *NativeSdkCefBridgeScript() {
 @interface NativeSdkChromiumWindowDelegate : NSObject <NSWindowDelegate>
 @property(nonatomic, assign) NativeSdkChromiumHost *host;
 @property(nonatomic, assign) uint64_t windowId;
+/// Set for tall-titlebar windows, whose delegate KVO-observes the
+/// window's `contentLayoutRect` (chrome re-query timing) and must
+/// unregister before the window closes.
+@property(nonatomic, assign) BOOL observesContentLayout;
 @end
 
 @interface NativeSdkChromiumShortcut : NSObject
@@ -607,8 +611,59 @@ static const char *NativeSdkCefBridgeScript() {
     [self.host emitWindowFrameForWindowId:self.windowId open:YES];
 }
 
+// Mirror of the AppKit host: the tall-titlebar toolbar is pure geometry,
+// and fullscreen would otherwise keep it visible as a blank band over
+// the app's own header. DID notifications, not WILL — the system
+// snapshots and restores toolbar visibility across the transition and
+// stomps changes made at the WILL edge; the re-emitted resize makes the
+// runtime re-query chrome insets after the toggle.
+// Same discipline as the AppKit host: the tall-titlebar toolbar is pure
+// geometry, and fullscreen keeps it visible as a blank band over the
+// app's own header — hide at the WILL edge so the transition's resizes
+// see it, re-assert the restore at the DID edge (the system stomps a
+// WILL-edge restore). The chrome re-query rides the contentLayoutRect
+// KVO below, which fires only when the band has actually relaid out.
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:NO];
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:NO];
+}
+
+- (void)windowWillExitFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:YES];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:YES];
+}
+
+- (void)setToolbarVisible:(BOOL)visible {
+    NSWindow *window = self.host.windows[@(self.windowId)];
+    if (!window.toolbar) return;
+    window.toolbar.visible = visible;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    (void)object;
+    (void)change;
+    (void)context;
+    if (![keyPath isEqualToString:@"contentLayoutRect"]) return;
+    [self.host emitResizeForWindowId:self.windowId];
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
+    if (self.observesContentLayout) {
+        NSWindow *window = self.host.windows[@(self.windowId)];
+        [window removeObserver:self forKeyPath:@"contentLayoutRect"];
+        self.observesContentLayout = NO;
+    }
     [self.host emitWindowFrameForWindowId:self.windowId open:NO];
     [self.host closeWebViewsInWindow:self.windowId];
     NSNumber *key = @(self.windowId);
@@ -1684,15 +1739,36 @@ bool NativeSdkCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
 } // namespace
 
-static void NativeSdkApplyHiddenInsetTitlebar(NSWindow *window, int titlebar_style) {
-    if (!window || titlebar_style != 1) return;
+static void NativeSdkApplyHiddenInsetTitlebar(NSWindow *window, int titlebar_style, NativeSdkChromiumWindowDelegate *delegate) {
+    if (!window || (titlebar_style != 1 && titlebar_style != 2)) return;
     window.styleMask |= NSWindowStyleMaskFullSizeContentView;
     window.titlebarAppearsTransparent = YES;
     window.titleVisibility = NSWindowTitleHidden;
+    if (titlebar_style == 2) {
+        // hidden_inset_tall: an empty borderless toolbar switches the
+        // titlebar to the unified-toolbar height and the system centers
+        // the traffic lights in it (same trick as the AppKit host).
+        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"native-sdk-tall-titlebar"];
+        toolbar.allowsUserCustomization = NO;
+        window.toolbar = toolbar;
+        window.toolbarStyle = NSWindowToolbarStyleUnified;
+        window.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
+        if (delegate && !delegate.observesContentLayout) {
+            // Chrome re-query timing rides the settled contentLayoutRect
+            // (see the delegate's observeValueForKeyPath:).
+            delegate.observesContentLayout = YES;
+            [window addObserver:delegate forKeyPath:@"contentLayoutRect" options:0 context:NULL];
+        }
+    }
 }
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
     @autoreleasepool {
+        // Present-before-show is a canvas contract; the Chromium host
+        // hosts webviews only (gpu-surface presents are unsupported on
+        // this engine), so the policy is accepted for ABI parity and
+        // windows show immediately — the web engine owns first paint.
+        (void)show_policy;
         (void)bundle_id;
         (void)bundle_id_len;
         (void)icon_path;
@@ -1708,7 +1784,7 @@ native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t 
         if (!resizable) {
             host.window.styleMask &= ~NSWindowStyleMaskResizable;
         }
-        NativeSdkApplyHiddenInsetTitlebar(host.window, titlebar_style);
+        NativeSdkApplyHiddenInsetTitlebar(host.window, titlebar_style, host.delegates[@1]);
         return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }
@@ -1903,12 +1979,14 @@ void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char 
     [object setShortcutsWithIds:ids idLengths:id_lens keys:keys keyLengths:key_lens modifiers:modifiers count:count];
 }
 
-int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
+int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
+    // Accepted for ABI parity; see native_sdk_appkit_create.
+    (void)show_policy;
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     NSString *titleString = window_title ? [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] : @"native-sdk";
     NSString *labelString = window_label ? [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] : @"";
     if (![object createWindowWithId:window_id title:titleString ?: @"native-sdk" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) makeMain:NO]) return 0;
-    NativeSdkApplyHiddenInsetTitlebar(object.windows[@(window_id)], titlebar_style);
+    NativeSdkApplyHiddenInsetTitlebar(object.windows[@(window_id)], titlebar_style, object.delegates[@(window_id)]);
     return 1;
 }
 
@@ -1946,7 +2024,7 @@ int native_sdk_appkit_start_window_drag(native_sdk_appkit_host_t *host, uint64_t
     return 1;
 }
 
-int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right) {
+int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height) {
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     NSWindow *window = object.windows[@(window_id)];
     if (!window) return 0;
@@ -1954,6 +2032,10 @@ int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint6
     *left = 0;
     *bottom = 0;
     *right = 0;
+    *buttons_x = 0;
+    *buttons_y = 0;
+    *buttons_width = 0;
+    *buttons_height = 0;
     if ((window.styleMask & NSWindowStyleMaskFullSizeContentView) == 0) return 1;
     NSView *contentView = window.contentView;
     if (!contentView) return 1;
@@ -1962,27 +2044,29 @@ int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint6
     double titlebarHeight = NSMaxY(contentBounds) - NSMaxY(layoutRect);
     if (titlebarHeight <= 0.5) return 1;
     *top = titlebarHeight;
-    double buttonsMaxX = 0;
-    double buttonsMinX = NSMaxX(contentBounds);
     NSButton *buttons[3] = {
         [window standardWindowButton:NSWindowCloseButton],
         [window standardWindowButton:NSWindowMiniaturizeButton],
         [window standardWindowButton:NSWindowZoomButton],
     };
+    NSRect cluster = NSZeroRect;
     BOOL anyButtonVisible = NO;
     for (size_t index = 0; index < 3; index += 1) {
         NSButton *button = buttons[index];
         if (!button || button.hidden || !button.superview) continue;
         NSRect buttonFrame = [contentView convertRect:button.frame fromView:button.superview];
-        buttonsMaxX = MAX(buttonsMaxX, NSMaxX(buttonFrame));
-        buttonsMinX = MIN(buttonsMinX, NSMinX(buttonFrame));
+        cluster = anyButtonVisible ? NSUnionRect(cluster, buttonFrame) : buttonFrame;
         anyButtonVisible = YES;
     }
     if (!anyButtonVisible) return 1;
-    if (buttonsMinX < NSMidX(contentBounds)) {
-        *left = buttonsMaxX + (buttonsMinX - NSMinX(contentBounds));
+    *buttons_x = NSMinX(cluster);
+    *buttons_y = NSMaxY(contentBounds) - NSMaxY(cluster);
+    *buttons_width = NSWidth(cluster);
+    *buttons_height = NSHeight(cluster);
+    if (NSMinX(cluster) < NSMidX(contentBounds)) {
+        *left = NSMaxX(cluster) + (NSMinX(cluster) - NSMinX(contentBounds));
     } else {
-        *right = (NSMaxX(contentBounds) - buttonsMinX) + (NSMaxX(contentBounds) - buttonsMaxX);
+        *right = (NSMaxX(contentBounds) - NSMinX(cluster)) + (NSMaxX(contentBounds) - NSMaxX(cluster));
     }
     return 1;
 }

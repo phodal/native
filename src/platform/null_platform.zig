@@ -214,15 +214,31 @@ pub const NullPlatform = struct {
     /// like `windows` — same seam-regression purpose as
     /// `window_resizable` (the startup create used to hardcode it).
     window_titlebar: [max_windows]WindowTitlebarStyle = [_]WindowTitlebarStyle{.standard} ** max_windows,
+    /// Captured `WindowOptions.show` per created window: the
+    /// present-before-show policy that must survive to the create seam.
+    window_show: [max_windows]types.WindowShowMode = [_]types.WindowShowMode{.immediate} ** max_windows,
+    /// Live visibility per window, modeling the macOS host: immediate
+    /// windows are visible at create; `.on_first_present` windows stay
+    /// hidden until their first gpu-surface present (or an explicit
+    /// `focusWindow`) shows them.
+    window_visible: [max_windows]bool = [_]bool{false} ** max_windows,
+    /// The present-before-show ORDERING seam: a per-platform op counter
+    /// stamps when each window's first gpu-surface present landed and
+    /// when it became visible (0 = never), so tests can assert the
+    /// present strictly precedes visibility.
+    show_op_seq: usize = 0,
+    window_first_present_seq: [max_windows]usize = [_]usize{0} ** max_windows,
+    window_shown_seq: [max_windows]usize = [_]usize{0} ** max_windows,
     /// Window ids handed to `startWindowDrag`, in call order: the
     /// window-drag region channel's recording seam. A double-click is
     /// two recorded calls (the host side decides drag vs zoom from the
     /// native event's click count).
     window_drag_starts: [max_windows * 4]WindowId = [_]WindowId{0} ** (max_windows * 4),
     window_drag_start_count: usize = 0,
-    /// Chrome overlay insets `windowChromeInsets` reports for every
-    /// window — settable so tests model a hidden-titlebar macOS host.
-    chrome_insets: geometry.InsetsF = .{},
+    /// Chrome overlay geometry `windowChrome` reports for every window
+    /// — settable so tests model a hidden-titlebar macOS host (insets
+    /// plus the traffic-light cluster frame).
+    window_chrome: types.WindowChrome = .{},
     window_count: usize = 0,
     views: [max_views]NullView = undefined,
     view_count: usize = 0,
@@ -418,7 +434,7 @@ pub const NullPlatform = struct {
                 .focus_window_fn = focusWindow,
                 .close_window_fn = closeWindow,
                 .start_window_drag_fn = startWindowDrag,
-                .window_chrome_insets_fn = windowChromeInsets,
+                .window_chrome_fn = windowChrome,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -629,8 +645,36 @@ pub const NullPlatform = struct {
         self.windows[self.window_count] = info;
         self.window_resizable[self.window_count] = options.resizable;
         self.window_titlebar[self.window_count] = options.titlebar;
+        self.window_show[self.window_count] = options.show;
+        self.window_first_present_seq[self.window_count] = 0;
+        // Present-before-show: deferred windows are created hidden and
+        // become visible on their first gpu-surface present.
+        if (options.show == .immediate) {
+            self.window_visible[self.window_count] = true;
+            self.show_op_seq += 1;
+            self.window_shown_seq[self.window_count] = self.show_op_seq;
+        } else {
+            self.window_visible[self.window_count] = false;
+            self.window_shown_seq[self.window_count] = 0;
+        }
         self.window_count += 1;
         return info;
+    }
+
+    /// Present-before-show bookkeeping shared by every gpu-surface
+    /// present path: stamp the window's first present, then make a
+    /// deferred window visible — present strictly before visibility.
+    fn recordGpuSurfacePresentForWindow(self: *NullPlatform, window_id: WindowId) void {
+        const index = self.findWindowIndex(window_id) orelse return;
+        if (self.window_first_present_seq[index] == 0) {
+            self.show_op_seq += 1;
+            self.window_first_present_seq[index] = self.show_op_seq;
+        }
+        if (!self.window_visible[index] and self.window_show[index] == .on_first_present) {
+            self.window_visible[index] = true;
+            self.show_op_seq += 1;
+            self.window_shown_seq[index] = self.show_op_seq;
+        }
     }
 
     fn startWindowDrag(context: ?*anyopaque, window_id: WindowId) anyerror!void {
@@ -641,10 +685,10 @@ pub const NullPlatform = struct {
         self.window_drag_start_count += 1;
     }
 
-    fn windowChromeInsets(context: ?*anyopaque, window_id: WindowId) geometry.InsetsF {
+    fn windowChrome(context: ?*anyopaque, window_id: WindowId) types.WindowChrome {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         _ = window_id;
-        return self.chrome_insets;
+        return self.window_chrome;
     }
 
     fn focusWindow(context: ?*anyopaque, window_id: WindowId) anyerror!void {
@@ -652,6 +696,13 @@ pub const NullPlatform = struct {
         const focused_index = self.findWindowIndex(window_id) orelse return error.WindowNotFound;
         for (self.windows[0..self.window_count], 0..) |*window, index| {
             window.focused = index == focused_index;
+        }
+        // An explicit focus shows a still-deferred window (the macOS
+        // host's makeKeyAndOrderFront override of present-before-show).
+        if (!self.window_visible[focused_index]) {
+            self.window_visible[focused_index] = true;
+            self.show_op_seq += 1;
+            self.window_shown_seq[focused_index] = self.show_op_seq;
         }
     }
 
@@ -1135,6 +1186,7 @@ pub const NullPlatform = struct {
         else
             .{ 0, 0, 0, 0 };
         self.gpu_surface_present_count += 1;
+        self.recordGpuSurfacePresentForWindow(pixels.window_id);
     }
 
     fn requestGpuSurfaceFrame(context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void {
@@ -1173,6 +1225,7 @@ pub const NullPlatform = struct {
         self.gpu_surface_packet_present_representable = packet.representable;
         self.gpu_surface_packet_present_json_len = packet.json.len;
         self.gpu_surface_packet_present_count += 1;
+        self.recordGpuSurfacePresentForWindow(packet.window_id);
     }
 
     /// Binary-encoding twin of `presentGpuSurfacePacket`: same recorder
@@ -1216,6 +1269,7 @@ pub const NullPlatform = struct {
         if (load_action == 3) self.gpu_surface_packet_present_binary_patch_count += 1;
         self.gpu_surface_packet_present_binary_count += 1;
         self.gpu_surface_packet_present_count += 1;
+        self.recordGpuSurfacePresentForWindow(packet.window_id);
     }
 
     fn uploadGpuSurfaceImage(context: ?*anyopaque, image: GpuSurfaceImagePixels) anyerror!void {

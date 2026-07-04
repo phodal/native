@@ -186,11 +186,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             resizable: bool = true,
             /// Titlebar chrome: `.hidden_inset` extends content under a
             /// transparent titlebar with the title hidden (macOS keeps
-            /// the traffic lights) — the VS Code/Linear pattern. Drag
-            /// regions and traffic-light-aware header layout are the
-            /// dedicated titlebar-control channel's scope, not this
-            /// field's. Platforms without the concept keep standard
-            /// chrome.
+            /// the traffic lights) — the VS Code/Linear pattern —
+            /// and `.hidden_inset_tall` is the same shape with the
+            /// unified-toolbar-height band (traffic lights vertically
+            /// centered, the Notes look). Drag regions and
+            /// traffic-light-aware header layout are the dedicated
+            /// titlebar-control channel's scope, not this field's.
+            /// Platforms without the concept keep standard chrome.
             titlebar: app_manifest.WindowTitlebarStyle = .standard,
             /// Msg dispatched when the USER closes the window (never for
             /// a reconcile close the model itself initiated). The
@@ -295,19 +297,22 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// reduce-motion state (and `tokens_fn` can derive from it).
             on_appearance: ?*const fn (appearance: platform.Appearance) ?MsgT = null,
             /// Optional mapping from the MAIN canvas window's chrome
-            /// overlay insets into messages — the hidden-titlebar
-            /// (`titlebar = .hidden_inset`) coordination channel. The
-            /// insets name the bands where OS window controls overlay
-            /// the content (macOS: titlebar height on top, traffic
-            /// lights on the leading edge; all-zero in fullscreen,
-            /// on standard-chrome windows, and on platforms without
-            /// the concept), so the model can pad its header's leading
-            /// edge instead of guessing pixel counts. Delivered before
-            /// the first view build and again whenever the insets
-            /// change (fullscreen transitions). Main canvas window
-            /// only — declared secondary windows have no inset hook
-            /// yet (same scope note as `sync`).
-            on_chrome: ?*const fn (insets: geometry.InsetsF) ?MsgT = null,
+            /// overlay geometry into messages — the hidden-titlebar
+            /// (`titlebar = .hidden_inset`/`.hidden_inset_tall`)
+            /// coordination channel. `chrome.insets` names the bands
+            /// where OS window controls overlay the content (macOS:
+            /// titlebar band height on top — compact or tall — and
+            /// traffic-light extent on the leading edge), and
+            /// `chrome.buttons` is the traffic-light cluster's frame in
+            /// content coordinates so a header can vertically center
+            /// its controls against the lights; everything is all-zero
+            /// in fullscreen, on standard-chrome windows, and on
+            /// platforms without the concept. Delivered before the
+            /// first view build and again whenever the geometry changes
+            /// (fullscreen transitions). Main canvas window only —
+            /// declared secondary windows have no chrome hook yet (same
+            /// scope note as `sync`).
+            on_chrome: ?*const fn (chrome: platform.WindowChrome) ?MsgT = null,
             /// Optional mapping from presented gpu frames (carrying the
             /// renderer diagnostics the runtime recorded) into messages.
             /// Called after presenting every frame except the installing
@@ -443,11 +448,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Exactly-once guard for `Options.init_fx`, independent of
         /// `installed` so a failed install rebuild cannot rerun it.
         init_fx_ran: bool = false,
-        /// Last chrome overlay insets delivered through `on_chrome`, so
-        /// resize-driven re-queries only dispatch on actual change
-        /// (fullscreen transitions flip them; ordinary resizes do not).
-        chrome_insets: geometry.InsetsF = .{},
-        chrome_insets_known: bool = false,
+        /// Last chrome overlay geometry delivered through `on_chrome`,
+        /// so resize-driven re-queries only dispatch on actual change
+        /// (fullscreen transitions flip it; ordinary resizes do not).
+        window_chrome: platform.WindowChrome = .{},
+        window_chrome_known: bool = false,
         pixel_snap_scale: f32 = 1,
         frame_timestamp_ns: u64 = 0,
         markup_arenas: [2]std.heap.ArenaAllocator,
@@ -1571,19 +1576,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         }
 
         /// The `on_chrome` delivery gate: query the platform's chrome
-        /// overlay insets for the canvas window and map them to a Msg
-        /// when the app subscribed AND the insets actually changed.
+        /// overlay geometry for the canvas window and map it to a Msg
+        /// when the app subscribed AND the geometry actually changed.
         fn chromeInsetsMsg(self: *Self, runtime: *Runtime, window_id: platform.WindowId) ?MsgT {
             const map = self.options.on_chrome orelse return null;
-            const insets = runtime.options.platform.services.windowChromeInsets(window_id);
-            if (self.chrome_insets_known and
-                insets.top == self.chrome_insets.top and
-                insets.left == self.chrome_insets.left and
-                insets.bottom == self.chrome_insets.bottom and
-                insets.right == self.chrome_insets.right) return null;
-            self.chrome_insets = insets;
-            self.chrome_insets_known = true;
-            return map(insets);
+            const chrome = runtime.options.platform.services.windowChrome(window_id);
+            if (self.window_chrome_known and std.meta.eql(chrome, self.window_chrome)) return null;
+            self.window_chrome = chrome;
+            self.window_chrome_known = true;
+            return map(chrome);
         }
 
         /// Typed press dispatch resolves through the press target — the

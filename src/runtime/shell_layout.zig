@@ -215,7 +215,20 @@ pub fn shellTitlebarStyle(style: app_manifest.WindowTitlebarStyle) platform.Wind
     return switch (style) {
         .standard => .standard,
         .hidden_inset => .hidden_inset,
+        .hidden_inset_tall => .hidden_inset_tall,
     };
+}
+
+/// Present-before-show policy for a shell window: a window whose content
+/// is a canvas (any `gpu_surface` view) is created ordered-out and shown
+/// only after its first canvas frame has completed presentation, so the
+/// user never sees a blank window while the first frame renders. Webview
+/// windows keep immediate visibility — their engine owns first paint.
+pub fn shellWindowShowMode(shell_window: app_manifest.ShellWindow) platform.WindowShowMode {
+    for (shell_window.views) |view| {
+        if (view.kind == .gpu_surface) return .on_first_present;
+    }
+    return .immediate;
 }
 
 /// Whether loading this scene must materialize the app's webview source

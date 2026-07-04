@@ -71,8 +71,12 @@ pub const RunOptions = struct {
             // `.shell.windows` — the startup window the host creates
             // adopts that declaration when the scene loads, but its
             // CHROME is fixed at create time, so the manifest's
-            // titlebar style threads through here.
+            // titlebar style threads through here. Same for visibility:
+            // a canvas-first startup window is created ordered-out and
+            // shown after its first canvas frame presents, so launch
+            // never flashes a blank window.
             info.main_window.titlebar = manifestShellStartupTitlebar();
+            info.main_window.show = manifestShellStartupShowMode();
         }
         return info;
     }
@@ -139,6 +143,7 @@ fn windowTitlebarStyle(comptime window: anytype) native_sdk.WindowTitlebarStyle 
     const value = window.titlebar;
     if (comptime std.mem.eql(u8, value, "standard")) return .standard;
     if (comptime std.mem.eql(u8, value, "hidden_inset")) return .hidden_inset;
+    if (comptime std.mem.eql(u8, value, "hidden_inset_tall")) return .hidden_inset_tall;
     @compileError("unknown app.zon window titlebar style");
 }
 
@@ -152,6 +157,25 @@ fn manifestShellStartupTitlebar() native_sdk.WindowTitlebarStyle {
     if (comptime !@hasField(@TypeOf(shell), "windows")) return .standard;
     if (comptime shell.windows.len == 0) return .standard;
     return windowTitlebarStyle(shell.windows[0]);
+}
+
+/// Present-before-show for the STARTUP window: when app.zon's first
+/// shell window hosts a canvas (`gpu_surface` view), the host creates
+/// it ordered-out and it becomes visible after the first canvas frame
+/// presents. Webview-first startup windows keep immediate visibility.
+fn manifestShellStartupShowMode() native_sdk.WindowShowMode {
+    if (comptime !@hasField(@TypeOf(app_manifest), "shell")) return .immediate;
+    const shell = app_manifest.shell;
+    if (comptime !@hasField(@TypeOf(shell), "windows")) return .immediate;
+    if (comptime shell.windows.len == 0) return .immediate;
+    const window = shell.windows[0];
+    if (comptime !@hasField(@TypeOf(window), "views")) return .immediate;
+    inline for (window.views) |view| {
+        if (comptime @hasField(@TypeOf(view), "kind")) {
+            if (comptime std.mem.eql(u8, view.kind, "gpu_surface")) return .on_first_present;
+        }
+    }
+    return .immediate;
 }
 
 fn windowLabel(comptime window: anytype, comptime index: usize) []const u8 {

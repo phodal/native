@@ -1026,6 +1026,7 @@ fn parseRestorePolicy(value: []const u8) !app_manifest.WindowRestorePolicy {
 fn parseTitlebarStyle(value: []const u8) !app_manifest.WindowTitlebarStyle {
     if (std.mem.eql(u8, value, "standard")) return .standard;
     if (std.mem.eql(u8, value, "hidden_inset")) return .hidden_inset;
+    if (std.mem.eql(u8, value, "hidden_inset_tall")) return .hidden_inset_tall;
     return error.InvalidWindowTitlebarStyle;
 }
 
@@ -1371,10 +1372,11 @@ test "manifest parser reads window titlebar styles" {
         \\  .version = "1.2.3",
         \\  .windows = .{
         \\    .{ .label = "main", .resizable = false, .titlebar = "hidden_inset" },
+        \\    .{ .label = "tall", .titlebar = "hidden_inset_tall" },
         \\  },
         \\  .shell = .{
         \\    .windows = .{
-        \\      .{ .label = "scene", .titlebar = "hidden_inset", .views = .{ .{ .label = "content", .kind = "webview", .url = "zero://app/index.html" } } },
+        \\      .{ .label = "scene", .titlebar = "hidden_inset_tall", .views = .{ .{ .label = "content", .kind = "webview", .url = "zero://app/index.html" } } },
         \\    },
         \\  },
         \\}
@@ -1383,16 +1385,18 @@ test "manifest parser reads window titlebar styles" {
 
     try std.testing.expectEqualStrings("hidden_inset", metadata.windows[0].titlebar);
     try std.testing.expect(!metadata.windows[0].resizable);
-    try std.testing.expectEqualStrings("hidden_inset", metadata.shell.windows[0].titlebar);
+    try std.testing.expectEqualStrings("hidden_inset_tall", metadata.windows[1].titlebar);
+    try std.testing.expectEqualStrings("hidden_inset_tall", metadata.shell.windows[0].titlebar);
 
     const windows = try convertWindows(std.testing.allocator, metadata.windows);
     defer std.testing.allocator.free(windows);
     try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset, windows[0].titlebar);
     try std.testing.expect(!windows[0].resizable);
+    try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset_tall, windows[1].titlebar);
 
     const shell = try parseShell(std.testing.allocator, metadata.shell);
     defer deinitParsedShell(std.testing.allocator, shell);
-    try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset, shell.windows[0].titlebar);
+    try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset_tall, shell.windows[0].titlebar);
 }
 
 test "manifest parser rejects unknown window titlebar style" {

@@ -249,7 +249,12 @@ typedef struct {
 typedef void (*native_sdk_appkit_event_callback_t)(void *context, const native_sdk_appkit_event_t *event);
 typedef void (*native_sdk_appkit_bridge_callback_t)(void *context, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *message, size_t message_len, const char *origin, size_t origin_len);
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style);
+// show_policy 0 = immediate (ordered front at create), 1 = deferred to
+// the first canvas present (present-before-show: the window is created
+// ordered-out and `makeKeyAndOrderFront` runs after the first
+// gpu-surface present lands, with a short fallback deadline so a wedged
+// first frame cannot leave the window invisible).
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
 void native_sdk_appkit_destroy(native_sdk_appkit_host_t *host);
 void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_event_callback_t callback, void *context);
 void native_sdk_appkit_stop(native_sdk_appkit_host_t *host);
@@ -264,7 +269,7 @@ void native_sdk_appkit_set_security_policy(native_sdk_appkit_host_t *host, const
 void native_sdk_appkit_set_menus(native_sdk_appkit_host_t *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count);
 void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count);
 void native_sdk_appkit_set_automation_frame_polling(native_sdk_appkit_host_t *host, int enabled);
-int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style);
+int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
 int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t window_id);
 int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t window_id);
 // Window-drag region channel: called during dispatch of the pointer-down
@@ -273,11 +278,14 @@ int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t wind
 // movement); a double-click applies the user's titlebar double-click
 // action (zoom by default). Returns 0 when the window id is unknown.
 int native_sdk_appkit_start_window_drag(native_sdk_appkit_host_t *host, uint64_t window_id);
-// Chrome overlay insets for hidden-titlebar windows: the bands where the
-// transparent titlebar and traffic lights overlay the content view, in
-// points. Standard-chrome windows and fullscreen report all-zero.
-// Returns 0 when the window id is unknown (out-params untouched).
-int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right);
+// Chrome overlay geometry for hidden-titlebar windows: the bands where
+// the transparent titlebar and traffic lights overlay the content view,
+// plus the traffic-light cluster's bounding frame (content coordinates,
+// top-left origin — so headers can vertically center against the lights
+// in the tall unified band), in points. Standard-chrome windows and
+// fullscreen report all-zero. Returns 0 when the window id is unknown
+// (out-params untouched).
+int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height);
 int native_sdk_appkit_create_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len);
 int native_sdk_appkit_update_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len);
 int native_sdk_appkit_set_view_frame(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height);

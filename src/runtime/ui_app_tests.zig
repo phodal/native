@@ -2161,20 +2161,24 @@ test "selection drag inside a pressable row selects without pressing; a click st
 const ChromeInsetModel = struct {
     leading: f32 = 0,
     top: f32 = 0,
+    /// The traffic-light cluster's vertical centerline — what a header
+    /// centers its controls against in the tall band.
+    buttons_center_y: f32 = 0,
     deliveries: u32 = 0,
 };
 
 const ChromeInsetMsg = union(enum) {
-    chrome: geometry.InsetsF,
+    chrome: zero_platform.WindowChrome,
 };
 
 const ChromeInsetApp = ui_app_model.UiApp(ChromeInsetModel, ChromeInsetMsg);
 
 fn chromeInsetUpdate(model: *ChromeInsetModel, msg: ChromeInsetMsg) void {
     switch (msg) {
-        .chrome => |insets| {
-            model.leading = insets.left;
-            model.top = insets.top;
+        .chrome => |chrome| {
+            model.leading = chrome.insets.left;
+            model.top = chrome.insets.top;
+            model.buttons_center_y = chrome.buttons.y + chrome.buttons.height / 2;
             model.deliveries += 1;
         },
     }
@@ -2190,17 +2194,20 @@ fn chromeInsetView(ui: *ChromeInsetApp.Ui, model: *const ChromeInsetModel) Chrom
     });
 }
 
-fn chromeInsetMap(insets: geometry.InsetsF) ?ChromeInsetMsg {
-    return .{ .chrome = insets };
+fn chromeInsetMap(chrome: zero_platform.WindowChrome) ?ChromeInsetMsg {
+    return .{ .chrome = chrome };
 }
 
-test "ui app delivers chrome overlay insets before install and on change" {
+test "ui app delivers chrome overlay geometry before install and on change" {
     const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
-    // Model a hidden-titlebar macOS host: titlebar band 28pt tall,
-    // traffic lights ending 78pt in.
-    harness.null_platform.chrome_insets = .{ .top = 28, .left = 78 };
+    // Model a tall hidden-titlebar macOS host: unified band 52pt tall,
+    // traffic lights ending 78pt in and vertically centered in the band.
+    harness.null_platform.window_chrome = .{
+        .insets = .{ .top = 52, .left = 78 },
+        .buttons = geometry.RectF.init(12, 19, 54, 14),
+    };
 
     const app_state = try std.testing.allocator.create(ChromeInsetApp);
     defer std.testing.allocator.destroy(app_state);
@@ -2229,7 +2236,10 @@ test "ui app delivers chrome overlay insets before install and on change" {
     try std.testing.expect(app_state.installed);
     try std.testing.expectEqual(@as(u32, 1), app_state.model.deliveries);
     try std.testing.expectEqual(@as(f32, 78), app_state.model.leading);
-    try std.testing.expectEqual(@as(f32, 28), app_state.model.top);
+    try std.testing.expectEqual(@as(f32, 52), app_state.model.top);
+    // The buttons frame carries the vertical truth: centerline at
+    // 19 + 14/2 = 26, the tall band's midpoint.
+    try std.testing.expectEqual(@as(f32, 26), app_state.model.buttons_center_y);
     try std.testing.expect(try retainedTextExists(&harness.runtime, "leading 78"));
 
     // A resize with unchanged insets dispatches nothing extra.
@@ -2242,8 +2252,8 @@ test "ui app delivers chrome overlay insets before install and on change" {
     try std.testing.expectEqual(@as(u32, 1), app_state.model.deliveries);
 
     // Fullscreen hides the chrome: the resize that accompanies the
-    // transition re-queries and delivers the zeroed insets.
-    harness.null_platform.chrome_insets = .{};
+    // transition re-queries and delivers the zeroed geometry.
+    harness.null_platform.window_chrome = .{};
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
         .window_id = 1,
         .label = canvas_label,
@@ -2252,5 +2262,6 @@ test "ui app delivers chrome overlay insets before install and on change" {
     } });
     try std.testing.expectEqual(@as(u32, 2), app_state.model.deliveries);
     try std.testing.expectEqual(@as(f32, 0), app_state.model.leading);
+    try std.testing.expectEqual(@as(f32, 0), app_state.model.buttons_center_y);
     try std.testing.expect(try retainedTextExists(&harness.runtime, "leading 0"));
 }

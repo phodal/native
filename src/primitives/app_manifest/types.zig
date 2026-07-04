@@ -261,9 +261,16 @@ pub const WindowRestorePolicy = enum {
 /// `window-drag="true"` so it moves the window, and pad it by the
 /// runtime's chrome insets so it clears the traffic lights. Platforms
 /// without the concept keep standard chrome.
+///
+/// `.hidden_inset_tall` is the same shape with the TALL titlebar band —
+/// the Notes/Linear unified-toolbar height (~52pt vs ~28pt), where
+/// macOS vertically centers the traffic lights in the band. Declare it
+/// when the header row replacing the titlebar is toolbar-height, so the
+/// lights center against it instead of sitting high.
 pub const WindowTitlebarStyle = enum {
     standard,
     hidden_inset,
+    hidden_inset_tall,
 };
 
 pub const Window = struct {

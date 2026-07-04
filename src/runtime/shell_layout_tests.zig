@@ -547,6 +547,22 @@ test "shell window titlebar style reaches the platform create seam" {
     }
     try std.testing.expect(found);
 
+    // The tall variant rides the same seam.
+    const tall_window: app_manifest.ShellWindow = .{
+        .label = "tall",
+        .title = "Tall",
+        .width = 640,
+        .height = 480,
+        .titlebar = .hidden_inset_tall,
+        .views = &shell_views,
+    };
+    const tall = try harness.runtime.createShellWindow(tall_window, platform.WebViewSource.html("<h1>Tall</h1>"));
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
+        if (info.id == tall.id) {
+            try std.testing.expectEqual(platform.WindowTitlebarStyle.hidden_inset_tall, harness.null_platform.window_titlebar[index]);
+        }
+    }
+
     // The default stays standard chrome.
     const standard_window: app_manifest.ShellWindow = .{
         .label = "standard",
@@ -559,6 +575,72 @@ test "shell window titlebar style reaches the platform create seam" {
     for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
         if (info.id == second.id) {
             try std.testing.expectEqual(platform.WindowTitlebarStyle.standard, harness.null_platform.window_titlebar[index]);
+        }
+    }
+}
+
+test "canvas shell windows present before they become visible" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "present-before-show", .source = platform.WebViewSource.html("<h1>Host</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    // A canvas window (any gpu_surface view) is created ORDERED OUT:
+    // the runtime derives `.show = .on_first_present` from its views.
+    const canvas_views = [_]app_manifest.ShellView{
+        .{ .label = "settings-canvas", .kind = .gpu_surface, .fill = true },
+    };
+    const canvas_window: app_manifest.ShellWindow = .{
+        .label = "settings",
+        .title = "Settings",
+        .width = 480,
+        .height = 360,
+        .views = &canvas_views,
+    };
+    const window = try harness.runtime.createShellWindow(canvas_window, null);
+    const index = for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, i| {
+        if (info.id == window.id) break i;
+    } else return error.WindowNotFound;
+    try std.testing.expectEqual(platform.WindowShowMode.on_first_present, harness.null_platform.window_show[index]);
+    try std.testing.expect(!harness.null_platform.window_visible[index]);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.window_shown_seq[index]);
+
+    // The first canvas present makes it visible — present strictly
+    // BEFORE the visibility flip (the ordering contract).
+    try harness.runtime.options.platform.services.presentGpuSurfacePacket(.{
+        .window_id = window.id,
+        .label = "settings-canvas",
+        .surface_size = geometry.SizeF.init(480, 360),
+        .json = "{\"v\":1}",
+    });
+    try std.testing.expect(harness.null_platform.window_visible[index]);
+    try std.testing.expect(harness.null_platform.window_first_present_seq[index] != 0);
+    try std.testing.expect(harness.null_platform.window_first_present_seq[index] < harness.null_platform.window_shown_seq[index]);
+
+    // A webview shell window keeps immediate visibility: its engine
+    // owns first paint.
+    const webview_views = [_]app_manifest.ShellView{
+        .{ .label = "content", .kind = .webview, .url = "zero://app/content.html", .fill = true },
+    };
+    const webview_window: app_manifest.ShellWindow = .{
+        .label = "docs",
+        .title = "Docs",
+        .width = 640,
+        .height = 480,
+        .views = &webview_views,
+    };
+    const second = try harness.runtime.createShellWindow(webview_window, platform.WebViewSource.html("<h1>Docs</h1>"));
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, i| {
+        if (info.id == second.id) {
+            try std.testing.expectEqual(platform.WindowShowMode.immediate, harness.null_platform.window_show[i]);
+            try std.testing.expect(harness.null_platform.window_visible[i]);
         }
     }
 }

@@ -323,11 +323,55 @@ pub const WindowRestorePolicy = enum {
 /// + `titleVisibility` hidden — the traffic lights stay). The app's own
 /// header becomes the drag surface through the widget `window_drag`
 /// channel (`start_window_drag_fn`), and it lays out around the traffic
-/// lights via `window_chrome_insets_fn`. Platforms without the concept
+/// lights via `window_chrome_fn`. Platforms without the concept
 /// ignore it (standard chrome).
+///
+/// `.hidden_inset_tall` is the same shape with the TALL titlebar band —
+/// the Notes/Linear unified-toolbar height (~52pt vs ~28pt), where the
+/// system vertically centers the traffic lights in the band (macOS: an
+/// empty borderless `NSToolbar` + `NSWindowToolbarStyleUnified` +
+/// `titlebarSeparatorStyle = .none` — pure geometry, nothing drawn).
+/// Pick it when the app's own header row is toolbar-height, so the
+/// lights sit centered against the header instead of hugging its top.
 pub const WindowTitlebarStyle = enum {
     standard,
     hidden_inset,
+    hidden_inset_tall,
+};
+
+/// What `window_chrome_fn` reports for a window: where OS window chrome
+/// overlays the app's content, so a hidden-titlebar header can pad AND
+/// vertically center against it honestly instead of hardcoding pixel
+/// counts. All-zero on standard-chrome windows, in fullscreen (the
+/// system hides the band and the lights), and on platforms without the
+/// concept.
+pub const WindowChrome = struct {
+    /// The band at each edge where OS chrome overlays the content
+    /// (macOS: titlebar band height on top — ~28pt compact, ~52pt tall —
+    /// and the traffic lights' extent on the leading edge, margin
+    /// included).
+    insets: geometry.InsetsF = .{},
+    /// The window-control cluster's bounding frame (macOS: the three
+    /// traffic lights) in content coordinates, top-left origin — the
+    /// vertical truth a header needs to center its controls against the
+    /// lights (`buttons.y + buttons.height / 2` is their centerline).
+    /// Zero-sized when no controls overlay the content.
+    buttons: geometry.RectF = geometry.RectF.init(0, 0, 0, 0),
+};
+
+/// When a created window first becomes visible.
+/// `.immediate` is the classic shape: ordered front at create — right
+/// for webview windows, whose engine paints its own first frame.
+/// `.on_first_present` is the canvas-window contract: the window is
+/// created ORDERED OUT and becomes visible only after its first canvas
+/// frame has completed presentation (macOS: the packet/pixel present
+/// lands, then `makeKeyAndOrderFront`), so the user never sees a blank
+/// window while the first frame renders. Platforms keep a short
+/// fallback deadline so a wedged first frame cannot leave the window
+/// invisible forever.
+pub const WindowShowMode = enum {
+    immediate,
+    on_first_present,
 };
 
 pub const WindowOptions = struct {
@@ -339,6 +383,7 @@ pub const WindowOptions = struct {
     restore_state: bool = true,
     restore_policy: WindowRestorePolicy = .clamp_to_visible_screen,
     titlebar: WindowTitlebarStyle = .standard,
+    show: WindowShowMode = .immediate,
 
     pub fn resolvedTitle(self: WindowOptions, app_name: []const u8) []const u8 {
         return if (self.title.len > 0) self.title else app_name;
@@ -388,6 +433,7 @@ pub const WindowCreateOptions = struct {
     restore_state: bool = true,
     restore_policy: WindowRestorePolicy = .clamp_to_visible_screen,
     titlebar: WindowTitlebarStyle = .standard,
+    show: WindowShowMode = .immediate,
     source: ?WebViewSource = null,
 
     pub fn windowOptions(self: WindowCreateOptions, id: WindowId, label: []const u8) WindowOptions {
@@ -400,6 +446,7 @@ pub const WindowCreateOptions = struct {
             .restore_state = self.restore_state,
             .restore_policy = self.restore_policy,
             .titlebar = self.titlebar,
+            .show = self.show,
         };
     }
 };
@@ -1633,13 +1680,15 @@ pub const PlatformServices = struct {
     /// concept leave this null; the runtime then treats the press as
     /// dead space (GTK/Win32 scoped out like window resizability).
     start_window_drag_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) anyerror!void = null,
-    /// Window-chrome overlay insets: the band at each edge where OS
-    /// window controls overlay the CONTENT of a `hidden_inset` window
-    /// (macOS: titlebar height on top, traffic lights on the leading
-    /// edge — both zero in fullscreen, where the system hides them).
-    /// Standard-titlebar windows and platforms without the concept
-    /// report zero; the null default is the same honest zero.
-    window_chrome_insets_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) geometry.InsetsF = null,
+    /// Window-chrome overlay geometry: the bands where OS window
+    /// controls overlay the CONTENT of a `hidden_inset`/
+    /// `hidden_inset_tall` window plus the control cluster's own frame
+    /// (macOS: titlebar band height on top, traffic lights on the
+    /// leading edge and their live button frames — all zero in
+    /// fullscreen, where the system hides them). Standard-titlebar
+    /// windows and platforms without the concept report the zero
+    /// `WindowChrome`; the null default is the same honest zero.
+    window_chrome_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) WindowChrome = null,
     create_view_fn: ?*const fn (context: ?*anyopaque, options: ViewOptions) anyerror!void = null,
     update_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, patch: ViewPatch) anyerror!void = null,
     set_view_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, frame: geometry.RectF) anyerror!void = null,
@@ -1812,9 +1861,9 @@ pub const PlatformServices = struct {
     /// Zero when the platform has no window-chrome-overlay concept —
     /// the honest cross-platform default (a header padding by these
     /// insets pads nothing on GTK/Win32/null).
-    pub fn windowChromeInsets(self: PlatformServices, window_id: WindowId) geometry.InsetsF {
-        const insets_fn = self.window_chrome_insets_fn orelse return .{};
-        return insets_fn(self.context, window_id);
+    pub fn windowChrome(self: PlatformServices, window_id: WindowId) WindowChrome {
+        const chrome_fn = self.window_chrome_fn orelse return .{};
+        return chrome_fn(self.context, window_id);
     }
 
     pub fn createView(self: PlatformServices, options: ViewOptions) anyerror!void {

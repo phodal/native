@@ -236,6 +236,10 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @interface NativeSdkWindowDelegate : NSObject <NSWindowDelegate>
 @property(nonatomic, assign) NativeSdkAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
+/// Set for tall-titlebar windows, whose delegate KVO-observes the
+/// window's `contentLayoutRect` (chrome re-query timing) and must
+/// unregister before the window closes.
+@property(nonatomic, assign) BOOL observesContentLayout;
 @end
 
 @interface NativeSdkWebView : WKWebView <NSDraggingDestination>
@@ -409,6 +413,15 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NativeSdkBridgeScriptHandler *> *bridgeScriptHandlers;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NativeSdkAssetSchemeHandler *> *assetSchemeHandlers;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *windowLabels;
+/// Present-before-show bookkeeping: windows created with the deferred
+/// show policy stay ordered OUT until their first gpu-surface present
+/// lands (or the fallback deadline fires). Values are the creation
+/// timestamps (ns) so the show can report create→first-present timing.
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *deferredShowWindows;
+/// Last NSWindow.backgroundColor applied from a canvas packet's clear
+/// color, packed RGBA8 per window — so residual gaps (resize slack,
+/// titlebar bands) show the app's background, never a blank default.
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *windowClearColors;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, WKWebView *> *childWebViews;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSView *> *nativeViews;
 /// Host-wide binary image-upload side-channel store: image id (decimal
@@ -442,12 +455,14 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSArray<NSString *> *allowedNavigationOrigins;
 @property(nonatomic, strong) NSArray<NSString *> *allowedExternalURLs;
 @property(nonatomic, assign) NSInteger externalLinkAction;
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle;
-- (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle makeMain:(BOOL)makeMain;
+- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy;
+- (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy makeMain:(BOOL)makeMain;
+- (void)showDeferredWindowIfPending:(uint64_t)windowId reason:(const char *)reason;
+- (void)applyWindowClearColor:(uint64_t)windowId red:(uint8_t)red green:(uint8_t)green blue:(uint8_t)blue alpha:(uint8_t)alpha;
 - (void)focusWindowWithId:(uint64_t)windowId;
 - (void)closeWindowWithId:(uint64_t)windowId;
 - (BOOL)startWindowDragWithId:(uint64_t)windowId;
-- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right;
+- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right buttonsX:(double *)buttonsX buttonsY:(double *)buttonsY buttonsWidth:(double *)buttonsWidth buttonsHeight:(double *)buttonsHeight;
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId;
 - (WKWebView *)mainWebViewForWindow:(NSWindow *)window;
 - (NativeSdkAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
@@ -541,6 +556,17 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)emitShortcutWithId:(NSString *)identifier key:(NSString *)key modifiers:(uint32_t)modifiers event:(NSEvent *)event;
 @end
 
+// Recursively re-emit the gpu-surface resize event for every metal
+// surface under `view` (the tall-titlebar chrome re-query path).
+static void NativeSdkEmitGpuSurfaceResizes(NSView *view) {
+    if ([view isKindOfClass:[NativeSdkMetalSurfaceView class]]) {
+        [(NativeSdkMetalSurfaceView *)view emitResizeEvent];
+    }
+    for (NSView *subview in view.subviews) {
+        NativeSdkEmitGpuSurfaceResizes(subview);
+    }
+}
+
 @implementation NativeSdkWindowDelegate
 
 - (void)windowDidResize:(NSNotification *)notification {
@@ -565,8 +591,79 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
     [self.host scheduleFrame];
 }
 
+// The tall-titlebar toolbar is pure geometry (it exists only to get the
+// unified band height and centered traffic lights), but in fullscreen
+// the system keeps an attached toolbar VISIBLE as a blank band covering
+// the app's own header. Hide it for the fullscreen stay and restore it
+// on exit — at the DID notifications, because the system snapshots and
+// restores toolbar visibility across the transition and stomps changes
+// made at the WILL edge. Re-emitting the resize after the toggle makes
+// the runtime re-query chrome insets AFTER the change, so
+// contentLayoutRect's new truth (zero overlay in fullscreen, tall band
+// back on exit) reaches the app deterministically.
+// The tall-titlebar toolbar is pure geometry (it exists only for the
+// unified band height and centered traffic lights), but fullscreen
+// keeps an attached toolbar VISIBLE as a blank band covering the app's
+// own header — so hide it for the fullscreen stay and restore it on
+// exit. Hiding lands at the WILL edge so every transition resize (and
+// its chrome re-query) already sees the hidden toolbar; the restore is
+// RE-ASSERTED at the DID edge because the system snapshots toolbar
+// visibility across the transition and stomps a WILL-edge restore.
+// The chrome re-query itself rides the `contentLayoutRect` KVO below,
+// which fires only when the band's geometry has ACTUALLY changed —
+// re-querying at the notification edges reads the stale rect.
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:NO];
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:NO];
+}
+
+- (void)windowWillExitFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:YES];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification *)notification {
+    (void)notification;
+    [self setToolbarVisible:YES];
+}
+
+- (void)setToolbarVisible:(BOOL)visible {
+    NSWindow *window = self.host.windows[@(self.windowId)];
+    if (!window.toolbar) return;
+    window.toolbar.visible = visible;
+}
+
+// Registered for tall-titlebar windows only (`observesContentLayout`):
+// whenever the titlebar band actually grows or shrinks — toolbar
+// visibility flips settle a layout pass after the notification edges —
+// re-emit the resizes so the runtime re-queries the chrome insets
+// against the settled rect. The gpu-surface resize is the one that
+// reaches a canvas app's chrome re-query (its frame is unchanged, but
+// the runtime re-queries chrome on every resize event and dedupes
+// unchanged geometry model-side).
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    (void)object;
+    (void)change;
+    (void)context;
+    if (![keyPath isEqualToString:@"contentLayoutRect"]) return;
+    [self.host emitResizeForWindowId:self.windowId];
+    NSWindow *window = self.host.windows[@(self.windowId)];
+    if (window.contentView) NativeSdkEmitGpuSurfaceResizes(window.contentView);
+    [self.host scheduleFrame];
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
+    if (self.observesContentLayout) {
+        NSWindow *window = self.host.windows[@(self.windowId)];
+        [window removeObserver:self forKeyPath:@"contentLayoutRect"];
+        self.observesContentLayout = NO;
+    }
     [self.host emitWindowFrameForWindowId:self.windowId open:NO];
     [self.host closeWebViewsInWindow:self.windowId];
     [self.host closeNativeViewsInWindow:self.windowId];
@@ -577,6 +674,8 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
     [self.host.bridgeScriptHandlers removeObjectForKey:key];
     [self.host.assetSchemeHandlers removeObjectForKey:key];
     [self.host.windowLabels removeObjectForKey:key];
+    [self.host.deferredShowWindows removeObjectForKey:key];
+    [self.host.windowClearColors removeObjectForKey:key];
     if (self.host.windows.count == 0) {
         [self.host emitShutdown];
         [self.host stop];
@@ -3742,7 +3841,7 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
 
 @implementation NativeSdkAppKitHost
 
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle {
+- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy {
     self = [super init];
     if (!self) {
         return nil;
@@ -3761,6 +3860,8 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     self.bridgeScriptHandlers = [[NSMutableDictionary alloc] init];
     self.assetSchemeHandlers = [[NSMutableDictionary alloc] init];
     self.windowLabels = [[NSMutableDictionary alloc] init];
+    self.deferredShowWindows = [[NSMutableDictionary alloc] init];
+    self.windowClearColors = [[NSMutableDictionary alloc] init];
     self.childWebViews = [[NSMutableDictionary alloc] init];
     self.nativeViews = [[NSMutableDictionary alloc] init];
     self.canvasImageStore = [[NSMutableDictionary alloc] init];
@@ -3774,14 +3875,14 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     self.shortcuts = @[];
     [self configureApplication];
 
-    [self createWindowWithId:1 title:(windowTitle.length > 0 ? windowTitle : self.appName) label:self.windowLabel x:x y:y width:width height:height restoreFrame:restoreFrame resizable:resizable titlebarStyle:titlebarStyle makeMain:YES];
+    [self createWindowWithId:1 title:(windowTitle.length > 0 ? windowTitle : self.appName) label:self.windowLabel x:x y:y width:width height:height restoreFrame:restoreFrame resizable:resizable titlebarStyle:titlebarStyle showPolicy:showPolicy makeMain:YES];
     self.didShutdown = NO;
     self.observesApplicationActivation = NO;
 
     return self;
 }
 
-- (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle makeMain:(BOOL)makeMain {
+- (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy makeMain:(BOOL)makeMain {
     NSNumber *key = @(windowId);
     if (self.windows[key]) {
         return NO;
@@ -3799,9 +3900,11 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     }
     // titlebarStyle 1 = hidden_inset (the VS Code/Linear shape): the
     // content view extends under a transparent titlebar with the title
-    // hidden; the traffic lights stay. Drag regions and inset-aware
-    // header layout are the app's concern.
-    if (titlebarStyle == 1) {
+    // hidden; the traffic lights stay. titlebarStyle 2 = hidden_inset_tall:
+    // the same shape with the unified-toolbar-height band (the Notes
+    // look), where the system vertically centers the traffic lights.
+    // Drag regions and inset-aware header layout are the app's concern.
+    if (titlebarStyle == 1 || titlebarStyle == 2) {
         styleMask |= NSWindowStyleMaskFullSizeContentView;
     }
     NSWindow *window = [[NSWindow alloc] initWithContentRect:rect
@@ -3817,9 +3920,23 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     // shutdown, which is why this stayed hidden until windows_fn).
     window.releasedWhenClosed = NO;
     [window setTitle:(title.length > 0 ? title : self.appName)];
-    if (titlebarStyle == 1) {
+    if (titlebarStyle == 1 || titlebarStyle == 2) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
+    }
+    if (titlebarStyle == 2) {
+        // The tall band: an empty borderless toolbar switches the
+        // titlebar to the unified-toolbar height (~52pt) and the system
+        // vertically centers the traffic lights in it. The toolbar is
+        // pure geometry — no items, no delegate, nothing drawn — and
+        // `titlebarSeparatorStyle = none` (the modern
+        // `showsBaselineSeparator`) removes the hairline it would draw
+        // over the app's own header.
+        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"native-sdk-tall-titlebar"];
+        toolbar.allowsUserCustomization = NO;
+        window.toolbar = toolbar;
+        window.toolbarStyle = NSWindowToolbarStyleUnified;
+        window.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
     }
     if (!restoreFrame) {
         [window center];
@@ -3864,6 +3981,13 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     delegate.host = self;
     delegate.windowId = windowId;
     window.delegate = delegate;
+    if (titlebarStyle == 2) {
+        // The chrome re-query rides the settled contentLayoutRect (see
+        // the delegate's observeValueForKeyPath:), not the fullscreen
+        // notification edges, which fire before the band relayouts.
+        delegate.observesContentLayout = YES;
+        [window addObserver:delegate forKeyPath:@"contentLayoutRect" options:0 context:NULL];
+    }
 
     self.windows[key] = window;
     self.webViews[key] = webView;
@@ -3871,6 +3995,19 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     self.bridgeScriptHandlers[key] = bridgeScriptHandler;
     self.assetSchemeHandlers[key] = assetSchemeHandler;
     self.windowLabels[key] = label.length > 0 ? label : @"main";
+    // Present-before-show: a deferred window stays ordered OUT until its
+    // first gpu-surface present lands (`showDeferredWindowIfPending`, at
+    // the bottom of every present path) — the user never sees a blank
+    // window while the first frame renders. The fallback deadline is the
+    // honest safety net: a wedged first frame surfaces as a late window,
+    // never as an invisible app.
+    if (showPolicy == 1) {
+        self.deferredShowWindows[key] = @(NativeSdkTimestampNanoseconds());
+        __weak NativeSdkAppKitHost *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [weakSelf showDeferredWindowIfPending:windowId reason:"fallback-deadline"];
+        });
+    }
     if (makeMain) {
         self.window = window;
         self.webView = webView;
@@ -3878,11 +4015,46 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
         self.bridgeScriptHandler = bridgeScriptHandler;
         self.assetSchemeHandler = assetSchemeHandler;
         self.windowLabel = label.length > 0 ? label : @"main";
-    } else {
+    } else if (showPolicy != 1) {
         [window makeKeyAndOrderFront:nil];
         [NSApp activate];
     }
     return YES;
+}
+
+// Order a deferred-show window front exactly once — from the first
+// gpu-surface present (the contract), or from the fallback deadline.
+// `NATIVE_SDK_WINDOW_TIMING=1` logs the create→show latency.
+- (void)showDeferredWindowIfPending:(uint64_t)windowId reason:(const char *)reason {
+    NSNumber *key = @(windowId);
+    NSNumber *createdNs = self.deferredShowWindows[key];
+    if (!createdNs) return;
+    [self.deferredShowWindows removeObjectForKey:key];
+    NSWindow *window = self.windows[key];
+    if (!window) return;
+    if (getenv("NATIVE_SDK_WINDOW_TIMING")) {
+        const double elapsedMs = (double)(NativeSdkTimestampNanoseconds() - createdNs.unsignedLongLongValue) / 1e6;
+        fprintf(stderr, "native-sdk: window %llu shown (%s) %.1f ms after create\n", (unsigned long long)windowId, reason, elapsedMs);
+    }
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activate];
+    [self emitWindowFrameForWindowId:windowId open:YES];
+    [self scheduleFrame];
+}
+
+// NSWindow.backgroundColor from the canvas packet's clear color, so any
+// residual gap (resize slack, the titlebar band before content lands)
+// shows the app's background instead of the system default. Applied on
+// change only; presents carry the color on every packet.
+- (void)applyWindowClearColor:(uint64_t)windowId red:(uint8_t)red green:(uint8_t)green blue:(uint8_t)blue alpha:(uint8_t)alpha {
+    NSNumber *key = @(windowId);
+    const uint32_t packed = ((uint32_t)red << 24) | ((uint32_t)green << 16) | ((uint32_t)blue << 8) | (uint32_t)alpha;
+    NSNumber *previous = self.windowClearColors[key];
+    if (previous && previous.unsignedIntValue == packed) return;
+    NSWindow *window = self.windows[key];
+    if (!window) return;
+    self.windowClearColors[key] = @(packed);
+    window.backgroundColor = [NSColor colorWithSRGBRed:red / 255.0 green:green / 255.0 blue:blue / 255.0 alpha:alpha / 255.0];
 }
 
 - (void)dealloc {
@@ -3903,6 +4075,9 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
 - (void)focusWindowWithId:(uint64_t)windowId {
     NSWindow *window = self.windows[@(windowId)];
     if (!window) return;
+    // An explicit focus overrides a pending present-before-show defer:
+    // the runtime asked for the window NOW.
+    [self.deferredShowWindows removeObjectForKey:@(windowId)];
     [window makeKeyAndOrderFront:nil];
     [NSApp activate];
     [self emitWindowFrameForWindowId:windowId open:YES];
@@ -3943,20 +4118,26 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     return YES;
 }
 
-// Chrome overlay insets for hidden-titlebar windows: how far the
+// Chrome overlay geometry for hidden-titlebar windows: how far the
 // transparent titlebar (top) and the traffic lights (leading edge)
-// overlay the content view, in points. Derived from live AppKit
-// geometry — contentLayoutRect for the titlebar band and the window
-// buttons' frames for their extent — so fullscreen (where the system
-// hides both) honestly reports zero. Standard-chrome windows report
-// zero: their content never extends under the titlebar.
-- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right {
+// overlay the content view, plus the traffic-light cluster's bounding
+// frame in content coordinates (top-left origin) — the vertical truth a
+// header needs to center against the lights in the tall unified band.
+// Derived from live AppKit geometry — contentLayoutRect for the titlebar
+// band and the window buttons' frames for their extent — so fullscreen
+// (where the system hides both) honestly reports zero. Standard-chrome
+// windows report zero: their content never extends under the titlebar.
+- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right buttonsX:(double *)buttonsX buttonsY:(double *)buttonsY buttonsWidth:(double *)buttonsWidth buttonsHeight:(double *)buttonsHeight {
     NSWindow *window = self.windows[@(windowId)];
     if (!window) return NO;
     *top = 0;
     *left = 0;
     *bottom = 0;
     *right = 0;
+    *buttonsX = 0;
+    *buttonsY = 0;
+    *buttonsWidth = 0;
+    *buttonsHeight = 0;
     if ((window.styleMask & NSWindowStyleMaskFullSizeContentView) == 0) return YES;
     NSView *contentView = window.contentView;
     if (!contentView) return YES;
@@ -3965,29 +4146,33 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     double titlebarHeight = NSMaxY(contentBounds) - NSMaxY(layoutRect);
     if (titlebarHeight <= 0.5) return YES;
     *top = titlebarHeight;
-    double buttonsMaxX = 0;
-    double buttonsMinX = NSMaxX(contentBounds);
     NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
     NSButton *miniaturizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
     NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
     NSButton *buttons[3] = { closeButton, miniaturizeButton, zoomButton };
+    NSRect cluster = NSZeroRect;
     BOOL anyButtonVisible = NO;
     for (size_t index = 0; index < 3; index += 1) {
         NSButton *button = buttons[index];
         if (!button || button.hidden || !button.superview) continue;
         NSRect buttonFrame = [contentView convertRect:button.frame fromView:button.superview];
-        buttonsMaxX = MAX(buttonsMaxX, NSMaxX(buttonFrame));
-        buttonsMinX = MIN(buttonsMinX, NSMinX(buttonFrame));
+        cluster = anyButtonVisible ? NSUnionRect(cluster, buttonFrame) : buttonFrame;
         anyButtonVisible = YES;
     }
     if (!anyButtonVisible) return YES;
-    if (buttonsMinX < NSMidX(contentBounds)) {
+    // The cluster in content coordinates, flipped to a top-left origin
+    // (the runtime's canvas convention).
+    *buttonsX = NSMinX(cluster);
+    *buttonsY = NSMaxY(contentBounds) - NSMaxY(cluster);
+    *buttonsWidth = NSWidth(cluster);
+    *buttonsHeight = NSHeight(cluster);
+    if (NSMinX(cluster) < NSMidX(contentBounds)) {
         // LTR: the buttons sit at the leading (left) edge; pad by their
         // far edge plus the same margin the system leaves before them.
-        *left = buttonsMaxX + (buttonsMinX - NSMinX(contentBounds));
+        *left = NSMaxX(cluster) + (NSMinX(cluster) - NSMinX(contentBounds));
     } else {
         // RTL layouts park the buttons on the right.
-        *right = (NSMaxX(contentBounds) - buttonsMinX) + (NSMaxX(contentBounds) - buttonsMaxX);
+        *right = (NSMaxX(contentBounds) - NSMinX(cluster)) + (NSMaxX(contentBounds) - NSMaxX(cluster));
     }
     return YES;
 }
@@ -4346,21 +4531,33 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
      * resync. (The packet path calls presentPixelsWithWidth internally,
      * so the invalidation lives here at the raw entry, not inside it.) */
     surface.hasCanvasRetainedState = NO;
-    return [surface presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
+    const BOOL presented = [surface presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
+    if (presented) [self showDeferredWindowIfPending:windowId reason:"first-present"];
+    return presented;
 }
 
 - (NSInteger)presentGpuSurfacePacketInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
-    return [(NativeSdkMetalSurfaceView *)view presentGpuPacketWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable json:json byteLength:byteLength];
+    const NSInteger result = [(NativeSdkMetalSurfaceView *)view presentGpuPacketWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable json:json byteLength:byteLength];
+    if (result == 1) {
+        [self applyWindowClearColor:windowId red:clearR green:clearG blue:clearB alpha:clearA];
+        [self showDeferredWindowIfPending:windowId reason:"first-present"];
+    }
+    return result;
 }
 
 - (NSInteger)presentGpuSurfacePacketBinaryInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable packet:(const uint8_t *)packet byteLength:(NSUInteger)byteLength {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
-    return [(NativeSdkMetalSurfaceView *)view presentGpuPacketBinaryWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable packet:packet byteLength:byteLength];
+    const NSInteger result = [(NativeSdkMetalSurfaceView *)view presentGpuPacketBinaryWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable packet:packet byteLength:byteLength];
+    if (result == 1) {
+        [self applyWindowClearColor:windowId red:clearR green:clearG blue:clearB alpha:clearA];
+        [self showDeferredWindowIfPending:windowId reason:"first-present"];
+    }
+    return result;
 }
 
 - (BOOL)requestGpuSurfaceFrameInWindow:(uint64_t)windowId label:(NSString *)label {
@@ -5211,7 +5408,12 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     self.callback = callback;
     self.context = context;
 
-    [self.window makeKeyAndOrderFront:nil];
+    // Present-before-show: a deferred startup window stays ordered out
+    // here and appears when its first canvas present lands (or the
+    // create-time fallback deadline fires).
+    if (!self.deferredShowWindows[@1]) {
+        [self.window makeKeyAndOrderFront:nil];
+    }
     [NSApp activate];
     if (!self.shortcutEventMonitor) {
         __weak NativeSdkAppKitHost *weakSelf = self;
@@ -5919,14 +6121,14 @@ static BOOL NativeSdkPolicyListMatches(NSArray<NSString *> *values, NSURL *url) 
     return NO;
 }
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
     @autoreleasepool {
         NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"native-sdk";
         NSString *windowTitleString = [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] ?: appNameString;
         NSString *bundleIdString = [[NSString alloc] initWithBytes:bundle_id length:bundle_id_len encoding:NSUTF8StringEncoding] ?: @"dev.native_sdk.app";
         NSString *iconPathString = [[NSString alloc] initWithBytes:icon_path length:icon_path_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *windowLabelString = [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] ?: @"main";
-        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style];
+        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style showPolicy:show_policy];
         return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }
@@ -6035,11 +6237,11 @@ void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char 
     [object setShortcutsWithIds:ids idLengths:id_lens keys:keys keyLengths:key_lens modifiers:modifiers count:count];
 }
 
-int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
+int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *titleString = window_title ? [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] : @"";
     NSString *labelString = window_label ? [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] : @"";
-    return [object createWindowWithId:window_id title:titleString ?: @"" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style makeMain:NO] ? 1 : 0;
+    return [object createWindowWithId:window_id title:titleString ?: @"" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style showPolicy:show_policy makeMain:NO] ? 1 : 0;
 }
 
 int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
@@ -6061,9 +6263,9 @@ int native_sdk_appkit_start_window_drag(native_sdk_appkit_host_t *host, uint64_t
     return [object startWindowDragWithId:window_id] ? 1 : 0;
 }
 
-int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right) {
+int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height) {
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
-    return [object chromeInsetsForWindowId:window_id top:top left:left bottom:bottom right:right] ? 1 : 0;
+    return [object chromeInsetsForWindowId:window_id top:top left:left bottom:bottom right:right buttonsX:buttons_x buttonsY:buttons_y buttonsWidth:buttons_width buttonsHeight:buttons_height] ? 1 : 0;
 }
 
 int native_sdk_appkit_create_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {

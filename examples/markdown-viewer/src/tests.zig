@@ -438,6 +438,34 @@ test "the theme toggle flips the derived tokens" {
     try testing.expectEqual(canvas.ColorScheme.light, model.effectiveScheme());
 }
 
+test "chrome geometry pads the toolbar and matches its height to the tall band" {
+    var fx = ViewerApp.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    var model = main.initialModel();
+    try testing.expectEqual(main.toolbar_natural_height, model.toolbar_height);
+
+    // The tall hidden-inset band arrives through on_chrome: the toolbar
+    // pads past the lights and grows to the band so its centered
+    // controls share the lights' centerline.
+    const chrome: native_sdk.WindowChrome = .{
+        .insets = .{ .top = 52, .left = 78 },
+        .buttons = geometry.RectF.init(20, 19, 52, 14),
+    };
+    const msg = main.onChrome(chrome) orelse return error.TestUnexpectedResult;
+    main.update(&model, msg, &fx);
+    try testing.expectEqual(@as(f32, 78), model.chrome_leading);
+    try testing.expectEqual(@as(f32, 52), model.toolbar_height);
+
+    // Fullscreen zeroes the chrome: the pad collapses and the height
+    // falls back to the toolbar's natural floor.
+    const cleared = main.onChrome(.{}) orelse return error.TestUnexpectedResult;
+    main.update(&model, cleared, &fx);
+    try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(main.toolbar_natural_height, model.toolbar_height);
+}
+
 test "the viewer lays out through the canvas engine at window size" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

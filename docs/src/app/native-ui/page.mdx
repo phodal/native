@@ -281,7 +281,7 @@ Automation reaches every window with the same verbs: snapshots enumerate all win
 `titlebar = "hidden_inset"` on a window (app.zon `windows`/`shell.windows`, `ShellWindow.titlebar`, or a `WindowDescriptor`'s `titlebar`) is the VS Code/Linear shape: content extends under a transparent titlebar with the title hidden — on macOS the traffic lights stay. The declaration threads through the startup window create, so the MAIN window hides its titlebar from the first frame. Three channels make the app's own header an honest replacement for the chrome it removed:
 
 1. **`window-drag="true"`** (builder: `.window_drag = true`) marks an element as a window-drag surface. A press on its background — or on plain text/icons inside it — moves the window (the drag starts only on actual movement; a plain click moves nothing), and a double-click applies the OS titlebar convention (macOS: zoom, honoring the user's titlebar double-click preference). Press fall-through keeps working: a button inside the drag header stays a button, because the press walk claims interactive children before the drag surface.
-2. **`on_chrome`** delivers the window's chrome overlay insets as a Msg — the bands where OS controls overlay the content (macOS: titlebar height on top, traffic lights on the leading edge; all-zero in fullscreen, on standard-chrome windows, and on platforms without the concept). It fires before the first view build and again when the insets change, so the model pads the header's leading edge instead of hardcoding pixel counts. Main canvas window only (the same scope note as `sync`).
+2. **`on_chrome`** delivers the window's chrome as a Msg — the overlay insets (macOS: titlebar height on top, traffic lights on the leading edge; all-zero in fullscreen, on standard-chrome windows, and on platforms without the concept) plus the traffic-light cluster's frame, so a header can pad its leading edge and vertically center content against the buttons instead of hardcoding pixel counts. It fires before the first view build and again when the chrome changes. Main canvas window only (the same scope note as `sync`).
 3. The header itself is ordinary markup:
 
 ```html
@@ -293,7 +293,9 @@ Automation reaches every window with the same verbs: snapshots enumerate all win
 </row>
 ```
 
-macOS-first, like `resizable = false`: GTK and Win32 hosts keep standard chrome (`hidden_inset` is harmless there), report zero insets, and treat drag-region presses as dead space. See `examples/markdown-viewer` for the full retrofit.
+`titlebar = "hidden_inset_tall"` is the same shape with the taller unified band: macOS centers the traffic lights in a 52pt band (the Notes/Linear look) instead of the compact one — pick it when the header row is toolbar-height so the lights sit on its centerline. Fullscreen falls back cleanly in both variants.
+
+macOS-first, like `resizable = false`: GTK and Win32 hosts keep standard chrome (both `hidden_inset` variants are harmless there), report zero insets, and treat drag-region presses as dead space. See `examples/markdown-viewer` for the full retrofit.
 
 ## Images
 

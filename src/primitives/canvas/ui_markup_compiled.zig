@@ -860,6 +860,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     // compile error on any other element (interpreter and
                     // validator parity).
                     comptime if (!std.mem.eql(u8, node.name, "icon")) fail(node, markup.icon_name_element_message);
+                } else if (comptime std.mem.eql(u8, attribute.name, "icon")) {
+                    // Button-scoped inline icon: the same closed literal
+                    // vocabulary as <icon name>, resolved at comptime so
+                    // a typo is a compile error (interpreter and
+                    // validator parity).
+                    options.icon = comptime blk: {
+                        if (!std.mem.eql(u8, node.name, "button")) fail(node, markup.button_icon_element_message);
+                        const expression = markup.parseAttrExpression(attribute.value) orelse fail(node, markup.button_icon_message);
+                        if (expression != .literal) fail(node, markup.button_icon_message);
+                        if (canvas.icons.find(expression.literal) == null) fail(node, markup.button_icon_message);
+                        break :blk expression.literal;
+                    };
                 } else if (comptime (colorStyleField(attribute.name) != null)) {
                     // Style token refs resolve entirely at comptime: a typo
                     // in a token name is a compile error.

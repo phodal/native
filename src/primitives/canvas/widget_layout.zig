@@ -873,8 +873,17 @@ fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometr
 fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const height = widgetControlHeight(widget, tokens);
     if (widget.size == .icon) return geometry.SizeF.init(height, height);
+    // An inline icon (`widget.icon`) widens the button: icon + gap before
+    // the label, or a square control when the label is empty. The extent
+    // and gap are the shared render metrics, so measured width matches
+    // painted pixels.
+    if (widget.icon.len > 0 and widget.text.len == 0) return geometry.SizeF.init(height, height);
+    const icon_width = if (widget.icon.len > 0)
+        widget_metrics.widgetButtonIconExtent(widget, tokens) + widget_metrics.widgetButtonIconGap(widget, tokens)
+    else
+        0;
     const text_width = measuredTextWidth(tokens, widget.text, widgetButtonTextSize(widget, tokens));
-    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetButtonInset(widget, tokens) * 2);
+    const width = @max(widgetSizedDensityValue(widget, tokens, 44), icon_width + text_width + widgetButtonInset(widget, tokens) * 2);
     return geometry.SizeF.init(width, height);
 }
 

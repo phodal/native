@@ -255,6 +255,12 @@ test "structural validation reports positions for grammar misuse" {
     var icon_parser = markup.Parser.init(arena_state.allocator(), icon_source);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try icon_parser.parse()));
 
+    // Buttons take an inline icon (with or without a label): one hit
+    // target, one tint.
+    const button_icon_source = "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"save\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"refresh\" label=\"Refresh\"></button>\n</row>";
+    var button_icon_parser = markup.Parser.init(arena_state.allocator(), button_icon_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try button_icon_parser.parse()));
+
     const cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<column>\n  <weird />\n</column>", .message = "unknown element" },
         .{ .source = "<column bogus=\"1\" />", .message = "unknown attribute" },
@@ -280,6 +286,11 @@ test "structural validation reports positions for grammar misuse" {
         .{ .source = "<row>\n  <badge name=\"search\">3</badge>\n</row>", .message = markup.icon_name_element_message },
         .{ .source = "<row>\n  <icon name=\"search\"><text>x</text></icon>\n</row>", .message = markup.icon_children_message },
         .{ .source = "<row>\n  <icon name=\"search\" on-press=\"go\" />\n</row>", .message = markup.non_hit_target_handler_message },
+        // Button icon attr: closed literal vocabulary, button-scoped.
+        .{ .source = "<row>\n  <button icon=\"sparkle-pony\">Save</button>\n</row>", .message = markup.button_icon_message },
+        .{ .source = "<row>\n  <button icon=\"{binding}\">Save</button>\n</row>", .message = markup.button_icon_message },
+        .{ .source = "<row>\n  <badge icon=\"save\">3</badge>\n</row>", .message = markup.button_icon_element_message },
+        .{ .source = "<row>\n  <toggle-button icon=\"save\">Bold</toggle-button>\n</row>", .message = markup.button_icon_element_message },
     };
     for (cases) |case| {
         var case_parser = markup.Parser.init(arena_state.allocator(), case.source);

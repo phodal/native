@@ -154,14 +154,19 @@ pub const Model = struct {
         return "Untitled";
     }
 
-    /// Plain words on purpose: the half-circle dingbats this used to carry
-    /// ("◑"/"◐") have no glyph in the bundled font and rendered as tofu,
-    /// and the built-in icon set has no sun/moon yet (registry gap).
+    /// The accessible name for the icon-only theme toggle (the sun/moon
+    /// vector icons carry the visual; dingbats rendered as tofu and are
+    /// long gone).
     pub fn themeLabel(model: *const Model) []const u8 {
         return switch (model.effectiveScheme()) {
             .light => "Dark mode",
             .dark => "Light mode",
         };
+    }
+
+    /// `<if test="{isDark}">` predicate for the theme toggle's icon arms.
+    pub fn isDark(model: *const Model) bool {
+        return model.effectiveScheme() == .dark;
     }
 
     pub const RecentDoc = struct {

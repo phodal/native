@@ -9,10 +9,13 @@ const widget_access = @import("widget_access.zig");
 const widget_metrics = @import("widget_metrics.zig");
 const widget_text_input = @import("widget_text_input.zig");
 const widget_render_style = @import("widget_render_style.zig");
+const icon_model = @import("icons.zig");
+const svg_icon_model = @import("svg_icon.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
 const Builder = canvas.Builder;
+const Affine = drawing_model.Affine;
 const Color = drawing_model.Color;
 const Radius = drawing_model.Radius;
 const Stroke = drawing_model.Stroke;
@@ -44,7 +47,10 @@ const widgetTypographySize = widget_metrics.widgetTypographySize;
 const widgetButtonInset = widget_metrics.widgetButtonInset;
 const widgetControlInset = widget_metrics.widgetControlInset;
 const widgetSizedDensityValue = widget_metrics.widgetSizedDensityValue;
+const widgetButtonIconExtent = widget_metrics.widgetButtonIconExtent;
+const widgetButtonIconGap = widget_metrics.widgetButtonIconGap;
 const estimateTextWidth = text_model.estimateTextWidth;
+const measureTextWidthForFont = text_model.measureTextWidthForFont;
 const layoutTextCaretRect = text_model.layoutTextCaretRect;
 const layoutTextSelectionRects = text_model.layoutTextSelectionRects;
 const textInputAffordanceColor = widget_render_style.textInputAffordanceColor;
@@ -150,12 +156,54 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
             },
         });
     }
+    const content_color = buttonTextColorForWidget(widget, tokens);
+    const icon = if (widget.icon.len > 0) icon_model.resolve(widget.icon) else null;
+    if (icon) |resolved| {
+        // Icon-in-button: icon (and optional label) are the button's own
+        // commands — one hit target, one tint that follows the button's
+        // enabled/disabled/variant state.
+        const icon_extent = widgetButtonIconExtent(widget, tokens);
+        const icon_y = widget.frame.y + (widget.frame.height - icon_extent) * 0.5;
+        if (widget.text.len == 0) {
+            const icon_frame = geometry.RectF.init(
+                widget.frame.x + (widget.frame.width - icon_extent) * 0.5,
+                icon_y,
+                icon_extent,
+                icon_extent,
+            );
+            try emitVectorIcon(builder, widget.id, 5, icon_frame, content_color, resolved);
+            return;
+        }
+        const gap = widgetButtonIconGap(widget, tokens);
+        const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, widget.text, text_size);
+        const available = @max(0, widget.frame.width - text_inset * 2);
+        const content_width = @min(available, icon_extent + gap + text_width);
+        const start_x = widget.frame.x + text_inset + @max(0, (available - content_width) * 0.5);
+        const icon_frame = geometry.RectF.init(start_x, icon_y, icon_extent, icon_extent);
+        try emitVectorIcon(builder, widget.id, 5, icon_frame, content_color, resolved);
+        const text_frame = geometry.RectF.init(
+            start_x + icon_extent + gap,
+            widget.frame.y,
+            @max(1, widget.frame.maxX() - text_inset - (start_x + icon_extent + gap)),
+            widget.frame.height,
+        );
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 4),
+            .font_id = tokens.typography.font_id,
+            .size = text_size,
+            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, 0)),
+            .color = content_color,
+            .text = widget.text,
+            .text_layout = boundedTextLayout(text_frame, text_size, 0, .start, .none, tokens),
+        });
+        return;
+    }
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 4),
         .font_id = tokens.typography.font_id,
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-        .color = buttonTextColorForWidget(widget, tokens),
+        .color = content_color,
         .text = widget.text,
         .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, tokens),
     });
@@ -179,6 +227,26 @@ pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTok
             .width = if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         },
     });
+    // Real vector icons: `widget.icon` first, then an icon-name `text`
+    // (so `el(.icon_button, .{ .text = "play" })` upgrades from glyph to
+    // vector); any other text keeps the historical glyph rendering.
+    const icon = if (widget.icon.len > 0)
+        icon_model.resolve(widget.icon)
+    else if (widget.text.len > 0)
+        icon_model.resolve(widget.text)
+    else
+        null;
+    if (icon) |resolved| {
+        const size = iconGlyphSize(widget, tokens);
+        const icon_frame = geometry.RectF.init(
+            widget.frame.x + (widget.frame.width - size) * 0.5,
+            widget.frame.y + (widget.frame.height - size) * 0.5,
+            size,
+            size,
+        );
+        try emitVectorIcon(builder, widget.id, 3, icon_frame, buttonTextColorForWidget(widget, tokens), resolved);
+        return;
+    }
     if (widget.text.len > 0) {
         const size = iconGlyphSize(widget, tokens);
         try builder.drawText(.{
@@ -190,6 +258,59 @@ pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTok
             .text = widget.text,
         });
     }
+}
+
+/// Draw a parsed vector icon fitted (contain, centered) into `rect`: a
+/// transform pair maps viewBox units to device space so the parsed
+/// elements are emitted as-is (static lifetime, packet-representable),
+/// stroke widths scale with the icon size, and `currentColor` resolves
+/// to `color`. Command ids are widget part slots from `first_slot` (two
+/// per shape), so callers pick a slot range clear of their own parts.
+pub fn emitVectorIcon(builder: *Builder, widget_id: ObjectId, first_slot: ObjectId, rect: geometry.RectF, color: Color, icon: *const svg_icon_model.Icon) Error!void {
+    const frame = rect.normalized();
+    if (frame.isEmpty()) return;
+    const box = icon.view_box;
+    const scale = @min(frame.width / box.width, frame.height / box.height);
+    if (!(scale > 0)) return;
+    const transform = Affine{
+        .a = scale,
+        .b = 0,
+        .c = 0,
+        .d = scale,
+        .tx = frame.x + (frame.width - box.width * scale) * 0.5 - box.x * scale,
+        .ty = frame.y + (frame.height - box.height * scale) * 0.5 - box.y * scale,
+    };
+    const inverse = transform.inverse() orelse return;
+
+    try builder.transform(transform);
+    for (icon.shapes, 0..) |shape, index| {
+        const elements = icon.elements[shape.start .. shape.start + shape.len];
+        if (iconPaintColor(shape.style.fill, color)) |fill_color| {
+            try builder.fillPath(.{
+                .id = widgetPartId(widget_id, first_slot + index * 2),
+                .elements = elements,
+                .fill = colorFill(fill_color),
+            });
+        }
+        if (shape.style.stroke_width > 0) {
+            if (iconPaintColor(shape.style.stroke, color)) |stroke_color| {
+                try builder.strokePath(.{
+                    .id = widgetPartId(widget_id, first_slot + 1 + index * 2),
+                    .elements = elements,
+                    .stroke = .{ .fill = colorFill(stroke_color), .width = shape.style.stroke_width },
+                });
+            }
+        }
+    }
+    try builder.transform(inverse);
+}
+
+fn iconPaintColor(paint: svg_icon_model.Paint, current: Color) ?Color {
+    return switch (paint) {
+        .none => null,
+        .current_color => current,
+        .color => |value| value,
+    };
 }
 
 pub fn emitSelectWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {

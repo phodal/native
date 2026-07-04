@@ -446,6 +446,14 @@ pub const Widget = struct {
     /// `Ui.paragraph` maintains this invariant for authors.
     spans: []const TextSpan = &.{},
     placeholder: []const u8 = "",
+    /// Vector icon name (built-in registry or an app-registered icon)
+    /// drawn INSIDE the widget as part of its own rendering — buttons
+    /// draw it before the label (icon-only when `text` is empty), icon
+    /// buttons draw it centered — so icon + label stay one hit target
+    /// and follow the widget's enabled/disabled tint. Empty = no icon.
+    /// Unknown names draw nothing (registration is a boot-time act; the
+    /// markup engines and `Ui.icon` validate built-in names up front).
+    icon: []const u8 = "",
     text_alignment: TextAlign = .start,
     command: []const u8 = "",
     image_id: ImageId = 0,

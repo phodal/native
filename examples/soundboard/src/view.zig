@@ -147,32 +147,28 @@ fn albumDetailView(ui: *Ui, model: *const Model, album_id: u8) Ui.Node {
     }));
 }
 
-/// Icon+text buttons via the overlay idiom (the mirror of the hotspot
-/// idiom notes uses): the button is the visual and the labeled hit
-/// target, and a centered row of icon + text is stacked over it. Icons
-/// and layout rows are never hit-tested, so presses there fall through
-/// to the button; the label TEXT is a hit target, so it carries the same
-/// on_press — either way the one message dispatches. The stack and text
-/// widths carry slack over the tight text measure for the macOS packet
-/// rasterizer's own font metrics (durationText's idiom).
+/// Icon+text buttons via `ElementOptions.icon`: the icon is part of the
+/// button's own rendering, so each control is ONE widget — one hit
+/// target, no duplicated on_press, and the icon follows the button's
+/// enabled/disabled tint for free. (These replaced the old overlay-stack
+/// idiom the moment icon-in-button landed.)
 fn backButton(ui: *Ui) Ui.Node {
-    return ui.el(.stack, .{ .width = 156, .height = 28 }, .{
-        ui.button(.{ .variant = .ghost, .size = .sm, .on_press = .close_album, .semantics = .{ .label = "Back to albums" } }, ""),
-        ui.row(.{ .main = .center, .cross = .center, .gap = 6 }, .{
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .text_muted } }, "chevron-left"),
-            ui.text(.{ .size = .sm, .width = 104, .on_press = .close_album }, "Back to albums"),
-        }),
-    });
+    return ui.button(.{
+        .variant = .ghost,
+        .size = .sm,
+        .icon = "chevron-left",
+        .on_press = .close_album,
+        .semantics = .{ .label = "Back to albums" },
+    }, "Back to albums");
 }
 
 fn playAlbumButton(ui: *Ui, album_id: u8) Ui.Node {
-    return ui.el(.stack, .{ .width = 148, .height = 34 }, .{
-        ui.button(.{ .variant = .primary, .on_press = Msg{ .play_album = album_id }, .semantics = .{ .label = "Play album" } }, ""),
-        ui.row(.{ .main = .center, .cross = .center, .gap = 7 }, .{
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .accent_text } }, "play"),
-            ui.text(.{ .size = .sm, .width = 86, .on_press = Msg{ .play_album = album_id }, .style_tokens = .{ .foreground = .accent_text } }, "Play album"),
-        }),
-    });
+    return ui.button(.{
+        .variant = .primary,
+        .icon = "play",
+        .on_press = Msg{ .play_album = album_id },
+        .semantics = .{ .label = "Play album" },
+    }, "Play album");
 }
 
 // ------------------------------------------------------------------ songs

@@ -155,9 +155,32 @@ test "registry entries and known names stay in lockstep" {
         try std.testing.expectEqual(entry.icon, icons.find(name).?);
     }
     try std.testing.expectEqual(@as(?*const icons.Icon, null), icons.find("not-an-icon"));
-    // The starter set covers the promised range.
-    try std.testing.expect(icons.entries.len >= 12);
-    try std.testing.expect(icons.entries.len <= 20);
+    // Deliberate size bound: the curated set is 41 after the showcase +
+    // ovation expansion (transport, files/folders, theming, GitHub
+    // vocabulary). Growing it is fine — raise the bound consciously and
+    // update the docs/skill name lists (the mirror-list lockstep test
+    // catches the validator; prose lists are on you).
+    try std.testing.expect(icons.entries.len >= 41);
+    try std.testing.expect(icons.entries.len <= 48);
+}
+
+test "app icon registration resolves for drawing but never widens the closed vocabulary" {
+    var buffer = svg_icon.IconBuffer{};
+    const parsed = try svg_icon.parse(
+        "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"4\" y1=\"12\" x2=\"20\" y2=\"12\"/></svg>",
+        &buffer,
+    );
+    const app_table = [_]icons.Entry{.{ .name = "app-rule", .icon = &parsed }};
+    icons.registerAppIcons(&app_table);
+    defer icons.registerAppIcons(&.{});
+    // Draw-path resolution sees the app icon; the comptime-safe `find`
+    // (markup validation, Ui.icon) does not.
+    try std.testing.expectEqual(@as(?*const icons.Icon, &parsed), icons.resolve("app-rule"));
+    try std.testing.expectEqual(@as(?*const icons.Icon, null), icons.find("app-rule"));
+    // Built-ins win on collision, and resolution falls through to them.
+    const shadowing = [_]icons.Entry{.{ .name = "check", .icon = &parsed }};
+    icons.registerAppIcons(&shadowing);
+    try std.testing.expectEqual(icons.find("check").?, icons.resolve("check").?);
 }
 
 test "every built-in icon is a 24x24 lucide-style stroke icon" {

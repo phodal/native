@@ -596,16 +596,24 @@ pub const avatar_image_element_message = "image is only supported on avatar - th
 /// registry); a test in ui_markup_view_tests.zig keeps the two in
 /// lockstep so a new icon cannot ship without its markup name.
 pub const known_icon_names = [_][]const u8{
-    "alert",         "arrow-right", "check",    "chevron-down", "chevron-left",
-    "chevron-right", "chevron-up",  "copy",     "download",     "edit",
-    "external-link", "info",        "menu",     "pause",        "play",
-    "plus",          "search",      "settings", "trash",        "x",
+    "alert",            "archive",      "arrow-down",   "arrow-right",   "arrow-up",
+    "check",            "chevron-down", "chevron-left", "chevron-right", "chevron-up",
+    "circle-dot",       "clock",        "copy",         "download",      "edit",
+    "external-link",    "eye",          "file-text",    "folder",        "folder-open",
+    "git-pull-request", "info",         "menu",         "moon",          "music",
+    "pause",            "play",         "plus",         "refresh-cw",    "repeat",
+    "save",             "search",       "send",         "settings",      "shuffle",
+    "skip-back",        "skip-forward", "sun",          "trash",         "volume",
+    "x",
 };
 
 pub const icon_name_message = "name takes a literal built-in icon name (see canvas.icons.known_icon_names, e.g. search, plus, x, check, chevron-down, settings, trash)";
 pub const icon_name_element_message = "name is only supported on icon - it selects a built-in vector icon";
 pub const icon_missing_name_message = "icon requires a name attribute selecting a built-in vector icon (e.g. <icon name=\"search\"/>)";
 pub const icon_children_message = "icon is a leaf - it takes no children";
+
+pub const button_icon_message = "icon takes a literal built-in icon name drawn inside the button (see canvas.icons.known_icon_names, e.g. save, plus, refresh-cw)";
+pub const button_icon_element_message = "icon is only supported on button - it draws a vector icon inside the button as one hit target; for a bare icon use <icon name=\"...\"/>";
 
 /// Markup attributes that reference a color design token by name. Values
 /// must be literal `ColorTokens` field names (`known_color_token_names`);
@@ -1010,6 +1018,23 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         null;
                     if (literal == null or !nameInList(literal.?, &known_icon_names)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = icon_name_message };
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "icon")) {
+                    // Button-scoped vector icon: the same closed literal
+                    // vocabulary as <icon name>, drawn inside the button
+                    // so icon + label are one hit target with one tint.
+                    if (!std.mem.eql(u8, node.name, "button")) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_element_message };
+                    }
+                    const expression = parseAttrExpression(attribute.value);
+                    const literal = if (expression) |value|
+                        (if (value == .literal) value.literal else null)
+                    else
+                        null;
+                    if (literal == null or !nameInList(literal.?, &known_icon_names)) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_message };
                     }
                     continue;
                 }

@@ -619,6 +619,43 @@ test "markup icons build icon widgets with validated names" {
     }
 }
 
+test "markup buttons take an inline icon with validated names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"add\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"add\"></button>\n</row>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const labeled = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.button, labeled.kind);
+    try testing.expectEqualStrings("save", labeled.icon);
+    try testing.expectEqualStrings("Save", labeled.text);
+    const icon_only = tree.root.children[1];
+    try testing.expectEqualStrings("refresh-cw", icon_only.icon);
+    try testing.expectEqualStrings("", icon_only.text);
+    // One hit target: the button dispatches its own press; there is no
+    // icon child to duplicate the handler onto.
+    try testing.expectEqual(@as(usize, 0), labeled.children.len);
+    try testing.expect(tree.msgFor(labeled.id, .press) != null);
+
+    // Unknown names, bindings, and non-button elements fail the build
+    // with the validator's messages.
+    const failing = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<row>\n  <button icon=\"sparkle-pony\">Save</button>\n</row>", .message = canvas.ui_markup.button_icon_message },
+        .{ .source = "<row>\n  <button icon=\"{filter}\">Save</button>\n</row>", .message = canvas.ui_markup.button_icon_message },
+        .{ .source = "<row>\n  <badge icon=\"save\">3</badge>\n</row>", .message = canvas.ui_markup.button_icon_element_message },
+        .{ .source = "<row>\n  <toggle-button icon=\"save\">Bold</toggle-button>\n</row>", .message = canvas.ui_markup.button_icon_element_message },
+    };
+    for (failing) |case| {
+        var failing_view = try InboxMarkup.init(arena, case.source);
+        var failing_ui = InboxUi.init(arena);
+        try testing.expectError(error.MarkupBuild, failing_view.build(&failing_ui, &model));
+        try testing.expectEqualStrings(case.message, failing_view.diagnostic.message);
+    }
+}
+
 test "the validator's icon name list matches the comptime registry" {
     // ui_markup.zig is std-only (it doubles as the LSP's module root), so
     // its icon vocabulary is a hardcoded mirror of the comptime-parsed

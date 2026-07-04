@@ -16,7 +16,19 @@
 // view slots); pages are only touched as views use their capacity.
 pub const max_canvas_commands_per_view: usize = 2048;
 pub const max_canvas_gradient_stops_per_view: usize = 64;
-pub const max_canvas_path_elements_per_view: usize = 128;
+// Raised 128 -> 2048 with icon-in-button and the 41-icon registry: vector
+// icons are path commands, and a curated stroke icon lowers to ~10-25
+// elements (folder 10, sun 21, settings 25). A realistic dense view — a
+// sidebar of icon rows, an icon toolbar, a transport — shows ~40 icons,
+// ~800 elements; the notes example hit the old 128 the moment its folder
+// rows wore icons. 2048 also gives path-drawn charts real room (three
+// 60-point polylines ~ 360 elements — the system-monitor sparklines had
+// to become bars under the old cap). Memory is fixed-capacity address
+// space: one PathElement is 28 B, so 2048 x 28 B = 56 KiB per view for
+// each of the two per-view arrays (retained canvas + display-list
+// scratch), x 32 view slots ~ 3.6 MiB total, pages touched only as views
+// draw paths.
+pub const max_canvas_path_elements_per_view: usize = 2048;
 pub const max_canvas_glyphs_per_view: usize = 8192;
 pub const max_canvas_text_bytes_per_view: usize = 32768;
 pub const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;

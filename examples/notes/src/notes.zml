@@ -10,10 +10,19 @@
       <spacer grow="1" />
       <search-field text="{search}" placeholder="Search all notes…" width="300" on-input="search_edit" label="Search notes" />
       <if test="{searching}">
-        <button size="sm" variant="ghost" on-press="clear_search" label="Clear search">Clear</button>
+        <!-- Icon-only clear: the x rides the button's own icon channel —
+             one hit target, one tint, label for the accessible name. -->
+        <button size="sm" variant="ghost" icon="x" on-press="clear_search" label="Clear search"></button>
       </if>
-      <button size="sm" variant="ghost" on-press="toggle_theme" label="Toggle color scheme">{themeLabel}</button>
-      <button variant="primary" on-press="new_note" label="New note">New note</button>
+      <!-- Icon-only theme toggle: sun in dark mode, moon in light; the
+           arms share a key so the button keeps its identity. -->
+      <if test="{isDark}">
+        <button key="theme-toggle" size="sm" variant="ghost" icon="sun" on-press="toggle_theme" label="{themeLabel}"></button>
+      </if>
+      <else>
+        <button key="theme-toggle" size="sm" variant="ghost" icon="moon" on-press="toggle_theme" label="{themeLabel}"></button>
+      </else>
+      <button variant="primary" icon="plus" on-press="new_note" label="New note">New note</button>
     </row>
     <separator />
     <row grow="1">
@@ -29,6 +38,11 @@
             <stack>
               <panel selected="{f.selected}" padding="8">
                 <row gap="8" cross="center">
+                  <!-- The folder icon the registry finally has (the notes
+                       build authored it as an app SVG first). Icons are
+                       never hit-tested, so the row's hotspot overlay
+                       still receives every click. -->
+                  <icon name="folder" width="14" height="14" foreground="text_muted" />
                   <text grow="1">{f.name}</text>
                   <badge variant="secondary">{f.count}</badge>
                 </row>

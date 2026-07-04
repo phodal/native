@@ -275,12 +275,13 @@ test "search filters albums and songs through typed dispatch" {
     tree = try buildTree(arena, &model);
     try testing.expectEqual(@as(usize, model_mod.tracks_per_album), countListItems(tree.root));
 
-    // Clear restores the full library. The clear control is an icon
-    // button: the ghost button carries the accessible label and an "x"
-    // vector icon (kind .icon, text = registry name) overlays it.
-    try testing.expect(findByText(tree.root, .icon, "x") != null);
+    // Clear restores the full library. The clear control is an
+    // icon-only button: the "x" rides the button's own icon channel
+    // (widget.icon), so there is exactly one widget and one hit target.
     const clear = findByLabel(tree.root, "Clear search").?;
     try testing.expectEqual(canvas.WidgetKind.button, clear.kind);
+    try testing.expectEqualStrings("x", clear.icon);
+    try testing.expectEqualStrings("", clear.text);
     apply(&model, tree.msgForPointer(clear.id, .up).?);
     try testing.expectEqualStrings("", model.search());
     tree = try buildTree(arena, &model);
@@ -311,24 +312,27 @@ test "a full session: open an album, play it, and use the context menus" {
     try testing.expect(findByLabel(tree.root, "Album detail") != null);
     try testing.expectEqual(@as(usize, model_mod.tracks_per_album), countListItems(tree.root));
 
-    // Play album starts track 7 (the record's first track). The button is
-    // an icon+text overlay: the button widget carries the label and the
-    // press handling; the play icon over it is decoration.
+    // Play album starts track 7 (the record's first track). The button
+    // carries its play icon inline (widget.icon) beside the label: one
+    // widget, one hit target, one tint.
     const play_button = findByLabel(tree.root, "Play album").?;
     try testing.expectEqual(canvas.WidgetKind.button, play_button.kind);
+    try testing.expectEqualStrings("play", play_button.icon);
+    try testing.expectEqualStrings("Play album", play_button.text);
     apply(&model, tree.msgForPointer(play_button.id, .up).?);
     try testing.expectEqual(@as(?u8, 7), model.now);
     try testing.expect(model.playing);
 
-    // The now-playing bar reflects it: the transport shows the pause
-    // vector icon (kind .icon, text = registry name) over the primary
-    // button, and the playing track row gets the play indicator icon.
+    // The now-playing bar reflects it: the primary transport button
+    // wears the pause icon while playing, prev/next wear the real
+    // skip-back/skip-forward glyphs, and the playing track row keeps its
+    // decorative play indicator (a bare .icon leaf — never hit-tested).
     tree = try buildTree(arena, &model);
     try testing.expect(findByText(tree.root, .text, "Glass") != null);
-    try testing.expect(findByText(tree.root, .icon, "pause") != null);
+    try testing.expectEqualStrings("pause", findByLabel(tree.root, "Play or pause").?.icon);
+    try testing.expectEqualStrings("skip-back", findByLabel(tree.root, "Previous track").?.icon);
+    try testing.expectEqualStrings("skip-forward", findByLabel(tree.root, "Next track").?.icon);
     try testing.expect(findByText(tree.root, .icon, "play") != null);
-    try testing.expect(findByText(tree.root, .icon, "chevron-left") != null);
-    try testing.expect(findByText(tree.root, .icon, "chevron-right") != null);
 
     // Pressing a different track row switches to it; pressing the playing
     // row toggles pause.
@@ -354,7 +358,7 @@ test "a full session: open an album, play it, and use the context menus" {
     try testing.expect(findByText(tree.root, .badge, "Up next") != null);
 
     // Back returns to the grid; the playing album is badged there. Back
-    // is a chevron-left icon+text overlay whose button carries the label.
+    // is a chevron-left icon+label button (inline icon, one hit target).
     apply(&model, .toggle_play);
     const back = findByLabel(tree.root, "Back to albums").?;
     try testing.expectEqual(canvas.WidgetKind.button, back.kind);
@@ -537,4 +541,46 @@ test "every view lays out within the canvas and the widget budget" {
         try testing.expect(layout.nodes.len < 512); // half the 1024 budget
         _ = arena_state.reset(.retain_capacity);
     }
+}
+
+// Env-gated screenshot renderer (skipped by default, never in CI): renders
+// the app OFFSCREEN through the deterministic reference renderer via the
+// automation screenshot artifact — no live window. PNGs land in
+// /tmp/icon-batch-shots/soundboard-*-artifacts/. To use:
+//
+//   ICON_BATCH_SHOTS=1 zig build test
+test "render icon-batch screenshots (env-gated)" {
+    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    const io = testing.io;
+
+    const live = try LiveApp.start(true);
+    defer live.stop();
+
+    // Album detail, playing: Play album / Back inline-icon buttons plus
+    // the skip-back / pause / skip-forward transport.
+    try live.dispatch(.{ .open_album = 2 });
+    try live.dispatch(.{ .play_track = 7 });
+    try presentShotFrame(live, 2);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/soundboard-detail-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+
+    // Searching: the icon-only clear button in the header.
+    try live.dispatch(.close_album);
+    var model = &live.app_state.model;
+    model.search_buffer = canvas.TextBuffer(model_mod.max_search).init("velvet");
+    try live.dispatch(.toggle_play);
+    try presentShotFrame(live, 3);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/soundboard-search-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+}
+
+fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
+        .label = main.canvas_label,
+        .size = surface_size,
+        .scale_factor = 1,
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .nonblank = true,
+    } });
 }

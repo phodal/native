@@ -712,3 +712,41 @@ test "the theme toggle flips the derived tokens and the system scheme flows in" 
     try testing.expectEqual(canvas.ColorScheme.light, model.effectiveScheme());
 }
 
+// Env-gated screenshot renderer (skipped by default, never in CI): renders
+// the app OFFSCREEN through the deterministic reference renderer via the
+// automation screenshot artifact — no live window. PNGs land in
+// /tmp/icon-batch-shots/notes-*-artifacts/. To use:
+//
+//   ICON_BATCH_SHOTS=1 zig build test
+test "render icon-batch screenshots (env-gated)" {
+    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    const io = testing.io;
+
+    var clock = native_sdk.TestClock{};
+    var h = try Harness.create(model_mod.initialModel(testClock(&clock)));
+    defer h.destroy();
+
+    // Light mode: folder icons on the sidebar rows, plus New note and the
+    // moon theme toggle in the header.
+    h.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/notes-light-artifacts", "Notes");
+    try h.harness.runtime.dispatchAutomationCommand(h.app, "screenshot notes-canvas 2");
+
+    // Dark mode while searching: the sun toggle and the icon-only clear
+    // button.
+    try h.dispatch(.toggle_theme);
+    try h.dispatch(.{ .search_edit = .{ .insert_text = "walk" } });
+    try presentShotFrame(&h, 2);
+    h.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/notes-dark-artifacts", "Notes");
+    try h.harness.runtime.dispatchAutomationCommand(h.app, "screenshot notes-canvas 2");
+}
+
+fn presentShotFrame(h: *Harness, frame_index: u64) !void {
+    try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .gpu_surface_frame = .{
+        .label = "notes-canvas",
+        .size = geometry.SizeF.init(1180, 760),
+        .scale_factor = 2,
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .nonblank = true,
+    } });
+}

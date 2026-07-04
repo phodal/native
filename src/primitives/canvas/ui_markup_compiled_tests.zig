@@ -484,6 +484,43 @@ test "compiled icons match the interpreter and carry the validated name" {
     try testing.expectEqualStrings("search", interpreted.root.children[0].text);
 }
 
+const button_icon_markup_source =
+    "<row gap=\"8\">\n" ++
+    "  <button icon=\"save\" on-press=\"add\">Save</button>\n" ++
+    "  <button icon=\"refresh-cw\" on-press=\"add\" label=\"Refresh\"></button>\n" ++
+    "</row>";
+
+test "compiled button icons match the interpreter and carry the validated name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = fixture.Model{};
+
+    var interpreter_view = try InboxInterpreter.init(arena, button_icon_markup_source);
+    var interpreter_ui = InboxUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try interpreter_view.build(&interpreter_ui, &model));
+
+    const Compiled = canvas.CompiledMarkupView(fixture.Model, fixture.Msg, button_icon_markup_source);
+    var compiled_ui = InboxUi.init(arena);
+    const compiled = try compiled_ui.finalize(Compiled.build(&compiled_ui, &model));
+
+    try expectSameTree(fixture.Msg, interpreted, compiled);
+    for ([_]InboxUi.Tree{ interpreted, compiled }) |tree| {
+        const labeled = tree.root.children[0];
+        try testing.expectEqual(canvas.WidgetKind.button, labeled.kind);
+        try testing.expectEqualStrings("save", labeled.icon);
+        try testing.expectEqualStrings("Save", labeled.text);
+        // Icon + label are ONE hit target: the icon has no child node and
+        // the button's own press handler dispatches.
+        try testing.expectEqual(@as(usize, 0), labeled.children.len);
+        try testing.expect(tree.msgFor(labeled.id, .press) != null);
+        const icon_only = tree.root.children[1];
+        try testing.expectEqualStrings("refresh-cw", icon_only.icon);
+        try testing.expectEqualStrings("", icon_only.text);
+        try testing.expectEqualStrings("Refresh", icon_only.semantics.label);
+    }
+}
+
 // --------------------------------------------- component catalog parity
 
 const CatalogUi = fixture.CatalogUi;

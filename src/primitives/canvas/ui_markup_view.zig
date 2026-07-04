@@ -805,6 +805,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     }
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "icon")) {
+                    try self.applyButtonIconAttr(node, options, attribute.value);
+                    continue;
+                }
                 if (try self.applyStyleTokenAttr(node, options, attribute)) continue;
                 if (!try self.applyOptionAttr(scope, node, options, attribute)) {
                     return self.failVoid(node, "unknown attribute for this element");
@@ -862,6 +866,22 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 .integer => |int| @intCast(int),
                 else => return self.failVoid(node, markup.avatar_image_message),
             };
+        }
+
+        /// `icon="save"` on button: the same closed literal vocabulary
+        /// as `<icon name>` (a typo can never rot silently), drawn inside
+        /// the button so icon + label are one hit target with one tint.
+        /// Mirrors the validator and the compiled engine's compile error.
+        fn applyButtonIconAttr(self: *Self, node: markup.MarkupNode, options: *Ui.ElementOptions, raw: []const u8) BuildError!void {
+            if (!std.mem.eql(u8, node.name, "button")) {
+                return self.failVoid(node, markup.button_icon_element_message);
+            }
+            const expression = markup.parseAttrExpression(raw) orelse {
+                return self.failVoid(node, markup.button_icon_message);
+            };
+            if (expression != .literal) return self.failVoid(node, markup.button_icon_message);
+            if (canvas.icons.find(expression.literal) == null) return self.failVoid(node, markup.button_icon_message);
+            options.icon = expression.literal;
         }
 
         fn applyOptionAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, options: *Ui.ElementOptions, attribute: markup.MarkupAttr) BuildError!bool {

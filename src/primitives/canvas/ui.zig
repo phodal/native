@@ -49,6 +49,15 @@ fn warnStackContainerGap(kind: WidgetKind, gap: f32) void {
     );
 }
 
+fn warnUnknownIconName(name: []const u8) void {
+    if (builtin.mode != .Debug) return;
+    if (name.len == 0 or canvas.icons.resolve(name) != null) return;
+    ui_log.warn(
+        "unknown icon \"{s}\": not a built-in (canvas.icons.known_icon_names) and not registered via canvas.icons.registerAppIcons - nothing will draw",
+        .{name},
+    );
+}
+
 pub const UiKey = union(enum) {
     index: usize,
     int: u64,
@@ -179,6 +188,15 @@ pub fn Ui(comptime Msg: type) type {
             /// keeps the widget on its non-image rendering (an avatar
             /// falls back to initials).
             image: canvas.ImageId = 0,
+            /// Vector icon name drawn inside icon-bearing controls
+            /// (`button`, `icon_button`): a built-in registry name
+            /// (`canvas.icons.known_icon_names`) or an app icon
+            /// registered at boot (`canvas.icons.registerAppIcons`).
+            /// Buttons draw the icon before the label — icon-only when
+            /// the label is empty — as ONE hit target that follows the
+            /// button's enabled/disabled tint. Empty = no icon; unknown
+            /// names draw nothing (a Debug-build warning names them).
+            icon: []const u8 = "",
             variant: canvas.WidgetVariant = .default,
             size: canvas.WidgetSize = .default,
             /// Definite width: the widget is exactly this wide (the value
@@ -631,6 +649,18 @@ pub fn Ui(comptime Msg: type) type {
                     @compileError("unknown built-in icon \"" ++ name ++ "\" - see canvas.icons.known_icon_names");
                 }
             }
+            var node = self.el(.icon, options, .{});
+            node.widget.text = name;
+            return node;
+        }
+
+        /// An icon leaf rendering an APP-REGISTERED vector icon: `name`
+        /// must be registered at boot via `canvas.icons.registerAppIcons`
+        /// (comptime-parse your SVG with `canvas.svg_icon.parseComptime`).
+        /// No compile-time check is possible for runtime registrations —
+        /// unknown names draw nothing, with a Debug-build warning. For
+        /// built-in names prefer `icon`, which compile-checks the name.
+        pub fn appIcon(self: *Self, options: ElementOptions, name: []const u8) Node {
             var node = self.el(.icon, options, .{});
             node.widget.text = name;
             return node;
@@ -1142,6 +1172,7 @@ pub fn Ui(comptime Msg: type) type {
 
         fn widgetFromOptions(kind: WidgetKind, options: ElementOptions) Widget {
             warnStackContainerGap(kind, options.gap);
+            warnUnknownIconName(options.icon);
             return .{
                 .kind = kind,
                 .frame = options.frame,
@@ -1149,6 +1180,7 @@ pub fn Ui(comptime Msg: type) type {
                 .transform = options.transform,
                 .text = options.text,
                 .placeholder = options.placeholder,
+                .icon = options.icon,
                 .text_alignment = options.text_alignment,
                 .image_id = options.image,
                 .value = options.value,

@@ -430,6 +430,155 @@ test "icon widgets render built-in vector icons as tinted path commands" {
     }
 }
 
+test "app-registered icons draw through the widget paths like built-ins" {
+    var buffer = canvas.svg_icon.IconBuffer{};
+    const parsed = try canvas.svg_icon.parse(
+        "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"4\" y1=\"12\" x2=\"20\" y2=\"12\"/></svg>",
+        &buffer,
+    );
+    const app_table = [_]canvas.icons.Entry{.{ .name = "app-rule", .icon = &parsed }};
+    canvas.icons.registerAppIcons(&app_table);
+    defer canvas.icons.registerAppIcons(&.{});
+
+    const tokens = DesignTokens{};
+    const icon = Widget{
+        .id = 65,
+        .kind = WidgetKind.icon,
+        .frame = geometry.RectF.init(0, 0, 24, 24),
+        .text = "app-rule",
+    };
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, icon, tokens);
+    switch (builder.displayList().findCommandById(widgetPartId(65, 2)).?.command) {
+        .stroke_path => |stroke| {
+            try std.testing.expectEqual(parsed.elements.ptr, stroke.elements.ptr);
+            try expectFillColor(tokens.colors.text, stroke.stroke.fill);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // The same name renders inside a button via the icon channel.
+    const button = Widget{
+        .id = 66,
+        .kind = WidgetKind.button,
+        .frame = geometry.RectF.init(0, 0, 44, 34),
+        .icon = "app-rule",
+    };
+    var button_commands: [8]CanvasCommand = undefined;
+    var button_builder = Builder.init(&button_commands);
+    try emitWidgetTree(&button_builder, button, tokens);
+    switch (button_builder.displayList().findCommandById(widgetPartId(66, 6)).?.command) {
+        .stroke_path => |stroke| try std.testing.expectEqual(parsed.elements.ptr, stroke.elements.ptr),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "buttons draw an inline vector icon and label as one widget with one tint" {
+    const tokens = DesignTokens{};
+    const button = Widget{
+        .id = 63,
+        .kind = WidgetKind.button,
+        .frame = geometry.RectF.init(0, 0, 120, 34),
+        .text = "Save",
+        .icon = "save",
+    };
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, button, tokens);
+    const display_list = builder.displayList();
+    // Fill + border + transform-in + icon strokes + transform-out + label.
+    const label = switch (display_list.findCommandById(widgetPartId(63, 4)).?.command) {
+        .draw_text => |text| text,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Save", label.text);
+    const icon_stroke = switch (display_list.findCommandById(widgetPartId(63, 6)).?.command) {
+        .stroke_path => |stroke| stroke,
+        else => return error.TestUnexpectedResult,
+    };
+    // Icon and label share the button's content tint, and the icon sits
+    // before the label (the transform carries the placement; compare the
+    // translation against the label origin).
+    try expectFillColor(label.color, icon_stroke.stroke.fill);
+    const registered = canvas.icons.find("save").?;
+    try std.testing.expectEqual(registered.elements.ptr, icon_stroke.elements.ptr);
+
+    // Disabled: BOTH the icon stroke and the label drop to the muted
+    // text color — the tint-tracking cost of the old overlay idiom.
+    var disabled = button;
+    disabled.state.disabled = true;
+    var disabled_commands: [16]CanvasCommand = undefined;
+    var disabled_builder = Builder.init(&disabled_commands);
+    try emitWidgetTree(&disabled_builder, disabled, tokens);
+    const disabled_list = disabled_builder.displayList();
+    switch (disabled_list.findCommandById(widgetPartId(63, 4)).?.command) {
+        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.text_muted, text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (disabled_list.findCommandById(widgetPartId(63, 6)).?.command) {
+        .stroke_path => |stroke| try expectFillColor(tokens.colors.text_muted, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Icon-only (empty label): the icon centers in the button and no
+    // label command is emitted.
+    var icon_only = button;
+    icon_only.text = "";
+    var icon_only_commands: [16]CanvasCommand = undefined;
+    var icon_only_builder = Builder.init(&icon_only_commands);
+    try emitWidgetTree(&icon_only_builder, icon_only, tokens);
+    const icon_only_list = icon_only_builder.displayList();
+    try std.testing.expect(icon_only_list.findCommandById(widgetPartId(63, 4)) == null);
+    try std.testing.expect(icon_only_list.findCommandById(widgetPartId(63, 6)) != null);
+}
+
+test "icon buttons draw registry names as vector icons and keep the glyph fallback" {
+    const tokens = DesignTokens{};
+    const vector = Widget{
+        .id = 64,
+        .kind = WidgetKind.icon_button,
+        .frame = geometry.RectF.init(0, 0, 34, 34),
+        .text = "play",
+    };
+    var commands: [12]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, vector, tokens);
+    switch (builder.displayList().findCommandById(widgetPartId(64, 4)).?.command) {
+        .stroke_path => |stroke| {
+            const registered = canvas.icons.find("play").?;
+            try std.testing.expectEqual(registered.elements.ptr, stroke.elements.ptr);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // widget.icon works too (and wins over text).
+    var by_field = vector;
+    by_field.text = "";
+    by_field.icon = "pause";
+    var field_commands: [12]CanvasCommand = undefined;
+    var field_builder = Builder.init(&field_commands);
+    try emitWidgetTree(&field_builder, by_field, tokens);
+    switch (field_builder.displayList().findCommandById(widgetPartId(64, 4)).?.command) {
+        .stroke_path => |stroke| {
+            const registered = canvas.icons.find("pause").?;
+            try std.testing.expectEqual(registered.elements.ptr, stroke.elements.ptr);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Non-registry text keeps the historical glyph rendering.
+    var glyph = vector;
+    glyph.text = "+";
+    var glyph_commands: [12]CanvasCommand = undefined;
+    var glyph_builder = Builder.init(&glyph_commands);
+    try emitWidgetTree(&glyph_builder, glyph, tokens);
+    switch (glyph_builder.displayList().findCommandById(widgetPartId(64, 3)).?.command) {
+        .draw_text => |text| try std.testing.expectEqualStrings("+", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "design tokens provide theme and contrast palettes" {
     const light = DesignTokens.theme(.{});
     try std.testing.expectEqual(Density.regular, light.density);

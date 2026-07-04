@@ -274,6 +274,11 @@ pub const Model = struct {
         return model.override_scheme orelse model.system_scheme;
     }
 
+    /// `<if test="{isDark}">` predicate for the theme toggle's icon arms.
+    pub fn isDark(model: *const Model) bool {
+        return model.effectiveScheme() == .dark;
+    }
+
     pub fn foldersFull(model: *const Model) bool {
         return model.folder_count >= max_folders;
     }

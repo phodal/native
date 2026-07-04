@@ -57,6 +57,14 @@ fn findByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) 
     return null;
 }
 
+fn findByLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
+    if (std.mem.eql(u8, widget.semantics.label, label)) return widget;
+    for (widget.children) |child| {
+        if (findByLabel(child, label)) |found| return found;
+    }
+    return null;
+}
+
 fn findByKind(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
     if (widget.kind == kind) return widget;
     for (widget.children) |child| {
@@ -128,6 +136,17 @@ const Harness = struct {
         try self.harness.runtime.dispatchPlatformEvent(self.app, .wake);
     }
 
+    fn presentFrame(self: *Harness, frame_index: u64) !void {
+        try self.harness.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_frame = .{
+            .label = "viewer-canvas",
+            .size = geometry.SizeF.init(1200, 760),
+            .scale_factor = 2,
+            .frame_index = frame_index,
+            .timestamp_ns = frame_index * 1_000_000,
+            .nonblank = true,
+        } });
+    }
+
     fn snapshot(self: *Harness) native_sdk.automation.snapshot.Input {
         return self.harness.runtime.automationSnapshot("Markdown Viewer");
     }
@@ -150,10 +169,20 @@ test "the initial tree renders the welcome sample in editor and preview" {
     const tree = try buildTree(arena, &model);
 
     // The toolbar is present and Save is disabled (nothing opened yet).
-    try testing.expect(findByText(tree.root, .button, "Open") != null);
+    // Open/Save carry inline vector icons on the button itself
+    // (widget.icon), so the disabled state tints icon and label together
+    // — the gap that kept this toolbar text-only before icon-in-button.
+    const open = findByText(tree.root, .button, "Open").?;
+    try testing.expectEqualStrings("folder-open", open.icon);
     const save = findByText(tree.root, .button, "Save").?;
     try testing.expect(save.state.disabled);
+    try testing.expectEqualStrings("save", save.icon);
     try testing.expect(findByText(tree.root, .button, "Save As") != null);
+
+    // The icon-only theme toggle wears moon in light mode and swaps to
+    // sun in dark mode, keeping its accessible name.
+    const toggle = findByLabel(tree.root, "Dark mode").?;
+    try testing.expectEqualStrings("moon", toggle.icon);
 
     // The editor pane heading carries the built-in "edit" vector icon
     // (kind .icon with the registry name as its text/semantics).
@@ -431,4 +460,29 @@ test "the viewer lays out through the canvas engine at window size" {
     try testing.expect(editor_frame.?.width > 350);
     try testing.expect(scroll_frame.?.width > 350);
     try testing.expect(editor_frame.?.height > 500);
+}
+
+// Env-gated screenshot renderer (skipped by default, never in CI): renders
+// the app OFFSCREEN through the deterministic reference renderer via the
+// automation screenshot artifact — no live window. PNGs land in
+// /tmp/icon-batch-shots/markdown-viewer-*-artifacts/. To use:
+//
+//   ICON_BATCH_SHOTS=1 zig build test
+test "render icon-batch screenshots (env-gated)" {
+    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    const io = testing.io;
+
+    var h = try Harness.create();
+    defer h.destroy();
+
+    // Light mode: toolbar with folder-open/save inline icons (Save
+    // disabled — icon and label grey out together) and the moon toggle.
+    h.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/markdown-viewer-light-artifacts", "Markdown Viewer");
+    try h.harness.runtime.dispatchAutomationCommand(h.app, "screenshot viewer-canvas 2");
+
+    // Dark mode: the toggle swaps to the sun icon.
+    try h.dispatch(.toggle_theme);
+    try h.presentFrame(2);
+    h.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/icon-batch-shots/markdown-viewer-dark-artifacts", "Markdown Viewer");
+    try h.harness.runtime.dispatchAutomationCommand(h.app, "screenshot viewer-canvas 2");
 }

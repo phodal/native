@@ -409,6 +409,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             if (node.widget.command.len > 0) try validateCommandName(node.widget.command);
             copy.widget.text = try self.copyWidgetText(node.widget.text);
             copy.widget.spans = try self.copyWidgetSpans(node.widget.text, copy.widget.text, node.widget.spans);
+            copy.widget.icon = try self.copyWidgetText(node.widget.icon);
             copy.widget.command = try self.copyWidgetText(node.widget.command);
             copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
             copy.widget.context_menu = try self.copyWidgetContextMenu(node.widget.context_menu);

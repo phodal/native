@@ -6,10 +6,22 @@
     <text foreground="text_muted">{docTitle}</text>
     <spacer width="16" />
     <text-field text="{path}" placeholder="/path/to/document.md" on-input="edit_path" on-submit="open_doc" grow="1" label="Document path" />
-    <button size="sm" variant="outline" on-press="open_doc" disabled="{pathEmpty}">Open</button>
-    <button size="sm" variant="outline" on-press="save_doc" disabled="{cannotSave}">Save</button>
+    <!-- Inline button icons: icon + label are one widget, so the icon
+         follows the disabled tint (Save greys out whole while unsaved
+         paths make it unavailable) — the gap that kept this toolbar
+         text-only before icon-in-button landed. -->
+    <button size="sm" variant="outline" icon="folder-open" on-press="open_doc" disabled="{pathEmpty}">Open</button>
+    <button size="sm" variant="outline" icon="save" on-press="save_doc" disabled="{cannotSave}">Save</button>
     <button size="sm" variant="outline" on-press="save_as" disabled="{pathEmpty}">Save As</button>
-    <button size="sm" variant="ghost" on-press="toggle_theme">{themeLabel}</button>
+    <!-- Icon-only theme toggle: sun in dark mode, moon in light. The two
+         arms share a key so the button keeps its identity when the icon
+         swaps; the label carries the accessible name. -->
+    <if test="{isDark}">
+      <button key="theme-toggle" size="sm" variant="ghost" icon="sun" on-press="toggle_theme" label="{themeLabel}"></button>
+    </if>
+    <else>
+      <button key="theme-toggle" size="sm" variant="ghost" icon="moon" on-press="toggle_theme" label="{themeLabel}"></button>
+    </else>
   </row>
   <separator />
   <row grow="1">

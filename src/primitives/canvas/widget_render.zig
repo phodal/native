@@ -20,7 +20,6 @@ const widget_render_scroll = @import("widget_render_scroll.zig");
 const widget_render_surfaces = @import("widget_render_surfaces.zig");
 const widget_render_controls = @import("widget_render_controls.zig");
 const icon_model = @import("icons.zig");
-const svg_icon_model = @import("svg_icon.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -643,11 +642,18 @@ fn textSpanCommandId(seed: u64, widget_id: ObjectId, ordinal: usize) ObjectId {
 }
 
 fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    // A vector icon name — built-in or app-registered
+    // (`icons.registerAppIcons`) — draws crisp parsed paths: `widget.icon`
+    // first (the explicit channel), then an icon-name `text`; any other
+    // text keeps the historical glyph rendering (apps that put literal
+    // glyph characters in `icon.text` are untouched).
+    if (widget.icon.len > 0) {
+        if (icon_model.resolve(widget.icon)) |icon| {
+            return emitVectorIconWidget(builder, widget, tokens, icon);
+        }
+    }
     if (widget.text.len == 0) return;
-    // A built-in vector icon name draws crisp comptime-parsed paths; any
-    // other text keeps the historical glyph rendering (apps that put
-    // literal glyph characters in `icon.text` are untouched).
-    if (icon_model.find(widget.text)) |icon| {
+    if (icon_model.resolve(widget.text)) |icon| {
         return emitVectorIconWidget(builder, widget, tokens, icon);
     }
     const size = iconGlyphSize(widget, tokens);
@@ -662,56 +668,13 @@ fn emitIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
 }
 
 /// Draw a parsed vector icon fitted (contain, centered) into the widget
-/// frame: a transform pair maps viewBox units to device space so the
-/// comptime-parsed elements are emitted as-is (static lifetime,
-/// packet-representable), and stroke widths scale with the icon size.
-/// `currentColor` resolves to the widget's foreground color token.
+/// frame via the shared `emitVectorIcon` helper (buttons and icon
+/// buttons draw inline icons through the same code path, so geometry and
+/// command shapes agree everywhere). `currentColor` resolves to the
+/// widget's foreground color token.
 fn emitVectorIconWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, icon: *const icon_model.Icon) Error!void {
-    const frame = widget.frame.normalized();
-    if (frame.isEmpty()) return;
-    const box = icon.view_box;
-    const scale = @min(frame.width / box.width, frame.height / box.height);
-    if (!(scale > 0)) return;
-    const transform = Affine{
-        .a = scale,
-        .b = 0,
-        .c = 0,
-        .d = scale,
-        .tx = frame.x + (frame.width - box.width * scale) * 0.5 - box.x * scale,
-        .ty = frame.y + (frame.height - box.height * scale) * 0.5 - box.y * scale,
-    };
-    const inverse = transform.inverse() orelse return;
     const color = widgetForegroundColor(widget, tokens, tokens.colors.text);
-
-    try builder.transform(transform);
-    for (icon.shapes, 0..) |shape, index| {
-        const elements = icon.elements[shape.start .. shape.start + shape.len];
-        if (iconPaintColor(shape.style.fill, color)) |fill_color| {
-            try builder.fillPath(.{
-                .id = widgetPartId(widget.id, 1 + index * 2),
-                .elements = elements,
-                .fill = colorFill(fill_color),
-            });
-        }
-        if (shape.style.stroke_width > 0) {
-            if (iconPaintColor(shape.style.stroke, color)) |stroke_color| {
-                try builder.strokePath(.{
-                    .id = widgetPartId(widget.id, 2 + index * 2),
-                    .elements = elements,
-                    .stroke = .{ .fill = colorFill(stroke_color), .width = shape.style.stroke_width },
-                });
-            }
-        }
-    }
-    try builder.transform(inverse);
-}
-
-fn iconPaintColor(paint: svg_icon_model.Paint, current: drawing_model.Color) ?drawing_model.Color {
-    return switch (paint) {
-        .none => null,
-        .current_color => current,
-        .color => |value| value,
-    };
+    try widget_render_controls.emitVectorIcon(builder, widget.id, 1, widget.frame, color, icon);
 }
 
 fn emitImageWidget(builder: *Builder, widget: Widget) Error!void {

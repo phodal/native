@@ -34,17 +34,22 @@ const CanvasRenderPass = frame_model.CanvasRenderPass;
 const layoutTextRun = text_model.layoutTextRun;
 const textLineBounds = text_model.textLineBounds;
 const estimatedGlyphAdvance = text_model.estimatedGlyphAdvance;
+const estimateTextAdvanceForBytes = text_model.estimateTextAdvanceForBytes;
 const nextTextOffset = text_model.nextTextOffset;
 
 const reference_blur = @import("reference_blur.zig");
 const reference_paths = @import("reference_paths.zig");
+const vector = @import("vector.zig");
+const font_ttf = @import("font_ttf.zig");
+
+/// Element budget for one glyph outline: the bundled face's densest
+/// glyphs stay well under this (maxp: 96 points per simple glyph).
+const reference_glyph_path_capacity: usize = 256;
 
 const referenceBlurKernel = reference_blur.referenceBlurKernel;
 const referenceBlurSampleWithKernel = reference_blur.referenceBlurSampleWithKernel;
 const referenceBlurSample = reference_blur.referenceBlurSample;
 const referenceDistanceToSegment = reference_paths.referenceDistanceToSegment;
-const referencePathContainsPoint = reference_paths.referencePathContainsPoint;
-const referenceDistanceToPath = reference_paths.referenceDistanceToPath;
 
 const max_reference_text_layout_lines: usize = 64;
 const max_reference_blur_kernel_samples: usize = 4096;
@@ -221,34 +226,47 @@ pub const ReferenceRenderSurface = struct {
     }
 
     fn fillPath(self: ReferenceRenderSurface, command: RenderCommand, value: FillPath, draw_bounds: geometry.RectF) Error!void {
+        // Anti-aliased scanline fill via the shared vector core. The wire
+        // command keeps its historical even-odd interiorness; consumers
+        // wanting nonzero (glyphs, icons) call the vector core directly.
         const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return;
-        var y = pixel_rect.y;
-        while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
-            var x = pixel_rect.x;
-            while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
-                const point = referencePixelCenter(x, y);
-                if (referencePathContainsPoint(point, value.elements, command.transform)) {
-                    self.blendPixel(@intCast(x), @intCast(y), referenceSampleFill(value.fill, command.transform, point), command.opacity);
-                }
-            }
-        }
+        var sink = ReferenceCoverageSink{
+            .surface = self,
+            .fill = value.fill,
+            .transform = command.transform,
+            .opacity = command.opacity,
+        };
+        vector.fillPath(
+            value.elements,
+            command.transform,
+            .even_odd,
+            vector.default_tolerance,
+            referenceVectorClip(pixel_rect),
+            &sink,
+        ) catch return error.ReferenceRenderUnsupportedCommand;
     }
 
     fn strokePath(self: ReferenceRenderSurface, command: RenderCommand, value: StrokePath, draw_bounds: geometry.RectF) Error!void {
+        // Anti-aliased stroke-to-outline via the shared vector core with
+        // round caps and joins, matching the historical distance-field
+        // semantics of this command.
         const stroke_width = nonNegative(value.stroke.width) * referenceTransformScale(command.transform);
         if (stroke_width <= 0) return;
-        const half_width = stroke_width * 0.5;
         const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return;
-        var y = pixel_rect.y;
-        while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
-            var x = pixel_rect.x;
-            while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
-                const point = referencePixelCenter(x, y);
-                if (referenceDistanceToPath(point, value.elements, command.transform)) |distance| {
-                    if (distance <= half_width) self.blendPixel(@intCast(x), @intCast(y), referenceSampleFill(value.stroke.fill, command.transform, point), command.opacity);
-                }
-            }
-        }
+        var sink = ReferenceCoverageSink{
+            .surface = self,
+            .fill = value.stroke.fill,
+            .transform = command.transform,
+            .opacity = command.opacity,
+        };
+        vector.strokePath(
+            value.elements,
+            command.transform,
+            .{ .width = stroke_width, .cap = .round, .join = .round },
+            vector.default_tolerance,
+            referenceVectorClip(pixel_rect),
+            &sink,
+        ) catch return error.ReferenceRenderUnsupportedCommand;
     }
 
     fn drawImage(self: ReferenceRenderSurface, command: RenderCommand, value: DrawImage, draw_bounds: geometry.RectF) Error!void {
@@ -403,27 +421,101 @@ pub const ReferenceRenderSurface = struct {
             const dx = line.bounds.x - raw_bounds.x;
             for (value.glyphs[line.glyph_start..glyph_end]) |glyph| {
                 const width = estimatedGlyphAdvance(glyph, value.size);
-                const glyph_rect = geometry.RectF.init(value.origin.x + glyph.x - first_x + dx, line.baseline + glyph.y - value.size, width, value.size);
-                self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
+                const pen_x = value.origin.x + glyph.x - first_x + dx;
+                const baseline = line.baseline + glyph.y;
+                const glyph_rect = geometry.RectF.init(pen_x, baseline - value.size, width, value.size);
+                const codepoint = referenceGlyphCodepoint(value.text, glyph.text_start, glyph.text_len);
+                self.drawGlyphBox(command, value, draw_bounds, codepoint, pen_x, baseline, glyph_rect);
             }
             return;
         }
 
+        // Without shaped glyphs the pen walks the same per-cluster
+        // estimator advances layout measured with, so painted lines end
+        // exactly at their measured bounds (the historical block painter
+        // stepped a fixed 0.5em per scalar and could overrun them).
         const end = @min(value.text.len, line.text_start + line.text_len);
-        const advance = value.size * 0.5;
         var text_offset: usize = line.text_start;
-        var scalar_index: usize = 0;
+        var x = line.bounds.x;
         while (text_offset < end) {
             const next_offset = nextTextOffset(value.text, text_offset);
+            const cluster = value.text[text_offset..next_offset];
+            const advance = estimateTextAdvanceForBytes(value.font_id, cluster, value.size);
             defer {
                 text_offset = next_offset;
-                scalar_index += 1;
+                x += advance;
             }
             if (isReferenceTextSpace(value.text[text_offset])) continue;
-            const x = line.bounds.x + @as(f32, @floatFromInt(scalar_index)) * advance;
             const glyph_rect = geometry.RectF.init(x, line.baseline - value.size, advance, value.size);
-            self.fillTextRect(command.transform.transformRect(glyph_rect).normalized(), draw_bounds, value.color, command.opacity);
+            const codepoint = referenceGlyphCodepoint(value.text, text_offset, next_offset - text_offset);
+            self.drawGlyphBox(command, value, draw_bounds, codepoint, x, line.baseline, glyph_rect);
         }
+    }
+
+    /// Paint one glyph: the real Geist outline through the vector core
+    /// when the codepoint resolves, the historical block rect otherwise
+    /// (unmapped codepoints, glyphs beyond the outline budgets, or draws
+    /// carrying no text bytes). Layout is untouched — the pen position
+    /// and advance still come from the deterministic estimator.
+    fn drawGlyphBox(
+        self: ReferenceRenderSurface,
+        command: RenderCommand,
+        value: DrawText,
+        draw_bounds: geometry.RectF,
+        codepoint: ?u21,
+        pen_x: f32,
+        baseline: f32,
+        block_rect: geometry.RectF,
+    ) void {
+        if (codepoint) |cp| {
+            if (self.drawGlyphOutline(command, value, draw_bounds, cp, pen_x, baseline)) return;
+        }
+        self.fillTextRect(command.transform.transformRect(block_rect).normalized(), draw_bounds, value.color, command.opacity);
+    }
+
+    /// True when the glyph was handled (drawn, or intentionally empty
+    /// like a space); false requests the block fallback.
+    fn drawGlyphOutline(
+        self: ReferenceRenderSurface,
+        command: RenderCommand,
+        value: DrawText,
+        draw_bounds: geometry.RectF,
+        codepoint: u21,
+        pen_x: f32,
+        baseline: f32,
+    ) bool {
+        const face = &font_ttf.geist_regular;
+        const glyph = face.glyphIndex(codepoint);
+        if (glyph == 0) return false;
+
+        const scale = value.size / face.units_per_em;
+        // Font units are y-up; bake the flip and em scaling into the pen
+        // placement, then apply the command transform on top.
+        const local = Affine{ .a = scale, .b = 0, .c = 0, .d = -scale, .tx = pen_x, .ty = baseline };
+        const total = command.transform.multiply(local);
+
+        var builder = vector.PathBuilder(reference_glyph_path_capacity){};
+        face.glyphOutline(glyph, total, &builder) catch return false;
+        if (builder.slice().len == 0) return true; // Space: nothing to ink.
+
+        const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return true;
+        var sink = ReferenceCoverageSink{
+            .surface = self,
+            .fill = .{ .color = value.color },
+            .transform = command.transform,
+            .opacity = command.opacity,
+        };
+        // The outline is already in device space; TrueType interiorness
+        // is the nonzero rule.
+        vector.fillPath(
+            builder.slice(),
+            Affine.identity(),
+            .nonzero,
+            vector.default_tolerance,
+            referenceVectorClip(pixel_rect),
+            &sink,
+        ) catch return false;
+        return true;
     }
 
     fn fillTextRect(self: ReferenceRenderSurface, rect: geometry.RectF, draw_bounds: geometry.RectF, color: Color, opacity: f32) void {
@@ -457,6 +549,34 @@ pub const ReferenceRenderSurface = struct {
         return findReferenceImage(self.images, id);
     }
 };
+
+/// Per-pixel coverage sink for the vector core: samples the fill at the
+/// pixel center and blends with the coverage folded into alpha.
+const ReferenceCoverageSink = struct {
+    surface: ReferenceRenderSurface,
+    fill: Fill,
+    transform: Affine,
+    opacity: f32,
+
+    pub fn pixel(self: *ReferenceCoverageSink, x: i32, y: i32, coverage: f32) void {
+        if (x < 0 or y < 0) return;
+        const px: usize = @intCast(x);
+        const py: usize = @intCast(y);
+        if (px >= self.surface.width or py >= self.surface.height) return;
+        const point = referencePixelCenter(px, py);
+        const color = referenceSampleFill(self.fill, self.transform, point);
+        self.surface.blendPixel(px, py, referenceScaleColorAlpha(color, coverage), self.opacity);
+    }
+};
+
+fn referenceVectorClip(pixel_rect: ReferencePixelRect) vector.ClipRect {
+    return .{
+        .x0 = @intCast(pixel_rect.x),
+        .y0 = @intCast(pixel_rect.y),
+        .x1 = @intCast(pixel_rect.x + pixel_rect.width),
+        .y1 = @intCast(pixel_rect.y + pixel_rect.height),
+    };
+}
 
 fn referenceMixRgba8(a: [4]u8, b: [4]u8, t: f32) [4]u8 {
     const value = std.math.clamp(t, 0, 1);
@@ -522,6 +642,18 @@ fn referenceSampleFill(fill: Fill, transform: Affine, point: geometry.PointF) Co
 
 fn isReferenceTextSpace(byte: u8) bool {
     return byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ';
+}
+
+/// Decode the first codepoint of the cluster `text[start..start+len]`;
+/// null when the draw carries no text bytes for the glyph (pure glyph-id
+/// draws keep their historical block rendering).
+fn referenceGlyphCodepoint(text: []const u8, start: usize, len: usize) ?u21 {
+    if (len == 0 or start >= text.len) return null;
+    const end = @min(text.len, start + len);
+    const cluster = text[start..end];
+    const seq_len = std.unicode.utf8ByteSequenceLength(cluster[0]) catch return null;
+    if (seq_len > cluster.len) return null;
+    return std.unicode.utf8Decode(cluster[0..seq_len]) catch null;
 }
 
 fn referenceSampleLinearGradient(gradient: LinearGradient, transform: Affine, point: geometry.PointF) Color {

@@ -589,6 +589,49 @@ test "gap on stacking containers fails the build with the teaching message" {
     _ = try view.build(&ui, &model);
 }
 
+test "markup icons build icon widgets with validated names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <icon name=\"search\" width=\"16\" height=\"16\" />\n  <text>Search</text>\n</row>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const icon = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.icon, icon.kind);
+    try testing.expectEqualStrings("search", icon.text);
+
+    // Unknown names, bindings, misplaced name attrs, and children fail
+    // the build with the validator's messages.
+    const failing = [_][]const u8{
+        "<row>\n  <icon />\n</row>",
+        "<row>\n  <icon name=\"sparkle-pony\" />\n</row>",
+        "<row>\n  <icon name=\"{filter}\" />\n</row>",
+        "<row>\n  <badge name=\"search\">3</badge>\n</row>",
+        "<row>\n  <icon name=\"search\"><text>x</text></icon>\n</row>",
+    };
+    for (failing) |source| {
+        var failing_view = try InboxMarkup.init(arena, source);
+        var failing_ui = InboxUi.init(arena);
+        try testing.expectError(error.MarkupBuild, failing_view.build(&failing_ui, &model));
+        try testing.expect(failing_view.diagnostic.message.len > 0);
+    }
+}
+
+test "the validator's icon name list matches the comptime registry" {
+    // ui_markup.zig is std-only (it doubles as the LSP's module root), so
+    // its icon vocabulary is a hardcoded mirror of the comptime-parsed
+    // registry; this keeps the two in lockstep.
+    try testing.expectEqual(canvas.icons.known_icon_names.len, canvas.ui_markup.known_icon_names.len);
+    for (canvas.ui_markup.known_icon_names) |name| {
+        try testing.expect(canvas.icons.find(name) != null);
+    }
+    for (canvas.icons.known_icon_names) |name| {
+        try testing.expect(nameListed(name, &canvas.ui_markup.known_icon_names));
+    }
+}
+
 test "the validator's element list matches the interpreter" {
     for (canvas.ui_markup.known_element_names) |name| {
         try testing.expect(markup_view.elementKind(name) != null);
@@ -649,8 +692,10 @@ test "the validator's text-leaf element list matches the interpreter's takes-tex
 /// Widget kinds deliberately NOT expressible in markup v1 — each needs
 /// something the closed grammar cannot carry, so these are written as Zig
 /// view functions instead of forcing a bad markup shape:
-/// - icon, image, icon_button: reference image/icon assets by ImageId,
+/// - image, icon_button: reference image assets by runtime ImageId,
 ///   which markup's literal/binding attribute values cannot express.
+///   (icon IS expressible: the built-in vector set is a closed literal
+///   vocabulary, comptime-validated.)
 /// - data_grid: a virtualized data grid needs per-column cell templates
 ///   (arbitrary render callbacks).
 /// - popover, menu_surface: floating surfaces anchored to runtime geometry
@@ -659,7 +704,7 @@ test "the validator's text-leaf element list matches the interpreter's takes-tex
 /// - segmented_control: engine kind for shell chrome segments; tabs and
 ///   toggle-group cover the component catalog's use cases.
 const markup_excluded_widget_kinds = [_]canvas.WidgetKind{
-    .icon, .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control,
+    .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control,
 };
 
 fn kindExpressible(kind: canvas.WidgetKind) bool {

@@ -610,6 +610,7 @@ pub const element_docs = [_]Doc{
     .{ .name = "combobox", .doc = "Text entry with menu affordance; edits via on-input, open via on-press." },
     .{ .name = "skeleton", .doc = "Loading placeholder block; size with width and height." },
     .{ .name = "spinner", .doc = "Indeterminate progress spinner leaf." },
+    .{ .name = "icon", .doc = "Built-in vector icon leaf: name selects one of the curated Lucide-style icons (comptime-validated), tint via foreground, size with width/height or size." },
     .{ .name = "markdown", .doc = "Renders a markdown string (GFM subset, pipe tables included) as widgets; source is one {binding}, links dispatch on-link (bare URLs autolink), <details> blocks toggle via on-details + details-expanded, #123 refs linkify via issue-link-base." },
     .{ .name = "stepper", .doc = "Stage stepper: step children joined by connectors; active names the current step index (earlier steps render completed, later ones pending)." },
     .{ .name = "step", .doc = "One stepper stage; only allowed inside a stepper, the label is the text content (supports {} interpolation), state derives from the stepper's active index." },
@@ -658,7 +659,7 @@ pub const attribute_docs = [_]Doc{
 };
 
 pub const template_attr_docs = [_]Doc{
-    .{ .name = "name", .doc = "template: the definition's name, referenced by use." },
+    .{ .name = "name", .doc = "template: the definition's name, referenced by use. icon: the built-in vector icon to draw (literal, comptime-validated against canvas.icons.known_icon_names)." },
     .{ .name = "args", .doc = "template: space-separated arg names use sites must pass (slice bindings iterate, scalars bind as values)." },
     .{ .name = "template", .doc = "use: names an earlier top-level template to expand in place." },
 };

@@ -592,7 +592,9 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 12077691111347092818), referenceSurfaceSignature(pixels));
+    // Regenerated 2026-07-03: reference text paints real Geist outlines
+    // (vector core + bundled TTF parser) instead of block glyphs.
+    try std.testing.expectEqual(@as(u64, 9986038597665570739), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

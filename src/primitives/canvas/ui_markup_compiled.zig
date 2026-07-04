@@ -173,6 +173,23 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);
 
+            if (comptime (kind == .icon)) {
+                // Closed vocabulary, resolved at comptime: a typo in an
+                // icon name is a compile error, and icons take no
+                // children.
+                const icon_name = comptime blk: {
+                    const raw = node.attr("name") orelse fail(node, markup.icon_missing_name_message);
+                    const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.icon_name_message);
+                    if (expression != .literal) fail(node, markup.icon_name_message);
+                    if (canvas.icons.find(expression.literal) == null) fail(node, markup.icon_name_message);
+                    if (node.children.len > 0) fail(node, markup.icon_children_message);
+                    break :blk expression.literal;
+                };
+                var built = ui.el(kind, options, .{});
+                built.widget.text = icon_name;
+                return built;
+            }
+
             if (comptime interpreter.elementTakesText(kind)) {
                 var built = ui.el(kind, options, .{});
                 built.widget.text = interpolatedText(node, entries, ui, model, scope);
@@ -838,6 +855,11 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     };
                 } else if (comptime std.mem.eql(u8, attribute.name, "image")) {
                     applyImageAttr(node, attribute.value, entries, ui, model, scope, options);
+                } else if (comptime std.mem.eql(u8, attribute.name, "name")) {
+                    // Consumed by the icon branch in buildElement; a
+                    // compile error on any other element (interpreter and
+                    // validator parity).
+                    comptime if (!std.mem.eql(u8, node.name, "icon")) fail(node, markup.icon_name_element_message);
                 } else if (comptime (colorStyleField(attribute.name) != null)) {
                     // Style token refs resolve entirely at comptime: a typo
                     // in a token name is a compile error.

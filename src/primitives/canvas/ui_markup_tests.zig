@@ -250,6 +250,11 @@ test "structural validation reports positions for grammar misuse" {
     var scrollable_parser = markup.Parser.init(arena_state.allocator(), scrollable);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try scrollable_parser.parse()));
 
+    // A built-in vector icon with a literal name and token tint is valid.
+    const icon_source = "<row gap=\"8\">\n  <icon name=\"search\" width=\"16\" height=\"16\" foreground=\"accent\" />\n  <text>Search</text>\n</row>";
+    var icon_parser = markup.Parser.init(arena_state.allocator(), icon_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try icon_parser.parse()));
+
     const cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<column>\n  <weird />\n</column>", .message = "unknown element" },
         .{ .source = "<column bogus=\"1\" />", .message = "unknown attribute" },
@@ -268,6 +273,13 @@ test "structural validation reports positions for grammar misuse" {
         .{ .source = "<column>\n  <text>x</text>\n  <else><text>y</text></else>\n</column>", .message = markup.else_placement_message },
         .{ .source = "<column>\n  <for each=\"items\" as=\"t\"></for>\n</column>", .message = markup.for_children_message },
         .{ .source = "<column>\n  <for each=\"items\" as=\"t\">stray text</for>\n</column>", .message = markup.for_children_message },
+        // Icon: closed literal name vocabulary, leaf, icon-scoped attr.
+        .{ .source = "<row>\n  <icon />\n</row>", .message = markup.icon_missing_name_message },
+        .{ .source = "<row>\n  <icon name=\"sparkle-pony\" />\n</row>", .message = markup.icon_name_message },
+        .{ .source = "<row>\n  <icon name=\"{binding}\" />\n</row>", .message = markup.icon_name_message },
+        .{ .source = "<row>\n  <badge name=\"search\">3</badge>\n</row>", .message = markup.icon_name_element_message },
+        .{ .source = "<row>\n  <icon name=\"search\"><text>x</text></icon>\n</row>", .message = markup.icon_children_message },
+        .{ .source = "<row>\n  <icon name=\"search\" on-press=\"go\" />\n</row>", .message = markup.non_hit_target_handler_message },
     };
     for (cases) |case| {
         var case_parser = markup.Parser.init(arena_state.allocator(), case.source);

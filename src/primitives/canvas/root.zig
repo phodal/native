@@ -247,6 +247,21 @@ pub const CanvasGpuPacketPlanner = gpu_model.CanvasGpuPacketPlanner;
 pub const ReferenceImage = reference_model.ReferenceImage;
 pub const ReferenceRenderSurface = reference_model.ReferenceRenderSurface;
 
+// Deterministic CPU path rasterizer (bezier flattening, scanline AA fill,
+// stroke-to-outline) lives in `vector.zig`; it serves the reference
+// renderer's path commands, real glyph painting, and icons.
+pub const vector = @import("vector.zig");
+
+// Bounded TTF outline parser over the bundled Geist face; feeds real
+// glyph outlines to the reference renderer's text painting.
+pub const font_ttf = @import("font_ttf.zig");
+
+// SVG icon-subset parser (Lucide/Feather/Tabler dialect, comptime-
+// parseable) and the curated built-in icon registry behind
+// `<icon name="..."/>` and `Ui.icon`.
+pub const svg_icon = @import("svg_icon.zig");
+pub const icons = @import("icons.zig");
+
 // Deterministic PNG writer (stored-deflate zlib stream) lives in `png.zig`.
 pub const png = @import("png.zig");
 

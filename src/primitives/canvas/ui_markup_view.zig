@@ -188,6 +188,20 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             var options: Ui.ElementOptions = .{};
             try self.applyAttrs(scope, node, &options);
 
+            if (kind == .icon) {
+                // Closed vocabulary: a literal built-in icon name, no
+                // children. Mirrors the validator and the compiled
+                // engine's comptime checks.
+                const raw = node.attr("name") orelse return self.failNode(node, markup.icon_missing_name_message);
+                const expression = markup.parseAttrExpression(raw) orelse return self.failNode(node, markup.icon_name_message);
+                if (expression != .literal) return self.failNode(node, markup.icon_name_message);
+                if (canvas.icons.find(expression.literal) == null) return self.failNode(node, markup.icon_name_message);
+                if (node.children.len > 0) return self.failNode(node, markup.icon_children_message);
+                var built = ui.el(kind, options, .{});
+                built.widget.text = expression.literal;
+                return built;
+            }
+
             if (elementTakesText(kind)) {
                 const text = try self.interpolatedText(ui, scope, node);
                 var built = ui.el(kind, options, .{});
@@ -782,6 +796,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 }
                 if (std.mem.eql(u8, attribute.name, "image")) {
                     try self.applyImageAttr(scope, node, options, attribute.value);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "name")) {
+                    // Consumed by the icon branch in buildElement.
+                    if (!std.mem.eql(u8, node.name, "icon")) {
+                        return self.failVoid(node, markup.icon_name_element_message);
+                    }
                     continue;
                 }
                 if (try self.applyStyleTokenAttr(node, options, attribute)) continue;
@@ -1392,6 +1413,7 @@ pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
         // Plain leaves.
         .{ "skeleton", canvas.WidgetKind.skeleton },
         .{ "spinner", canvas.WidgetKind.spinner },
+        .{ "icon", canvas.WidgetKind.icon },
     };
     inline for (map) |entry| {
         if (std.mem.eql(u8, name, entry[0])) return entry[1];

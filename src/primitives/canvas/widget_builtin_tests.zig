@@ -366,6 +366,70 @@ const expectRouteEntry = support.expectRouteEntry;
 const expectFillColor = support.expectFillColor;
 const expectGpuPaintColor = support.expectGpuPaintColor;
 
+test "icon widgets render built-in vector icons as tinted path commands" {
+    const icon = Widget{
+        .id = 61,
+        .kind = WidgetKind.icon,
+        .frame = geometry.RectF.init(0, 0, 24, 24),
+        .text = "check",
+    };
+    const tokens = DesignTokens{};
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, icon, tokens);
+    const display_list = builder.displayList();
+    // Transform in, one stroke per shape, inverse transform out.
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.findCommandById(widgetPartId(61, 2)).?.command) {
+        .stroke_path => |stroke| {
+            // Stroke width is in viewBox units (scaled by the wrapping
+            // transform); currentColor resolves to the text token.
+            try std.testing.expectEqual(@as(f32, 2), stroke.stroke.width);
+            try expectFillColor(tokens.colors.text, stroke.stroke.fill);
+            // The elements are the comptime-parsed registry storage:
+            // zero per-frame geometry copies, static lifetime.
+            const registered = canvas.icons.find("check").?;
+            try std.testing.expectEqual(registered.elements.ptr, stroke.elements.ptr);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // The icon paints real ink through the reference renderer and is
+    // byte-identical across runs.
+    var render_commands: [4]RenderCommand = undefined;
+    const plan = try (DisplayList{ .commands = display_list.commands }).renderPlan(&render_commands);
+    var pixels: [24 * 24 * 4]u8 = undefined;
+    @memset(&pixels, 0);
+    const surface = try ReferenceRenderSurface.init(24, 24, &pixels);
+    try surface.renderPass(.{
+        .commands = plan.commands,
+        .surface_size = geometry.SizeF.init(24, 24),
+        .full_repaint = true,
+    }, Color.rgb8(255, 255, 255));
+    var ink: usize = 0;
+    var index: usize = 0;
+    while (index < pixels.len) : (index += 4) {
+        if (pixels[index] < 250) ink += 1;
+    }
+    try std.testing.expect(ink > 20);
+    try std.testing.expectEqual(@as(u64, 791826400385843778), support.referenceSurfaceSignature(&pixels));
+
+    // A non-registry text keeps the historical glyph rendering.
+    const glyph = Widget{
+        .id = 62,
+        .kind = WidgetKind.icon,
+        .frame = geometry.RectF.init(0, 0, 24, 24),
+        .text = "+",
+    };
+    var glyph_commands: [4]CanvasCommand = undefined;
+    var glyph_builder = Builder.init(&glyph_commands);
+    try emitWidgetTree(&glyph_builder, glyph, tokens);
+    switch (glyph_builder.displayList().findCommandById(widgetPartId(62, 1)).?.command) {
+        .draw_text => |text| try std.testing.expectEqualStrings("+", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 test "design tokens provide theme and contrast palettes" {
     const light = DesignTokens.theme(.{});
     try std.testing.expectEqual(Density.regular, light.density);

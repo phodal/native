@@ -612,6 +612,31 @@ pub fn Ui(comptime Msg: type) type {
             return self.el(.image, options, .{});
         }
 
+        /// A built-in vector icon leaf: `name` is one of
+        /// `canvas.icons.known_icon_names` (compile error otherwise), so
+        /// icon references never rot. Size comes from `options.size` /
+        /// explicit width and height (square by default), tint from the
+        /// `foreground` style token (`currentColor` in the SVG source).
+        pub fn icon(self: *Self, options: ElementOptions, comptime name: []const u8) Node {
+            comptime {
+                if (canvas.icons.find(name) == null) {
+                    @compileError("unknown built-in icon \"" ++ name ++ "\" - see canvas.icons.known_icon_names");
+                }
+            }
+            var node = self.el(.icon, options, .{});
+            node.widget.text = name;
+            return node;
+        }
+
+        /// An icon leaf rendering a literal glyph (the pre-vector-icon
+        /// behavior, e.g. an emoji or dingbat character): kept for text
+        /// glyphs; prefer `icon` for the built-in vector set.
+        pub fn iconGlyph(self: *Self, options: ElementOptions, glyph: []const u8) Node {
+            var node = self.el(.icon, options, .{});
+            node.widget.text = glyph;
+            return node;
+        }
+
         pub fn textField(self: *Self, options: ElementOptions) Node {
             return self.el(.text_field, options, .{});
         }

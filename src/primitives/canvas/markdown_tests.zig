@@ -400,7 +400,9 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // default tokens and the deterministic estimator. Regenerated when GFM
 // pipe tables landed: the README's command table now renders as a real
 // table instead of paragraphs.
-const dev2_readme_reference_signature: u64 = 6219307851265720950;
+// Regenerated 2026-07-03: the reference renderer paints real Geist
+// outlines instead of block glyphs (vector core + bundled TTF parser).
+const dev2_readme_reference_signature: u64 = 3000945620529366733;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

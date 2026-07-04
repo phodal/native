@@ -456,6 +456,34 @@ test "the compiled path accepts every element the validator knows" {
     }
 }
 
+const icon_markup_source =
+    "<row gap=\"8\">\n" ++
+    "  <icon name=\"search\" width=\"16\" height=\"16\" foreground=\"accent\" />\n" ++
+    "  <text>Search</text>\n" ++
+    "</row>";
+
+test "compiled icons match the interpreter and carry the validated name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = fixture.Model{};
+
+    var interpreter_view = try InboxInterpreter.init(arena, icon_markup_source);
+    var interpreter_ui = InboxUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try interpreter_view.build(&interpreter_ui, &model));
+
+    const Compiled = canvas.CompiledMarkupView(fixture.Model, fixture.Msg, icon_markup_source);
+    var compiled_ui = InboxUi.init(arena);
+    const compiled = try compiled_ui.finalize(Compiled.build(&compiled_ui, &model));
+
+    try expectSameTree(fixture.Msg, interpreted, compiled);
+    const icon = compiled.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.icon, icon.kind);
+    try testing.expectEqualStrings("search", icon.text);
+    try testing.expectEqual(canvas.WidgetKind.icon, interpreted.root.children[0].kind);
+    try testing.expectEqualStrings("search", interpreted.root.children[0].text);
+}
+
 // --------------------------------------------- component catalog parity
 
 const CatalogUi = fixture.CatalogUi;

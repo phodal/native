@@ -52,7 +52,7 @@ Every component in the catalog is expressible in markup views through its `.zml`
   </tbody>
 </table>
 
-A markup element covers each component's declarative shape; anything that needs runtime geometry or asset references (anchored popovers, icon and image content, data-grid cell templates) stays a Zig view function — see the exclusions note on [Native UI](/native-ui).
+A markup element covers each component's declarative shape; anything that needs runtime geometry or asset references (anchored popovers, image content, data-grid cell templates) stays a Zig view function; built-in vector icons are declarative via `<icon name="..."/>` — see the exclusions note on [Native UI](/native-ui).
 
 Three composites build on the catalog rather than adding widget kinds: `Stepper` (`stepper` + `step`, or `ui.stepper`) renders a stage track with completed/active/pending indicators and connectors; `Timeline` (`timeline` + `timeline-item`, or `ui.timeline`/`ui.timelineItem`) renders ledger items with a status indicator, connector rail, title/description/meta, and an optional full-area press with chevron; and `ui.nav` (Zig-only) is the within-pane navigation stack. See [Pipeline components](/native-ui#pipeline-components-stepper-timeline-and-nav).
 

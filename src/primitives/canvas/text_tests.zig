@@ -731,8 +731,13 @@ test "text bounds and reference renderer honor per-run wrapping" {
         .surface_size = geometry.SizeF.init(16, 32),
         .full_repaint = true,
     }, Color.rgb8(0, 0, 0));
-    try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 1, 1);
-    try expectPixelRgba8([4]u8{ 255, 255, 255, 255 }, surface, 1, 13);
+    // Real Geist outlines replaced block glyphs: line one's 'A' inks
+    // from cap height (row 3) down to the baseline at row 10, and line
+    // two's 'B' from row 15 under the 12px line advance; the sampled
+    // pixels sit on anti-aliased stem edges.
+    try expectPixelRgba8([4]u8{ 225, 225, 225, 255 }, surface, 1, 7);
+    try expectPixelRgba8([4]u8{ 0, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8([4]u8{ 241, 241, 241, 255 }, surface, 1, 15);
 }
 
 test "text layout wraps words into deterministic line boxes" {

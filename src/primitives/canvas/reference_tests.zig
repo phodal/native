@@ -842,9 +842,12 @@ test "reference renderer strokes paths" {
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 0);
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 0, 1);
+    // The round end cap only partially covers the pixel left of the
+    // segment start; the anti-aliased vector core reports 75% coverage
+    // there (the historical point-sampled renderer filled it solid).
+    try expectPixelRgba8(.{ 191, 0, 0, 255 }, surface, 0, 1);
     try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 2, 1);
+    try expectPixelRgba8(.{ 191, 0, 0, 255 }, surface, 2, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 3, 1);
 }
 
@@ -1012,9 +1015,13 @@ test "reference renderer draws proxy text runs" {
     const surface = try ReferenceRenderSurface.init(5, 4, &pixels);
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+    // Real Geist outlines walk estimator advances: 'A' inks column 1,
+    // the space keeps column 2 empty, 'B' inks column 3 and ends inside
+    // its estimator box (column 4 stays background). Values are exact
+    // 2px-em anti-aliased coverage.
+    try expectPixelRgba8(.{ 39, 0, 0, 255 }, surface, 1, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 2, 1);
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 1);
+    try expectPixelRgba8(.{ 72, 0, 0, 255 }, surface, 3, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 3);
 }
@@ -1055,9 +1062,14 @@ test "reference renderer advances proxy text by utf8 scalars" {
     const surface = try ReferenceRenderSurface.init(5, 4, &pixels);
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
-    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 2, 1);
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 3, 1);
+    // Real outlines walking estimator advances: the composite 'e-acute'
+    // inks column 1 (11 at this row; its accent shows stronger one row
+    // down) and grazes column 2 with anti-aliased spill; 'B' lands one
+    // scalar advance later on column 3, so multi-byte input still
+    // advances once per scalar, not per byte.
+    try expectPixelRgba8(.{ 11, 0, 0, 255 }, surface, 1, 1);
+    try expectPixelRgba8(.{ 2, 0, 0, 255 }, surface, 2, 1);
+    try expectPixelRgba8(.{ 70, 0, 0, 255 }, surface, 3, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
 }
 

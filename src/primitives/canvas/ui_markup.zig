@@ -510,7 +510,7 @@ fn isBindingPath(text: []const u8) bool {
 
 /// Element names the interpreter accepts (kept in sync by a test in
 /// ui_markup_view_tests.zig). Covers every built-in component whose shape
-/// fits the closed grammar; the deliberate exclusions (icon, image,
+/// fits the closed grammar; the deliberate exclusions (image,
 /// icon-button, data-grid, popover, menu-surface, segmented-control) are
 /// documented next to the widget-kind coverage test in
 /// ui_markup_view_tests.zig — write those as Zig view functions.
@@ -530,7 +530,7 @@ pub const known_element_names =
     [_][]const u8{ "checkbox", "radio", "slider", "progress" } ++
     [_][]const u8{ "text-field", "search-field", "textarea", "input", "combobox" } ++
     // Plain leaves.
-    [_][]const u8{ "separator", "spacer", "skeleton", "spinner" };
+    [_][]const u8{ "separator", "spacer", "skeleton", "spinner", "icon" };
 
 /// Elements whose content is a single run of text (with `{}`
 /// interpolation) and that take no element children. Kept in sync with the
@@ -565,6 +565,7 @@ pub const known_non_hit_target_element_names = [_][]const u8{
     "list",       "table",       "table-row", "breadcrumb",   "button-group",
     "pagination", "radio-group", "tabs",      "toggle-group", "tooltip",
     "avatar",     "badge",       "separator", "skeleton",     "spinner",
+    "icon",
 };
 
 pub const non_hit_target_handler_message = "on-* handlers never fire here: this element is layout/decoration and is never a hit target - put the handler on a leaf like list-item or text, or on a control (button, checkbox) inside it";
@@ -586,7 +587,23 @@ pub const known_stack_container_element_names = [_][]const u8{
 pub const stack_container_gap_message = "gap does nothing here: this container layers its children on top of each other - wrap them in a column (or row) inside it for flow, or drop the gap";
 
 pub const avatar_image_message = "image takes one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes) - runtime image ids are model data, not markup literals; 0 renders the initials fallback";
-pub const avatar_image_element_message = "image is only supported on avatar - the other image-bearing widgets (image, icon, icon-button) stay Zig views (ui.image with ElementOptions.image)";
+pub const avatar_image_element_message = "image is only supported on avatar - the other image-bearing widgets (image, icon-button) stay Zig views (ui.image with ElementOptions.image)";
+
+/// The built-in vector icon vocabulary behind `<icon name="..."/>`.
+/// std-only mirror of `canvas.icons.known_icon_names` (the comptime-parsed
+/// registry); a test in ui_markup_view_tests.zig keeps the two in
+/// lockstep so a new icon cannot ship without its markup name.
+pub const known_icon_names = [_][]const u8{
+    "alert",        "arrow-right",   "check",    "chevron-down", "chevron-left",
+    "chevron-right", "chevron-up",   "copy",     "download",     "edit",
+    "external-link", "info",         "menu",     "pause",        "play",
+    "plus",          "search",       "settings", "trash",        "x",
+};
+
+pub const icon_name_message = "name takes a literal built-in icon name (see canvas.icons.known_icon_names, e.g. search, plus, x, check, chevron-down, settings, trash)";
+pub const icon_name_element_message = "name is only supported on icon - it selects a built-in vector icon";
+pub const icon_missing_name_message = "icon requires a name attribute selecting a built-in vector icon (e.g. <icon name=\"search\"/>)";
+pub const icon_children_message = "icon is a leaf - it takes no children";
 
 /// Markup attributes that reference a color design token by name. Values
 /// must be literal `ColorTokens` field names (`known_color_token_names`);
@@ -934,6 +951,10 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     if (text_runs > 1) return errorAt(child, text_leaf_single_run_message);
                 }
             }
+            if (std.mem.eql(u8, node.name, "icon")) {
+                if (node.attr("name") == null) return errorAt(node, icon_missing_name_message);
+                if (node.children.len > 0) return errorAt(node.children[0], icon_children_message);
+            }
             for (node.attrs) |attribute| {
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {
                     if (!nameInList(attribute.name[3..], &known_events)) {
@@ -971,6 +992,22 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         else
                             style_token_literal_message;
                         return .{ .line = attribute.line, .column = attribute.column, .message = message };
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "name")) {
+                    // Built-in vector icon selector, icon-scoped: a closed
+                    // literal vocabulary so icon references never rot.
+                    if (!std.mem.eql(u8, node.name, "icon")) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = icon_name_element_message };
+                    }
+                    const expression = parseAttrExpression(attribute.value);
+                    const literal = if (expression) |value|
+                        (if (value == .literal) value.literal else null)
+                    else
+                        null;
+                    if (literal == null or !nameInList(literal.?, &known_icon_names)) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = icon_name_message };
                     }
                     continue;
                 }

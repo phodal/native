@@ -326,6 +326,17 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, assign) NSUInteger canvasPacketPixelWidth;
 @property(nonatomic, assign) NSUInteger canvasPacketPixelHeight;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSImage *> *canvasImageCache;
+/* Retained command display list for incremental (`patch`) presents:
+ * decoded command dictionaries keyed by the engine's retain key, plus the
+ * draw-order vector and the generation of the full present that built
+ * them. `hasCanvasRetainedState` is YES only after a keyed full present
+ * (generation > 0) or a successfully applied patch; ANY other present
+ * (JSON packet, scissor-subset load, raw pixels) clears it, so a patch
+ * can never composite from state the glass has moved past. */
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSDictionary *> *canvasRetainedCommands;
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *canvasRetainedOrder;
+@property(nonatomic, assign) uint64_t canvasRetainedGeneration;
+@property(nonatomic, assign) BOOL hasCanvasRetainedState;
 @property(nonatomic, strong) NSCursor *surfaceCursor;
 @property(nonatomic, strong) NSTrackingArea *surfaceTrackingArea;
 @property(nonatomic, copy) NSString *markedText;
@@ -1692,17 +1703,28 @@ static BOOL NativeSdkPacketDrawCommand(NSDictionary *command, CGContextRef conte
 }
 
 /* ---------------------------------------------------------------------------
- * Compact binary gpu-surface packet decoding (wire format v1).
+ * Compact binary gpu-surface packet decoding (wire format v2).
  *
  * Little-endian, length-prefixed, mirror of the engine's binary packet
- * encoder (serialization.zig, `writeCanvasGpuPacketBinary`). Both sides
- * pin the layout and tag tables independently: any disagreement makes a
- * bounds-checked read fail here, the present is refused (return 0), and
- * the runtime records the refusal and paints the frame through its pixel
- * fallback — never garbage on the glass. The decoder reconstructs the
- * exact dictionary shape the JSON path produces, so every draw function
- * above serves both encodings unchanged.
+ * encoder (serialization.zig, `writeCanvasGpuPacketBinary` and the patch
+ * writer in canvas_frame.zig). Both sides pin the layout and tag tables
+ * independently: any disagreement makes a bounds-checked read fail here,
+ * the present is refused (return 0), and the runtime records the refusal
+ * and resyncs (full present, then its pixel fallback) — never garbage on
+ * the glass. The decoder reconstructs the exact dictionary shape the JSON
+ * path produces, so every draw function above serves both encodings
+ * unchanged; v2 adds a retained-state generation, a retain key per
+ * command, and the `patch` load action carrying an edit script (evicts +
+ * keyed upserts + the full draw-order vector) against the view's retained
+ * command dictionary.
  */
+
+/* Retained commands per view; pins the engine's
+ * `canvas_limits.max_canvas_retained_packet_commands_per_view`. A patch
+ * that would grow the dictionary past this refuses (and drops the
+ * retained state) so the engine resyncs with a full present — never a
+ * partially applied edit script. */
+enum { NativeSdkPacketRetainedCommandCap = 2048 };
 
 typedef struct {
     const uint8_t *bytes;
@@ -2059,22 +2081,28 @@ static NSDictionary *NativeSdkBinaryReadCommand(NativeSdkBinaryPacketReader *rea
 
 /* Decode a whole binary packet into the exact dictionary shape the JSON
  * parse produces, so the shared present path serves both encodings.
- * Returns nil on any framing violation (bad magic, unknown version or
- * tag, truncated payload, trailing bytes). */
+ * Full presents additionally carry @"generation" and @"commandKeys" (an
+ * NSNumber per command, parallel to @"commands"); patch presents carry
+ * @"generation", @"patchEvicts" (keys), @"patchUpserts" (pairs of
+ * @"key" + @"command"), and @"patchOrder" (keys). Returns nil on any
+ * framing violation (bad magic, unknown version or tag, truncated
+ * payload, trailing bytes). */
 static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, NSUInteger length) {
-    if (!bytes || length < 8) return nil;
+    if (!bytes || length < 16) return nil;
     NativeSdkBinaryPacketReader reader = { .bytes = bytes, .length = length, .offset = 0, .failed = NO };
     if (memcmp(bytes, "NSGP", 4) != 0) return nil;
     reader.offset = 4;
     uint8_t version = NativeSdkBinaryReadU8(&reader);
-    if (version != 1) return nil;
+    if (version != 2) return nil;
     uint8_t loadActionCode = NativeSdkBinaryReadU8(&reader);
     uint8_t packetFlags = NativeSdkBinaryReadU8(&reader);
     (void)NativeSdkBinaryReadU8(&reader); /* reserved */
-    NSString *loadAction = loadActionCode == 1 ? @"load" : (loadActionCode == 2 ? @"clear" : nil);
-    if (!loadAction) return nil;
+    uint64_t generation = NativeSdkBinaryReadU64(&reader);
+    BOOL isPatch = loadActionCode == 3;
+    NSString *loadAction = loadActionCode == 1 ? @"load" : (loadActionCode == 2 ? @"clear" : (isPatch ? @"patch" : nil));
+    if (!loadAction || reader.failed) return nil;
 
-    NSMutableDictionary *packet = [NSMutableDictionary dictionaryWithDictionary:@{ @"loadAction" : loadAction }];
+    NSMutableDictionary *packet = [NSMutableDictionary dictionaryWithDictionary:@{ @"loadAction" : loadAction, @"generation" : @(generation) }];
     if (packetFlags & 0x01) {
         NSArray *scissor = NativeSdkBinaryReadF32Array(&reader, 4);
         if (!scissor) return nil;
@@ -2114,15 +2142,52 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     }
     packet[@"imageActions"] = actions;
 
-    uint32_t commandCount = NativeSdkBinaryReadU32(&reader);
-    if (reader.failed || commandCount > reader.length - reader.offset) return nil;
-    NSMutableArray *commands = [NSMutableArray arrayWithCapacity:commandCount];
-    for (uint32_t index = 0; index < commandCount; index++) {
-        NSDictionary *command = NativeSdkBinaryReadCommand(&reader);
-        if (!command) return nil;
-        [commands addObject:command];
+    if (isPatch) {
+        uint32_t evictCount = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed || evictCount > reader.length - reader.offset) return nil;
+        NSMutableArray *evicts = [NSMutableArray arrayWithCapacity:evictCount];
+        for (uint32_t index = 0; index < evictCount; index++) {
+            uint64_t key = NativeSdkBinaryReadU64(&reader);
+            if (reader.failed) return nil;
+            [evicts addObject:@(key)];
+        }
+        packet[@"patchEvicts"] = evicts;
+
+        uint32_t upsertCount = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed || upsertCount > reader.length - reader.offset) return nil;
+        NSMutableArray *upserts = [NSMutableArray arrayWithCapacity:upsertCount];
+        for (uint32_t index = 0; index < upsertCount; index++) {
+            uint64_t key = NativeSdkBinaryReadU64(&reader);
+            NSDictionary *command = NativeSdkBinaryReadCommand(&reader);
+            if (!command) return nil;
+            [upserts addObject:@{ @"key" : @(key), @"command" : command }];
+        }
+        packet[@"patchUpserts"] = upserts;
+
+        uint32_t orderCount = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed || orderCount > reader.length - reader.offset) return nil;
+        NSMutableArray *order = [NSMutableArray arrayWithCapacity:orderCount];
+        for (uint32_t index = 0; index < orderCount; index++) {
+            uint64_t key = NativeSdkBinaryReadU64(&reader);
+            if (reader.failed) return nil;
+            [order addObject:@(key)];
+        }
+        packet[@"patchOrder"] = order;
+    } else {
+        uint32_t commandCount = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed || commandCount > reader.length - reader.offset) return nil;
+        NSMutableArray *commands = [NSMutableArray arrayWithCapacity:commandCount];
+        NSMutableArray *commandKeys = [NSMutableArray arrayWithCapacity:commandCount];
+        for (uint32_t index = 0; index < commandCount; index++) {
+            uint64_t key = NativeSdkBinaryReadU64(&reader);
+            NSDictionary *command = NativeSdkBinaryReadCommand(&reader);
+            if (!command) return nil;
+            [commandKeys addObject:@(key)];
+            [commands addObject:command];
+        }
+        packet[@"commands"] = commands;
+        packet[@"commandKeys"] = commandKeys;
     }
-    packet[@"commands"] = commands;
 
     /* Trailing bytes mean the encoder and decoder disagree about the
      * layout — refuse rather than trust a partial parse. */
@@ -2437,25 +2502,85 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     NSString *loadAction = [packet[@"loadAction"] isKindOfClass:[NSString class]] ? packet[@"loadAction"] : @"";
     BOOL clearLoadAction = [loadAction isEqualToString:@"clear"];
     BOOL retainedLoadAction = [loadAction isEqualToString:@"load"];
-    if (!clearLoadAction && !retainedLoadAction) return 0;
-    NSArray *commands = NativeSdkPacketArray(packet[@"commands"], 0);
+    BOOL patchLoadAction = [loadAction isEqualToString:@"patch"];
+    if (!clearLoadAction && !retainedLoadAction && !patchLoadAction) return 0;
+
+    NSArray *commands = nil;
+    if (patchLoadAction) {
+        /* Incremental present: apply the edit script to the retained
+         * command dictionary, then draw from it. Every precondition
+         * failure refuses (return 0) so the engine resyncs with a full
+         * present; failures after mutation begins ALSO drop the retained
+         * state so a refused half-applied patch can never be patched
+         * again — resync or nothing, never partial state. */
+        if (!self.hasCanvasRetainedState || !self.canvasRetainedCommands || !self.canvasRetainedOrder) return 0;
+        uint64_t generation = [packet[@"generation"] respondsToSelector:@selector(unsignedLongLongValue)] ? [packet[@"generation"] unsignedLongLongValue] : 0;
+        if (generation == 0 || generation != self.canvasRetainedGeneration) return 0;
+        NSArray *evicts = NativeSdkPacketArray(packet[@"patchEvicts"], 0);
+        NSArray *upserts = NativeSdkPacketArray(packet[@"patchUpserts"], 0);
+        NSArray *order = NativeSdkPacketArray(packet[@"patchOrder"], 0);
+        if (!evicts || !upserts || !order) return 0;
+        for (id evictObject in evicts) {
+            if (![evictObject isKindOfClass:[NSNumber class]]) { self.hasCanvasRetainedState = NO; return 0; }
+            /* Evicting a key we do not hold means the two sides disagree
+             * about the baseline — drift, refuse. */
+            if (!self.canvasRetainedCommands[evictObject]) { self.hasCanvasRetainedState = NO; return 0; }
+            [self.canvasRetainedCommands removeObjectForKey:evictObject];
+        }
+        for (id upsertObject in upserts) {
+            NSDictionary *upsert = NativeSdkPacketDictionary(upsertObject);
+            NSNumber *key = [upsert[@"key"] isKindOfClass:[NSNumber class]] ? upsert[@"key"] : nil;
+            NSDictionary *command = NativeSdkPacketDictionary(upsert[@"command"]);
+            if (!key || !command) { self.hasCanvasRetainedState = NO; return 0; }
+            self.canvasRetainedCommands[key] = command;
+        }
+        if (self.canvasRetainedCommands.count > NativeSdkPacketRetainedCommandCap) { self.hasCanvasRetainedState = NO; return 0; }
+        /* Draw order comes exclusively from the order vector, and it must
+         * name the retained set exactly — a dangling or missing key is
+         * drift. */
+        if (order.count != self.canvasRetainedCommands.count) { self.hasCanvasRetainedState = NO; return 0; }
+        NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:order.count];
+        NSMutableArray *orderKeys = [NSMutableArray arrayWithCapacity:order.count];
+        for (id keyObject in order) {
+            NSDictionary *command = [keyObject isKindOfClass:[NSNumber class]] ? self.canvasRetainedCommands[keyObject] : nil;
+            if (!command) { self.hasCanvasRetainedState = NO; return 0; }
+            [ordered addObject:command];
+            [orderKeys addObject:keyObject];
+        }
+        self.canvasRetainedOrder = orderKeys;
+        commands = ordered;
+    } else {
+        commands = NativeSdkPacketArray(packet[@"commands"], 0);
+    }
     if (!commands) return 0;
-    if (commandCount != 0 && commands.count != commandCount) return 0;
+    if (commandCount != 0 && commands.count != commandCount) {
+        if (patchLoadAction) self.hasCanvasRetainedState = NO;
+        return 0;
+    }
     NSArray *images = NativeSdkPacketArray(packet[@"images"], 0) ?: @[];
     NSArray *imageActions = NativeSdkPacketArray(packet[@"imageActions"], 0) ?: @[];
     if (!self.canvasImageCache) self.canvasImageCache = [NSMutableDictionary dictionary];
-    if (!NativeSdkPacketApplyImageActions(imageActions, images, self.canvasImageCache, self.host.canvasImageStore)) return 0;
+    if (!NativeSdkPacketApplyImageActions(imageActions, images, self.canvasImageCache, self.host.canvasImageStore)) {
+        if (patchLoadAction) self.hasCanvasRetainedState = NO;
+        return 0;
+    }
     NSArray *scissor = NativeSdkPacketArray(packet[@"scissorBounds"], 4);
     BOOL hasScissor = scissor != nil;
     NSRect scissorRect = hasScissor ? NativeSdkPacketRect(scissor) : NSZeroRect;
 
+    /* A patch without a scissor repaints the whole surface from the
+     * retained list — clear semantics over a fresh buffer. */
+    BOOL fullSurfacePass = clearLoadAction || (patchLoadAction && !hasScissor);
     NSUInteger byteLengthRequired = pixelWidth * pixelHeight * 4;
     NSMutableData *pixels = nil;
-    BOOL directRetainedDirtyUpdate = retainedLoadAction && hasScissor;
-    if (clearLoadAction) {
+    BOOL directRetainedDirtyUpdate = (retainedLoadAction || patchLoadAction) && hasScissor;
+    if (fullSurfacePass) {
         pixels = [NSMutableData dataWithLength:byteLengthRequired];
     } else {
-        if (!self.canvasPacketPixels || self.canvasPacketPixelWidth != pixelWidth || self.canvasPacketPixelHeight != pixelHeight || self.canvasPacketPixels.length != byteLengthRequired) return 0;
+        if (!self.canvasPacketPixels || self.canvasPacketPixelWidth != pixelWidth || self.canvasPacketPixelHeight != pixelHeight || self.canvasPacketPixels.length != byteLengthRequired) {
+            if (patchLoadAction) self.hasCanvasRetainedState = NO;
+            return 0;
+        }
         pixels = directRetainedDirtyUpdate ? self.canvasPacketPixels : [self.canvasPacketPixels mutableCopy];
     }
     if (!pixels || pixels.length != byteLengthRequired) return -1;
@@ -2472,10 +2597,10 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     NSGraphicsContext *graphics = [NSGraphicsContext graphicsContextWithCGContext:context flipped:YES];
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:graphics];
-    if (clearLoadAction) {
+    if (fullSurfacePass) {
         [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
         NSRectFill(NSMakeRect(0, 0, surfaceWidth, surfaceHeight));
-    } else if (retainedLoadAction && hasScissor) {
+    } else if (hasScissor) {
         [[NSColor colorWithDeviceRed:(CGFloat)clearR / 255.0 green:(CGFloat)clearG / 255.0 blue:(CGFloat)clearB / 255.0 alpha:(CGFloat)clearA / 255.0] setFill];
         NSRectFill(scissorRect);
     }
@@ -2493,10 +2618,54 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     }
     [NSGraphicsContext restoreGraphicsState];
     CGContextRelease(context);
-    if (!supported) return 0;
+    if (!supported) {
+        if (patchLoadAction) self.hasCanvasRetainedState = NO;
+        return 0;
+    }
 
-    BOOL uploadDirtyRect = retainedLoadAction && hasScissor;
-    return [self presentPixelsWithWidth:pixelWidth height:pixelHeight scale:normalizedScale hasDirtyRect:uploadDirtyRect dirtyX:scissorRect.origin.x dirtyY:scissorRect.origin.y dirtyWidth:scissorRect.size.width dirtyHeight:scissorRect.size.height rgba8:(const uint8_t *)pixels.bytes byteLength:pixels.length] ? 1 : -1;
+    BOOL uploadDirtyRect = directRetainedDirtyUpdate;
+    BOOL presented = [self presentPixelsWithWidth:pixelWidth height:pixelHeight scale:normalizedScale hasDirtyRect:uploadDirtyRect dirtyX:scissorRect.origin.x dirtyY:scissorRect.origin.y dirtyWidth:scissorRect.size.width dirtyHeight:scissorRect.size.height rgba8:(const uint8_t *)pixels.bytes byteLength:pixels.length];
+    if (!presented) {
+        if (patchLoadAction) self.hasCanvasRetainedState = NO;
+        return -1;
+    }
+
+    /* Retained-state bookkeeping, only after the frame actually reached
+     * the glass. A keyed `clear` under a nonzero generation is a
+     * baseline: rebuild the dictionary + order. A patch already updated
+     * them during apply. Every OTHER present (scissor-subset load, JSON
+     * packets without keys, generation-0 binary) moves the glass past the
+     * dictionary, so the retained state drops and the next patch attempt
+     * refuses into a full resync. */
+    if (patchLoadAction) {
+        /* state updated during apply; generation unchanged */
+    } else {
+        uint64_t generation = [packet[@"generation"] respondsToSelector:@selector(unsignedLongLongValue)] ? [packet[@"generation"] unsignedLongLongValue] : 0;
+        NSArray *commandKeys = NativeSdkPacketArray(packet[@"commandKeys"], 0);
+        BOOL retainable = clearLoadAction && generation != 0 && commandKeys != nil &&
+            commandKeys.count == commands.count && commands.count <= NativeSdkPacketRetainedCommandCap;
+        if (retainable) {
+            NSMutableDictionary *retained = [NSMutableDictionary dictionaryWithCapacity:commands.count];
+            NSMutableArray *order = [NSMutableArray arrayWithCapacity:commands.count];
+            for (NSUInteger index = 0; index < commands.count; index += 1) {
+                NSNumber *key = [commandKeys[index] isKindOfClass:[NSNumber class]] ? commandKeys[index] : nil;
+                NSDictionary *command = NativeSdkPacketDictionary(commands[index]);
+                if (!key || !command || retained[key]) { retainable = NO; break; }
+                retained[key] = command;
+                [order addObject:key];
+            }
+            if (retainable) {
+                self.canvasRetainedCommands = retained;
+                self.canvasRetainedOrder = order;
+                self.canvasRetainedGeneration = generation;
+                self.hasCanvasRetainedState = YES;
+            }
+        }
+        if (!retainable) {
+            self.hasCanvasRetainedState = NO;
+        }
+    }
+    return 1;
 }
 
 - (BOOL)ensureCanvasPresenter {
@@ -4163,7 +4332,13 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
-    return [(NativeSdkMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
+    NativeSdkMetalSurfaceView *surface = (NativeSdkMetalSurfaceView *)view;
+    /* A raw pixel present moves the glass past the retained command
+     * dictionary; the next patch attempt must refuse into a full
+     * resync. (The packet path calls presentPixelsWithWidth internally,
+     * so the invalidation lives here at the raw entry, not inside it.) */
+    surface.hasCanvasRetainedState = NO;
+    return [surface presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
 }
 
 - (NSInteger)presentGpuSurfacePacketInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength {

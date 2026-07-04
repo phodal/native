@@ -10,6 +10,7 @@ const view_widget_tree = @import("view_widget_tree.zig");
 const platform = @import("../platform/root.zig");
 
 const max_canvas_commands_per_view = canvas_limits.max_canvas_commands_per_view;
+const max_canvas_retained_packet_commands_per_view = canvas_limits.max_canvas_retained_packet_commands_per_view;
 const max_canvas_gradient_stops_per_view = canvas_limits.max_canvas_gradient_stops_per_view;
 const max_canvas_path_elements_per_view = canvas_limits.max_canvas_path_elements_per_view;
 const max_canvas_glyphs_per_view = canvas_limits.max_canvas_glyphs_per_view;
@@ -114,6 +115,29 @@ pub const RuntimeView = struct {
     /// rate-limited to the first fallback and every interval after, so a
     /// per-frame oscillation cannot flood stderr.
     gpu_present_fallback_logged_count: usize = 0,
+    /// Incremental packet presentation state: the engine's mirror of the
+    /// host's retained command dictionary. `canvas_packet_generation` is
+    /// bumped by every successful keyed FULL binary present (the baseline
+    /// patches edit); the key+fingerprint arrays record, in draw order,
+    /// the commands that baseline (or the last applied patch) left
+    /// retained host-side. `canvas_packet_baseline_valid` is the single
+    /// gate for attempting a patch — any present that bypasses the
+    /// retained protocol (JSON, pixels, non-retained binary) clears it,
+    /// and the next binary present rebuilds via FULL. Sized by
+    /// `canvas_limits.max_canvas_retained_packet_commands_per_view`.
+    canvas_packet_generation: u64 = 0,
+    canvas_packet_baseline_valid: bool = false,
+    canvas_packet_baseline_count: usize = 0,
+    canvas_packet_baseline_surface_size: geometry.SizeF = geometry.SizeF.init(0, 0),
+    canvas_packet_baseline_scale: f32 = 1,
+    canvas_packet_baseline_keys: [max_canvas_retained_packet_commands_per_view]u64 = undefined,
+    canvas_packet_baseline_fingerprints: [max_canvas_retained_packet_commands_per_view]u64 = undefined,
+    /// Patch telemetry surfaced on the automation snapshot view line
+    /// (present_mode= / present_patch_*= / present_retained_commands=).
+    gpu_present_packet_mode: platform.GpuPresentPacketMode = .none,
+    gpu_present_patch_bytes: usize = 0,
+    gpu_present_patch_upsert_count: usize = 0,
+    gpu_present_patch_evict_count: usize = 0,
     canvas_commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined,
     canvas_command_count: usize = 0,
     canvas_revision: u64 = 0,
@@ -484,6 +508,11 @@ pub const RuntimeView = struct {
             .gpu_present_fallback_limit_bytes = self.gpu_present_fallback_limit_bytes,
             .gpu_present_fallback_command_kind = self.gpu_present_fallback_command_kind_storage[0..self.gpu_present_fallback_command_kind_len],
             .gpu_present_fallback_frame_count = self.gpu_present_fallback_frame_count,
+            .gpu_present_packet_mode = self.gpu_present_packet_mode,
+            .gpu_present_patch_bytes = self.gpu_present_patch_bytes,
+            .gpu_present_patch_upsert_count = self.gpu_present_patch_upsert_count,
+            .gpu_present_patch_evict_count = self.gpu_present_patch_evict_count,
+            .gpu_present_retained_command_count = if (self.canvas_packet_baseline_valid) self.canvas_packet_baseline_count else 0,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
             .canvas_frame_requires_render = self.canvas_frame_requires_render,

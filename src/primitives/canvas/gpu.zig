@@ -231,6 +231,13 @@ pub const CanvasGpuCommand = struct {
 pub const CanvasGpuPacket = struct {
     frame_index: u64 = 0,
     timestamp_ns: u64 = 0,
+    /// Retained-command-state generation stamped into the binary wire
+    /// header (v2): a keyed full present under generation G is the
+    /// baseline later `patch` presents edit. Generation 0 means "do not
+    /// retain" — the host draws the frame but never answers a patch from
+    /// it (packets built outside the runtime's retained bookkeeping stay
+    /// at 0).
+    generation: u64 = 0,
     load_action: CanvasRenderPassLoadAction = .skip,
     surface_size: geometry.SizeF = .{},
     scale: f32 = 1,

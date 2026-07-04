@@ -953,7 +953,7 @@ fn writeGlyphsJson(glyphs: []const Glyph, writer: anytype) !void {
 }
 
 // ---------------------------------------------------------------------------
-// Compact binary gpu-surface packet encoding (wire format v1).
+// Compact binary gpu-surface packet encoding (wire format v2).
 //
 // Little-endian, length-prefixed throughout, no field names, no decimal
 // formatting, and no glyph arrays (the packet host draws text through the
@@ -965,45 +965,199 @@ fn writeGlyphsJson(glyphs: []const Glyph, writer: anytype) !void {
 // decode loudly (refused present -> recorded fallback) instead of drawing
 // garbage. Bump `binary_packet_version` on ANY layout change.
 //
+// v2 (from v1): every header carries a retained-state `generation`, every
+// command rides behind an explicit retain `key` (its ObjectId, or a
+// synthetic key for unkeyed commands), and a third load action `patch`
+// (3) carries an edit script (evicts + keyed upserts + the full draw-order
+// vector) against the host's retained command dictionary instead of the
+// full command list. Generation 0 means "do not retain": the host draws
+// the frame but never answers a later patch from it.
+//
 // Layout:
-//   "NSGP" u8[4] | version u8 | load_action u8 | flags u8 (bit0 scissor)
-//   | reserved u8 | [scissor f32[4]]
+//   "NSGP" u8[4] | version u8 | load_action u8 (1 load / 2 clear /
+//     3 patch) | flags u8 (bit0 scissor) | reserved u8
+//   | generation u64 | [scissor f32[4]]
 //   | image_count u32 | images { image_id u64, fingerprint u64,
 //       width u32, height u32 }
 //   | image_action_count u32 | actions { kind u8 (0 upload / 1 retain /
 //       2 evict), key_image_id u64, key_fingerprint u64,
 //       image_index u32 (0xFFFFFFFF = none) }
-//   | command_count u32 | commands (see writeCanvasGpuCommandBinary)
+//   | load/clear: command_count u32 | commands { key u64, command (see
+//       writeCanvasGpuCommandBinary) }
+//   | patch: evict_count u32 | evict keys u64[]
+//     | upsert_count u32 | upserts { key u64, command }
+//     | order_count u32 | order keys u64[]
 
 pub const binary_packet_magic = "NSGP";
-pub const binary_packet_version: u8 = 1;
+pub const binary_packet_version: u8 = 2;
+
+/// Wire code for the `patch` load action (`CanvasRenderPassLoadAction`
+/// has no patch member — patches are a transport-level edit script, not
+/// a render pass the engine plans).
+pub const binary_packet_load_action_patch: u8 = 3;
 
 const binary_image_index_none: u32 = 0xFFFF_FFFF;
 
-pub fn writeCanvasGpuPacketBinary(packet: CanvasGpuPacket, writer: anytype) !void {
+const hash = @import("hash.zig");
+
+/// Content fingerprint of a packet command: covers every field the binary
+/// command encoding serializes (measured text lines are a deterministic
+/// function of the hashed text inputs, so hashing the inputs is hashing
+/// the lines without paying `layoutTextRun` for unchanged runs — that
+/// skip IS the patch win on text-heavy views). Equal fingerprints mean
+/// byte-identical wire encodings; `canvas_frame_patch_tests.zig` pins
+/// field coverage so a new encoded field cannot silently stop
+/// invalidating patches.
+pub fn canvasGpuCommandFingerprint(command: CanvasGpuCommand) u64 {
+    var h = hash.resourceHashTag("gpu-packet-command");
+    h = hash.resourceHashU8(h, binaryCommandKindCode(command.kind));
+    h = hash.resourceHashRect(h, command.bounds);
+    h = hash.resourceHashF32(h, command.opacity);
+    h = hash.resourceHashF32(h, command.stroke_width);
+    h = hash.resourceHashOptionalObjectId(h, command.id);
+    h = hash.resourceHashOptionalRect(h, command.clip);
+    h = hash.resourceHashAffine(h, command.transform);
+    switch (command.shape) {
+        .none => h = hash.resourceHashU8(h, 0),
+        .rect => |rect| h = hash.resourceHashRect(hash.resourceHashU8(h, 1), rect),
+        .rounded_rect => |rounded_rect| {
+            h = hash.resourceHashU8(h, 2);
+            h = hash.resourceHashRect(h, rounded_rect.rect);
+            h = hash.resourceHashRadius(h, rounded_rect.radius);
+        },
+        .stroke_rect => |stroke_rect| {
+            h = hash.resourceHashU8(h, 3);
+            h = hash.resourceHashRect(h, stroke_rect.rect);
+            h = hash.resourceHashRadius(h, stroke_rect.radius);
+            h = hash.resourceHashF32(h, stroke_rect.width);
+        },
+        .line => |line| {
+            h = hash.resourceHashU8(h, 4);
+            h = hash.resourceHashPoint(h, line.from);
+            h = hash.resourceHashPoint(h, line.to);
+            h = hash.resourceHashF32(h, line.width);
+        },
+        .path => |elements| h = hash.resourceHashPath(hash.resourceHashU8(h, 5), elements),
+    }
+    switch (command.paint) {
+        .none => h = hash.resourceHashU8(h, 0),
+        .color => |color| h = hash.resourceHashColor(hash.resourceHashU8(h, 1), color),
+        .linear_gradient => |gradient| {
+            h = hash.resourceHashU8(h, 2);
+            h = hash.resourceHashPoint(h, gradient.start);
+            h = hash.resourceHashPoint(h, gradient.end);
+            h = hash.resourceHashUsize(h, gradient.stops.len);
+            for (gradient.stops) |stop| {
+                h = hash.resourceHashF32(h, stop.offset);
+                h = hash.resourceHashColor(h, stop.color);
+            }
+        },
+    }
+    if (command.image) |image| {
+        h = hash.resourceHashU8(h, 1);
+        h = hash.resourceHashU64(h, image.image_id);
+        h = hash.resourceHashOptionalRect(h, image.src);
+        h = hash.resourceHashRect(h, image.dst);
+        h = hash.resourceHashF32(h, image.opacity);
+        h = hash.resourceHashEnum(h, @intFromEnum(image.fit));
+        h = hash.resourceHashEnum(h, @intFromEnum(image.sampling));
+        h = hash.resourceHashRadius(h, image.radius);
+    } else {
+        h = hash.resourceHashU8(h, 0);
+    }
+    if (command.text) |text| {
+        h = hash.resourceHashU8(h, 1);
+        h = hash.resourceHashU64(h, text.font_id);
+        h = hash.resourceHashF32(h, text.size);
+        h = hash.resourceHashPoint(h, text.origin);
+        h = hash.resourceHashColor(h, text.color);
+        h = hash.resourceHashBytes(h, text.text);
+        h = hash.resourceHashUsize(h, text.glyphs.len);
+        for (text.glyphs) |glyph| {
+            h = hash.resourceHashU32(h, glyph.id);
+            h = hash.resourceHashU64(h, glyph.font_id);
+            h = hash.resourceHashF32(h, glyph.x);
+            h = hash.resourceHashF32(h, glyph.y);
+            h = hash.resourceHashF32(h, glyph.advance);
+            h = hash.resourceHashUsize(h, glyph.text_start);
+            h = hash.resourceHashUsize(h, glyph.text_len);
+        }
+        if (text.text_layout) |options| {
+            h = hash.resourceHashU8(h, 1);
+            h = hash.resourceHashF32(h, nonNegative(options.max_width));
+            h = hash.resourceHashF32(h, nonNegative(options.line_height));
+            h = hash.resourceHashEnum(h, @intFromEnum(options.wrap));
+            h = hash.resourceHashEnum(h, @intFromEnum(options.alignment));
+        } else {
+            h = hash.resourceHashU8(h, 0);
+        }
+    } else {
+        h = hash.resourceHashU8(h, 0);
+    }
+    switch (command.effect) {
+        .none => h = hash.resourceHashU8(h, 0),
+        .shadow => |shadow| {
+            h = hash.resourceHashU8(h, 1);
+            h = hash.resourceHashRect(h, shadow.rect);
+            h = hash.resourceHashRadius(h, shadow.radius);
+            h = hash.resourceHashF32(h, shadow.offset.dx);
+            h = hash.resourceHashF32(h, shadow.offset.dy);
+            h = hash.resourceHashF32(h, shadow.blur);
+            h = hash.resourceHashF32(h, shadow.spread);
+            h = hash.resourceHashColor(h, shadow.color);
+        },
+        .blur => |blur| {
+            h = hash.resourceHashU8(h, 2);
+            h = hash.resourceHashRect(h, blur.rect);
+            h = hash.resourceHashF32(h, blur.radius);
+        },
+    }
+    return h;
+}
+
+/// Retain key for a packet command: the widget-stamped ObjectId when
+/// present, else a synthetic key derived from the command's render-plan
+/// index + content fingerprint. Unkeyed commands therefore degrade to
+/// evict+insert whenever anything above them shifts their index — correct,
+/// just not cheap; stamping ids is the fast path.
+pub fn canvasGpuPacketCommandKey(command: CanvasGpuCommand, fingerprint: u64) u64 {
+    if (command.id) |id| return id;
+    var h = hash.resourceHashTag("gpu-packet-synthetic-key");
+    h = hash.resourceHashUsize(h, command.command_index);
+    h = hash.resourceHashU64(h, fingerprint);
+    return h;
+}
+
+/// Shared v2 packet header + image sections; `load_action_code` is the
+/// wire code (1 load / 2 clear / 3 patch).
+pub fn writeCanvasGpuPacketBinaryHeader(
+    load_action_code: u8,
+    generation: u64,
+    scissor: ?geometry.RectF,
+    images: []const RenderImage,
+    image_actions: []const RenderImageCacheAction,
+    writer: anytype,
+) !void {
     try writer.writeAll(binary_packet_magic);
     try writer.writeByte(binary_packet_version);
-    try writer.writeByte(switch (packet.load_action) {
-        .skip => 0,
-        .load => 1,
-        .clear => 2,
-    });
+    try writer.writeByte(load_action_code);
     var flags: u8 = 0;
-    if (packet.scissor != null) flags |= 0x01;
+    if (scissor != null) flags |= 0x01;
     try writer.writeByte(flags);
     try writer.writeByte(0);
-    if (packet.scissor) |scissor| try writeBinaryRect(scissor, writer);
+    try writer.writeInt(u64, generation, .little);
+    if (scissor) |rect| try writeBinaryRect(rect, writer);
 
-    try writer.writeInt(u32, @intCast(packet.images.len), .little);
-    for (packet.images) |image| {
+    try writer.writeInt(u32, @intCast(images.len), .little);
+    for (images) |image| {
         try writer.writeInt(u64, image.image_id, .little);
         try writer.writeInt(u64, image.fingerprint, .little);
         try writer.writeInt(u32, @intCast(image.width), .little);
         try writer.writeInt(u32, @intCast(image.height), .little);
     }
 
-    try writer.writeInt(u32, @intCast(packet.image_actions.len), .little);
-    for (packet.image_actions) |action| {
+    try writer.writeInt(u32, @intCast(image_actions.len), .little);
+    for (image_actions) |action| {
         try writer.writeByte(switch (action.kind) {
             .upload => 0,
             .retain => 1,
@@ -1013,10 +1167,25 @@ pub fn writeCanvasGpuPacketBinary(packet: CanvasGpuPacket, writer: anytype) !voi
         try writer.writeInt(u64, action.key.fingerprint, .little);
         try writer.writeInt(u32, if (action.image_index) |index| @intCast(index) else binary_image_index_none, .little);
     }
+}
+
+/// One retained command: retain key + the v1 command encoding.
+pub fn writeCanvasGpuCommandBinaryKeyed(key: u64, command: CanvasGpuCommand, writer: anytype) !void {
+    try writer.writeInt(u64, key, .little);
+    try writeCanvasGpuCommandBinary(command, writer);
+}
+
+pub fn writeCanvasGpuPacketBinary(packet: CanvasGpuPacket, writer: anytype) !void {
+    try writeCanvasGpuPacketBinaryHeader(switch (packet.load_action) {
+        .skip => 0,
+        .load => 1,
+        .clear => 2,
+    }, packet.generation, packet.scissor, packet.images, packet.image_actions, writer);
 
     try writer.writeInt(u32, @intCast(packet.commands.len), .little);
     for (packet.commands) |command| {
-        try writeCanvasGpuCommandBinary(command, writer);
+        const fingerprint = canvasGpuCommandFingerprint(command);
+        try writeCanvasGpuCommandBinaryKeyed(canvasGpuPacketCommandKey(command, fingerprint), command, writer);
     }
 }
 

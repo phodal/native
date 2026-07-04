@@ -40,10 +40,32 @@ const max_canvas_diff_changes_per_view = canvas_limits.max_canvas_diff_changes_p
 const max_canvas_render_animations_per_view = canvas_limits.max_canvas_render_animations_per_view;
 const max_canvas_text_layouts_per_view = canvas_limits.max_canvas_text_layouts_per_view;
 const max_canvas_text_layout_lines_per_view = canvas_limits.max_canvas_text_layout_lines_per_view;
+const max_canvas_retained_packet_commands_per_view = canvas_limits.max_canvas_retained_packet_commands_per_view;
 threadlocal var canvas_frame_text_layout_plans_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutPlan = undefined;
 threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layout_lines_per_view]canvas.TextLine = undefined;
 threadlocal var canvas_frame_text_layout_cache_entries_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined;
 threadlocal var canvas_frame_text_layout_cache_actions_scratch: [max_canvas_text_layouts_per_view * 2]canvas.TextLayoutCacheAction = undefined;
+
+/// One entry of the frame's CURRENT keyed command list — the full draw
+/// order the retained packet protocol works on (never the scissor
+/// subset). `render_index` points back into the frame's render plan so
+/// upserts re-encode only the commands that changed.
+const CanvasPacketCurrentCommand = struct {
+    key: u64,
+    fingerprint: u64,
+    render_index: u32,
+};
+
+// Patch-derivation scratch (threadlocal, same pattern as the text-layout
+// scratch above): the current keyed list, a key-sorted index over it for
+// duplicate detection, a key-sorted index over the view's retained
+// baseline for O(log n) lookups, per-baseline matched flags (unmatched =
+// evict), and per-current upsert flags. ~64 KiB per thread total.
+threadlocal var canvas_packet_current_scratch: [max_canvas_retained_packet_commands_per_view]CanvasPacketCurrentCommand = undefined;
+threadlocal var canvas_packet_current_sort_scratch: [max_canvas_retained_packet_commands_per_view]u32 = undefined;
+threadlocal var canvas_packet_baseline_sort_scratch: [max_canvas_retained_packet_commands_per_view]u32 = undefined;
+threadlocal var canvas_packet_baseline_matched_scratch: [max_canvas_retained_packet_commands_per_view]bool = undefined;
+threadlocal var canvas_packet_upsert_scratch: [max_canvas_retained_packet_commands_per_view]bool = undefined;
 
 const validateViewLabel = validation.validateViewLabel;
 const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
@@ -198,7 +220,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 .{ .reason = .missing_service }
             else
                 .{ .reason = .unsupported_command, .command_kind = firstUnsupportedCommandName(canvas_frame, packet) };
-            const presented = try presentCanvasPacketEncoded(self, window_id, label, packet, clear_color, packet_json_buffer, refusal);
+            const presented = try presentCanvasPacketEncoded(self, window_id, label, canvas_frame, packet, clear_color, packet_json_buffer, refusal);
             if (!presented) return error.UnsupportedService;
             if (runtimeFindViewIndex(self, window_id, label)) |index| {
                 self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
@@ -254,7 +276,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                                 },
                                 else => return err,
                             };
-                            break :blk try presentCanvasPacketEncoded(self, window_id, label, packet, clear_color, packet_json_buffer, .{ .reason = .missing_service });
+                            break :blk try presentCanvasPacketEncoded(self, window_id, label, canvas_frame, packet, clear_color, packet_json_buffer, .{ .reason = .missing_service });
                         };
                         if (packet_presented) {
                             if (runtimeFindViewIndex(self, window_id, label)) |index| {
@@ -334,6 +356,14 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 // through the pixel path (covers the direct pixel entry
                 // points and the packet-fallback route alike).
                 self.views[index].gpu_present_path = .pixels;
+                // Pixels on the glass no longer match the retained
+                // command dictionary (the host drops its copy on pixel
+                // presents too): the next packet present must be FULL.
+                self.views[index].canvas_packet_baseline_valid = false;
+                self.views[index].gpu_present_packet_mode = .none;
+                self.views[index].gpu_present_patch_bytes = 0;
+                self.views[index].gpu_present_patch_upsert_count = 0;
+                self.views[index].gpu_present_patch_evict_count = 0;
             }
         }
 
@@ -389,6 +419,18 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
         /// same frame, so capability negotiation is a per-present
         /// conversation rather than a boot-time contract and the JSON
         /// path stays alive for compatibility and wire debugging.
+        ///
+        /// On the binary path, presentation is INCREMENTAL whenever the
+        /// view holds a valid retained baseline: the frame's full keyed
+        /// command list is diffed against the baseline's key+fingerprint
+        /// mirror and only the edits (upserts + evicts + the draw-order
+        /// vector) ride the wire as a `patch` present. Everything else —
+        /// no baseline, resized surface, unrepresentable or over-budget
+        /// command lists, duplicate keys, host refusal, patch overflow —
+        /// resolves to a FULL keyed present in the same frame that
+        /// rebuilds both sides' retained state under a fresh generation.
+        /// Drift can therefore cost one full present, never wrong pixels.
+        ///
         /// Returns true when a present succeeded. Every refusal records
         /// its fallback reason on the view BEFORE returning, so
         /// automation snapshots explain WHY a frame left the packet
@@ -399,6 +441,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             self: *Runtime,
             window_id: platform.WindowId,
             label: []const u8,
+            canvas_frame: canvas.CanvasFrame,
             packet: canvas.CanvasGpuPacket,
             clear_color: canvas.Color,
             packet_bytes_buffer: []u8,
@@ -422,6 +465,101 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             };
             if (services.present_gpu_surface_packet_binary_fn != null) binary: {
                 const binary_buffer = packet_bytes_buffer[0..@min(packet_bytes_buffer.len, platform.max_gpu_surface_packet_binary_bytes)];
+                const view_index = runtimeFindViewIndex(self, window_id, label);
+                // The retained protocol works on the frame's FULL keyed
+                // draw order (never the scissor subset); null when the
+                // full list is unrepresentable, over the retained budget,
+                // or carries duplicate keys — those frames present
+                // through the non-retained encoding below.
+                const current = if (view_index != null) gatherCanvasPacketCurrentCommands(canvas_frame) else null;
+
+                // ---- incremental attempt: patch the host's retained list.
+                if (current) |current_commands| patch: {
+                    const view = &self.views[view_index.?];
+                    if (!view.canvas_packet_baseline_valid) break :patch;
+                    if (!sizesEqual(view.canvas_packet_baseline_surface_size, packet.surface_size) or
+                        view.canvas_packet_baseline_scale != packet.scale) break :patch;
+                    const stats = computeCanvasPacketPatchStats(view, current_commands);
+                    // A patch that re-encodes EVERY command is strictly
+                    // larger than the keyed full present (same upserts
+                    // plus the order vector), so frames where everything
+                    // changed — a scroll step shifting the whole view —
+                    // present full, which also refreshes the baseline
+                    // generation.
+                    if (stats.upsert_count >= current_commands.len) break :patch;
+                    var writer = std.Io.Writer.fixed(binary_buffer);
+                    // A patch that outgrows the transport is not a
+                    // failure — the full present below is the compact
+                    // form.
+                    writeCanvasPacketPatchBinary(view, canvas_frame, packet, current_commands, stats, &writer) catch break :patch;
+                    base.binary = writer.buffered();
+                    base.json = "";
+                    base.command_count = current_commands.len;
+                    services.presentGpuSurfacePacketBinary(base) catch |err| switch (err) {
+                        error.UnsupportedService => {
+                            // Host refused the patch (retained state
+                            // lost, generation drift, budget, decode).
+                            // Record the reason, then resync via the
+                            // full present below in this same frame.
+                            recordCanvasPacketFallback(self, window_id, label, .{ .reason = .patch_refused });
+                            view.canvas_packet_baseline_valid = false;
+                            break :patch;
+                        },
+                        else => return err,
+                    };
+                    adoptCanvasPacketBaseline(view, current_commands, packet);
+                    view.gpu_present_packet_mode = .patch;
+                    view.gpu_present_patch_bytes = base.binary.len;
+                    view.gpu_present_patch_upsert_count = stats.upsert_count;
+                    view.gpu_present_patch_evict_count = stats.evict_count;
+                    return true;
+                }
+
+                // ---- full keyed present: (re)build both sides' retained
+                // state under a fresh generation.
+                if (current) |current_commands| {
+                    const view = &self.views[view_index.?];
+                    const generation = if (view.canvas_packet_generation == std.math.maxInt(u64)) 1 else view.canvas_packet_generation + 1;
+                    var writer = std.Io.Writer.fixed(binary_buffer);
+                    writeCanvasPacketFullBinary(canvas_frame, packet, current_commands, generation, &writer) catch {
+                        view.canvas_packet_baseline_valid = false;
+                        if (services.present_gpu_surface_packet_fn == null) {
+                            recordCanvasPacketFallback(self, window_id, label, .{
+                                .reason = .binary_overflow,
+                                .needed_bytes = canvasPacketFullBinaryByteSize(canvas_frame, packet, current_commands, generation),
+                                .limit_bytes = binary_buffer.len,
+                            });
+                            return false;
+                        }
+                        break :binary;
+                    };
+                    base.binary = writer.buffered();
+                    base.json = "";
+                    base.command_count = current_commands.len;
+                    services.presentGpuSurfacePacketBinary(base) catch |err| switch (err) {
+                        // A host that refuses the keyed full present is
+                        // refusing this binary encoding, not the retained
+                        // protocol: negotiate down to JSON.
+                        error.UnsupportedService => {
+                            view.canvas_packet_baseline_valid = false;
+                            break :binary;
+                        },
+                        else => return err,
+                    };
+                    view.canvas_packet_generation = generation;
+                    adoptCanvasPacketBaseline(view, current_commands, packet);
+                    view.gpu_present_packet_mode = .full;
+                    view.gpu_present_patch_bytes = 0;
+                    view.gpu_present_patch_upsert_count = 0;
+                    view.gpu_present_patch_evict_count = 0;
+                    return true;
+                }
+
+                // ---- non-retained binary present (no view, duplicate
+                // keys, over-budget or unrepresentable full list): the
+                // scissor-subset packet under generation 0, which the
+                // host draws but never retains.
+                if (view_index) |index| self.views[index].canvas_packet_baseline_valid = false;
                 var writer = std.Io.Writer.fixed(binary_buffer);
                 packet.writeBinary(&writer) catch {
                     // A frame too big for the binary encoding might
@@ -442,12 +580,14 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 };
                 base.binary = writer.buffered();
                 base.json = "";
+                base.command_count = packet.commandCount();
                 services.presentGpuSurfacePacketBinary(base) catch |err| switch (err) {
                     // The platform wires the binary seam but declines at
                     // call time: negotiate down to JSON.
                     error.UnsupportedService => break :binary,
                     else => return err,
                 };
+                if (view_index) |index| recordCanvasPacketFullPresent(&self.views[index]);
                 return true;
             }
             if (services.present_gpu_surface_packet_fn == null) {
@@ -470,6 +610,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             };
             base.json = writer.buffered();
             base.binary = "";
+            base.command_count = packet.commandCount();
             services.presentGpuSurfacePacket(base) catch |err| switch (err) {
                 error.UnsupportedService => {
                     recordCanvasPacketFallback(self, window_id, label, refusal);
@@ -477,6 +618,12 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 },
                 else => return err,
             };
+            // JSON presents bypass the retained protocol entirely (the
+            // host invalidates its retained state on them too).
+            if (runtimeFindViewIndex(self, window_id, label)) |index| {
+                self.views[index].canvas_packet_baseline_valid = false;
+                recordCanvasPacketFullPresent(&self.views[index]);
+            }
             return true;
         }
 
@@ -881,6 +1028,206 @@ const CanvasPacketRefusal = struct {
     limit_bytes: usize = 0,
     command_kind: []const u8 = "",
 };
+
+/// Edit-script size of the last patch encode, for telemetry.
+const CanvasPacketPatchStats = struct {
+    upsert_count: usize = 0,
+    evict_count: usize = 0,
+};
+
+/// Build the frame's CURRENT keyed command list — every supported render
+/// command intersecting the full-repaint bounds, in draw order, with its
+/// retain key and content fingerprint. This is the exact set a full
+/// keyed present ships (and the host retains), so patches derived from
+/// it can never disagree with a full re-present. Returns null when the
+/// frame cannot ride the retained protocol: an unsupported command
+/// anywhere in the FULL list (a scissor subset might hide it), more
+/// commands than the retained budget
+/// (`canvas_limits.max_canvas_retained_packet_commands_per_view`), or
+/// duplicate retain keys (which would corrupt a keyed dictionary) — those
+/// frames present through the non-retained encoding instead.
+fn gatherCanvasPacketCurrentCommands(canvas_frame: canvas.CanvasFrame) ?[]const CanvasPacketCurrentCommand {
+    const render_commands = canvas_frame.render_plan.commands;
+    const full_bounds = canvasFullRepaintBounds(canvas_frame.surface_size, canvas_frame.render_plan.bounds) orelse return null;
+    var count: usize = 0;
+    for (render_commands, 0..) |command, index| {
+        if (!canvas.renderCommandIntersectsDirtyBounds(command, full_bounds)) continue;
+        const gpu_command = canvas.canvasGpuCommandFromRenderCommand(command, index);
+        if (!gpu_command.supported()) return null;
+        if (count >= canvas_packet_current_scratch.len) return null;
+        const fingerprint = canvas.canvasGpuCommandFingerprint(gpu_command);
+        canvas_packet_current_scratch[count] = .{
+            .key = canvas.canvasGpuPacketCommandKey(gpu_command, fingerprint),
+            .fingerprint = fingerprint,
+            .render_index = @intCast(index),
+        };
+        count += 1;
+    }
+    const sorted = canvas_packet_current_sort_scratch[0..count];
+    for (sorted, 0..) |*slot, index| slot.* = @intCast(index);
+    std.sort.pdq(u32, sorted, @as([]const CanvasPacketCurrentCommand, canvas_packet_current_scratch[0..count]), canvasPacketCurrentKeyLessThan);
+    var index: usize = 1;
+    while (index < count) : (index += 1) {
+        if (canvas_packet_current_scratch[sorted[index - 1]].key == canvas_packet_current_scratch[sorted[index]].key) return null;
+    }
+    return canvas_packet_current_scratch[0..count];
+}
+
+fn canvasPacketCurrentKeyLessThan(current: []const CanvasPacketCurrentCommand, a: u32, b: u32) bool {
+    return current[a].key < current[b].key;
+}
+
+fn canvasPacketBaselineKeyLessThan(keys: []const u64, a: u32, b: u32) bool {
+    return keys[a] < keys[b];
+}
+
+/// Binary search over `sorted` (an index array ordered by key) for `key`;
+/// returns the baseline index holding it.
+fn findCanvasPacketBaselineIndex(keys: []const u64, sorted: []const u32, key: u64) ?usize {
+    var low: usize = 0;
+    var high: usize = sorted.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = keys[sorted[mid]];
+        if (candidate == key) return sorted[mid];
+        if (candidate < key) low = mid + 1 else high = mid;
+    }
+    return null;
+}
+
+/// Diff the frame's current keyed list against the view's retained
+/// baseline: fills the matched/upsert scratch flags (which the patch
+/// encoder reads) and returns the edit counts, so callers can decide
+/// patch-vs-full BEFORE paying for the encode.
+fn computeCanvasPacketPatchStats(view: anytype, current: []const CanvasPacketCurrentCommand) CanvasPacketPatchStats {
+    const baseline_count = view.canvas_packet_baseline_count;
+    const baseline_keys = view.canvas_packet_baseline_keys[0..baseline_count];
+    const baseline_fingerprints = view.canvas_packet_baseline_fingerprints[0..baseline_count];
+
+    const baseline_sorted = canvas_packet_baseline_sort_scratch[0..baseline_count];
+    for (baseline_sorted, 0..) |*slot, index| slot.* = @intCast(index);
+    std.sort.pdq(u32, baseline_sorted, @as([]const u64, baseline_keys), canvasPacketBaselineKeyLessThan);
+    const matched = canvas_packet_baseline_matched_scratch[0..baseline_count];
+    @memset(matched, false);
+    const upserts = canvas_packet_upsert_scratch[0..current.len];
+
+    var stats = CanvasPacketPatchStats{};
+    for (current, 0..) |entry, index| {
+        upserts[index] = true;
+        if (findCanvasPacketBaselineIndex(baseline_keys, baseline_sorted, entry.key)) |baseline_index| {
+            matched[baseline_index] = true;
+            if (baseline_fingerprints[baseline_index] == entry.fingerprint) upserts[index] = false;
+        }
+        if (upserts[index]) stats.upsert_count += 1;
+    }
+    for (matched) |flag| {
+        if (!flag) stats.evict_count += 1;
+    }
+    return stats;
+}
+
+/// Encode the incremental `patch` present: evicts (baseline keys gone
+/// from the current list), keyed upserts (new or fingerprint-changed
+/// commands, re-encoded), and the full draw-order vector. Unchanged
+/// commands are never re-encoded — for text runs that skips
+/// `layoutTextRun` entirely, which is most of what a transcript frame
+/// used to pay. Reads the scratch flags `computeCanvasPacketPatchStats`
+/// filled for the same `current` list. Errors are overflow of the
+/// caller's transport buffer.
+fn writeCanvasPacketPatchBinary(
+    view: anytype,
+    canvas_frame: canvas.CanvasFrame,
+    packet: canvas.CanvasGpuPacket,
+    current: []const CanvasPacketCurrentCommand,
+    stats: CanvasPacketPatchStats,
+    writer: *std.Io.Writer,
+) !void {
+    const baseline_count = view.canvas_packet_baseline_count;
+    const baseline_keys = view.canvas_packet_baseline_keys[0..baseline_count];
+    const matched = canvas_packet_baseline_matched_scratch[0..baseline_count];
+    const upserts = canvas_packet_upsert_scratch[0..current.len];
+
+    try canvas.writeCanvasGpuPacketBinaryHeader(
+        canvas.binary_packet_load_action_patch,
+        view.canvas_packet_generation,
+        packet.scissor,
+        packet.images,
+        packet.image_actions,
+        writer,
+    );
+    try writer.writeInt(u32, @intCast(stats.evict_count), .little);
+    for (matched, 0..) |flag, index| {
+        if (!flag) try writer.writeInt(u64, baseline_keys[index], .little);
+    }
+    try writer.writeInt(u32, @intCast(stats.upsert_count), .little);
+    const render_commands = canvas_frame.render_plan.commands;
+    for (current, 0..) |entry, index| {
+        if (!upserts[index]) continue;
+        const command = canvas.canvasGpuCommandFromRenderCommand(render_commands[entry.render_index], entry.render_index);
+        try canvas.writeCanvasGpuCommandBinaryKeyed(entry.key, command, writer);
+    }
+    try writer.writeInt(u32, @intCast(current.len), .little);
+    for (current) |entry| try writer.writeInt(u64, entry.key, .little);
+}
+
+/// Encode the FULL keyed present that (re)builds the host's retained
+/// command dictionary: a `clear` over the full-repaint bounds carrying
+/// the whole keyed command list under `generation`. Byte-identical
+/// content whether it is a first baseline or a resync, which is what the
+/// golden patch-vs-full equivalence test compares against.
+fn writeCanvasPacketFullBinary(
+    canvas_frame: canvas.CanvasFrame,
+    packet: canvas.CanvasGpuPacket,
+    current: []const CanvasPacketCurrentCommand,
+    generation: u64,
+    writer: *std.Io.Writer,
+) !void {
+    const scissor = canvasFullRepaintBounds(canvas_frame.surface_size, canvas_frame.render_plan.bounds);
+    // Load-action wire code 2 = clear (see serialization.zig's layout).
+    try canvas.writeCanvasGpuPacketBinaryHeader(2, generation, scissor, packet.images, packet.image_actions, writer);
+    try writer.writeInt(u32, @intCast(current.len), .little);
+    const render_commands = canvas_frame.render_plan.commands;
+    for (current) |entry| {
+        const command = canvas.canvasGpuCommandFromRenderCommand(render_commands[entry.render_index], entry.render_index);
+        try canvas.writeCanvasGpuCommandBinaryKeyed(entry.key, command, writer);
+    }
+}
+
+/// Byte size the overflowing full keyed encode actually needed, measured
+/// with a discarding writer — overflow-path diagnostics only.
+fn canvasPacketFullBinaryByteSize(
+    canvas_frame: canvas.CanvasFrame,
+    packet: canvas.CanvasGpuPacket,
+    current: []const CanvasPacketCurrentCommand,
+    generation: u64,
+) usize {
+    var trailing: [128]u8 = undefined;
+    var discarding = std.Io.Writer.Discarding.init(&trailing);
+    writeCanvasPacketFullBinary(canvas_frame, packet, current, generation, &discarding.writer) catch return 0;
+    return @intCast(discarding.fullCount());
+}
+
+/// A successful retained present (full or patch) makes `current` the
+/// view's baseline: the engine-side mirror of what the host now retains.
+fn adoptCanvasPacketBaseline(view: anytype, current: []const CanvasPacketCurrentCommand, packet: canvas.CanvasGpuPacket) void {
+    for (current, 0..) |entry, index| {
+        view.canvas_packet_baseline_keys[index] = entry.key;
+        view.canvas_packet_baseline_fingerprints[index] = entry.fingerprint;
+    }
+    view.canvas_packet_baseline_count = current.len;
+    view.canvas_packet_baseline_surface_size = packet.surface_size;
+    view.canvas_packet_baseline_scale = packet.scale;
+    view.canvas_packet_baseline_valid = true;
+}
+
+/// Telemetry for packet presents that moved the whole frame (non-retained
+/// binary and JSON): mode `full`, no patch bytes.
+fn recordCanvasPacketFullPresent(view: anytype) void {
+    view.gpu_present_packet_mode = .full;
+    view.gpu_present_patch_bytes = 0;
+    view.gpu_present_patch_upsert_count = 0;
+    view.gpu_present_patch_evict_count = 0;
+}
 
 /// Emit the rate-limited fallback diagnostic on the first fallback, on
 /// every reason change, and every this-many fallback frames while the

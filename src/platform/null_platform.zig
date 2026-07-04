@@ -180,6 +180,13 @@ pub const NullPlatform = struct {
     /// (binary refused -> JSON attempt in the same frame) is exactly
     /// what a disabled toggle exercises.
     gpu_surface_packet_binary: bool = false,
+    /// Model a binary host that ALSO applies incremental `patch`
+    /// presents. Disabling it models a binary host without retained
+    /// command state (or one that lost it): patch payloads are refused
+    /// with `error.UnsupportedService`, which the runtime answers with a
+    /// FULL keyed present in the same frame — the resync negotiation the
+    /// patch tests pin.
+    gpu_surface_packet_binary_patch: bool = true,
     /// Enable the deterministic test image decoder: strict PNGs in the
     /// exact subset `canvas.png.writeRgba8` emits decode through the seam
     /// real platforms serve with CGImageSource/gdk-pixbuf/WIC. Tests
@@ -306,6 +313,15 @@ pub const NullPlatform = struct {
     /// retaining whole packets.
     gpu_surface_packet_present_binary_prefix: [16]u8 = [_]u8{0} ** 16,
     gpu_surface_packet_present_binary_count: usize = 0,
+    /// Full copy of the last binary packet payload, so patch tests can
+    /// decode the wire bytes and replay them against a reference retained
+    /// store (the Zig-side twin of the AppKit host's command dictionary).
+    gpu_surface_packet_present_binary_storage: [types.max_gpu_surface_packet_binary_bytes]u8 = undefined,
+    /// Wire load-action code of the last binary present (byte 5 of the
+    /// payload: 1 load / 2 clear / 3 patch).
+    gpu_surface_packet_present_binary_load_action: u8 = 0,
+    /// How many of the recorded binary presents were incremental patches.
+    gpu_surface_packet_present_binary_patch_count: usize = 0,
     gpu_surface_packet_present_count: usize = 0,
     gpu_surface_frame_request_window_id: WindowId = 0,
     gpu_surface_frame_request_label_storage: [max_view_label_bytes]u8 = undefined,
@@ -1171,6 +1187,11 @@ pub const NullPlatform = struct {
         const view_index = self.findViewIndex(packet.window_id, packet.label) orelse return error.ViewNotFound;
         if (self.views[view_index].kind != .gpu_surface) return error.InvalidGpuSurfacePacket;
         if (packet.binary.len == 0 or packet.binary.len > types.max_gpu_surface_packet_binary_bytes) return error.InvalidGpuSurfacePacket;
+        // Wire byte 5 is the load-action code; 3 = incremental patch. A
+        // host modeled without retained state refuses patches, which the
+        // runtime answers with a full keyed present in the same frame.
+        const load_action: u8 = if (packet.binary.len > 5) packet.binary[5] else 0;
+        if (load_action == 3 and !self.gpu_surface_packet_binary_patch) return error.UnsupportedService;
 
         self.gpu_surface_packet_present_window_id = packet.window_id;
         self.gpu_surface_packet_present_label_storage = undefined;
@@ -1190,6 +1211,9 @@ pub const NullPlatform = struct {
         self.gpu_surface_packet_present_binary_len = packet.binary.len;
         const prefix_len = @min(packet.binary.len, self.gpu_surface_packet_present_binary_prefix.len);
         @memcpy(self.gpu_surface_packet_present_binary_prefix[0..prefix_len], packet.binary[0..prefix_len]);
+        @memcpy(self.gpu_surface_packet_present_binary_storage[0..packet.binary.len], packet.binary);
+        self.gpu_surface_packet_present_binary_load_action = load_action;
+        if (load_action == 3) self.gpu_surface_packet_present_binary_patch_count += 1;
         self.gpu_surface_packet_present_binary_count += 1;
         self.gpu_surface_packet_present_count += 1;
     }

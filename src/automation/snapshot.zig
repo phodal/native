@@ -273,6 +273,19 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 view.gpu_present_fallback_command_kind,
                 view.gpu_present_fallback_frame_count,
             });
+            // Incremental-presentation telemetry: whether the last packet
+            // present shipped the full command list or a patch against
+            // the host's retained dictionary, the patch's bytes and edit
+            // counts, and how many commands the host currently retains —
+            // the numbers that make "frame cost scales with what changed"
+            // observable instead of asserted.
+            try writer.print(" present_mode={s} present_patch_bytes={d} present_patch_upserts={d} present_patch_evicts={d} present_retained_commands={d}", .{
+                @tagName(view.gpu_present_packet_mode),
+                view.gpu_present_patch_bytes,
+                view.gpu_present_patch_upsert_count,
+                view.gpu_present_patch_evict_count,
+                view.gpu_present_retained_command_count,
+            });
             try writer.print(" canvas_revision={d} canvas_commands={d} canvas_frame_requires_render={any} canvas_frame_full_repaint={any} canvas_frame_batches={d} canvas_frame_encoder_commands={d} canvas_frame_encoder_cache_actions={d} canvas_frame_encoder_pipeline_binds={d} canvas_frame_encoder_draws={d} canvas_frame_pipelines={d} canvas_frame_pipeline_uploads={d} canvas_frame_pipeline_retains={d} canvas_frame_pipeline_evicts={d}", .{
                 view.canvas_revision,
                 view.canvas_command_count,
@@ -725,6 +738,11 @@ test "snapshot emits GPU surface frame proof" {
         .gpu_present_fallback_needed_bytes = 218347,
         .gpu_present_fallback_limit_bytes = 131072,
         .gpu_present_fallback_frame_count = 12,
+        .gpu_present_packet_mode = .patch,
+        .gpu_present_patch_bytes = 2412,
+        .gpu_present_patch_upsert_count = 3,
+        .gpu_present_patch_evict_count = 1,
+        .gpu_present_retained_command_count = 402,
         .gpu_frame_index = 4,
         .gpu_timestamp_ns = 99,
         .gpu_frame_interval_ns = 8,
@@ -827,6 +845,11 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_fallback_limit=131072") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_fallback_command=\"\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_fallback_frames=12") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_mode=patch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_patch_bytes=2412") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_patch_upserts=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_patch_evicts=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "present_retained_commands=402") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_frame=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_timestamp_ns=99") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_frame_interval_ns=8") != null);

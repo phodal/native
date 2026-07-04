@@ -82,6 +82,7 @@ pub const GpuSurfaceBackend = types.GpuSurfaceBackend;
 pub const GpuSurfacePixelFormat = types.GpuSurfacePixelFormat;
 pub const GpuSurfacePresentMode = types.GpuSurfacePresentMode;
 pub const GpuPresentPath = types.GpuPresentPath;
+pub const GpuPresentPacketMode = types.GpuPresentPacketMode;
 pub const GpuPresentFallbackReason = types.GpuPresentFallbackReason;
 pub const GpuSurfaceAlphaMode = types.GpuSurfaceAlphaMode;
 pub const GpuSurfaceColorSpace = types.GpuSurfaceColorSpace;

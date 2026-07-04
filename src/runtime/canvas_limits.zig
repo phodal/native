@@ -31,6 +31,19 @@ pub const max_canvas_gradient_stops_per_view: usize = 64;
 pub const max_canvas_path_elements_per_view: usize = 2048;
 pub const max_canvas_glyphs_per_view: usize = 8192;
 pub const max_canvas_text_bytes_per_view: usize = 32768;
+// Retained packet commands per gpu-surface view: the host-side command
+// dictionary that incremental (`patch`) presents edit, and the engine's
+// per-view key+fingerprint mirror that derives those patches. Derived
+// from the command budget because every retained command is born from
+// exactly one display-list command — the command budget fails first,
+// loudly, before this one can. The AppKit host pins the same value
+// (NATIVE_SDK_PACKET_RETAINED_COMMAND_CAP in appkit_host.m); a frame past
+// either side's cap presents FULL (and the host drops its retained
+// state), never a partial dictionary. Engine memory is two u64 arrays:
+// 16 B x 2048 = 32 KiB per view x 32 view slots = 1 MiB fixed address
+// space; host memory is the decoded command dictionaries, realistically
+// a few hundred KB for a dense view.
+pub const max_canvas_retained_packet_commands_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
 pub const max_canvas_render_animations_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_render_animation_dirty_bounds_per_view: usize = 8;

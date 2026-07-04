@@ -482,6 +482,20 @@ pub const GpuPresentPath = enum {
     pixels,
 };
 
+/// HOW the most recent packet-path present moved its commands: a `full`
+/// present ships the whole command list (and, on the binary wire,
+/// rebuilds the host's retained command dictionary), a `patch` present
+/// ships only an edit script (upserts + evicts + the draw-order vector)
+/// against that retained state. `.none` before the first packet present.
+/// Patch presents are why frame cost scales with what CHANGED instead of
+/// with view size; snapshots surface this as `present_mode=` next to the
+/// patch byte/edit counters.
+pub const GpuPresentPacketMode = enum {
+    none,
+    full,
+    patch,
+};
+
 /// WHY the most recent frame left the GPU packet path for the CPU pixel
 /// fallback. `.none` while frames present through the packet path (or
 /// before the first present). The two paths rasterize text and shapes
@@ -503,6 +517,13 @@ pub const GpuPresentFallbackReason = enum {
     /// The platform declared no packet presenter (or refused the
     /// present call with `error.UnsupportedService`).
     missing_service,
+    /// The host refused an incremental `patch` present (retained state
+    /// lost, generation mismatch, retained-command budget, or a decode
+    /// failure). The runtime answers by re-presenting FULL in the same
+    /// frame, so this reason is transient unless every frame refuses —
+    /// the cumulative `present_fallback_frames` counter keeps the
+    /// history visible either way.
+    patch_refused,
 };
 
 pub const GpuSurfaceAlphaMode = enum {
@@ -657,6 +678,23 @@ pub const ViewInfo = struct {
     /// open, so snapshots catch oscillation that self-heals between
     /// polls).
     gpu_present_fallback_frame_count: usize = 0,
+    /// How the last packet present moved its commands (see
+    /// `GpuPresentPacketMode`): `patch` while incremental presentation
+    /// holds, `full` on baselines/resyncs, `none` before the first
+    /// packet present.
+    gpu_present_packet_mode: GpuPresentPacketMode = .none,
+    /// Encoded bytes of the last patch present (0 while presents are
+    /// full) — the number that makes the incremental win measurable
+    /// against the full-present size.
+    gpu_present_patch_bytes: usize = 0,
+    /// Commands the last patch inserted or replaced.
+    gpu_present_patch_upsert_count: usize = 0,
+    /// Commands the last patch evicted.
+    gpu_present_patch_evict_count: usize = 0,
+    /// Commands currently retained host-side for this view (the engine's
+    /// mirror of the host dictionary; 0 while no baseline is
+    /// established).
+    gpu_present_retained_command_count: usize = 0,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,

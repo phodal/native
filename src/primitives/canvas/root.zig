@@ -243,6 +243,8 @@ pub const CanvasGpuCommand = gpu_model.CanvasGpuCommand;
 pub const CanvasGpuPacket = gpu_model.CanvasGpuPacket;
 pub const CanvasGpuPacketSummary = gpu_model.CanvasGpuPacketSummary;
 pub const CanvasGpuPacketPlanner = gpu_model.CanvasGpuPacketPlanner;
+pub const canvasGpuCommandFromRenderCommand = gpu_model.canvasGpuCommandFromRenderCommand;
+pub const renderCommandIntersectsDirtyBounds = gpu_model.renderCommandIntersectsDirtyBounds;
 
 // Reference raster renderer lives in reference.zig; root keeps the public API stable.
 pub const ReferenceImage = reference_model.ReferenceImage;
@@ -543,8 +545,13 @@ pub const virtualWidgetScrollContentExtentWithTokens = widget_runtime.virtualWid
 
 pub const writeCanvasGpuPacketJson = serialization.writeCanvasGpuPacketJson;
 pub const writeCanvasGpuPacketBinary = serialization.writeCanvasGpuPacketBinary;
+pub const writeCanvasGpuPacketBinaryHeader = serialization.writeCanvasGpuPacketBinaryHeader;
+pub const writeCanvasGpuCommandBinaryKeyed = serialization.writeCanvasGpuCommandBinaryKeyed;
+pub const canvasGpuCommandFingerprint = serialization.canvasGpuCommandFingerprint;
+pub const canvasGpuPacketCommandKey = serialization.canvasGpuPacketCommandKey;
 pub const binary_packet_magic = serialization.binary_packet_magic;
 pub const binary_packet_version = serialization.binary_packet_version;
+pub const binary_packet_load_action_patch = serialization.binary_packet_load_action_patch;
 
 test {
     _ = @import("tests.zig");

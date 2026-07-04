@@ -23,7 +23,15 @@ Every process that touches Virtualization.framework needs the `com.apple.securit
 1. `guest-mac fetch` — downloads the latest supported macOS IPSW (~15 GB) to `~/Library/Caches/native-sdk/guest-mac/`.
 2. `guest-mac install` — creates the VM bundle at `~/.native/guest-mac/vm/` (defaults: 4 CPUs, 8 GB RAM, 90 GB sparse disk; override with `--cpus/--memory-gb/--disk-gb`) and restores macOS onto it. The windowed app runs both steps automatically if you skip them.
 3. Run the windowed app and **click through Setup Assistant in the display area** — the one genuinely manual step. Create the user account you want agents to SSH as.
-4. Follow the in-app checklist: enable Remote Login, grant Screen Recording, then run `provision.sh` inside the guest (mounts the repo share at `/Volumes/repo`, installs the pinned Zig, disables sleep, installs a boot-time remount daemon).
+4. Follow the in-app checklist: enable Remote Login, grant Screen Recording, then run `provision.sh` inside the guest. The script lives in the repo, and the repo rides into the guest as a virtio-fs device tagged `repo` — bootstrap the first mount by hand in the guest's Terminal:
+
+   ```sh
+   mkdir -p /Volumes/repo
+   sudo mount_virtiofs repo /Volumes/repo
+   /Volumes/repo/tools/guest-mac/provision.sh
+   ```
+
+   The script installs a boot-time remount daemon (so this is the only manual mount), enables what it can, installs the pinned Zig, and disables sleep.
 
 After that, agents drive everything headless (`agents.md`).
 

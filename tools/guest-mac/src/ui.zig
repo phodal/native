@@ -40,9 +40,12 @@ const checklist = [_][]const u8{
     "    Sharing > Remote Login: ON.",
     "4. Privacy & Security > Screen Recording:",
     "    allow the test runner / sshd-child.",
-    "5. Run tools/guest-mac/provision.sh inside",
-    "    the guest (zig toolchain + repo mount).",
-    "6. guest-mac ip  ->  ssh <user>@<ip>",
+    "5. In the guest terminal, bootstrap the",
+    "    share once:  mkdir -p /Volumes/repo &&",
+    "    sudo mount_virtiofs repo /Volumes/repo",
+    "6. Run /Volumes/repo/tools/guest-mac/",
+    "    provision.sh (zig + boot-time remount).",
+    "7. guest-mac ip  ->  ssh <user>@<ip>",
 };
 
 fn checklistViews(comptime base: usize) [checklist.len]native_sdk.ShellView {

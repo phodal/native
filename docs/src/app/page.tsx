@@ -96,6 +96,20 @@ function CodePane({ title, lang, code }: { title: string; lang: string; code: st
   );
 }
 
+function AppWindow({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-md border border-gray-alpha-400 bg-background-200 shadow-[0_24px_48px_-24px_rgba(0,0,0,0.18)] dark:bg-gray-alpha-100 dark:shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7)]">
+      <div className="flex items-center gap-1.5 border-b border-gray-alpha-400 px-4 py-2.5">
+        <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+        <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+        <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+        <span className="ml-3 font-mono label-12 text-gray-900">{title}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function Terminal({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="overflow-hidden rounded-md border border-gray-alpha-400 bg-background-100 text-left shadow-card">
@@ -150,7 +164,7 @@ const stats = [
     label: "Lines of markup and logic for that entire calculator app.",
   },
   {
-    value: "5",
+    value: "6",
     label: "Real apps in examples/, screenshotted on this page from actual builds.",
   },
 ];
@@ -311,7 +325,50 @@ export default function HomePage() {
             {siteName} keeps the expressive authoring model and replaces the runtime with native
             rendering.
           </SectionLede>
-          <div className="mx-auto mt-12 grid max-w-4xl gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+          {/* The proof: soundboard and deck are the same player — same
+              library, transport, queue, and search — separated only by
+              design tokens and a chrome pass. Soundboard follows the site
+              theme; deck is dark by design, so it never swaps. */}
+          <figure className="mt-12">
+            <div className="grid items-start gap-6 lg:grid-cols-2">
+              <AppWindow title="examples/soundboard">
+                {(["light", "dark"] as const).map((scheme) => (
+                  <Image
+                    key={scheme}
+                    src={`/home/soundboard-${scheme}.webp`}
+                    alt={`The Soundboard example app rendered by the Native SDK engine (${scheme} theme): a clean music library with album covers and a playback bar`}
+                    width={2160}
+                    height={1440}
+                    quality={90}
+                    className={`block h-auto w-full ${
+                      scheme === "light" ? "dark:hidden" : "hidden dark:block"
+                    }`}
+                  />
+                ))}
+              </AppWindow>
+              <AppWindow title="examples/deck">
+                <Image
+                  src="/home/deck-dark.webp"
+                  alt="The Deck example app rendered by the Native SDK engine: the same music player restyled as a rack-mount hardware unit with a phosphor readout and spectrum analyzer, dark by design"
+                  width={1920}
+                  height={1280}
+                  quality={90}
+                  className="block h-auto w-full"
+                />
+              </AppWindow>
+            </div>
+            <figcaption className="mx-auto mt-6 max-w-3xl text-center">
+              <p className="copy-16 text-gray-1000">
+                The same toolkit. The same player. Two identities.
+              </p>
+              <p className="mt-2 copy-14 text-gray-900">
+                Every difference between <InlineCode>examples/soundboard</InlineCode> and{" "}
+                <InlineCode>examples/deck</InlineCode> is design tokens and a chrome pass — same
+                widgets, same engine. Soundboard follows the site theme; deck is dark by design.
+              </p>
+            </figcaption>
+          </figure>
+          <div className="mx-auto mt-14 grid max-w-4xl gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
             {principles.map((principle) => (
               <div key={principle.name} className="border-t border-gray-alpha-400 pt-4">
                 <h3 className="heading-16 text-gray-1000">{principle.name}</h3>
@@ -363,12 +420,12 @@ export default function HomePage() {
       <section className="border-t border-gray-alpha-400" id="showcase">
         <div className="mx-auto max-w-[1200px] px-6 py-16 sm:py-24">
           <SectionLabel>Built for modern apps</SectionLabel>
-          <SectionTitle>Five real apps, in the repo</SectionTitle>
+          <SectionTitle>Six real apps, in the repo</SectionTitle>
           <SectionLede>
             Dashboards, editors, tools, internal apps, creative software — every screenshot is
             rendered by {siteName}’s deterministic engine from the example apps in{" "}
             <InlineCode>examples/</InlineCode>, the same state captured once per color scheme.
-            Flip the site theme and the apps flip with it.
+            Flip the site theme and the apps flip with it — deck alone stays dark, by design.
           </SectionLede>
           <div className="mt-10">
             <Showcase />
@@ -482,6 +539,7 @@ export default function HomePage() {
               <Prompt>zig build -Doptimize=ReleaseFast</Prompt>
               <Prompt>ls -lh */zig-out/bin</Prompt>
               <Muted>2.4M calculator</Muted>
+              <Muted>2.6M deck</Muted>
               <Muted>2.4M markdown-viewer</Muted>
               <Muted>2.4M notes</Muted>
               <Muted>4.5M soundboard</Muted>

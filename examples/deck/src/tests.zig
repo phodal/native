@@ -574,6 +574,35 @@ test "render deck screenshots (env-gated)" {
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
 }
 
+// Env-gated homepage screenshot renderer (skipped by default, never in
+// CI): renders the docs-homepage showcase state OFFSCREEN through the
+// deterministic reference renderer — the library face with a track playing
+// mid-song and one queued cue. Deck is dark-only by design, so unlike the
+// other homepage shots there is exactly one capture. PNG lands in
+// /tmp/homepage-shots/deck-dark-artifacts/. To use:
+//
+//   HOMEPAGE_SHOTS=1 zig build test
+test "render homepage screenshots (env-gated)" {
+    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    const io = testing.io;
+
+    const live = try LiveApp.start();
+    defer live.stop();
+
+    // The hero state: the full ledger, a track playing mid-song, one
+    // queued cue. The mid-song position comes from REAL seek steps on
+    // the fader (the widget keyboard path), so the fader, the VFD
+    // progress strip, and the timecode all agree.
+    try live.dispatch(.{ .play_track = 7 });
+    try live.dispatch(.{ .queue_track = 12 });
+    const seek_id = try live.widgetIdByLabel(.slider, "Seek");
+    for (0..8) |_| try live.widgetAction(seek_id, "increment");
+    try live.dispatch(.{ .select_album = 0 });
+    try presentShotFrame(live, 2);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/deck-dark-artifacts", "Deck");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
+}
+
 fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
     try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
         .label = main.canvas_label,

@@ -13,6 +13,8 @@ interface ShowcaseApp {
   width: number;
   height: number;
   portrait?: boolean;
+  /** Dark-only apps ship one capture that shows in both site themes. */
+  darkOnly?: boolean;
 }
 
 // Every number below is measured from the repository: line counts are the
@@ -44,6 +46,20 @@ const apps: ShowcaseApp[] = [
     ],
     width: 2160,
     height: 1440,
+  },
+  {
+    id: "deck",
+    name: "Deck",
+    tagline: "Soundboard’s twin, restyled as rack-mount hardware.",
+    detail:
+      "The same library, transport, queue, and search — a different identity from design tokens and a custom chrome pass alone. The spectrum analyzer is a real chart widget driven by the playback clock, and the skin is dark-only by design.",
+    facts: [
+      { label: "App source", value: "1,868 lines" },
+      { label: "Binary", value: "2.6 MB" },
+    ],
+    width: 1920,
+    height: 1280,
+    darkOnly: true,
   },
   {
     id: "notes",
@@ -116,7 +132,8 @@ export function Showcase() {
       </div>
 
       {/* Framed screenshot: the light and dark captures are the same app
-          state rendered per scheme; the site theme picks which one shows. */}
+          state rendered per scheme; the site theme picks which one shows.
+          Dark-only apps (deck) ship a single capture for both themes. */}
       <div className="mt-6 overflow-hidden rounded-md border border-gray-alpha-400 bg-background-200 shadow-[0_24px_48px_-24px_rgba(0,0,0,0.18)] dark:bg-gray-alpha-100 dark:shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7)]">
         <div className="flex items-center gap-1.5 border-b border-gray-alpha-400 px-4 py-2.5">
           <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
@@ -127,17 +144,19 @@ export function Showcase() {
           </span>
         </div>
         <div className={`relative ${active.portrait ? "flex justify-center bg-gray-100 py-8" : ""}`}>
-          {(["light", "dark"] as const).map((scheme) => (
+          {(active.darkOnly ? (["dark"] as const) : (["light", "dark"] as const)).map((scheme) => (
             <Image
               key={`${active.id}-${scheme}`}
               src={`/home/${active.id}-${scheme}.webp`}
-              alt={`The ${active.name} example app rendered by the Native SDK engine (${scheme} theme)`}
+              alt={`The ${active.name} example app rendered by the Native SDK engine ${
+                active.darkOnly ? "(dark by design)" : `(${scheme} theme)`
+              }`}
               width={active.width}
               height={active.height}
               quality={90}
               loading="eager"
               className={`h-auto ${active.portrait ? "w-64 rounded-md border border-gray-alpha-400 shadow-modal sm:w-72" : "w-full"} ${
-                scheme === "light" ? "dark:hidden" : "hidden dark:block"
+                active.darkOnly ? "" : scheme === "light" ? "dark:hidden" : "hidden dark:block"
               }`}
             />
           ))}

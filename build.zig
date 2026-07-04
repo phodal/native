@@ -100,6 +100,15 @@ pub fn build(b: *std.Build) void {
     const canvas_mod = module(b, target, optimize, "src/primitives/canvas/root.zig");
     canvas_mod.addImport("geometry", geometry_mod);
     canvas_mod.addImport("json", json_mod);
+    if (target.result.os.tag == .macos) {
+        // The estimator-vs-CoreText agreement test (text_metrics_tests.zig)
+        // shapes the bundled face through CoreText; apps already link these
+        // transitively via AppKit.
+        canvas_mod.linkFramework("CoreFoundation", .{});
+        canvas_mod.linkFramework("CoreGraphics", .{});
+        canvas_mod.linkFramework("CoreText", .{});
+        canvas_mod.linkSystemLibrary("c", .{});
+    }
     const debug_mod = module(b, target, optimize, "src/debug/root.zig");
     debug_mod.addImport("app_dirs", app_dirs_mod);
     debug_mod.addImport("trace", trace_mod);

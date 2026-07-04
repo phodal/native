@@ -12,6 +12,7 @@ test {
     _ = @import("svg_icon_tests.zig");
     _ = @import("png.zig");
     _ = @import("text_tests.zig");
+    _ = @import("text_metrics_tests.zig");
     _ = @import("text_span_tests.zig");
     _ = @import("markdown_tests.zig");
 }

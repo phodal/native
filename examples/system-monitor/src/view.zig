@@ -130,9 +130,7 @@ fn statTile(ui: *Ui, spec: TileSpec) Ui.Node {
         ui.paragraph(.{ .width = spark_width, .semantics = .{ .label = spec.value } }, &.{
             .{ .text = spec.value, .weight = .bold, .scale = 1.55 },
         }),
-        // Explicit full-row width: the macOS packet rasterizer re-measures
-        // text with its own font metrics, and a tight intrinsic box clips.
-        ui.text(.{ .width = spark_width, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, spec.detail),
+        ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, spec.detail),
         sparklineView(ui, spec.label, spec.history, spec.scale),
     }));
 }
@@ -205,9 +203,7 @@ fn toolbarView(ui: *Ui, model: *const Model) Ui.Node {
         else
             ui.el(.stack, .{}, .{}),
         ui.spacer(1),
-        // Width slack: a tight intrinsic box wraps under the reference
-        // renderer's metrics ("Sor/t").
-        ui.text(.{ .width = 34, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Sort"),
+        ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Sort"),
         sortChips(ui, model),
         sortDirectionIcon(ui, model),
     });
@@ -324,8 +320,9 @@ fn columnHeadings(ui: *Ui) Ui.Node {
     });
 }
 
-/// Right-aligned muted hint with ~20% width slack over the tight measure
-/// (host-side font metrics differ; see `alignedCell`).
+/// Right-aligned muted hint. The explicit width is the alignment box:
+/// `text_alignment = .end` needs a frame wider than the content to have
+/// an edge to align against.
 fn rightAlignedHint(ui: *Ui, text: []const u8) Ui.Node {
     var node = ui.text(.{ .width = 380, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, text);
     node.widget.text_alignment = .end;
@@ -359,9 +356,9 @@ fn rowView(ui: *Ui, row: *const model_mod.TableRow) Ui.Node {
     }));
 }
 
-/// Right-aligned fixed-width numeric cell. The width carries slack over
-/// the tight measure: the macOS packet rasterizer re-lays text out with
-/// its own font metrics, so a tight box can wrap host-side.
+/// Right-aligned fixed-width numeric cell. The fixed width is a table
+/// column: it keeps every row's value right edge aligned regardless of
+/// digit count, sized for the widest plausible value.
 fn alignedCell(ui: *Ui, width: f32, text: []const u8, tone: canvas.ColorTokenName) Ui.Node {
     var node = ui.text(.{ .width = width, .size = .sm, .style_tokens = .{ .foreground = tone } }, text);
     node.widget.text_alignment = .end;

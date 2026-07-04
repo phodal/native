@@ -6,10 +6,10 @@
 //! screenshots, `render_pixels`, mobile embeds, headless frames.
 //!
 //! Deliberately NOT a full font stack: no hinting, no kerning, no
-//! shaping, no CFF. Layout keeps using the deterministic estimator
-//! metrics (`text_metrics.zig`), so every measurement-derived golden is
-//! byte-identical; this module only changes what glyph PAINTING looks
-//! like. All parsing is bounds-checked against fixed budgets sized from
+//! shaping, no CFF. The deterministic estimator (`text_metrics.zig`)
+//! derives its advance table from this face's `cmap`/`hmtx`, so layout
+//! measures with exactly the advances these outlines are inked at.
+//! All parsing is bounds-checked against fixed budgets sized from
 //! the bundled face's `maxp` (96 points / 16 contours per simple glyph,
 //! composites well under both), and any glyph beyond the budget fails
 //! with a recoverable error so callers can fall back to block glyphs.

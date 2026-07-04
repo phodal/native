@@ -532,13 +532,26 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .color = widgetForegroundColor(widget, tokens, tokens.colors.text),
         .text = widget.text,
         .text_layout = .{
-            .max_width = widget.frame.width,
+            .max_width = textWrapMaxWidth(tokens, widget.frame.width),
             .line_height = text_size * 1.25,
             .wrap = .word,
             .alignment = widget.text_alignment,
             .measure = tokens.text_measure,
         },
     });
+}
+
+/// Wrap budget for text painted inside a pixel-snapped frame. Geometry
+/// snapping (`emitWidgetDepthContent`'s `pixelSnapGeometryRect`) can shave
+/// up to half a device pixel off the layout frame that intrinsic sizing
+/// measured with the exact same metrics — enough to word-wrap an
+/// exact-fit line ("Sort" painting as "Sor"/"t"). Hand the shaved
+/// quantum back to the wrap so snapping never changes line breaks;
+/// glyph origins still snap independently via `pixelSnapTextPoint`.
+fn textWrapMaxWidth(tokens: DesignTokens, width: f32) f32 {
+    if (!tokens.pixel_snap.geometry) return width;
+    const scale = pixelSnapScale(tokens) orelse return width;
+    return width + 0.5 / scale;
 }
 
 /// Static text selection highlight: fill rects behind the selected lines
@@ -568,7 +581,7 @@ fn emitTextSpansWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
     var runs: [text_spans_model.max_text_span_runs_per_paragraph]text_spans_model.TextSpanRun = undefined;
     const layout = text_spans_model.layoutTextSpans(
         widget.spans,
-        widget_metrics.widgetTextSpanLayoutOptions(widget, tokens, content.width),
+        widget_metrics.widgetTextSpanLayoutOptions(widget, tokens, textWrapMaxWidth(tokens, content.width)),
         &runs,
     );
 

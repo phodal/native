@@ -248,9 +248,9 @@ fn trackIndicator(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
     });
 }
 
-/// Right-aligned fixed-width duration. The width carries slack on purpose:
-/// the macOS packet rasterizer re-lays text out with its own font metrics,
-/// so a tight intrinsic measure can wrap host-side.
+/// Right-aligned fixed-width duration. The fixed width is a column: it
+/// keeps every row's duration right edge aligned regardless of digit
+/// count ("8:05" vs "12:41"), sized for the widest plausible value.
 fn durationText(ui: *Ui, duration: []const u8) Ui.Node {
     var node = ui.text(.{ .width = 44, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, duration);
     node.widget.text_alignment = .end;
@@ -260,12 +260,11 @@ fn durationText(ui: *Ui, duration: []const u8) Ui.Node {
 // ---------------------------------------------------------------- shared
 
 fn sectionHeading(ui: *Ui, title: []const u8, count: []const u8) Ui.Node {
-    // The explicit width carries ~20% slack over the tight intrinsic
-    // measure: the macOS packet rasterizer re-measures with its own font
-    // stack, and a tight paragraph box wraps host-side ("Song\ns").
-    const width = 14 * @as(f32, @floatFromInt(title.len)) + 12;
+    // Intrinsic width: layout measures with the bundled face's real
+    // advances and the packet host draws the engine's lines verbatim,
+    // so the old slack-width workaround (friction #80) is gone.
     return ui.row(.{ .gap = 10, .cross = .center }, .{
-        ui.paragraph(.{ .width = width, .semantics = .{ .label = title } }, &.{
+        ui.paragraph(.{ .semantics = .{ .label = title } }, &.{
             .{ .text = title, .weight = .bold, .scale = 1.45 },
         }),
         ui.el(.badge, .{ .variant = .secondary, .text = count }, .{}),

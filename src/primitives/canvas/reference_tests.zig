@@ -1062,14 +1062,15 @@ test "reference renderer advances proxy text by utf8 scalars" {
     const surface = try ReferenceRenderSurface.init(5, 4, &pixels);
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
-    // Real outlines walking estimator advances: the composite 'e-acute'
-    // inks column 1 (11 at this row; its accent shows stronger one row
-    // down) and grazes column 2 with anti-aliased spill; 'B' lands one
-    // scalar advance later on column 3, so multi-byte input still
-    // advances once per scalar, not per byte.
+    // Real outlines walking the face's real advances: the composite
+    // 'e-acute' inks column 1 (11 at this row; its accent shows stronger
+    // one row down) and 'B' lands one scalar advance later — é now
+    // measures its true 0.567 em, so 'B' starts a third of a pixel
+    // earlier than under the old flat multibyte estimate but still
+    // proves multi-byte input advances once per scalar, not per byte.
     try expectPixelRgba8(.{ 11, 0, 0, 255 }, surface, 1, 1);
-    try expectPixelRgba8(.{ 2, 0, 0, 255 }, surface, 2, 1);
-    try expectPixelRgba8(.{ 70, 0, 0, 255 }, surface, 3, 1);
+    try expectPixelRgba8(.{ 23, 0, 0, 255 }, surface, 2, 1);
+    try expectPixelRgba8(.{ 49, 0, 0, 255 }, surface, 3, 1);
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
 }
 

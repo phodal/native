@@ -688,7 +688,7 @@ test "text edit state tracks ime composition ranges" {
 test "text bounds follow utf8 scalar fallback and shaped y offsets" {
     // Metric boxes inflate by the ink allowance (left/bottom 0.1em,
     // right 0.35em) so real glyph outlines never clip at the bounds.
-    try expectRectApprox(geometry.RectF.init(1, 8, 20.28, 13.5), textBounds(.{
+    try expectRectApprox(geometry.RectF.init(1, 8, 19.47, 13.5), textBounds(.{
         .font_id = 1,
         .size = 10,
         .origin = geometry.PointF.init(2, 18),
@@ -718,14 +718,14 @@ test "text bounds and reference renderer honor per-run wrapping" {
         .text = "ABCD",
         .text_layout = .{ .max_width = 10, .line_height = 12, .wrap = .character },
     };
-    // Metric box (0, 0, 7.01, 48) plus the ink allowance.
-    try expectRectApprox(geometry.RectF.init(-1, 0, 11.51, 49), textBounds(text));
+    // Metric box (0, 0, 7.11, 48) plus the ink allowance.
+    try expectRectApprox(geometry.RectF.init(-1, 0, 11.61, 49), textBounds(text));
 
     const commands = [_]CanvasCommand{.{ .draw_text = text }};
     var render_commands: [1]RenderCommand = undefined;
     const render_plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
     try std.testing.expectEqual(@as(usize, 1), render_plan.commandCount());
-    try expectRectApprox(geometry.RectF.init(-1, 0, 11.51, 49), render_plan.commands[0].bounds);
+    try expectRectApprox(geometry.RectF.init(-1, 0, 11.61, 49), render_plan.commands[0].bounds);
 
     var pixels: [16 * 32 * 4]u8 = [_]u8{0} ** (16 * 32 * 4);
     const surface = try ReferenceRenderSurface.init(16, 32, &pixels);
@@ -767,7 +767,7 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(usize, 4), layout.lineCount());
     try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
     try std.testing.expectEqual(@as(usize, 5), layout.lines[0].text_len);
-    try expectRectApprox(geometry.RectF.init(4, 10, 24.23, 14), layout.lines[0].bounds);
+    try expectRectApprox(geometry.RectF.init(4, 10, 24.25, 14), layout.lines[0].bounds);
     try std.testing.expectEqual(@as(usize, 6), layout.lines[1].text_start);
     try std.testing.expectEqual(@as(usize, 5), layout.lines[1].text_len);
     try std.testing.expectEqual(@as(f32, 34), layout.lines[1].baseline);
@@ -775,7 +775,7 @@ test "text layout wraps words into deterministic line boxes" {
     try std.testing.expectEqual(@as(usize, 4), layout.lines[2].text_len);
     try std.testing.expectEqual(@as(usize, 17), layout.lines[3].text_start);
     try std.testing.expectEqual(@as(usize, 4), layout.lines[3].text_len);
-    try expectRectApprox(geometry.RectF.init(4, 10, 26.7, 56), layout.bounds);
+    try expectRectApprox(geometry.RectF.init(4, 10, 26.61, 56), layout.bounds);
 }
 
 test "text layout aligns fallback and shaped line boxes" {
@@ -790,12 +790,12 @@ test "text layout aligns fallback and shaped line boxes" {
     var center_lines: [1]TextLine = undefined;
     const centered = try layoutTextRunPlan(text, .{ .max_width = 30, .line_height = 14, .alignment = .center }, &center_lines);
     try std.testing.expectEqual(TextAlign.center, centered.key.alignment);
-    try expectRectApprox(geometry.RectF.init(14.23, 10, 9.54, 14), centered.layout.lines[0].bounds);
-    try expectRectApprox(geometry.RectF.init(14.23, 10, 9.54, 14), centered.layout.bounds);
+    try expectRectApprox(geometry.RectF.init(14.215, 10, 9.57, 14), centered.layout.lines[0].bounds);
+    try expectRectApprox(geometry.RectF.init(14.215, 10, 9.57, 14), centered.layout.bounds);
 
     var end_lines: [1]TextLine = undefined;
     const end = try layoutTextRun(text, .{ .max_width = 30, .line_height = 14, .alignment = .end }, &end_lines);
-    try expectRectApprox(geometry.RectF.init(24.46, 10, 9.54, 14), end.lines[0].bounds);
+    try expectRectApprox(geometry.RectF.init(24.43, 10, 9.57, 14), end.lines[0].bounds);
 
     const glyphs = [_]Glyph{
         .{ .id = 1, .x = 0, .y = 0, .advance = 8 },
@@ -826,16 +826,16 @@ test "text layout maps caret selection and points across wrapped fallback lines"
     const options = TextLayoutOptions{ .max_width = 30, .line_height = 14, .wrap = .word };
 
     var caret_lines: [2]TextLine = undefined;
-    try expectRectApprox(geometry.RectF.init(28.23, 10, 1, 14), try layoutTextCaretRect(text, options, 5, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(28.25, 10, 1, 14), try layoutTextCaretRect(text, options, 5, &caret_lines));
 
     var selection_lines: [2]TextLine = undefined;
     var selection_rects: [2]TextSelectionRect = undefined;
     const rects = try layoutTextSelectionRects(text, options, TextRange.init(3, 8), &selection_lines, &selection_rects);
     try std.testing.expectEqual(@as(usize, 2), rects.len);
     try std.testing.expectEqualDeep(TextRange.init(3, 5), rects[0].range);
-    try expectRectApprox(geometry.RectF.init(19.57, 10, 8.66, 14), rects[0].rect);
+    try expectRectApprox(geometry.RectF.init(19.63, 10, 8.62, 14), rects[0].rect);
     try std.testing.expectEqualDeep(TextRange.init(6, 8), rects[1].range);
-    try expectRectApprox(geometry.RectF.init(4, 24, 13.95, 14), rects[1].rect);
+    try expectRectApprox(geometry.RectF.init(4, 24, 13.98, 14), rects[1].rect);
 
     const dashboard_value = DrawText{
         .font_id = default_sans_font_id,
@@ -846,7 +846,7 @@ test "text layout maps caret selection and points across wrapped fallback lines"
     };
     var dashboard_value_lines: [1]TextLine = undefined;
     try expectRectApprox(
-        geometry.RectF.init(55.709, 0, 1, 21.25),
+        geometry.RectF.init(57.001, 0, 1, 21.25),
         try layoutTextCaretRect(dashboard_value, .{ .line_height = 21.25 }, dashboard_value.text.len, &dashboard_value_lines),
     );
 
@@ -957,19 +957,18 @@ test "text layout measures utf8 scalars for fallback wrapping" {
         .text = "éééé éé",
     };
 
+    // é measures at the face's real 0.567 em advance, so "éééé" splits
+    // after three scalars and the remaining "é éé" fits one line.
     var lines: [3]TextLine = undefined;
     const layout = try layoutTextRun(text, .{ .max_width = 20, .line_height = 12, .wrap = .word }, &lines);
-    try std.testing.expectEqual(@as(usize, 3), layout.lineCount());
+    try std.testing.expectEqual(@as(usize, 2), layout.lineCount());
     try std.testing.expectEqual(@as(usize, 0), layout.lines[0].text_start);
     try std.testing.expectEqual(@as(usize, 6), layout.lines[0].text_len);
-    try expectRectApprox(geometry.RectF.init(2, 8, 19.5, 12), layout.lines[0].bounds);
+    try expectRectApprox(geometry.RectF.init(2, 8, 17.01, 12), layout.lines[0].bounds);
     try std.testing.expectEqual(@as(usize, 6), layout.lines[1].text_start);
-    try std.testing.expectEqual(@as(usize, 2), layout.lines[1].text_len);
-    try expectRectApprox(geometry.RectF.init(2, 20, 6.5, 12), layout.lines[1].bounds);
-    try std.testing.expectEqual(@as(usize, 9), layout.lines[2].text_start);
-    try std.testing.expectEqual(@as(usize, 4), layout.lines[2].text_len);
-    try expectRectApprox(geometry.RectF.init(2, 32, 13, 12), layout.lines[2].bounds);
-    try expectRectApprox(geometry.RectF.init(2, 8, 19.5, 36), layout.bounds);
+    try std.testing.expectEqual(@as(usize, 7), layout.lines[1].text_len);
+    try expectRectApprox(geometry.RectF.init(2, 20, 19.51, 12), layout.lines[1].bounds);
+    try expectRectApprox(geometry.RectF.init(2, 8, 19.51, 24), layout.bounds);
 
     var character_lines: [3]TextLine = undefined;
     const character_layout = try layoutTextRun(.{
@@ -1008,7 +1007,7 @@ test "text layout cache plans upload retain and evict work" {
     try std.testing.expectEqual(@as(usize, 0), first.evictCount());
     try std.testing.expectEqual(@as(usize, 4), first.entries[0].line_count);
     try std.testing.expectEqual(@as(u64, 1), first.entries[0].last_used_frame);
-    try expectRectApprox(geometry.RectF.init(4, 10, 26.7, 56), first.entries[0].bounds);
+    try expectRectApprox(geometry.RectF.init(4, 10, 26.61, 56), first.entries[0].bounds);
     try std.testing.expectEqual(TextLayoutCacheActionKind.upload, first.actions[0].kind);
 
     var retained_entries: [1]TextLayoutCacheEntry = undefined;

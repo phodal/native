@@ -45,10 +45,12 @@ pub const max_notes = 48;
 /// so the per-view 64 KiB widget-text budget stays far away.
 pub const max_note_bytes = 4 * 1024;
 pub const max_search_bytes = 48;
-/// Derived-title/snippet cuts (bytes, backed off to UTF-8 boundaries).
-/// Sized so each stays a single line in the fixed-width list rail even
-/// when the macOS packet rasterizer re-lays text out with its own,
-/// slightly wider font metrics (the soundboard slack rule).
+/// Derived-title/snippet cuts (bytes, backed off to UTF-8 boundaries):
+/// the app-level ellipsis mechanism that keeps each derived string a
+/// single line in the fixed-width list rail. Layout now measures with
+/// the bundled face's real advances (and the packet host draws the
+/// engine's lines verbatim), so these are plain content-length design
+/// caps — no slack for divergent host metrics baked in.
 pub const max_title_bytes = 28;
 pub const max_snippet_bytes = 30;
 pub const max_path_bytes = 512;
@@ -961,7 +963,10 @@ pub fn persistStore(model: *Model, fx: *Effects) void {
 /// The first-run content: three folders and a handful of notes with
 /// staggered ages, so the list, snippets, and relative times all have
 /// something honest to show. Ages are relative to the model's clock —
-/// deterministic under a `TestClock`.
+/// deterministic under a `TestClock`. Prose bodies are natural
+/// one-line paragraphs: the editor soft-wraps them with the same
+/// metrics the renderer inks, so the hard-wrapped-seed workaround
+/// (friction #80) is gone.
 pub fn seed(model: *Model) void {
     model.folder_count = 0;
     model.note_count = 0;
@@ -976,26 +981,22 @@ pub fn seed(model: *Model) void {
     _ = model.addNote(reading, now - 8 * std.time.ms_per_day,
         \\Piranesi
         \\
-        \\The halls, the tides, the statues. Reread the flooding
-        \\scene — the calm inventory voice is what makes it land.
+        \\The halls, the tides, the statues. Reread the flooding scene — the calm inventory voice is what makes it land.
     );
     _ = model.addNote(reading, now - 4 * std.time.ms_per_day,
         \\The Making of Prince of Persia
         \\
-        \\Jordan Mechner's journals. The rotoscoping chapter pairs
-        \\well with the animation notes in Ideas.
+        \\Jordan Mechner's journals. The rotoscoping chapter pairs well with the animation notes in Ideas.
     );
     _ = model.addNote(ideas, now - 2 * std.time.ms_per_day,
         \\Reading queue mechanics
         \\
-        \\The queue should surface the oldest unread item, not the
-        \\newest. Novelty is the enemy of finishing.
+        \\The queue should surface the oldest unread item, not the newest. Novelty is the enemy of finishing.
     );
     _ = model.addNote(ideas, now - 26 * std.time.ms_per_hour,
         \\Field recorder for the balcony
         \\
-        \\A tiny app that samples one minute of audio at sunrise and
-        \\files it by date. Could pair with the weather log.
+        \\A tiny app that samples one minute of audio at sunrise and files it by date. Could pair with the weather log.
     );
     _ = model.addNote(inbox, now - 5 * std.time.ms_per_hour,
         \\Platform sync — Thursday
@@ -1019,15 +1020,11 @@ pub fn seed(model: *Model) void {
     _ = model.addNote(inbox, now - 2 * std.time.ms_per_min,
         \\Welcome to Notes
         \\
-        \\Everything here is a real note — edit this text and watch
-        \\the list re-sort by edit time.
+        \\Everything here is a real note — edit this text and watch the list re-sort by edit time.
         \\
-        \\The first line of a note becomes its title, the next lines
-        \\become the preview, and search covers every folder's full
-        \\text. Notes autosave a moment after you stop typing.
+        \\The first line of a note becomes its title, the next lines become the preview, and search covers every folder's full text. Notes autosave a moment after you stop typing.
         \\
-        \\The whole keyboard map is on the right when no note is
-        \\open; start with Cmd+N.
+        \\The whole keyboard map is on the right when no note is open; start with Cmd+N.
     );
 
     model.selected_folder = all_folder_id;

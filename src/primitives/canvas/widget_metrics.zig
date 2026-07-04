@@ -35,7 +35,10 @@ pub fn widgetLineHeight(text_size: f32) f32 {
 /// The single source of truth for how a span paragraph (`.text` widget
 /// with `spans`) lays out: intrinsic sizing, wrapped-height reservation,
 /// link hit-area frames, and command emission all build their options
-/// here so they agree byte-for-byte.
+/// here so they agree byte-for-byte. One deliberate exception: emission
+/// widens `max_width` by the pixel-snap quantum (`textWrapMaxWidth`) so
+/// a snapped paint frame never wraps a line the layout frame fit —
+/// painted lines are therefore always <= the reserved line count.
 pub fn widgetTextSpanLayoutOptions(widget: Widget, tokens: DesignTokens, max_width: f32) text_spans_model.TextSpanLayoutOptions {
     return .{
         .size = widgetBodyTextSize(widget, tokens),

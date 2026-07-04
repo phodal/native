@@ -94,11 +94,11 @@ fn expressionField(ui: *Ui, model: *const Model) Ui.Node {
     }, .{});
 }
 
-/// The result: one scaled span, right-aligned. The explicit width carries
-/// the whole content column so host-side re-measurement (the macOS packet
-/// rasterizer uses its own font metrics) can never wrap it. Its semantic
-/// label IS the value, so assistive tech (and the automation snapshot)
-/// reads the result directly.
+/// The result: one scaled span, right-aligned. The explicit width spans
+/// the whole content column — it is the alignment box that keeps the
+/// right-aligned result flush with the keypad edge. Its semantic label
+/// IS the value, so assistive tech (and the automation snapshot) reads
+/// the result directly.
 fn resultLine(ui: *Ui, model: *const Model) Ui.Node {
     const value = model.displayText(ui.arena);
     var node = ui.paragraph(.{

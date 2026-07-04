@@ -1,4 +1,6 @@
+const std = @import("std");
 const canvas = @import("root.zig");
+const font_ttf = @import("font_ttf.zig");
 const text_atlas = @import("text_atlas.zig");
 const text_interaction = @import("text_interaction.zig");
 
@@ -79,12 +81,97 @@ pub fn estimateTextWidthForFont(font_id: FontId, text: []const u8, size: f32) f3
     return width;
 }
 
+/// Design pitch for the reserved mono id. The repo bundles no mono
+/// face, so this stays a constant rather than a derived metric: 0.6 em
+/// is Geist Mono's actual advance (600/1000 units in every published
+/// weight), so the estimator, the live Geist Mono provider path, and
+/// SF Mono (0.6 em) all agree on the pitch.
+const mono_advance_em: f32 = 0.6;
+
+/// The bundled face's `.notdef` advance in em units (0.6 em in Geist).
+/// This is the width the face itself declares for "I do not have this
+/// glyph", so it is what layout charges for codepoints outside the
+/// face's coverage (and for control or malformed bytes, which paint as
+/// the same block fallback).
+const notdef_advance_em: f32 = faceAdvanceEm(&font_ttf.geist_regular, 0);
+
+/// Em-unit advances for the printable ASCII range, read from the
+/// bundled face's `cmap`/`hmtx` at comptime. Layout therefore measures
+/// with exactly the advances the reference renderer inks; a bundle
+/// swap that drops ASCII coverage is a compile error.
+const ascii_advance_em: [0x7F - 0x20]f32 = blk: {
+    @setEvalBranchQuota(400_000);
+    var table: [0x7F - 0x20]f32 = undefined;
+    for (&table, 0x20..) |*slot, codepoint| {
+        const glyph = font_ttf.geist_regular.glyphIndex(codepoint);
+        if (glyph == 0) @compileError("bundled Geist face is missing printable ASCII coverage");
+        slot.* = faceAdvanceEm(&font_ttf.geist_regular, glyph);
+    }
+    break :blk table;
+};
+
+fn faceAdvanceEm(face: *const font_ttf.Face, glyph: u16) f32 {
+    return face.advance(glyph) / face.units_per_em;
+}
+
 pub fn estimateTextAdvanceForBytes(font_id: FontId, bytes: []const u8, size: f32) f32 {
     if (bytes.len == 0) return 0;
-    if (font_id == default_mono_font_id) return size * 0.6;
+    if (font_id == default_mono_font_id) return size * mono_advance_em;
     const weight = sansVariantWidthFactor(font_id);
-    if (bytes.len > 1) return size * 0.65 * weight;
-    return size * geistSansAdvanceFactor(bytes[0]) * weight;
+    return size * clusterAdvanceEm(bytes) * weight;
+}
+
+/// Em-unit advance of one UTF-8 cluster, derived from the bundled face:
+/// a comptime `hmtx` table for printable ASCII, a runtime lookup against
+/// the embedded face for every other covered codepoint (so the estimate
+/// is definitionally in lockstep with the bytes the renderer inks), and
+/// two documented fallbacks for what the face cannot answer — East
+/// Asian wide/fullwidth codepoints charge a full em (the advance CJK
+/// fallback fonts such as PingFang use, and the cell a fullwidth block
+/// glyph should occupy), everything else charges the face's own
+/// `.notdef` advance.
+fn clusterAdvanceEm(bytes: []const u8) f32 {
+    if (bytes.len == 1) {
+        const byte = bytes[0];
+        if (byte >= 0x20 and byte < 0x7F) return ascii_advance_em[byte - 0x20];
+        return notdef_advance_em;
+    }
+    // `utf8Decode` asserts (rather than errors) when the slice length
+    // does not match the lead byte, so truncated clusters — possible at
+    // the end of a run — take the notdef fallback explicitly.
+    if (bytes.len != utf8SequenceLength(bytes[0])) return notdef_advance_em;
+    const codepoint = std.unicode.utf8Decode(bytes) catch return notdef_advance_em;
+    const face = &font_ttf.geist_regular;
+    const glyph = face.glyphIndex(codepoint);
+    if (glyph != 0) return faceAdvanceEm(face, glyph);
+    if (isEastAsianWideCodepoint(codepoint)) return 1.0;
+    return notdef_advance_em;
+}
+
+/// East Asian wide / fullwidth blocks (Unicode EAW `W`/`F`, plus the
+/// emoji planes, which render fullwidth everywhere). The bundled face
+/// covers none of these, so they take the 1.0 em fallback instead of
+/// the `.notdef` advance.
+fn isEastAsianWideCodepoint(codepoint: u21) bool {
+    return switch (codepoint) {
+        0x1100...0x115F, // Hangul jamo
+        0x2E80...0x303E, // CJK radicals, Kangxi, CJK symbols and punctuation
+        0x3041...0x33FF, // Kana, CJK compatibility
+        0x3400...0x4DBF, // CJK extension A
+        0x4E00...0x9FFF, // CJK unified ideographs
+        0xA000...0xA4CF, // Yi
+        0xA960...0xA97F, // Hangul jamo extended-A
+        0xAC00...0xD7A3, // Hangul syllables
+        0xF900...0xFAFF, // CJK compatibility ideographs
+        0xFE10...0xFE19, // Vertical forms
+        0xFE30...0xFE6F, // CJK compatibility forms, small form variants
+        0xFF00...0xFF60, // Fullwidth forms
+        0xFFE0...0xFFE6, // Fullwidth signs
+        0x1F300...0x1FAFF, // Emoji and symbol planes
+        0x20000...0x3FFFD, // CJK extensions B and beyond
+        => true,
+        else => false,
+    };
 }
 
 /// Width factor for the reserved sans variant ids (span weight/slant).
@@ -101,103 +188,3 @@ pub fn estimatedGlyphAdvance(glyph: Glyph, size: f32) f32 {
     return @max(size * 0.25, glyph.advance);
 }
 
-fn geistSansAdvanceFactor(byte: u8) f32 {
-    return switch (byte) {
-        ' ' => 0.25,
-        '!' => 0.268,
-        '"' => 0.408,
-        '#' => 0.654,
-        '$' => 0.647,
-        '%' => 0.844,
-        '&' => 0.718,
-        '\'' => 0.213,
-        '(' => 0.365,
-        ')' => 0.365,
-        '*' => 0.469,
-        '+' => 0.633,
-        ',' => 0.214,
-        '-' => 0.424,
-        '.' => 0.2,
-        '/' => 0.458,
-        '0' => 0.66,
-        '1' => 0.348,
-        '2' => 0.596,
-        '3' => 0.622,
-        '4' => 0.584,
-        '5' => 0.602,
-        '6' => 0.601,
-        '7' => 0.553,
-        '8' => 0.621,
-        '9' => 0.601,
-        ':' => 0.237,
-        ';' => 0.237,
-        '<' => 0.605,
-        '=' => 0.606,
-        '>' => 0.605,
-        '?' => 0.498,
-        '@' => 0.899,
-        'A' => 0.668,
-        'B' => 0.678,
-        'C' => 0.7,
-        'D' => 0.701,
-        'E' => 0.602,
-        'F' => 0.589,
-        'G' => 0.707,
-        'H' => 0.702,
-        'I' => 0.269,
-        'J' => 0.596,
-        'K' => 0.651,
-        'L' => 0.579,
-        'M' => 0.876,
-        'N' => 0.737,
-        'O' => 0.74,
-        'P' => 0.649,
-        'Q' => 0.74,
-        'R' => 0.67,
-        'S' => 0.647,
-        'T' => 0.578,
-        'U' => 0.688,
-        'V' => 0.668,
-        'W' => 0.91,
-        'X' => 0.628,
-        'Y' => 0.628,
-        'Z' => 0.542,
-        '[' => 0.349,
-        '\\' => 0.458,
-        ']' => 0.349,
-        '^' => 0.537,
-        '_' => 0.562,
-        '`' => 0.35,
-        'a' => 0.574,
-        'b' => 0.602,
-        'c' => 0.551,
-        'd' => 0.602,
-        'e' => 0.567,
-        'f' => 0.401,
-        'g' => 0.601,
-        'h' => 0.584,
-        'i' => 0.252,
-        'j' => 0.258,
-        'k' => 0.594,
-        'l' => 0.288,
-        'm' => 0.879,
-        'n' => 0.584,
-        'o' => 0.578,
-        'p' => 0.602,
-        'q' => 0.602,
-        'r' => 0.385,
-        's' => 0.529,
-        't' => 0.399,
-        'u' => 0.586,
-        'v' => 0.534,
-        'w' => 0.817,
-        'x' => 0.584,
-        'y' => 0.535,
-        'z' => 0.549,
-        '{' => 0.365,
-        '|' => 0.256,
-        '}' => 0.365,
-        '~' => 0.633,
-        else => 0.58,
-    };
-}

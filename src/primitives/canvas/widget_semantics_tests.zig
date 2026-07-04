@@ -1153,7 +1153,7 @@ test "widget search fields expose textbox semantics and render search chrome" {
     try std.testing.expect(semantics[0].focusable);
     try std.testing.expectEqualDeep(TextRange.init(9, 9), semantics[0].text_selection.?);
     const search_geometry = layout.textGeometry(10, .{}).?;
-    try expectRectApprox(geometry.RectF.init(112.042, 21.25, 1, 17.5), search_geometry.caret_bounds.?);
+    try expectRectApprox(geometry.RectF.init(111.818, 21.25, 1, 17.5), search_geometry.caret_bounds.?);
     try std.testing.expectEqual(@as(usize, 0), search_geometry.selection_rect_count);
 
     const tokens = DesignTokens{
@@ -1318,9 +1318,9 @@ test "widget text fields render selection caret and composition ranges" {
     const text_geometry = layout.textGeometry(9, .{}).?;
     try std.testing.expect(text_geometry.caret_bounds == null);
     try std.testing.expectEqual(@as(usize, 1), text_geometry.selection_rect_count);
-    try expectRectApprox(geometry.RectF.init(28.036, 19.25, 24.57, 17.5), text_geometry.selection_bounds.?);
+    try expectRectApprox(geometry.RectF.init(27.98, 19.25, 24.472, 17.5), text_geometry.selection_bounds.?);
     try std.testing.expectEqual(@as(usize, 1), text_geometry.composition_rect_count);
-    try expectRectApprox(geometry.RectF.init(36.464, 19.25, 16.142, 17.5), text_geometry.composition_bounds.?);
+    try expectRectApprox(geometry.RectF.init(36.352, 19.25, 16.1, 17.5), text_geometry.composition_bounds.?);
 
     var commands: [6]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
@@ -1389,21 +1389,21 @@ test "widget text fields render wrapped selection geometry" {
     const layout = try layoutWidgetTree(field, field.frame, &nodes);
     const text_geometry = layout.textGeometry(11, tokens).?;
     try std.testing.expectEqual(@as(usize, 2), text_geometry.selection_rect_count);
-    try expectRectApprox(geometry.RectF.init(8, 10, 14.01, 25), text_geometry.selection_bounds.?);
+    try expectRectApprox(geometry.RectF.init(8, 10, 14.13, 25), text_geometry.selection_bounds.?);
 
     const display_list = builder.displayList();
     try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
     switch (display_list.commands[2]) {
         .fill_rounded_rect => |selection| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(11, 3)), selection.id);
-            try expectRectApprox(geometry.RectF.init(14.68, 10, 6.78, 12.5), selection.rect);
+            try expectRectApprox(geometry.RectF.init(14.7, 10, 6.8, 12.5), selection.rect);
         },
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[3]) {
         .fill_rounded_rect => |selection| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(11, 13)), selection.id);
-            try expectRectApprox(geometry.RectF.init(8, 22.5, 14.01, 12.5), selection.rect);
+            try expectRectApprox(geometry.RectF.init(8, 22.5, 14.13, 12.5), selection.rect);
         },
         else => return error.TestUnexpectedResult,
     }

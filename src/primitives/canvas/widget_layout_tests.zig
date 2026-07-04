@@ -445,7 +445,9 @@ test "widget layout uses intrinsic sizes for unframed controls" {
     try std.testing.expect(search_size.width > button_size.width);
     try expectLayoutFrame(layout, 2, geometry.RectF.init(0, (64 - button_size.height) * 0.5, button_size.width, button_size.height));
     try expectLayoutFrame(layout, 3, geometry.RectF.init(button_size.width + 8, (64 - search_size.height) * 0.5, search_size.width, search_size.height));
-    try expectLayoutFrame(layout, 4, geometry.RectF.init(button_size.width + search_size.width + 16, (64 - icon_size.height) * 0.5, icon_size.width, icon_size.height));
+    // Accumulate x the way the row layout does (previous x + width + gap)
+    // so the comparison stays bit-exact under f32 association.
+    try expectLayoutFrame(layout, 4, geometry.RectF.init((button_size.width + 8) + search_size.width + 8, (64 - icon_size.height) * 0.5, icon_size.width, icon_size.height));
 
     var custom_nodes: [4]WidgetLayoutNode = undefined;
     const custom_tokens = DesignTokens{ .typography = .{ .button_size = 18 } };

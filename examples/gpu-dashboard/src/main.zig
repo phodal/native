@@ -36,9 +36,12 @@ const max_dashboard_widgets: usize = 64;
 const dashboard_chrome_prefix_commands: usize = 6;
 const expected_dashboard_command_count: usize = 72;
 const expected_dashboard_interaction_command_count: usize = 72;
+// Regenerated 2026-07-04: layout measures with the bundled face's real
+// advance table (estimator wave); spot-reviewed before/after — sub-pixel
+// text shifts only, no layout change.
 // Regenerated 2026-07-03: reference text paints real Geist outlines
 // (vector core + bundled TTF parser) instead of block glyphs.
-const expected_dashboard_reference_signature: u64 = 6773049485618721280;
+const expected_dashboard_reference_signature: u64 = 1175012014721456853;
 const expected_dashboard_widget_node_count: usize = 48;
 const expected_dashboard_snapshot_widget_count: usize = 48;
 const refresh_command = "dashboard.refresh";

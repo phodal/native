@@ -405,7 +405,12 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // Regenerated for the text-bounds ink allowance (2026-07-04): 27 pixels
 // changed, all additive — previously bounds-clipped tail-glyph edges (the
 // final stroke of trailing 'N's, a heading marker's leading edge) now ink.
-const dev2_readme_reference_signature: u64 = 2891846887944972153;
+// Regenerated when the estimator became the bundled face's real advance
+// table (2026-07-04): 3.78% of pixels moved, all sub-pixel text shifts
+// and re-flowed line breaks (em dashes now measure 0.913 em instead of
+// the flat 0.65 em, so "—no" renders with its real gap); spot-reviewed
+// the three biggest-moving bands for overlap or clipping — none.
+const dev2_readme_reference_signature: u64 = 1181242958105405837;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

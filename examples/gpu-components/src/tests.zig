@@ -594,7 +594,10 @@ test "gpu components display list renders stable reference snapshot" {
 
     // Regenerated 2026-07-03: reference text paints real Geist outlines
     // (vector core + bundled TTF parser) instead of block glyphs.
-    try std.testing.expectEqual(@as(u64, 9986038597665570739), referenceSurfaceSignature(pixels));
+    // Regenerated 2026-07-04: layout measures with the bundled face's real
+    // advance table (estimator wave); sub-pixel text shifts only,
+    // spot-reviewed against the previous render — no layout change.
+    try std.testing.expectEqual(@as(u64, 8042786773695106391), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

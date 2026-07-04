@@ -2052,3 +2052,38 @@ test "themed design tokens flow into widget display lists" {
         else => return error.TestUnexpectedResult,
     }
 }
+
+test "widget text at intrinsic width does not wrap under geometry pixel snapping" {
+    // Geometry snapping can shave up to half a device pixel off the frame
+    // that intrinsic sizing measured; the text emitter hands the shaved
+    // quantum back to the wrap budget so an exact-fit label ("Sort")
+    // never breaks into "Sor"/"t". Regression for the snapped-frame wrap
+    // seam surfaced when the estimator became the bundled face's real
+    // advance table.
+    const scales = [_]f32{ 1, 2 };
+    for (scales) |scale| {
+        const tokens = DesignTokens{ .pixel_snap = .{ .geometry = true, .text = true, .scale = scale } };
+        var label = Widget{ .id = 7, .kind = .text, .text = "Sort" };
+        label.size = .sm;
+        const children = [_]Widget{ Widget{ .id = 2, .kind = .stack, .layout = .{ .grow = 1 } }, label };
+        const row = Widget{ .id = 1, .kind = .row, .layout = .{ .gap = 10, .cross_alignment = .center }, .children = &children };
+
+        var nodes: [4]WidgetLayoutNode = undefined;
+        const layout = try canvas.layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 34), tokens, &nodes);
+
+        var commands: [8]CanvasCommand = undefined;
+        var builder = Builder.init(&commands);
+        try canvas.emitWidgetLayout(&builder, layout, tokens);
+        var seen = false;
+        for (builder.displayList().commands) |command| switch (command) {
+            .draw_text => |text| {
+                seen = true;
+                var lines: [4]TextLine = undefined;
+                const text_layout = try canvas.layoutTextRun(text, text.text_layout.?, &lines);
+                try std.testing.expectEqual(@as(usize, 1), text_layout.lineCount());
+            },
+            else => {},
+        };
+        try std.testing.expect(seen);
+    }
+}

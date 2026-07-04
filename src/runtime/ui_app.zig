@@ -294,6 +294,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// messages so the model can own color scheme, contrast, and
             /// reduce-motion state (and `tokens_fn` can derive from it).
             on_appearance: ?*const fn (appearance: platform.Appearance) ?MsgT = null,
+            /// Optional mapping from the MAIN canvas window's chrome
+            /// overlay insets into messages — the hidden-titlebar
+            /// (`titlebar = .hidden_inset`) coordination channel. The
+            /// insets name the bands where OS window controls overlay
+            /// the content (macOS: titlebar height on top, traffic
+            /// lights on the leading edge; all-zero in fullscreen,
+            /// on standard-chrome windows, and on platforms without
+            /// the concept), so the model can pad its header's leading
+            /// edge instead of guessing pixel counts. Delivered before
+            /// the first view build and again whenever the insets
+            /// change (fullscreen transitions). Main canvas window
+            /// only — declared secondary windows have no inset hook
+            /// yet (same scope note as `sync`).
+            on_chrome: ?*const fn (insets: geometry.InsetsF) ?MsgT = null,
             /// Optional mapping from presented gpu frames (carrying the
             /// renderer diagnostics the runtime recorded) into messages.
             /// Called after presenting every frame except the installing
@@ -429,6 +443,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Exactly-once guard for `Options.init_fx`, independent of
         /// `installed` so a failed install rebuild cannot rerun it.
         init_fx_ran: bool = false,
+        /// Last chrome overlay insets delivered through `on_chrome`, so
+        /// resize-driven re-queries only dispatch on actual change
+        /// (fullscreen transitions flip them; ordinary resizes do not).
+        chrome_insets: geometry.InsetsF = .{},
+        chrome_insets_known: bool = false,
         pixel_snap_scale: f32 = 1,
         frame_timestamp_ns: u64 = 0,
         markup_arenas: [2]std.heap.ArenaAllocator,
@@ -1368,6 +1387,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                         init_fx(&self.model, &self.effects);
                     }
                 }
+                // Chrome insets reach the model BEFORE the first view
+                // build (`applyMsg`, no dispatch — the installing
+                // rebuild below is the one that renders it), so a
+                // hidden-titlebar header is padded in the very first
+                // paint.
+                if (self.chromeInsetsMsg(runtime, frame_event.window_id)) |msg| {
+                    self.applyMsg(msg);
+                }
                 try self.rebuild(runtime, frame_event.window_id);
                 if (self.options.chrome == null) {
                     _ = try runtime.emitCanvasWidgetDisplayList(frame_event.window_id, self.options.canvas_label, runtime.tokensWithTextMeasure(self.effectiveTokens()));
@@ -1530,7 +1557,33 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 return;
             }
             self.canvas_size = .{ .width = resize_event.frame.width, .height = resize_event.frame.height };
-            if (self.installed) try self.rebuild(runtime, resize_event.window_id);
+            if (!self.installed) return;
+            // Fullscreen transitions resize the canvas AND flip the
+            // chrome overlay insets (macOS hides the titlebar band and
+            // traffic lights); re-query on every resize and dispatch
+            // only on change — `dispatch` already rebuilds, so the
+            // plain-resize rebuild is the else arm.
+            if (self.chromeInsetsMsg(runtime, resize_event.window_id)) |msg| {
+                try self.dispatch(runtime, resize_event.window_id, msg);
+                return;
+            }
+            try self.rebuild(runtime, resize_event.window_id);
+        }
+
+        /// The `on_chrome` delivery gate: query the platform's chrome
+        /// overlay insets for the canvas window and map them to a Msg
+        /// when the app subscribed AND the insets actually changed.
+        fn chromeInsetsMsg(self: *Self, runtime: *Runtime, window_id: platform.WindowId) ?MsgT {
+            const map = self.options.on_chrome orelse return null;
+            const insets = runtime.options.platform.services.windowChromeInsets(window_id);
+            if (self.chrome_insets_known and
+                insets.top == self.chrome_insets.top and
+                insets.left == self.chrome_insets.left and
+                insets.bottom == self.chrome_insets.bottom and
+                insets.right == self.chrome_insets.right) return null;
+            self.chrome_insets = insets;
+            self.chrome_insets_known = true;
+            return map(insets);
         }
 
         /// Typed press dispatch resolves through the press target — the

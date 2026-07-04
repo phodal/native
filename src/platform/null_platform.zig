@@ -14,6 +14,7 @@ const WebViewSourceKind = types.WebViewSourceKind;
 const WebViewAssetSource = types.WebViewAssetSource;
 const WebViewSource = types.WebViewSource;
 const WindowId = types.WindowId;
+const WindowTitlebarStyle = types.WindowTitlebarStyle;
 const ViewId = types.ViewId;
 const max_windows = types.max_windows;
 const max_window_label_bytes = types.max_window_label_bytes;
@@ -202,6 +203,19 @@ pub const NullPlatform = struct {
     /// to assert the flag survives to the platform seam (the macOS host
     /// used to drop it at the C ABI).
     window_resizable: [max_windows]bool = [_]bool{true} ** max_windows,
+    /// Captured `WindowOptions.titlebar` per created window, indexed
+    /// like `windows` — same seam-regression purpose as
+    /// `window_resizable` (the startup create used to hardcode it).
+    window_titlebar: [max_windows]WindowTitlebarStyle = [_]WindowTitlebarStyle{.standard} ** max_windows,
+    /// Window ids handed to `startWindowDrag`, in call order: the
+    /// window-drag region channel's recording seam. A double-click is
+    /// two recorded calls (the host side decides drag vs zoom from the
+    /// native event's click count).
+    window_drag_starts: [max_windows * 4]WindowId = [_]WindowId{0} ** (max_windows * 4),
+    window_drag_start_count: usize = 0,
+    /// Chrome overlay insets `windowChromeInsets` reports for every
+    /// window — settable so tests model a hidden-titlebar macOS host.
+    chrome_insets: geometry.InsetsF = .{},
     window_count: usize = 0,
     views: [max_views]NullView = undefined,
     view_count: usize = 0,
@@ -387,6 +401,8 @@ pub const NullPlatform = struct {
                 .create_window_fn = createWindow,
                 .focus_window_fn = focusWindow,
                 .close_window_fn = closeWindow,
+                .start_window_drag_fn = startWindowDrag,
+                .window_chrome_insets_fn = windowChromeInsets,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -596,8 +612,23 @@ pub const NullPlatform = struct {
         };
         self.windows[self.window_count] = info;
         self.window_resizable[self.window_count] = options.resizable;
+        self.window_titlebar[self.window_count] = options.titlebar;
         self.window_count += 1;
         return info;
+    }
+
+    fn startWindowDrag(context: ?*anyopaque, window_id: WindowId) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        _ = self.findWindowIndex(window_id) orelse return error.WindowNotFound;
+        if (self.window_drag_start_count >= self.window_drag_starts.len) return error.WindowLimitReached;
+        self.window_drag_starts[self.window_drag_start_count] = window_id;
+        self.window_drag_start_count += 1;
+    }
+
+    fn windowChromeInsets(context: ?*anyopaque, window_id: WindowId) geometry.InsetsF {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        _ = window_id;
+        return self.chrome_insets;
     }
 
     fn focusWindow(context: ?*anyopaque, window_id: WindowId) anyerror!void {

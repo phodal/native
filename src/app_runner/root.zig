@@ -66,6 +66,13 @@ pub const RunOptions = struct {
         if (windows.len > 0) {
             info.main_window = windows[0];
             info.windows = windows;
+        } else {
+            // Scene-first apps declare their one window under
+            // `.shell.windows` — the startup window the host creates
+            // adopts that declaration when the scene loads, but its
+            // CHROME is fixed at create time, so the manifest's
+            // titlebar style threads through here.
+            info.main_window.titlebar = manifestShellStartupTitlebar();
         }
         return info;
     }
@@ -123,7 +130,28 @@ fn manifestWindow(comptime window: anytype, comptime index: usize) native_sdk.Wi
         .resizable = windowBool(window, "resizable", true),
         .restore_state = windowBool(window, "restore_state", true),
         .restore_policy = windowRestorePolicy(window),
+        .titlebar = windowTitlebarStyle(window),
     };
+}
+
+fn windowTitlebarStyle(comptime window: anytype) native_sdk.WindowTitlebarStyle {
+    if (comptime !@hasField(@TypeOf(window), "titlebar")) return .standard;
+    const value = window.titlebar;
+    if (comptime std.mem.eql(u8, value, "standard")) return .standard;
+    if (comptime std.mem.eql(u8, value, "hidden_inset")) return .hidden_inset;
+    @compileError("unknown app.zon window titlebar style");
+}
+
+/// The startup window's titlebar style for scene-first apps: app.zon's
+/// `.shell.windows[0].titlebar`. Chrome cannot change after the host
+/// creates the window, so it must ride the create call — unlike
+/// size/title, which the loading scene re-applies.
+fn manifestShellStartupTitlebar() native_sdk.WindowTitlebarStyle {
+    if (comptime !@hasField(@TypeOf(app_manifest), "shell")) return .standard;
+    const shell = app_manifest.shell;
+    if (comptime !@hasField(@TypeOf(shell), "windows")) return .standard;
+    if (comptime shell.windows.len == 0) return .standard;
+    return windowTitlebarStyle(shell.windows[0]);
 }
 
 fn windowLabel(comptime window: anytype, comptime index: usize) []const u8 {

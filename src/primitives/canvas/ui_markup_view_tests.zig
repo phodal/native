@@ -585,6 +585,36 @@ test "press handlers on layout elements build and stamp the press action" {
     try testing.expect(!canvas.widgetClaimsPress(row.children[0]));
 }
 
+test "window-drag marks an element as a window-drag region without claiming presses" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    // The hidden-titlebar header shape: a drag-region row holding a real
+    // button. The row becomes a hit target (so presses on its background
+    // land on IT), but it never claims presses — the button inside stays
+    // a button and the window-drag walk stops at it.
+    var view = try InboxMarkup.init(arena, "<column>\n  <row window-drag=\"true\" gap=\"8\">\n    <text>Title</text>\n    <button on-press=\"add\">Open</button>\n  </row>\n</column>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const row = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.row, row.kind);
+    try testing.expect(row.window_drag);
+    try testing.expect(canvas.widgetIsWindowDragRegion(row));
+    try testing.expect(canvas.widgetIsHitTarget(row));
+    try testing.expect(!canvas.widgetClaimsPress(row));
+    try testing.expect(!row.children[0].window_drag);
+    try testing.expect(canvas.widgetClaimsPress(row.children[1]));
+
+    // window-drag="false" (and absent) leave the row inert.
+    var plain_view = try InboxMarkup.init(arena, "<column>\n  <row window-drag=\"false\" gap=\"8\">\n    <text>Title</text>\n  </row>\n</column>");
+    var plain_ui = InboxUi.init(arena);
+    const plain_tree = try plain_ui.finalize(try plain_view.build(&plain_ui, &model));
+    try testing.expect(!plain_tree.root.children[0].window_drag);
+    try testing.expect(!canvas.widgetIsHitTarget(plain_tree.root.children[0]));
+}
+
 test "gap on stacking containers fails the build with the teaching message" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

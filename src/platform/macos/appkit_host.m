@@ -431,10 +431,12 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSArray<NSString *> *allowedNavigationOrigins;
 @property(nonatomic, strong) NSArray<NSString *> *allowedExternalURLs;
 @property(nonatomic, assign) NSInteger externalLinkAction;
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable;
+- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle;
 - (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle makeMain:(BOOL)makeMain;
 - (void)focusWindowWithId:(uint64_t)windowId;
 - (void)closeWindowWithId:(uint64_t)windowId;
+- (BOOL)startWindowDragWithId:(uint64_t)windowId;
+- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right;
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId;
 - (WKWebView *)mainWebViewForWindow:(NSWindow *)window;
 - (NativeSdkAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
@@ -3571,7 +3573,7 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
 
 @implementation NativeSdkAppKitHost
 
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable {
+- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle {
     self = [super init];
     if (!self) {
         return nil;
@@ -3603,7 +3605,7 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     self.shortcuts = @[];
     [self configureApplication];
 
-    [self createWindowWithId:1 title:(windowTitle.length > 0 ? windowTitle : self.appName) label:self.windowLabel x:x y:y width:width height:height restoreFrame:restoreFrame resizable:resizable titlebarStyle:0 makeMain:YES];
+    [self createWindowWithId:1 title:(windowTitle.length > 0 ? windowTitle : self.appName) label:self.windowLabel x:x y:y width:width height:height restoreFrame:restoreFrame resizable:resizable titlebarStyle:titlebarStyle makeMain:YES];
     self.didShutdown = NO;
     self.observesApplicationActivation = NO;
 
@@ -3734,6 +3736,83 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     NSWindow *window = self.windows[@(windowId)];
     if (!window) return;
     [window performClose:nil];
+}
+
+// The window-drag region channel. Called synchronously while the runtime
+// dispatches the pointer-down that started the gesture, so
+// NSApp.currentEvent IS that mouse-down NSEvent (the host forwards input
+// events synchronously from the view's mouseDown:). A double-click
+// applies the user's titlebar double-click preference
+// (AppleActionOnDoubleClick: Maximize/zoom by default, Minimize, or
+// None); a single press hands the event to performWindowDragWithEvent:,
+// which moves the window only on actual movement — a plain click is a
+// no-op, exactly like the native titlebar.
+- (BOOL)startWindowDragWithId:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return NO;
+    NSEvent *event = NSApp.currentEvent;
+    if (!event) return YES;
+    if (event.type != NSEventTypeLeftMouseDown && event.type != NSEventTypeLeftMouseDragged) return YES;
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
+        NSString *action = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleActionOnDoubleClick"] ?: @"Maximize";
+        if ([action isEqualToString:@"Minimize"]) {
+            [window performMiniaturize:nil];
+        } else if (![action isEqualToString:@"None"]) {
+            [window performZoom:nil];
+        }
+        return YES;
+    }
+    [window performWindowDragWithEvent:event];
+    return YES;
+}
+
+// Chrome overlay insets for hidden-titlebar windows: how far the
+// transparent titlebar (top) and the traffic lights (leading edge)
+// overlay the content view, in points. Derived from live AppKit
+// geometry — contentLayoutRect for the titlebar band and the window
+// buttons' frames for their extent — so fullscreen (where the system
+// hides both) honestly reports zero. Standard-chrome windows report
+// zero: their content never extends under the titlebar.
+- (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return NO;
+    *top = 0;
+    *left = 0;
+    *bottom = 0;
+    *right = 0;
+    if ((window.styleMask & NSWindowStyleMaskFullSizeContentView) == 0) return YES;
+    NSView *contentView = window.contentView;
+    if (!contentView) return YES;
+    NSRect contentBounds = contentView.bounds;
+    NSRect layoutRect = [contentView convertRect:window.contentLayoutRect fromView:nil];
+    double titlebarHeight = NSMaxY(contentBounds) - NSMaxY(layoutRect);
+    if (titlebarHeight <= 0.5) return YES;
+    *top = titlebarHeight;
+    double buttonsMaxX = 0;
+    double buttonsMinX = NSMaxX(contentBounds);
+    NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *miniaturizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
+    NSButton *buttons[3] = { closeButton, miniaturizeButton, zoomButton };
+    BOOL anyButtonVisible = NO;
+    for (size_t index = 0; index < 3; index += 1) {
+        NSButton *button = buttons[index];
+        if (!button || button.hidden || !button.superview) continue;
+        NSRect buttonFrame = [contentView convertRect:button.frame fromView:button.superview];
+        buttonsMaxX = MAX(buttonsMaxX, NSMaxX(buttonFrame));
+        buttonsMinX = MIN(buttonsMinX, NSMinX(buttonFrame));
+        anyButtonVisible = YES;
+    }
+    if (!anyButtonVisible) return YES;
+    if (buttonsMinX < NSMidX(contentBounds)) {
+        // LTR: the buttons sit at the leading (left) edge; pad by their
+        // far edge plus the same margin the system leaves before them.
+        *left = buttonsMaxX + (buttonsMinX - NSMinX(contentBounds));
+    } else {
+        // RTL layouts park the buttons on the right.
+        *right = (NSMaxX(contentBounds) - buttonsMinX) + (NSMaxX(contentBounds) - buttonsMaxX);
+    }
+    return YES;
 }
 
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId {
@@ -5657,14 +5736,14 @@ static BOOL NativeSdkPolicyListMatches(NSArray<NSString *> *values, NSURL *url) 
     return NO;
 }
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
     @autoreleasepool {
         NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"native-sdk";
         NSString *windowTitleString = [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] ?: appNameString;
         NSString *bundleIdString = [[NSString alloc] initWithBytes:bundle_id length:bundle_id_len encoding:NSUTF8StringEncoding] ?: @"dev.native_sdk.app";
         NSString *iconPathString = [[NSString alloc] initWithBytes:icon_path length:icon_path_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *windowLabelString = [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] ?: @"main";
-        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0)];
+        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style];
         return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }
@@ -5792,6 +5871,16 @@ int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t wind
     if (!object.windows[@(window_id)]) return 0;
     [object closeWindowWithId:window_id];
     return 1;
+}
+
+int native_sdk_appkit_start_window_drag(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    return [object startWindowDragWithId:window_id] ? 1 : 0;
+}
+
+int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    return [object chromeInsetsForWindowId:window_id top:top left:left bottom:bottom right:right] ? 1 : 0;
 }
 
 int native_sdk_appkit_create_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {

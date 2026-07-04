@@ -1337,6 +1337,7 @@ pub const attr_names: []const AttrName = &.{
     .{ .markup = "columns", .zig = "columns" },
     .{ .markup = "virtualized", .zig = "virtualized" },
     .{ .markup = "virtual-item-extent", .zig = "virtual_item_extent" },
+    .{ .markup = "window-drag", .zig = "window_drag" },
 };
 
 /// Markup color style attribute → `StyleTokenRefs` field. Shared with the

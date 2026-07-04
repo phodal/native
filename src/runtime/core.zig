@@ -595,6 +595,7 @@ pub const Runtime = struct {
     pub const routeCanvasWidgetTextInput = CanvasWidgetEventMethods.routeCanvasWidgetTextInput;
     pub const routeCanvasWidgetFileDrop = CanvasWidgetEventMethods.routeCanvasWidgetFileDrop;
     pub const routeCanvasWidgetDragInput = CanvasWidgetEventMethods.routeCanvasWidgetDragInput;
+    pub const startCanvasWidgetWindowDragFromPointer = CanvasWidgetEventMethods.startCanvasWidgetWindowDragFromPointer;
     const updateCanvasWidgetFocusFromPointer = CanvasWidgetEventMethods.updateCanvasWidgetFocusFromPointer;
     const updateCanvasWidgetInteractionFromPointer = CanvasWidgetEventMethods.updateCanvasWidgetInteractionFromPointer;
     const syncCanvasWidgetCursorForView = CanvasWidgetEventMethods.syncCanvasWidgetCursorForView;

@@ -516,6 +516,11 @@ pub const widgetKindDismissibleSurface = @import("widget_access.zig").widgetKind
 /// a hit path that claims presses.
 pub const widgetPressTargetForHit = @import("widget_routing.zig").widgetPressTargetForHit;
 pub const widgetPressTargetIndexFromNode = @import("widget_routing.zig").widgetPressTargetIndexFromNode;
+/// Window-drag regions (`window-drag="true"` / `.window_drag`): the
+/// widget-level predicate and the press walk that resolves whether a
+/// pointer-down moves the window instead of pressing a widget.
+pub const widgetIsWindowDragRegion = @import("widget_access.zig").isWindowDragRegion;
+pub const widgetWindowDragTargetIndexFromNode = @import("widget_routing.zig").widgetWindowDragTargetIndexFromNode;
 /// Whether widgets of this kind layer their children on top of each other
 /// (widget_layout.zig — the source of truth the builder's Debug gap
 /// diagnostic, both markup engines, and the markup validator's

@@ -117,6 +117,23 @@ pub fn widgetPressTargetForHit(layout: anytype, hit: WidgetHit) ?WidgetHit {
     return widgetHitFromNode(layout.nodes[index], index);
 }
 
+/// The window-drag region a press that hit `node_index` lands on, if
+/// any: the same target-then-ancestors walk as the press fall-through,
+/// but a press-CLAIMING widget encountered first wins the gesture for
+/// itself (a button inside a drag header stays a button) and stops the
+/// walk. A widget that both claims presses and marks `window_drag`
+/// keeps its press — authored handlers outrank the drag surface.
+pub fn widgetWindowDragTargetIndexFromNode(layout: anytype, node_index: usize) ?usize {
+    var current: ?usize = node_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return null;
+        if (widget_access.widgetClaimsPress(layout.nodes[index].widget)) return null;
+        if (widget_access.isWindowDragRegion(layout.nodes[index].widget)) return index;
+        current = layout.nodes[index].parent_index;
+    }
+    return null;
+}
+
 fn isPointVisibleInWidgetAncestors(layout: anytype, node_index: usize, point: geometry.PointF) bool {
     var current: usize = node_index;
     while (true) {

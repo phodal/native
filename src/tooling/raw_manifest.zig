@@ -73,7 +73,9 @@ pub const RawWindow = struct {
     height: f32 = 480,
     x: ?f32 = null,
     y: ?f32 = null,
+    resizable: bool = true,
     restore_state: bool = true,
+    titlebar: []const u8 = "standard",
 };
 
 pub const RawShell = struct {
@@ -90,6 +92,7 @@ pub const RawShellWindow = struct {
     resizable: bool = true,
     restore_state: bool = true,
     restore_policy: []const u8 = "clamp_to_visible_screen",
+    titlebar: []const u8 = "standard",
     views: []const RawShellView = &.{},
 };
 

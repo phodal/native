@@ -113,6 +113,7 @@ pub const WindowCreateOptions = platform.WindowCreateOptions;
 pub const WindowInfo = platform.WindowInfo;
 pub const WindowState = platform.WindowState;
 pub const WindowRestorePolicy = platform.WindowRestorePolicy;
+pub const WindowTitlebarStyle = platform.WindowTitlebarStyle;
 pub const Menu = platform.Menu;
 pub const MenuItem = platform.MenuItem;
 pub const Shortcut = platform.Shortcut;

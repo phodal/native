@@ -65,6 +65,12 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .width = window_width,
     .height = window_height,
     .restore_state = false,
+    // Hidden-inset titlebar (declared in app.zon too, which threads it
+    // through the STARTUP window create): the toolbar row is the drag
+    // region (`window-drag` in viewer.zml) and pads its leading edge by
+    // the chrome insets `on_chrome` delivers, so nothing hides under
+    // the traffic lights.
+    .titlebar = .hidden_inset,
     .views = &shell_views,
 }};
 const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -115,6 +121,13 @@ pub const Model = struct {
     /// One-line activity note for the status bar ("Saved", "Open failed…").
     note_storage: [max_note_bytes]u8 = undefined,
     note_len: usize = 0,
+    /// Chrome overlay insets from `on_chrome` (hidden-inset titlebar):
+    /// the toolbar pads its leading/trailing edges by these so its
+    /// controls clear the traffic lights; zero in fullscreen and on
+    /// platforms with standard chrome. The view binds the fields
+    /// directly.
+    chrome_leading: f32 = 0,
+    chrome_trailing: f32 = 0,
 
     pub const samples = [_]Sample{
         .{ .id = welcome_sample_id, .title = "Welcome", .body = @embedFile("samples/welcome.md") },
@@ -357,6 +370,7 @@ pub const Msg = union(enum) {
     save_as,
     toggle_theme,
     system_scheme: canvas.ColorScheme,
+    chrome_changed: geometry.InsetsF,
     toggle_details: usize,
     open_url: []const u8,
     file_done: native_sdk.EffectFileResult,
@@ -456,6 +470,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             .dark => .light,
         },
         .system_scheme => |scheme| model.system_scheme = scheme,
+        .chrome_changed => |insets| {
+            model.chrome_leading = insets.left;
+            model.chrome_trailing = insets.right;
+        },
         .toggle_details => |index| {
             if (index < max_details) model.details_expanded[index] = !model.details_expanded[index];
         },
@@ -572,6 +590,13 @@ pub fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     } };
 }
 
+/// Chrome overlay insets flow into the model (hidden-inset titlebar):
+/// delivered before the first view build and again when they change —
+/// entering fullscreen hides the traffic lights and this goes to zero.
+pub fn onChrome(insets: geometry.InsetsF) ?Msg {
+    return .{ .chrome_changed = insets };
+}
+
 // ------------------------------------------------------------------- view
 
 pub const ViewerUi = canvas.Ui(Msg);
@@ -619,6 +644,7 @@ pub fn main(init: std.process.Init) !void {
         .init_fx = boot,
         .tokens_fn = viewerTokens,
         .on_appearance = onAppearance,
+        .on_chrome = onChrome,
         .view = CompiledViewerView.build,
         .markup = if (dev_markup_reload)
             .{ .source = viewer_markup, .watch_path = "src/viewer.zml", .io = init.io }

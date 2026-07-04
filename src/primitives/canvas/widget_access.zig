@@ -85,7 +85,15 @@ pub fn widgetKindHitTarget(kind: WidgetKind) bool {
 pub fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
     if (widget.semantics.actions.press or widget.semantics.actions.toggle) return true;
+    if (widget.window_drag) return true;
     return widgetKindHitTarget(widget.kind);
+}
+
+/// Whether this widget is a live window-drag surface: a press landing
+/// on it (or falling through to it) moves the WINDOW. Disabled widgets
+/// stand down exactly like they do for presses.
+pub fn isWindowDragRegion(widget: Widget) bool {
+    return widget.id != 0 and !widget.state.disabled and widget.window_drag;
 }
 
 /// Widget KINDS that stop (claim) a press gesture themselves: interactive

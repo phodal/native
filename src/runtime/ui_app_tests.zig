@@ -2155,3 +2155,102 @@ test "selection drag inside a pressable row selects without pressing; a click st
     try std.testing.expectEqual(@as(u32, 1), app_state.model.picks);
     try std.testing.expectEqual(@as(u32, 1), app_state.model.picked);
 }
+
+// --------------------------------------------------------------- on_chrome
+
+const ChromeInsetModel = struct {
+    leading: f32 = 0,
+    top: f32 = 0,
+    deliveries: u32 = 0,
+};
+
+const ChromeInsetMsg = union(enum) {
+    chrome: geometry.InsetsF,
+};
+
+const ChromeInsetApp = ui_app_model.UiApp(ChromeInsetModel, ChromeInsetMsg);
+
+fn chromeInsetUpdate(model: *ChromeInsetModel, msg: ChromeInsetMsg) void {
+    switch (msg) {
+        .chrome => |insets| {
+            model.leading = insets.left;
+            model.top = insets.top;
+            model.deliveries += 1;
+        },
+    }
+}
+
+fn chromeInsetView(ui: *ChromeInsetApp.Ui, model: *const ChromeInsetModel) ChromeInsetApp.Ui.Node {
+    return ui.column(.{ .gap = 8 }, .{
+        ui.row(.{ .window_drag = true, .height = 40 }, .{
+            ui.el(.stack, .{ .width = model.leading }, .{}),
+            ui.text(.{}, "Header"),
+        }),
+        ui.text(.{}, ui.fmt("leading {d}", .{model.leading})),
+    });
+}
+
+fn chromeInsetMap(insets: geometry.InsetsF) ?ChromeInsetMsg {
+    return .{ .chrome = insets };
+}
+
+test "ui app delivers chrome overlay insets before install and on change" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    // Model a hidden-titlebar macOS host: titlebar band 28pt tall,
+    // traffic lights ending 78pt in.
+    harness.null_platform.chrome_insets = .{ .top = 28, .left = 78 };
+
+    const app_state = try std.testing.allocator.create(ChromeInsetApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = ChromeInsetApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-chrome",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = chromeInsetUpdate,
+        .view = chromeInsetView,
+        .on_chrome = chromeInsetMap,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // The insets land in the model BEFORE the first view build, so the
+    // installing frame already renders the padded header.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.deliveries);
+    try std.testing.expectEqual(@as(f32, 78), app_state.model.leading);
+    try std.testing.expectEqual(@as(f32, 28), app_state.model.top);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "leading 78"));
+
+    // A resize with unchanged insets dispatches nothing extra.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .frame = geometry.RectF.init(0, 0, 640, 480),
+        .scale_factor = 2,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.deliveries);
+
+    // Fullscreen hides the chrome: the resize that accompanies the
+    // transition re-queries and delivers the zeroed insets.
+    harness.null_platform.chrome_insets = .{};
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_resized = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .frame = geometry.RectF.init(0, 0, 1440, 900),
+        .scale_factor = 2,
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.deliveries);
+    try std.testing.expectEqual(@as(f32, 0), app_state.model.leading);
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "leading 0"));
+}

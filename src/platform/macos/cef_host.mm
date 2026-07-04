@@ -1684,7 +1684,14 @@ bool NativeSdkCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
 } // namespace
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable) {
+static void NativeSdkApplyHiddenInsetTitlebar(NSWindow *window, int titlebar_style) {
+    if (!window || titlebar_style != 1) return;
+    window.styleMask |= NSWindowStyleMaskFullSizeContentView;
+    window.titlebarAppearsTransparent = YES;
+    window.titleVisibility = NSWindowTitleHidden;
+}
+
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
     @autoreleasepool {
         (void)bundle_id;
         (void)bundle_id_len;
@@ -1701,6 +1708,7 @@ native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t 
         if (!resizable) {
             host.window.styleMask &= ~NSWindowStyleMaskResizable;
         }
+        NativeSdkApplyHiddenInsetTitlebar(host.window, titlebar_style);
         return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }
@@ -1895,11 +1903,13 @@ void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char 
     [object setShortcutsWithIds:ids idLengths:id_lens keys:keys keyLengths:key_lens modifiers:modifiers count:count];
 }
 
-int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable) {
+int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style) {
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     NSString *titleString = window_title ? [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] : @"native-sdk";
     NSString *labelString = window_label ? [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] : @"";
-    return [object createWindowWithId:window_id title:titleString ?: @"native-sdk" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) makeMain:NO] ? 1 : 0;
+    if (![object createWindowWithId:window_id title:titleString ?: @"native-sdk" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) makeMain:NO]) return 0;
+    NativeSdkApplyHiddenInsetTitlebar(object.windows[@(window_id)], titlebar_style);
+    return 1;
 }
 
 int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
@@ -1913,6 +1923,67 @@ int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t wind
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     if (!object.windows[@(window_id)]) return 0;
     [object closeWindowWithId:window_id];
+    return 1;
+}
+
+int native_sdk_appkit_start_window_drag(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    NSWindow *window = object.windows[@(window_id)];
+    if (!window) return 0;
+    NSEvent *event = NSApp.currentEvent;
+    if (!event) return 1;
+    if (event.type != NSEventTypeLeftMouseDown && event.type != NSEventTypeLeftMouseDragged) return 1;
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
+        NSString *action = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleActionOnDoubleClick"] ?: @"Maximize";
+        if ([action isEqualToString:@"Minimize"]) {
+            [window performMiniaturize:nil];
+        } else if (![action isEqualToString:@"None"]) {
+            [window performZoom:nil];
+        }
+        return 1;
+    }
+    [window performWindowDragWithEvent:event];
+    return 1;
+}
+
+int native_sdk_appkit_window_chrome_insets(native_sdk_appkit_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    NSWindow *window = object.windows[@(window_id)];
+    if (!window) return 0;
+    *top = 0;
+    *left = 0;
+    *bottom = 0;
+    *right = 0;
+    if ((window.styleMask & NSWindowStyleMaskFullSizeContentView) == 0) return 1;
+    NSView *contentView = window.contentView;
+    if (!contentView) return 1;
+    NSRect contentBounds = contentView.bounds;
+    NSRect layoutRect = [contentView convertRect:window.contentLayoutRect fromView:nil];
+    double titlebarHeight = NSMaxY(contentBounds) - NSMaxY(layoutRect);
+    if (titlebarHeight <= 0.5) return 1;
+    *top = titlebarHeight;
+    double buttonsMaxX = 0;
+    double buttonsMinX = NSMaxX(contentBounds);
+    NSButton *buttons[3] = {
+        [window standardWindowButton:NSWindowCloseButton],
+        [window standardWindowButton:NSWindowMiniaturizeButton],
+        [window standardWindowButton:NSWindowZoomButton],
+    };
+    BOOL anyButtonVisible = NO;
+    for (size_t index = 0; index < 3; index += 1) {
+        NSButton *button = buttons[index];
+        if (!button || button.hidden || !button.superview) continue;
+        NSRect buttonFrame = [contentView convertRect:button.frame fromView:button.superview];
+        buttonsMaxX = MAX(buttonsMaxX, NSMaxX(buttonFrame));
+        buttonsMinX = MIN(buttonsMinX, NSMinX(buttonFrame));
+        anyButtonVisible = YES;
+    }
+    if (!anyButtonVisible) return 1;
+    if (buttonsMinX < NSMidX(contentBounds)) {
+        *left = buttonsMaxX + (buttonsMinX - NSMinX(contentBounds));
+    } else {
+        *right = (NSMaxX(contentBounds) - buttonsMinX) + (NSMaxX(contentBounds) - buttonsMaxX);
+    }
     return 1;
 }
 

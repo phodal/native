@@ -256,9 +256,11 @@ pub const WindowRestorePolicy = enum {
 
 /// How the window draws its titlebar chrome. `.hidden_inset` is the
 /// VS Code/Linear shape: content extends under a transparent titlebar
-/// with the title hidden (macOS keeps the traffic lights). Drag
-/// regions and traffic-light-aware header layout are app concerns, not
-/// this channel's. Platforms without the concept keep standard chrome.
+/// with the title hidden (macOS keeps the traffic lights). The app's
+/// own header takes over the titlebar's job: mark it
+/// `window-drag="true"` so it moves the window, and pad it by the
+/// runtime's chrome insets so it clears the traffic lights. Platforms
+/// without the concept keep standard chrome.
 pub const WindowTitlebarStyle = enum {
     standard,
     hidden_inset,
@@ -274,6 +276,10 @@ pub const Window = struct {
     resizable: bool = true,
     restore_state: bool = true,
     restore_policy: WindowRestorePolicy = .clamp_to_visible_screen,
+    /// Titlebar chrome for the window the HOST creates at startup —
+    /// threaded through the platform create call, so the main window
+    /// can hide its titlebar before the scene loads.
+    titlebar: WindowTitlebarStyle = .standard,
 };
 
 pub const ViewKind = enum {
@@ -388,11 +394,13 @@ pub const ShellWindow = struct {
     resizable: bool = true,
     restore_state: bool = true,
     restore_policy: WindowRestorePolicy = .clamp_to_visible_screen,
-    /// Titlebar chrome. NOTE: applies to windows the runtime CREATES
-    /// (scene windows beyond the first, model-declared windows); the
-    /// STARTUP window is created by the host from app options before
-    /// the scene loads, so its titlebar style is pending the dedicated
-    /// titlebar-control channel.
+    /// Titlebar chrome. Windows the runtime CREATES (scene windows
+    /// beyond the first, model-declared windows) apply it at create
+    /// time. The STARTUP window is created by the host from app
+    /// options before the scene loads — app.zon's `.shell.windows[0]`
+    /// (or a top-level `.windows[0]`) threads it through to that
+    /// create, and the scene's first window here should declare the
+    /// SAME style so the two never disagree.
     titlebar: WindowTitlebarStyle = .standard,
     views: []const ShellView = &.{},
 };

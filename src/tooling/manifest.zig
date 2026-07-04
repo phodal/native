@@ -78,12 +78,14 @@ pub const Metadata = struct {
         for (self.windows) |window| {
             allocator.free(window.label);
             if (window.title) |title| allocator.free(title);
+            allocator.free(window.titlebar);
         }
         if (self.windows.len > 0) allocator.free(self.windows);
         for (self.shell.windows) |window| {
             allocator.free(window.label);
             if (window.title) |title| allocator.free(title);
             allocator.free(window.restore_policy);
+            allocator.free(window.titlebar);
             for (window.views) |view| {
                 allocator.free(view.label);
                 allocator.free(view.kind);
@@ -159,7 +161,9 @@ pub const WindowMetadata = struct {
     height: f32 = 480,
     x: ?f32 = null,
     y: ?f32 = null,
+    resizable: bool = true,
     restore_state: bool = true,
+    titlebar: []const u8 = "standard",
 };
 
 pub const ShellMetadata = struct {
@@ -176,6 +180,7 @@ pub const ShellWindowMetadata = struct {
     resizable: bool = true,
     restore_state: bool = true,
     restore_policy: []const u8 = "clamp_to_visible_screen",
+    titlebar: []const u8 = "standard",
     views: []const ShellViewMetadata = &.{},
 };
 
@@ -317,7 +322,7 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     }
     const frontend = if (metadata.frontend) |frontend_value| convertFrontend(frontend_value) else null;
     const security = convertSecurity(metadata.security) catch return .{ .ok = false, .message = "app.zon security policy is invalid" };
-    const windows = try convertWindows(allocator, metadata.windows);
+    const windows = convertWindows(allocator, metadata.windows) catch return .{ .ok = false, .message = "app.zon windows are invalid" };
     defer allocator.free(windows);
     const shell = parseShell(allocator, metadata.shell) catch return .{ .ok = false, .message = "app.zon shell is invalid" };
     defer deinitParsedShell(allocator, shell);
@@ -467,7 +472,9 @@ fn convertRawWindows(allocator: std.mem.Allocator, windows: []const RawWindow) !
             .height = window.height,
             .x = window.x,
             .y = window.y,
+            .resizable = window.resizable,
             .restore_state = window.restore_state,
+            .titlebar = try allocator.dupe(u8, window.titlebar),
         };
     }
     return converted;
@@ -491,6 +498,7 @@ fn convertRawShellWindows(allocator: std.mem.Allocator, windows: []const RawShel
             .resizable = window.resizable,
             .restore_state = window.restore_state,
             .restore_policy = try allocator.dupe(u8, window.restore_policy),
+            .titlebar = try allocator.dupe(u8, window.titlebar),
             .views = try convertRawShellViews(allocator, window.views),
         };
     }
@@ -676,6 +684,7 @@ fn convertSecurity(security: SecurityMetadata) !app_manifest.SecurityConfig {
 fn convertWindows(allocator: std.mem.Allocator, windows: []const WindowMetadata) ![]const app_manifest.Window {
     if (windows.len == 0) return &.{};
     const converted = try allocator.alloc(app_manifest.Window, windows.len);
+    errdefer allocator.free(converted);
     for (windows, 0..) |window, index| {
         converted[index] = .{
             .label = window.label,
@@ -684,7 +693,9 @@ fn convertWindows(allocator: std.mem.Allocator, windows: []const WindowMetadata)
             .height = window.height,
             .x = window.x,
             .y = window.y,
+            .resizable = window.resizable,
             .restore_state = window.restore_state,
+            .titlebar = try parseTitlebarStyle(window.titlebar),
         };
     }
     return converted;
@@ -701,6 +712,10 @@ fn parseShell(allocator: std.mem.Allocator, shell: ShellMetadata) !app_manifest.
         }
     }
     for (shell.windows, 0..) |window, index| {
+        // Parse the fallible scalar fields BEFORE allocating the views
+        // slice, so a bad policy/titlebar string cannot leak it.
+        const restore_policy = try parseRestorePolicy(window.restore_policy);
+        const titlebar = try parseTitlebarStyle(window.titlebar);
         const views = try parseShellViews(allocator, window.views);
         windows[index] = .{
             .label = window.label,
@@ -711,7 +726,8 @@ fn parseShell(allocator: std.mem.Allocator, shell: ShellMetadata) !app_manifest.
             .y = window.y,
             .resizable = window.resizable,
             .restore_state = window.restore_state,
-            .restore_policy = try parseRestorePolicy(window.restore_policy),
+            .restore_policy = restore_policy,
+            .titlebar = titlebar,
             .views = views,
         };
         initialized += 1;
@@ -1005,6 +1021,12 @@ fn parseRestorePolicy(value: []const u8) !app_manifest.WindowRestorePolicy {
     if (std.mem.eql(u8, value, "clamp_to_visible_screen")) return .clamp_to_visible_screen;
     if (std.mem.eql(u8, value, "center_on_primary")) return .center_on_primary;
     return error.InvalidWindowRestorePolicy;
+}
+
+fn parseTitlebarStyle(value: []const u8) !app_manifest.WindowTitlebarStyle {
+    if (std.mem.eql(u8, value, "standard")) return .standard;
+    if (std.mem.eql(u8, value, "hidden_inset")) return .hidden_inset;
+    return error.InvalidWindowTitlebarStyle;
 }
 
 fn parseViewKind(value: []const u8) !app_manifest.ViewKind {
@@ -1339,6 +1361,60 @@ test "manifest metadata parser reads shell windows and views" {
         .version = try parseVersion(metadata.version),
         .shell = shell,
     });
+}
+
+test "manifest parser reads window titlebar styles" {
+    const metadata = try parseText(std.testing.allocator,
+        \\.{
+        \\  .id = "com.example.app",
+        \\  .name = "example",
+        \\  .version = "1.2.3",
+        \\  .windows = .{
+        \\    .{ .label = "main", .resizable = false, .titlebar = "hidden_inset" },
+        \\  },
+        \\  .shell = .{
+        \\    .windows = .{
+        \\      .{ .label = "scene", .titlebar = "hidden_inset", .views = .{ .{ .label = "content", .kind = "webview", .url = "zero://app/index.html" } } },
+        \\    },
+        \\  },
+        \\}
+    );
+    defer metadata.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("hidden_inset", metadata.windows[0].titlebar);
+    try std.testing.expect(!metadata.windows[0].resizable);
+    try std.testing.expectEqualStrings("hidden_inset", metadata.shell.windows[0].titlebar);
+
+    const windows = try convertWindows(std.testing.allocator, metadata.windows);
+    defer std.testing.allocator.free(windows);
+    try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset, windows[0].titlebar);
+    try std.testing.expect(!windows[0].resizable);
+
+    const shell = try parseShell(std.testing.allocator, metadata.shell);
+    defer deinitParsedShell(std.testing.allocator, shell);
+    try std.testing.expectEqual(app_manifest.WindowTitlebarStyle.hidden_inset, shell.windows[0].titlebar);
+}
+
+test "manifest parser rejects unknown window titlebar style" {
+    const metadata = try parseText(std.testing.allocator,
+        \\.{
+        \\  .id = "com.example.app",
+        \\  .name = "example",
+        \\  .version = "1.2.3",
+        \\  .windows = .{
+        \\    .{ .label = "main", .titlebar = "transparent" },
+        \\  },
+        \\  .shell = .{
+        \\    .windows = .{
+        \\      .{ .label = "scene", .titlebar = "frameless", .views = .{ .{ .label = "content", .kind = "webview", .url = "zero://app/index.html" } } },
+        \\    },
+        \\  },
+        \\}
+    );
+    defer metadata.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.InvalidWindowTitlebarStyle, convertWindows(std.testing.allocator, metadata.windows));
+    try std.testing.expectError(error.InvalidWindowTitlebarStyle, parseShell(std.testing.allocator, metadata.shell));
 }
 
 test "manifest parser rejects invalid shell view kind" {

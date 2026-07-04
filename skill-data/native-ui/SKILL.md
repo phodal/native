@@ -168,6 +168,7 @@ Appearance/state: `variant` (default|primary|secondary|outline|ghost|destructive
 Focus: `autofocus` (focusable controls only — a teaching error elsewhere): moves keyboard focus to the element when it MOUNTS or when the bound value turns on, edge-triggered so holding it true never re-steals focus from the user. The TEA way to focus an editor on note-create (`<text-field autofocus="{editing}" ...>` or mount the field under an `<if>` with `autofocus="true"`; Zig views use `ElementOptions.autofocus`) and to give keyboard-first apps their first focus without a click.
 Semantics: `role` (listitem, treeitem, button, ...; `treeitem` also makes the row part of its tree's roving keyboard focus set), `label` (accessible name), `expanded` (tree rows: disclosure state, model-owned — omit on leaves).
 Identity: `key` (sibling-scoped), `global-key` (parent-independent — use for items that move between containers, e.g. board cards; ids then survive reparenting).
+Window chrome: `window-drag="true"` (Zig: `.window_drag = true`) marks the element as a window-drag surface for hidden-titlebar windows — pressing its background or plain text/icons inside moves the WINDOW (drag starts only on actual movement), double-click zooms per the OS convention, and press-claiming children (buttons, fields) stay fully interactive via the ordinary press fall-through. macOS-only; elsewhere the press is dead space. See "Hidden titlebar" below.
 Render channel (Zig-only, no markup attributes): `ElementOptions.opacity` and `ElementOptions.transform` wrap the element's emitted commands without reflowing siblings — the defaults (1, identity) emit nothing, opacity 0 culls painting (pair with `disabled` when fading interactive content), and a transform moves both rendering and pointer hit-testing while accessibility frames stay at the layout frame. Pair with `UiApp.Options.animations` for tweening.
 
 Numbers are plain (`gap="12"`), booleans are `true`/`false` or a binding.
@@ -643,8 +644,18 @@ Rules that matter:
 - **A user close dispatches `on_close`** (the dismissal precedent): the window is already gone as the optimistic echo; clear the open flag in `update` — or keep declaring the window and the next rebuild brings it back (source wins). A close the model itself initiated never echoes a Msg.
 - **Budget**: at most `UiApp.max_ui_windows` (4) declared windows; excess warns and is ignored. Every dispatched Msg rebuilds every open window's view.
 - **Markup binds ONE window's content** — there is no `window` element in the closed grammar. A markup-authored secondary window is a `canvas.CompiledMarkupView` whose `build` `window_view` calls for that label.
-- **Titlebar**: descriptors accept `.titlebar = .hidden_inset` (content under a transparent titlebar, macOS keeps the traffic lights); drag regions and inset-aware headers are the app's layout concern.
+- **Titlebar**: descriptors accept `.titlebar = .hidden_inset` (content under a transparent titlebar, macOS keeps the traffic lights); give the window's header `window-drag="true"` so it moves the window. See "Hidden titlebar" below.
 - Tests: after the open Msg, deliver the new window's `gpu_surface_frame` (its window id from `runtime.listWindows`) to install its tree; simulate a user close by dispatching `.window_frame_changed` with `open = false`. See `examples/system-monitor` (gear chip -> settings window).
+
+## Hidden titlebar: `titlebar = "hidden_inset"` + `window-drag` + `on_chrome`
+
+The VS Code/Linear shape — content under a transparent titlebar, the app's header as the working titlebar. Three parts, all declared:
+
+1. **app.zon**: `.titlebar = "hidden_inset"` on the shell window (and the matching `.titlebar = .hidden_inset` on the `ShellWindow` in main.zig). The first shell window's declaration threads through the STARTUP window create, so the main window's chrome is right from the first frame; `zig build validate` checks the value.
+2. **The header row** gets `window-drag="true"`: its background (and plain text/icons inside) moves the window; buttons inside stay buttons; double-click zooms (macOS honors the user's titlebar double-click preference).
+3. **`Options.on_chrome`** (`fn (insets: geometry.InsetsF) ?Msg`) delivers the chrome overlay insets — macOS: titlebar band height on top, traffic-light extent on the leading edge; zero in fullscreen, on standard chrome, and on other platforms. It fires BEFORE the first view build and on changes; store the insets in the model and pad the header with a leading `<spacer width="{chrome_leading}" />`. Main canvas window only (same scope as `sync`).
+
+macOS-first like `resizable = false`: GTK/Win32 keep standard chrome and the whole channel is harmless there. Full retrofit: `examples/markdown-viewer` (toolbar row is the drag region). Tests: the null platform records `startWindowDrag` calls (`window_drag_starts`), per-window `window_titlebar`, and serves settable `chrome_insets`.
 
 ## Time: wall clock + monotonic, with a testable seam
 

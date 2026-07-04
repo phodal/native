@@ -320,10 +320,11 @@ pub const WindowRestorePolicy = enum {
 /// `.hidden_inset` is the VS Code/Linear shape: content extends under a
 /// transparent titlebar with the title hidden (macOS:
 /// `NSWindowStyleMaskFullSizeContentView` + `titlebarAppearsTransparent`
-/// + `titleVisibility` hidden — the traffic lights stay). Drag regions,
-/// traffic-light-aware header layout, and double-click-zoom behaviors
-/// are deliberately NOT part of this channel. Platforms without the
-/// concept ignore it (standard chrome).
+/// + `titleVisibility` hidden — the traffic lights stay). The app's own
+/// header becomes the drag surface through the widget `window_drag`
+/// channel (`start_window_drag_fn`), and it lays out around the traffic
+/// lights via `window_chrome_insets_fn`. Platforms without the concept
+/// ignore it (standard chrome).
 pub const WindowTitlebarStyle = enum {
     standard,
     hidden_inset,
@@ -1584,6 +1585,23 @@ pub const PlatformServices = struct {
     create_window_fn: ?*const fn (context: ?*anyopaque, options: WindowOptions) anyerror!WindowInfo = null,
     focus_window_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) anyerror!void = null,
     close_window_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) anyerror!void = null,
+    /// Hand the ACTIVE pointer-down to the platform as a window-drag
+    /// gesture (the hidden-titlebar drag-region channel): the window
+    /// moves once the pointer actually moves — a plain click moves
+    /// nothing — and the platform applies its own double-click titlebar
+    /// convention (macOS: zoom, honoring the user's titlebar
+    /// double-click preference). Must be called during dispatch of the
+    /// pointer-down that starts the gesture. Platforms without the
+    /// concept leave this null; the runtime then treats the press as
+    /// dead space (GTK/Win32 scoped out like window resizability).
+    start_window_drag_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) anyerror!void = null,
+    /// Window-chrome overlay insets: the band at each edge where OS
+    /// window controls overlay the CONTENT of a `hidden_inset` window
+    /// (macOS: titlebar height on top, traffic lights on the leading
+    /// edge — both zero in fullscreen, where the system hides them).
+    /// Standard-titlebar windows and platforms without the concept
+    /// report zero; the null default is the same honest zero.
+    window_chrome_insets_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) geometry.InsetsF = null,
     create_view_fn: ?*const fn (context: ?*anyopaque, options: ViewOptions) anyerror!void = null,
     update_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, patch: ViewPatch) anyerror!void = null,
     set_view_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, frame: geometry.RectF) anyerror!void = null,
@@ -1746,6 +1764,19 @@ pub const PlatformServices = struct {
     pub fn closeWindow(self: PlatformServices, window_id: WindowId) anyerror!void {
         const close_fn = self.close_window_fn orelse return error.UnsupportedService;
         return close_fn(self.context, window_id);
+    }
+
+    pub fn startWindowDrag(self: PlatformServices, window_id: WindowId) anyerror!void {
+        const drag_fn = self.start_window_drag_fn orelse return error.UnsupportedService;
+        return drag_fn(self.context, window_id);
+    }
+
+    /// Zero when the platform has no window-chrome-overlay concept —
+    /// the honest cross-platform default (a header padding by these
+    /// insets pads nothing on GTK/Win32/null).
+    pub fn windowChromeInsets(self: PlatformServices, window_id: WindowId) geometry.InsetsF {
+        const insets_fn = self.window_chrome_insets_fn orelse return .{};
+        return insets_fn(self.context, window_id);
     }
 
     pub fn createView(self: PlatformServices, options: ViewOptions) anyerror!void {

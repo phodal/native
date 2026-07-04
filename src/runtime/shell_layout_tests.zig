@@ -510,6 +510,59 @@ test "shell window resizable reaches the platform create seam" {
     }
 }
 
+test "shell window titlebar style reaches the platform create seam" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-titlebar", .source = platform.WebViewSource.html("<h1>Host</h1>") };
+        }
+    };
+
+    // Same seam discipline as `resizable`: chrome is fixed at create
+    // time, so the created window's options must arrive with the
+    // declared titlebar style intact.
+    const shell_views = [_]app_manifest.ShellView{
+        .{ .label = "content", .kind = .webview, .url = "zero://app/content.html", .fill = true },
+    };
+    const inset_window: app_manifest.ShellWindow = .{
+        .label = "inset",
+        .title = "Inset",
+        .width = 640,
+        .height = 480,
+        .titlebar = .hidden_inset,
+        .views = &shell_views,
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    const window = try harness.runtime.createShellWindow(inset_window, platform.WebViewSource.html("<h1>Inset</h1>"));
+    var found = false;
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
+        if (info.id == window.id) {
+            found = true;
+            try std.testing.expectEqual(platform.WindowTitlebarStyle.hidden_inset, harness.null_platform.window_titlebar[index]);
+        }
+    }
+    try std.testing.expect(found);
+
+    // The default stays standard chrome.
+    const standard_window: app_manifest.ShellWindow = .{
+        .label = "standard",
+        .title = "Standard",
+        .width = 640,
+        .height = 480,
+        .views = &shell_views,
+    };
+    const second = try harness.runtime.createShellWindow(standard_window, platform.WebViewSource.html("<h1>Standard</h1>"));
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
+        if (info.id == second.id) {
+            try std.testing.expectEqual(platform.WindowTitlebarStyle.standard, harness.null_platform.window_titlebar[index]);
+        }
+    }
+}
+
 test "runtime lays out created shell windows with native returned bounds" {
     const ShellCreatePlatform = struct {
         create_count: usize = 0,

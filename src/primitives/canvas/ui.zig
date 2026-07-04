@@ -337,6 +337,15 @@ pub fn Ui(comptime Msg: type) type {
             columns: usize = 0,
             virtualized: bool = false,
             virtual_item_extent: f32 = 0,
+            /// Marks the element as a WINDOW-drag surface (the hidden
+            /// titlebar pattern): pressing its own background — or plain
+            /// text/icons inside it — moves the window, and double-click
+            /// zooms per the OS convention. Interactive children stay
+            /// live: the press fall-through walk claims a button inside
+            /// the region before the drag does. macOS-only today;
+            /// platforms without the channel treat the press as dead
+            /// space.
+            window_drag: bool = false,
             style: canvas.WidgetStyle = .{},
             /// Named token references resolved against design tokens in
             /// `finalizeWithTokens`; explicit `style` values win.
@@ -1583,6 +1592,7 @@ pub fn Ui(comptime Msg: type) type {
                 },
                 .style = options.style,
                 .semantics = options.semantics,
+                .window_drag = options.window_drag,
             };
         }
 

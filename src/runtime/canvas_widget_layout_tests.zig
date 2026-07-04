@@ -8,6 +8,7 @@ test {
     _ = @import("canvas_widget_text_tests.zig");
     _ = @import("canvas_widget_clipboard_tests.zig");
     _ = @import("canvas_widget_control_tests.zig");
+    _ = @import("canvas_widget_window_drag_tests.zig");
     _ = @import("canvas_widget_accessibility_tests.zig");
     _ = @import("canvas_widget_chart_tests.zig");
     _ = @import("canvas_widget_split_tree_tests.zig");

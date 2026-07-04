@@ -573,6 +573,16 @@ pub const Widget = struct {
     /// `.scroll_view`: the engine's drawn scrollbar and kinetic physics
     /// stand down — the OS scroller owns feel and the overlay scroller.
     native_scroll: bool = false,
+    /// Window-drag surface (`window-drag="true"` / `.window_drag`): a
+    /// pointer press that lands here — or falls through plain text /
+    /// icons / decorations onto it — moves the WINDOW instead of
+    /// pressing a widget, and a double-click zooms per the OS
+    /// convention. Interactive children keep working: the press
+    /// fall-through walk stops at any press-claiming widget first, so a
+    /// button inside a drag header stays a button. The flag makes the
+    /// widget a hit target; platforms without a window-drag channel
+    /// treat the press as dead space.
+    window_drag: bool = false,
     /// Plot data for `.chart` widgets: model-derived series (values,
     /// token colors, kind) plus domain/grid options. The retained tree
     /// copies series and points into per-view storage like text/spans,

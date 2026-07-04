@@ -81,6 +81,37 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             return null;
         }
 
+        /// A primary pointer-down whose hit path resolves to a
+        /// window-drag region (`window-drag="true"` / `.window_drag`)
+        /// hands the gesture to the platform WINDOW instead of the
+        /// widget pipeline: the window moves once the pointer actually
+        /// moves (a plain click moves nothing) and the platform applies
+        /// its double-click titlebar convention (macOS: zoom). The walk
+        /// mirrors the press fall-through, so a press-claiming widget
+        /// inside the region — a button in a drag header — keeps its
+        /// press and this returns false. Returns true when the down was
+        /// consumed; the caller then skips widget press/text/focus/
+        /// command dispatch for it so no widget is left pressed while
+        /// the OS owns the pointer. Platforms without the channel
+        /// (`error.UnsupportedService`) degrade to dead space.
+        pub fn startCanvasWidgetWindowDragFromPointer(
+            self: *Runtime,
+            input_event: GpuSurfaceInputEvent,
+            pointer_event: CanvasWidgetPointerEvent,
+        ) anyerror!bool {
+            if (pointer_event.pointer.phase != .down or input_event.button != 0) return false;
+            const target = pointer_event.target orelse return false;
+            const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return false;
+            if (self.views[index].kind != .gpu_surface) return false;
+            const layout = self.views[index].widgetLayoutTree();
+            if (canvas.widgetWindowDragTargetIndexFromNode(layout, target.index) == null) return false;
+            self.options.platform.services.startWindowDrag(pointer_event.window_id) catch |err| switch (err) {
+                error.UnsupportedService => return false,
+                else => return err,
+            };
+            return true;
+        }
+
         /// Resolve the view's stored (raw) pressed widget id through the
         /// press fall-through walk, so control activation compares the
         /// same resolved ids the press target carries.

@@ -574,7 +574,7 @@ pub const known_option_attrs = [_][]const u8{
     "variant",        "size",        "width",       "height",              "grow",     "gap",
     "padding",        "main",        "cross",       "wrap",                "key",      "global-key",
     "text-alignment", "columns",     "virtualized", "virtual-item-extent", "role",     "label",
-    "autofocus",      "min-width",   "expanded",
+    "autofocus",      "min-width",   "expanded",    "window-drag",
 };
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input", "scroll", "dismiss", "hold", "resize" };

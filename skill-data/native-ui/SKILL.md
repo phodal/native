@@ -152,7 +152,7 @@ The deepest declaring widget on the hit route wins; disabled items and separator
 | `stepper` > `step` | composite stage track | `active="{index}"` (required) derives each step's completed/active/pending state; steps are text leaves (no attributes) joined by connectors; stepper also takes `key`, `global-key`, `label` |
 | `timeline` > `timeline-item` | composite ledger list | items only inside a timeline (for/if fine); items are leaves — `title` (required), `description`, `meta`, `indicator`, `variant`, `connector="false"` on the last item, `selected`; `on-press` makes the whole item pressable with a trailing chevron |
 
-Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `image` (needs `ImageId` pixel references, runtime-registered — see the Images section), `icon_button` (`<button icon="...">` with empty content is the declarative icon button), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`). Built-in vector icons ARE expressible: `<icon name="search"/>` (closed, compile-checked name set; `Ui.icon` is the Zig-view equivalent). App-authored icons: `canvas.svg_icon.parseComptime(@embedFile("icons/logo.svg"))` parses any Lucide-dialect SVG at comptime; register the parsed table once at boot with `canvas.icons.registerAppIcons(&table)` and draw by name via `ui.appIcon(.{...}, "logo")` or `ElementOptions.icon` — registered names render exactly like built-ins on every draw path. Markup `<icon>`/`<button icon>` stay built-in-only (the compiled engine validates names at comptime, where runtime registrations cannot exist — engine parity). The one image binding markup DOES carry is the avatar's: `<avatar image="{user_image}">CT</avatar>` binds a `u64` ImageId model field/fn (the id is just model data; 0 keeps the initials fallback) — the embedded-asset exclusion stays.
+Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `image` (needs `ImageId` pixel references, runtime-registered — see the Images section), `icon_button` (`<button icon="...">` with empty content is the declarative icon button), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (shell chrome kind; use `tabs`/`toggle-group`), `chart` (series are model-derived float arrays; markup's scalar bindings cannot carry arrays — build chart panes with `ui.chart` and compose them into markup apps as Zig subtrees; see the Charts section). Built-in vector icons ARE expressible: `<icon name="search"/>` (closed, compile-checked name set; `Ui.icon` is the Zig-view equivalent). App-authored icons: `canvas.svg_icon.parseComptime(@embedFile("icons/logo.svg"))` parses any Lucide-dialect SVG at comptime; register the parsed table once at boot with `canvas.icons.registerAppIcons(&table)` and draw by name via `ui.appIcon(.{...}, "logo")` or `ElementOptions.icon` — registered names render exactly like built-ins on every draw path. Markup `<icon>`/`<button icon>` stay built-in-only (the compiled engine validates names at comptime, where runtime registrations cannot exist — engine parity). The one image binding markup DOES carry is the avatar's: `<avatar image="{user_image}">CT</avatar>` binds a `u64` ImageId model field/fn (the id is just model data; 0 keeps the initials fallback) — the embedded-asset exclusion stays.
 
 ## Attributes
 
@@ -201,7 +201,7 @@ The model closes the picker in `pick_repo` (and `toggle_repo_picker` flips it). 
 
 ## Widget budgets and virtualization
 
-Every view has fixed per-view capacities (`src/runtime/canvas_limits.zig`): **1024 retained widget nodes** (`max_canvas_widget_nodes_per_view` — the budget that matters for tree design; semantics and spans match it), 64 KiB retained widget text, **512 declared context-menu items** summed across all widgets of the view (`max_canvas_widget_context_menu_items_per_view` — separators count as items), and per-frame content budgets (2048 commands, 8192 glyphs, 32 KiB frame text). Overflow is loud: `error.WidgetLayoutListFull` / `error.WidgetNodeLimitReached` / `error.WidgetContextMenuLimitReached` fail tests under the harness's propagate policy and log a teaching diagnostic naming the budget in production (the app degrades to the previous frame). Watch headroom without overflowing: automation snapshots report `widget_nodes=N/1024 widget_semantics=N/1024 context_menu_items=N/512` on every gpu_surface view line.
+Every view has fixed per-view capacities (`src/runtime/canvas_limits.zig`): **1024 retained widget nodes** (`max_canvas_widget_nodes_per_view` — the budget that matters for tree design; semantics and spans match it), 64 KiB retained widget text, **512 declared context-menu items** summed across all widgets of the view (`max_canvas_widget_context_menu_items_per_view` — separators count as items), **64 chart series / 16384 chart points** summed across all charts of the view (`max_canvas_widget_chart_*` — `ui.chart` downsamples every series to 256 points, so this is 64 maximal series or hundreds of sparklines), and per-frame content budgets (2048 commands, 8192 glyphs, 32 KiB frame text, 2048 path elements shared by icons and charts). Overflow is loud: `error.WidgetLayoutListFull` / `error.WidgetNodeLimitReached` / `error.WidgetContextMenuLimitReached` fail tests under the harness's propagate policy and log a teaching diagnostic naming the budget in production (the app degrades to the previous frame). Watch headroom without overflowing: automation snapshots report `widget_nodes=N/1024 widget_semantics=N/1024 context_menu_items=N/512` on every gpu_surface view line.
 
 Budget rules of thumb: 1024 nodes is roomy for a three-pane desktop app (~500 nodes measured for a dense sidebar + markdown detail + run surface), but node count scales with what is MOUNTED, not what is visible — so bound every unbounded collection:
 
@@ -696,6 +696,31 @@ Three composites for pipeline/run UIs — pure compositions of existing widgets 
 - Timeline item: leading badge (dot colored by `variant`, or `indicator` text like `"✓"`), connector rail (`connector="false"` ends it), bold title, wrapped muted description, muted meta line. With `on-press` the item gains a trailing chevron and the press binds to the item's root (role `listitem`, focusable, labeled by the title) — clicks on the title/description/meta fall through to it, so a click anywhere dispatches and dragging still selects the text. No hover fill or description line-clamp in v1.
 - Zig: `ui.stepper(.{ .active = ... }, &.{ .{ .label = "Work" }, ... })`, `ui.timeline(options, items)`, `ui.timelineItem(.{ .title = ..., .on_press = ... })`.
 - Nav (Zig-only; markup swaps with `<if>`): `ui.nav(.{ .active = model.nav_depth, .retain = true }, .{ pageA, pageB })` — the model owns the stack; pages are index-keyed so widget ids (and engine scroll/text state) are stable across swaps; `retain=true` keeps inactive pages mounted-but-hidden (state preserved, excluded from render/hit-test/focus/semantics), default unmounts. Instant swap, no animation in v1; move focus in `update` when pushing/popping if the focused widget lives on the outgoing page.
+
+## Charts (Zig views)
+
+`ui.chart` is the data-visualization leaf (`.chart` widget kind): model-derived series drawn through the vector path pipeline with token colors — charts retheme with the palette, repaint exactly when their data changes (value equality, not identity), and report series semantics to automation. Zig-only: markup bindings are scalar, so chart panes are Zig subtrees.
+
+```zig
+// Star-history: cumulative stars per repo. 10k-point series are fine —
+// ui.chart downsamples deterministically past 256 points per series.
+ui.chart(.{ .grow = 1, .height = 220, .y_min = 0, .grid_lines = 3 }, &.{
+    .{ .kind = .line, .values = model.starsFor(0), .fill = true, .color = .accent, .label = "native-sdk" },
+    .{ .kind = .line, .values = model.starsFor(1), .color = .info, .label = "ovation" },
+})
+// Sparkline tile: zero-baseline bars pinned to an absolute 0..1 domain.
+ui.chart(.{ .width = 239, .height = 32, .y_min = 0, .y_max = 1 }, &.{
+    .{ .kind = .bar, .values = model.cpuHistory(), .color = .accent },
+})
+```
+
+- Kinds: `.line` (polyline; `fill = true` adds a translucent area to the baseline; one sample draws a dot), `.bar` (one bar per value, ALWAYS anchored at zero — the auto domain forces 0 in, negatives hang below; a zero value draws nothing), `.band` (min/max envelope: `values` upper, `low` lower).
+- Data: `values: []const f32` at uniform x steps, oldest first. `NaN` = missing sample, draws a gap — pad a filling ring with leading `NaN` so the trace enters from the right (see examples/system-monitor).
+- Domain: derived per side from the data unless `y_min`/`y_max` pin it; a flat series expands symmetrically. `grid_lines = N` draws N horizontal token hairlines (opt-in, none by default); `baseline = true` marks the zero line.
+- Colors are token refs (`.accent`, `.info`, `.success`, `.warning`, `.destructive`, ...) — never raw colors — so both themes hold up.
+- Downsampling: past 256 points per series, deterministic index-bucket min/max decimation (spikes survive; same series → same pixels, golden-testable). The generated semantics summary still describes the SOURCE series.
+- Semantics: role `chart`; label = a generated summary (`"chart: stars 10000 pts last 9999.00"`) unless `semantics.label` is set; accessibility value = the first series' latest point — assert live data from snapshots without pixels.
+- Display-only: never a hit target; clicks fall through to the nearest pressable ancestor, so charts inside pressable rows keep the row clickable. Axis labels are composition — put `text` widgets around the plot; the chart draws no text.
 
 ## Rich text: inline spans and markdown (Zig views)
 

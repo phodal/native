@@ -762,8 +762,12 @@ test "the validator's text-leaf element list matches the interpreter's takes-tex
 ///   menu case).
 /// - segmented_control: engine kind for shell chrome segments; tabs and
 ///   toggle-group cover the component catalog's use cases.
+/// - chart: series data is model-derived float arrays, and markup's
+///   scalar bindings cannot carry arrays (the documented select-options
+///   constraint, one level deeper). Charts are Zig views via `Ui.chart`;
+///   a markup chart element waits for an array-binding channel.
 const markup_excluded_widget_kinds = [_]canvas.WidgetKind{
-    .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control,
+    .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control, .chart,
 };
 
 fn kindExpressible(kind: canvas.WidgetKind) bool {

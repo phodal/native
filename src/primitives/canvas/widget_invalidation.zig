@@ -9,6 +9,7 @@ const equality_model = @import("equality.zig");
 const widget_tree = @import("widget_tree.zig");
 const widget_render = @import("widget_render.zig");
 const textSpansEqual = @import("text_spans.zig").textSpansEqual;
+const chartDataEqual = @import("chart.zig").chartDataEqual;
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -177,6 +178,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         !widgetLayoutStylesEqual(previous.widget.layout, next.widget.layout);
     const content_dirty = !std.mem.eql(u8, previous.widget.text, next.widget.text) or
         !textSpansEqual(previous.widget.spans, next.widget.spans) or
+        !chartDataEqual(previous.widget.chart, next.widget.chart) or
         !std.mem.eql(u8, previous.widget.placeholder, next.widget.placeholder) or
         !std.mem.eql(u8, previous.widget.icon, next.widget.icon) or
         previous.widget.value != next.widget.value or

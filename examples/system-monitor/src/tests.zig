@@ -373,12 +373,47 @@ test "the history ring holds exactly 60 samples, oldest shifted out" {
     try testing.expectApproxEqAbs(@as(f32, 0.05), model.cpu_history[0], 0.0001);
     try testing.expectApproxEqAbs(@as(f32, 64.0 / 100.0), model.cpu_history[model_mod.history_len - 1], 0.0001);
 
-    // The sparkline draws one bar per sample, bottom-aligned.
+    // The sparkline is ONE chart widget over the full sample window
+    // (the pre-primitive design was sixty bar widgets): a zero-baseline
+    // bar series pinned to the 0..1 core-fraction domain, padded with
+    // leading NaN while the ring fills so the trace enters from the
+    // right.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const tree = try buildTree(arena_state.allocator(), &model);
     const chart = findByLabel(tree.root, "CPU history").?;
-    try testing.expectEqual(@as(usize, model_mod.history_len), chart.children.len);
+    try testing.expectEqual(@as(usize, 0), chart.children.len);
+    try testing.expectEqual(@as(usize, 1), chart.chart.series.len);
+    try testing.expectEqual(native_sdk.canvas.ChartSeriesKind.bar, chart.chart.series[0].kind);
+    try testing.expectEqual(@as(usize, model_mod.history_len), chart.chart.series[0].values.len);
+    try testing.expectEqual(@as(?f32, 0), chart.chart.y_min);
+    try testing.expectEqual(@as(?f32, 1), chart.chart.y_max);
+    // Newest sample at the right edge; a full ring has no NaN padding.
+    try testing.expectApproxEqAbs(@as(f32, 64.0 / 100.0), chart.chart.series[0].values[model_mod.history_len - 1], 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.05), chart.chart.series[0].values[0], 0.0001);
+}
+
+test "a filling history ring pads the sparkline with leading missing samples" {
+    var model = Model{};
+    model.cores = 1;
+    var fx = model_mod.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    for (0..5) |_| {
+        main.update(&model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = "  1  50.0  0.1  100 00:10 /sbin/launchd" } }, &fx);
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const tree = try buildTree(arena_state.allocator(), &model);
+    const chart = findByLabel(tree.root, "CPU history").?;
+    const values = chart.chart.series[0].values;
+    try testing.expectEqual(@as(usize, model_mod.history_len), values.len);
+    // Leading slots are NaN (drawn as nothing), the 5 real samples sit at
+    // the right edge — the scope-trace entry the bar design had.
+    try testing.expect(std.math.isNan(values[0]));
+    try testing.expect(std.math.isNan(values[model_mod.history_len - 6]));
+    try testing.expectApproxEqAbs(@as(f32, 0.5), values[model_mod.history_len - 1], 0.0001);
 }
 
 // ----------------------------------------------------------- table logic
@@ -635,7 +670,10 @@ test "the stat tiles land on exact frames and the tree stays in budget" {
     var nodes: [1024]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, main.window_width, main.window_height), &nodes);
     try testing.expect(layout.nodes.len > 0);
-    try testing.expect(layout.nodes.len < 640); // 3 sparklines of 60 bars + chrome
+    // The chart retrofit collapsed 3 sparklines x 60 bar widgets into 3
+    // chart leaves; the whole app now mounts in a fraction of the old
+    // 640-node worst case.
+    try testing.expect(layout.nodes.len < 460);
 
     const labels = [_][]const u8{ "CPU tile", "Memory tile", "Processes tile", "Uptime tile" };
     var seen: usize = 0;
@@ -652,7 +690,7 @@ test "the stat tiles land on exact frames and the tree stays in budget" {
     }
     try testing.expectEqual(@as(usize, 4), seen);
 
-    // Sparklines are exactly the designed box: 60 bars never overflow it.
+    // Sparkline charts land exactly on the designed box.
     for (layout.nodes) |node| {
         if (!std.mem.eql(u8, node.widget.semantics.label, "CPU history")) continue;
         try testing.expectEqual(view_mod.spark_width, node.frame.width);

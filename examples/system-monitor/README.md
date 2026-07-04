@@ -1,6 +1,6 @@
 # Native SDK system monitor example
 
-A live CPU / memory / process monitor built to showcase the effects channel: a repeating `fx.startTimer` tick spawns the OS's own commands through `fx.spawn` (collect mode), `update` parses their stdout with pure fixture-tested parsers, and the UI derives everything from the model — stat tiles with 60-sample sparkline history, a top-CPU process table with search and sort toggles, and a context-menu SIGTERM action behind a real confirmation dialog. Zero third-party services; the "backend" is `ps`, `vm_stat`, and `sysctl`.
+A live CPU / memory / process monitor built to showcase the effects channel: a repeating `fx.startTimer` tick spawns the OS's own commands through `fx.spawn` (collect mode), `update` parses their stdout with pure fixture-tested parsers, and the UI derives everything from the model — stat tiles with 60-sample `ui.chart` sparklines, a top-CPU process table with search and sort toggles, and a context-menu SIGTERM action behind a real confirmation dialog. Zero third-party services; the "backend" is `ps`, `vm_stat`, and `sysctl`.
 
 ## The sampling loop (the showcase)
 
@@ -13,7 +13,7 @@ A tick that lands while the previous spawns are still running is **skipped and c
 
 ## Sparklines
 
-Each charted stat keeps 60 samples (a 2-minute window at the 2 s cadence), shifted in place. The charts are gpu-dashboard-style chart drawing built in Zig views: one thin token-tinted bar widget per sample, bottom-aligned in a fixed 239x32 box, entering from the right like a scope trace. Bars live in the retained widget tree, so they re-theme with the palette, respect layout budgets, and appear in automation snapshots like everything else. (The vector core's `strokePath` was the alternative; three 60-point polylines exceed the 128 path-elements-per-view budget, so bars are the honest fit — and read better at this size anyway.) CPU and memory bars scale against their absolute range; the process-count bars normalize against the window's own maximum, since counts have no natural ceiling.
+Each charted stat keeps 60 samples (a 2-minute window at the 2 s cadence), shifted in place. The charts are `ui.chart` widgets — the framework's chart primitive (one leaf per sparkline, series drawn through the vector path pipeline with token colors, so they re-theme with the palette, invalidate on data changes, and report series semantics in automation snapshots). CPU and memory draw zero-baseline **bars** pinned to the absolute 0..1 domain; the process count draws a filled **line** against the chart's auto domain (the window's own min..max), since counts have no natural ceiling and an absolute scale would render a featureless block. Histories shorter than the window pad with leading NaN — missing samples draw nothing — so the trace enters from the right like a scope. (This app originally hand-built the sparklines as sixty bar widgets per tile because three 60-point polylines blew the old 128 path-elements-per-view budget; the chart primitive plus the 2048 budget retired that idiom.)
 
 ## Terminating a process (safety, documented)
 
@@ -22,7 +22,7 @@ Right/ctrl-click a table row for the native context menu. **Terminate (SIGTERM)�
 ## Authoring split (markup-first)
 
 - `src/header.zml` — brand, live/paused status line, model-driven exclusive theme chips.
-- `src/view.zig` — the Zig sections: stat tiles, sparkline bar charts, the toolbar (vector icons paired with press handlers — play/pause, x, chevrons; markup buttons carry text only), the process table with per-row context menus, and the modal confirmation overlaid through a z-stack root.
+- `src/view.zig` — the Zig sections: stat tiles, `ui.chart` sparklines, the toolbar (vector icons paired with press handlers — play/pause, x, chevrons; markup buttons carry text only), the process table with per-row context menus, and the modal confirmation overlaid through a z-stack root.
 - `src/sampler.zig` — the pure parsers and per-OS command lines; no effects, no allocation.
 - `src/model.zig` — sampling state, history, table derivations, `update`, `boot`.
 - `src/theme.zig` — the teal/slate "ops room" token set for both modes; high-contrast falls back to the framework palettes.
@@ -37,7 +37,7 @@ Right/ctrl-click a table row for the native context menu. **Terminate (SIGTERM)�
 - 128 top-CPU rows kept per sample (an exact top-K selection over the full ps output — never "the first 128 lines"; count and CPU sum still cover every process). 14 rows shown in the table.
 - 48-byte process names (display cut, never dropped), 32-byte search buffer, 160-byte status note.
 - 3 context-menu entries per row x 14 rows = 42 of the 128 per-view budget.
-- Widget tree peaks around 320 nodes of the 1024 per-view budget (three 60-bar sparklines are the bulk).
+- Widget tree peaks around 140 nodes of the 1024 per-view budget (the chart retrofit collapsed three 60-bar sparklines into 3 leaves).
 
 ## Run
 

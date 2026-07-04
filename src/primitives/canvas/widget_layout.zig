@@ -107,7 +107,7 @@ pub fn layoutWidgetDepth(
         // Span paragraphs and span-carrying table cells share the link
         // hotspot child convention (no spans or no children is a no-op).
         .text, .data_cell => try layoutTextSpanLinkChildren(widget, content, index, depth, output, len, tokens),
-        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner => {},
+        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner, .chart => {},
     }
 
     return index;
@@ -690,6 +690,10 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .separator => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline)),
         .skeleton => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 120), widgetSizedDensityValue(widget, tokens, 20)),
         .spinner => intrinsicSquareControlSize(widget, tokens),
+        // A plot has no natural content size; the default is a small
+        // sparkline-friendly box, and definite `width`/`height` (or flex
+        // grow) size real charts.
+        .chart => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 48)),
         .alert => intrinsicAlertWidgetSize(widget, tokens),
         .card => intrinsicCardWidgetSize(widget, tokens),
         .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens),

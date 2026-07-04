@@ -46,6 +46,7 @@ pub const Error = error{
     RenderStackUnderflow,
     InvalidTransform,
     WidgetDepthExceeded,
+    ChartPathElementListFull,
     WidgetEventRouteListFull,
     WidgetInvalidationListFull,
     WidgetLayoutListFull,
@@ -369,6 +370,21 @@ pub const textSpansEqual = text_spans.textSpansEqual;
 pub const max_text_spans_per_paragraph = text_spans.max_text_spans_per_paragraph;
 pub const max_text_span_runs_per_paragraph = text_spans.max_text_span_runs_per_paragraph;
 pub const max_text_span_lines_per_paragraph = text_spans.max_text_span_lines_per_paragraph;
+
+// Chart plot data for the `.chart` widget kind (series, downsampling,
+// domain) lives in `chart.zig`.
+pub const chart = @import("chart.zig");
+pub const ChartSeries = chart.ChartSeries;
+pub const ChartSeriesKind = chart.ChartSeriesKind;
+pub const ChartSeriesColor = chart.ChartSeriesColor;
+pub const ChartData = chart.ChartData;
+pub const ChartDomain = chart.ChartDomain;
+pub const chartDomain = chart.chartDomain;
+pub const chartDataEqual = chart.chartDataEqual;
+pub const downsampleChartValues = chart.downsampleChartValues;
+pub const downsampledChartLen = chart.downsampledChartLen;
+pub const max_chart_points_per_series = chart.max_chart_points_per_series;
+pub const max_chart_path_elements_per_frame = chart.max_chart_path_elements_per_frame;
 
 // GitHub-flavored-markdown mapper (markdown source -> widget tree + span
 // model) lives in `markdown.zig`; also exported as `native_sdk.markdown`.

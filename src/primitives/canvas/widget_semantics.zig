@@ -120,6 +120,7 @@ fn semanticRole(widget: Widget) WidgetRole {
         .progress => .progressbar,
         .separator, .skeleton => .none,
         .spinner => .progressbar,
+        .chart => .chart,
     };
 }
 
@@ -135,8 +136,18 @@ fn semanticValue(widget: Widget) ?f32 {
         .accordion, .checkbox, .switch_control, .toggle, .toggle_button => if (widget_access.booleanControlSelected(widget)) 1 else 0,
         .slider, .progress => std.math.clamp(widget.value, 0, 1),
         .spinner => null,
+        // The latest datapoint of the first series, so automation can
+        // assert on live chart data without pixel access.
+        .chart => chartSemanticValue(widget),
         else => null,
     };
+}
+
+fn chartSemanticValue(widget: Widget) ?f32 {
+    if (widget.chart.series.len == 0) return null;
+    const values = widget.chart.series[0].values;
+    if (values.len == 0) return null;
+    return values[values.len - 1];
 }
 
 fn semanticState(widget: Widget) WidgetState {

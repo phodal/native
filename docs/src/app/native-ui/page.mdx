@@ -348,6 +348,30 @@ ui.nav(.{ .active = model.nav_depth, .retain = true }, .{
 
 The model owns the stack (TEA: push = set `nav_depth = 1`, pop = back to 0; out-of-range clamps). Pages are index-keyed, so a page's widget ids — and with them engine-owned scroll offsets and text edits — are stable across swaps. `retain = true` keeps inactive pages mounted but hidden: they keep engine state and drop out of rendering, hit-testing, focus traversal, and semantics; the default unmounts them (cheapest, engine state dropped). v1 swaps instantly — there is no push/pop animation yet — and focus does not transfer automatically: move it from `update` when the focused widget lives on the outgoing page.
 
+## Charts
+
+`ui.chart` is the data-visualization leaf: model-derived series drawn through the vector path pipeline with token colors, so charts re-theme with the palette, repaint exactly when their data changes, and report their series in automation snapshots. Three series kinds cover time-series dashboards:
+
+```zig
+// A star-history pane: cumulative stars per repo, one filled line each.
+ui.chart(.{ .grow = 1, .height = 220, .y_min = 0, .grid_lines = 3 }, &.{
+    .{ .kind = .line, .values = model.starsFor(0), .fill = true, .color = .accent, .label = "native-sdk" },
+    .{ .kind = .line, .values = model.starsFor(1), .color = .info, .label = "ovation" },
+})
+```
+
+- **`.line`** — a polyline through the values; `fill = true` adds a translucent area down to the baseline. A single sample renders as a dot.
+- **`.bar`** — one bar per value, always anchored at zero (the auto domain forces 0 in; negative values hang below the zero line). A zero value draws nothing — zero looks like zero.
+- **`.band`** — a min/max envelope: `values` is the upper edge, `low` the lower.
+
+Series `values` are `[]const f32` at uniform x steps, oldest first; `NaN` marks a missing sample and draws a gap (pad a filling ring with leading `NaN` so the trace enters from the right). Colors are design-token references (`accent`, `info`, `success`, `warning`, `destructive`, ...), never raw colors, so charts hold up in both themes. The y domain derives from the data per side unless `y_min`/`y_max` pin it; `grid_lines` draws that many horizontal token hairlines (opt-in — none by default) and `baseline = true` marks the zero line. Axis labels are composition: put `text` widgets around the plot; the chart itself draws no text.
+
+Long series are safe: `ui.chart` downsamples every series past 256 points with deterministic index-bucket min/max decimation (spikes survive, same input always produces the same pixels), so a 10k-point history renders within the path budget instead of erroring.
+
+Semantics: role `chart`, a generated series summary as the label (`"chart: stars 10000 pts last 9999.00; cpu 3 pts last 0.75"` — describing the source series, pre-decimation) unless you set one, and the first series' latest value as the accessibility value, so automation can assert on live data without pixel access. Charts are display-only and never hit targets: clicks fall through to the nearest pressable ancestor, so a chart inside a pressable row keeps the row clickable.
+
+Charts are Zig-only in v1: markup's scalar bindings cannot carry series arrays (the same closed-grammar constraint as select options), so chart panes are Zig views composed into markup apps the usual way.
+
 ## Tooling
 
 - `native markup check src/app.zml` — instant validation with `file:line:column` errors.

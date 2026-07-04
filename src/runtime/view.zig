@@ -254,6 +254,13 @@ pub const RuntimeView = struct {
     widget_span_len: usize = 0,
     widget_context_menu_items: [canvas_limits.max_canvas_widget_context_menu_items_per_view]canvas.WidgetContextMenuItem = undefined,
     widget_context_menu_len: usize = 0,
+    /// Chart series and points retained across all `.chart` widgets of
+    /// the view (labels ride `widget_text_bytes`), same bump-copy
+    /// discipline as spans.
+    widget_chart_series_entries: [canvas_limits.max_canvas_widget_chart_series_per_view]canvas.ChartSeries = undefined,
+    widget_chart_series_len: usize = 0,
+    widget_chart_points: [canvas_limits.max_canvas_widget_chart_points_per_view]f32 = undefined,
+    widget_chart_points_len: usize = 0,
     focused: bool = false,
     open: bool = false,
     label_storage: [platform.max_view_label_bytes]u8 = undefined,
@@ -389,6 +396,7 @@ pub const RuntimeView = struct {
     pub const copyWidgetText = CanvasWidgetTreeMethods.copyWidgetText;
     pub const copyWidgetSpans = CanvasWidgetTreeMethods.copyWidgetSpans;
     pub const copyWidgetContextMenu = CanvasWidgetTreeMethods.copyWidgetContextMenu;
+    pub const copyWidgetChart = CanvasWidgetTreeMethods.copyWidgetChart;
 
     // By pointer, never by value: a RuntimeView is multiple MiB of fixed
     // capacity arrays, and a by-value self parameter copies it onto the

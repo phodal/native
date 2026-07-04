@@ -139,6 +139,8 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_text_len = 0;
             self.widget_span_len = 0;
             self.widget_context_menu_len = 0;
+            self.widget_chart_series_len = 0;
+            self.widget_chart_points_len = 0;
 
             for (layout.nodes, 0..) |node, layout_index| {
                 const text_reconciled = canvasWidgetLayoutNodeWithTextReconcileState(node, layout, layout_index, previous_text_states);
@@ -413,6 +415,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             copy.widget.command = try self.copyWidgetText(node.widget.command);
             copy.widget.semantics.label = try self.copyWidgetText(node.widget.semantics.label);
             copy.widget.context_menu = try self.copyWidgetContextMenu(node.widget.context_menu);
+            copy.widget.chart = try self.copyWidgetChart(node.widget.chart);
             copy = canvasWidgetLayoutNodeWithSourceSemantics(copy, source_semantics);
             copy.widget.children = &.{};
             return copy;
@@ -435,6 +438,42 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             }
             self.widget_context_menu_len = end;
             return self.widget_context_menu_items[start..end];
+        }
+
+        /// Retain a `.chart` widget's plot data: series entries, their
+        /// point arrays, and their labels all copy into per-view storage
+        /// (same ownership rule as text/spans — a repaint can never read
+        /// samples from a reused app buffer). Bounded by the per-view
+        /// chart budgets in `canvas_limits`.
+        pub fn copyWidgetChart(self: *RuntimeView, data: canvas.ChartData) anyerror!canvas.ChartData {
+            if (data.series.len == 0) {
+                var copy = data;
+                copy.series = &.{};
+                return copy;
+            }
+            const end = self.widget_chart_series_len + data.series.len;
+            if (end > self.widget_chart_series_entries.len) return error.WidgetChartSeriesLimitReached;
+            const start = self.widget_chart_series_len;
+            self.widget_chart_series_len = end;
+            for (data.series, self.widget_chart_series_entries[start..end]) |series, *entry| {
+                entry.* = series;
+                entry.values = try copyWidgetChartPoints(self, series.values);
+                entry.low = try copyWidgetChartPoints(self, series.low);
+                entry.label = try self.copyWidgetText(series.label);
+            }
+            var copy = data;
+            copy.series = self.widget_chart_series_entries[start..end];
+            return copy;
+        }
+
+        fn copyWidgetChartPoints(self: *RuntimeView, points: []const f32) anyerror![]const f32 {
+            if (points.len == 0) return &.{};
+            const end = self.widget_chart_points_len + points.len;
+            if (end > self.widget_chart_points.len) return error.WidgetChartPointsLimitReached;
+            const start = self.widget_chart_points_len;
+            @memcpy(self.widget_chart_points[start..end], points);
+            self.widget_chart_points_len = end;
+            return self.widget_chart_points[start..end];
         }
 
         pub fn copyWidgetText(self: *RuntimeView, text: []const u8) anyerror![]const u8 {

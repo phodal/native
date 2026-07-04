@@ -968,3 +968,53 @@ test "a bound press handler makes layout containers hit targets" {
     try testing.expectEqual(row.id, bare_hit.id);
     try testing.expectEqual(@as(u32, 7), tree.msgForPointer(row.id, .up).?.toggle);
 }
+
+test "chart builder copies, downsamples, and summarizes series" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var ui = InboxUi.init(arena_state.allocator());
+
+    // A 10k-point series (the star-history shape) plus a sparkline.
+    const big = try testing.allocator.alloc(f32, 10_000);
+    defer testing.allocator.free(big);
+    for (big, 0..) |*value, index| value.* = @floatFromInt(index);
+    var small = [_]f32{ 0.25, 0.5, 0.75 };
+
+    const node = ui.chart(.{ .width = 240, .height = 64, .y_min = 0 }, &.{
+        .{ .kind = .line, .values = big, .fill = true, .color = .accent, .label = "stars" },
+        .{ .kind = .bar, .values = &small, .color = .info, .label = "cpu" },
+    });
+    const tree = try ui.finalize(node);
+
+    // Series copied into the arena and bounded by the downsampling cap;
+    // clobbering the caller buffer must not reach the stored points.
+    small[0] = 9;
+    const stored = tree.root.chart.series;
+    try testing.expectEqual(@as(usize, 2), stored.len);
+    try testing.expectEqual(canvas.max_chart_points_per_series, stored[0].values.len);
+    try testing.expectEqualSlices(f32, &.{ 0.25, 0.5, 0.75 }, stored[1].values);
+    // Deterministic decimation keeps the true extremes of a ramp.
+    try testing.expectEqual(@as(f32, 0), stored[0].values[0]);
+    try testing.expectEqual(@as(f32, 9999), stored[0].values[stored[0].values.len - 1]);
+    try testing.expectEqual(@as(?f32, 0), tree.root.chart.y_min);
+
+    // The generated summary describes the SOURCE series so automation
+    // asserts on what the app handed over.
+    try testing.expectEqualStrings(
+        "chart: stars 10000 pts last 9999.00; cpu 3 pts last 0.75",
+        tree.root.semantics.label,
+    );
+
+    // Display-only: a chart is not a hit target and never claims a press.
+    try testing.expect(!canvas.widgetKindHitTarget(.chart));
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 240, 64), &nodes);
+    try testing.expect(layout.hitTest(geometry.PointF.init(120, 32)) == null);
+
+    // An explicit semantics label wins over the generated summary.
+    var labeled_ui = InboxUi.init(arena_state.allocator());
+    const labeled = try labeled_ui.finalize(labeled_ui.chart(.{
+        .semantics = .{ .label = "CPU history" },
+    }, &.{.{ .kind = .line, .values = &small }}));
+    try testing.expectEqualStrings("CPU history", labeled.root.semantics.label);
+}

@@ -273,6 +273,9 @@ pub fn mobileWidgetRole(role: canvas.WidgetRole) MobileWidgetRole {
         .switch_control => .switch_control,
         .slider => .slider,
         .progressbar => .progressbar,
+        // The mobile ABI predates the chart role; expose charts as images
+        // carrying the series-summary label.
+        .chart => .image,
     };
 }
 

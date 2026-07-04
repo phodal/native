@@ -20,6 +20,7 @@ const widget_render_scroll = @import("widget_render_scroll.zig");
 const widget_render_surfaces = @import("widget_render_surfaces.zig");
 const widget_render_controls = @import("widget_render_controls.zig");
 const icon_model = @import("icons.zig");
+const chart_model = @import("chart.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -119,7 +120,32 @@ const spinner_segments = [_]SpinnerSegment{
     .{ .x = -0.707, .y = -0.707 },
 };
 
+/// Frame-lifetime scratch for chart path elements: `.chart` widgets build
+/// their line/band `PathElement`s here at emit time (unlike icons, whose
+/// elements are comptime-static), and emitted commands slice into it. The
+/// event loop is single-threaded and the runtime copies the display list
+/// into per-view storage within the same emit call stack, so one
+/// threadlocal buffer per frame is sound — reset at each emit entry
+/// point. Sized to mirror the runtime's per-view path-element budget
+/// (`canvas_limits.max_canvas_path_elements_per_view`; a lockstep test
+/// keeps them equal), so overflow here fails exactly where the per-view
+/// copy would have refused anyway — loudly, by budget name.
+threadlocal var chart_frame_path_elements: [chart_model.max_chart_path_elements_per_frame]drawing_model.PathElement = undefined;
+threadlocal var chart_frame_path_len: usize = 0;
+
+fn resetChartFramePathScratch() void {
+    chart_frame_path_len = 0;
+}
+
+fn allocChartPathElements(count: usize) Error![]drawing_model.PathElement {
+    if (chart_frame_path_len + count > chart_frame_path_elements.len) return error.ChartPathElementListFull;
+    const start = chart_frame_path_len;
+    chart_frame_path_len += count;
+    return chart_frame_path_elements[start .. start + count];
+}
+
 pub fn emitWidgetTree(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    resetChartFramePathScratch();
     try emitWidgetDepth(builder, widget, tokens, 0);
 }
 
@@ -128,6 +154,7 @@ pub fn emitWidgetLayout(builder: *Builder, layout: anytype, tokens: DesignTokens
 }
 
 pub fn emitWidgetLayoutWithState(builder: *Builder, layout: anytype, tokens: DesignTokens, state: WidgetRenderState) Error!void {
+    resetChartFramePathScratch();
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
 }
 
@@ -186,6 +213,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
         .skeleton => try emitSkeletonWidget(builder, paint_widget, tokens),
         .spinner => try emitSpinnerWidget(builder, paint_widget, tokens),
+        .chart => try emitChartWidget(builder, paint_widget, tokens),
     }
 }
 
@@ -309,6 +337,7 @@ fn emitWidgetLayoutNodeContent(
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
         .skeleton => try emitSkeletonWidget(builder, paint_widget, tokens),
         .spinner => try emitSpinnerWidget(builder, paint_widget, tokens),
+        .chart => try emitChartWidget(builder, paint_widget, tokens),
     }
 
     try emitWidgetLayoutClippedChildren(builder, layout, node_index, tokens, state, paint_widget);
@@ -889,6 +918,274 @@ fn emitSpinnerWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Er
             },
         });
     }
+}
+
+// ------------------------------------------------------------------ chart
+
+/// Draw a `.chart` widget: token-hairline gridlines and baseline first,
+/// then each series oldest-to-newest through the vector path pipeline —
+/// lines as one `strokePath` (plus an optional translucent baseline-fill
+/// `fillPath`), bands as one closed envelope `fillPath`, bars as one
+/// pixel-snapped `fillRoundedRect` per value. Series colors resolve from
+/// design tokens at emit time, so charts retheme with the palette.
+/// Deterministic by construction: geometry is a pure function of the
+/// series, the domain, and the frame.
+fn emitChartWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const data = widget.chart;
+    const plot = widget.frame.inset(widget.layout.padding).normalized();
+    if (plot.isEmpty() or plot.width <= 0 or plot.height <= 0) return;
+    const domain = chart_model.chartDomain(data);
+
+    const hairline = @max(1, tokens.stroke.hairline);
+    if (data.grid_lines > 0) {
+        const divisions: f32 = @floatFromInt(@as(usize, data.grid_lines) + 1);
+        for (0..data.grid_lines) |index| {
+            const y = plot.y + plot.height * @as(f32, @floatFromInt(index + 1)) / divisions;
+            try builder.fillRect(.{
+                .id = chartCommandId(widget.id, chart_grid_seed, 0, index),
+                .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(plot.x, y - hairline * 0.5, plot.width, hairline)),
+                .fill = colorFill(tokens.colors.border),
+            });
+        }
+    }
+    if (data.baseline) {
+        const y = chartMapY(chartBaselineValue(domain), domain, plot, 0);
+        try builder.fillRect(.{
+            .id = chartCommandId(widget.id, chart_baseline_seed, 0, 0),
+            .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(plot.x, y - hairline * 0.5, plot.width, hairline)),
+            .fill = colorFill(tokens.colors.border),
+        });
+    }
+
+    for (data.series, 0..) |series, series_index| {
+        if (series.values.len == 0) continue;
+        const color = text_spans_model.textSpanColorValue(tokens.colors, series.color);
+        switch (series.kind) {
+            .bar => try emitChartBars(builder, widget, tokens, plot, domain, series, series_index, color),
+            .line => try emitChartLine(builder, widget, plot, domain, series, series_index, color),
+            .band => try emitChartBand(builder, widget, plot, domain, series, series_index, color),
+        }
+    }
+}
+
+/// Where fills and bars anchor: zero when the domain includes it, else
+/// the nearer domain edge (an all-positive auto domain fills to the plot
+/// floor, matching what the data shows).
+fn chartBaselineValue(domain: chart_model.ChartDomain) f32 {
+    return std.math.clamp(0, domain.min, domain.max);
+}
+
+/// Map a value into plot-space y, top-down, with an optional symmetric
+/// vertical inset (line strokes inset by half their width so peak ink
+/// stays inside the widget frame and its dirty bounds).
+fn chartMapY(value: f32, domain: chart_model.ChartDomain, plot: geometry.RectF, inset: f32) f32 {
+    const fraction = std.math.clamp((value - domain.min) / domain.span(), 0, 1);
+    const height = @max(0, plot.height - inset * 2);
+    return plot.maxY() - inset - fraction * height;
+}
+
+fn chartMapX(index: usize, count: usize, plot: geometry.RectF, inset: f32) f32 {
+    const width = @max(0, plot.width - inset * 2);
+    if (count <= 1) return plot.x + inset + width * 0.5;
+    return plot.x + inset + width * @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(count - 1));
+}
+
+const chart_stroke_default: f32 = 1.5;
+const chart_line_fill_alpha: f32 = 0.18;
+const chart_band_fill_alpha: f32 = 0.25;
+
+fn chartStrokeWidth(widget: Widget) f32 {
+    const explicit = widget.style.stroke_width orelse chart_stroke_default;
+    return if (std.math.isFinite(explicit) and explicit > 0) explicit else chart_stroke_default;
+}
+
+fn emitChartBars(
+    builder: *Builder,
+    widget: Widget,
+    tokens: DesignTokens,
+    plot: geometry.RectF,
+    domain: chart_model.ChartDomain,
+    series: chart_model.ChartSeries,
+    series_index: usize,
+    color: drawing_model.Color,
+) Error!void {
+    const count = series.values.len;
+    const slot = plot.width / @as(f32, @floatFromInt(count));
+    const gap = if (count > 1) std.math.clamp(slot * 0.25, 0.5, 4) else 0;
+    const bar_width = @max(1, slot - gap);
+    const base_value = chartBaselineValue(domain);
+    const base_y = chartMapY(base_value, domain, plot, 0);
+    for (series.values, 0..) |value, index| {
+        if (!std.math.isFinite(value)) continue;
+        if (value == base_value) continue;
+        const x = plot.x + slot * @as(f32, @floatFromInt(index)) + (slot - bar_width) * 0.5;
+        const value_y = chartMapY(value, domain, plot, 0);
+        const top = @min(base_y, value_y);
+        // A visible tick for near-baseline values: zero draws nothing
+        // (zero looks like zero), anything else is at least a hairline.
+        const height = @max(1, @abs(base_y - value_y));
+        try builder.fillRoundedRect(.{
+            .id = chartCommandId(widget.id, chart_bar_seed, series_index, index),
+            .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(x, if (value >= base_value) top else base_y, bar_width, height)),
+            .radius = Radius.all(@min(1, bar_width * 0.5)),
+            .fill = colorFill(color),
+        });
+    }
+}
+
+fn emitChartLine(
+    builder: *Builder,
+    widget: Widget,
+    plot: geometry.RectF,
+    domain: chart_model.ChartDomain,
+    series: chart_model.ChartSeries,
+    series_index: usize,
+    color: drawing_model.Color,
+) Error!void {
+    const stroke_width = chartStrokeWidth(widget);
+    const inset = stroke_width * 0.5;
+    const points = try chartPolylinePoints(series.values, domain, plot, inset);
+    if (points.len == 0) return;
+    if (points.len == 1) {
+        // A single sample has no line: draw a dot at the point.
+        const extent = @max(2, stroke_width * 2);
+        try builder.fillRoundedRect(.{
+            .id = chartCommandId(widget.id, chart_line_seed, series_index, 0),
+            .rect = geometry.RectF.init(points[0].x - extent * 0.5, points[0].y - extent * 0.5, extent, extent),
+            .radius = Radius.all(extent * 0.5),
+            .fill = colorFill(color),
+        });
+        return;
+    }
+
+    if (series.fill) {
+        const base_y = chartMapY(chartBaselineValue(domain), domain, plot, 0);
+        const elements = try allocChartPathElements(points.len + 3);
+        for (points, 0..) |point, index| {
+            elements[index] = .{
+                .verb = if (index == 0) .move_to else .line_to,
+                .points = .{ point, geometry.PointF.zero(), geometry.PointF.zero() },
+            };
+        }
+        elements[points.len] = .{ .verb = .line_to, .points = .{ geometry.PointF.init(points[points.len - 1].x, base_y), geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[points.len + 1] = .{ .verb = .line_to, .points = .{ geometry.PointF.init(points[0].x, base_y), geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[points.len + 2] = .{ .verb = .close };
+        try builder.fillPath(.{
+            .id = chartCommandId(widget.id, chart_fill_seed, series_index, 0),
+            .elements = elements,
+            .fill = colorFill(colorWithAlpha(color, chart_line_fill_alpha)),
+        });
+    }
+
+    const elements = try allocChartPathElements(points.len);
+    for (points, 0..) |point, index| {
+        elements[index] = .{
+            .verb = if (index == 0) .move_to else .line_to,
+            .points = .{ point, geometry.PointF.zero(), geometry.PointF.zero() },
+        };
+    }
+    try builder.strokePath(.{
+        .id = chartCommandId(widget.id, chart_line_seed, series_index, 0),
+        .elements = elements,
+        .stroke = .{
+            .fill = colorFill(color),
+            .width = stroke_width,
+        },
+    });
+}
+
+fn emitChartBand(
+    builder: *Builder,
+    widget: Widget,
+    plot: geometry.RectF,
+    domain: chart_model.ChartDomain,
+    series: chart_model.ChartSeries,
+    series_index: usize,
+    color: drawing_model.Color,
+) Error!void {
+    const upper = try chartPolylinePoints(series.values, domain, plot, 0);
+    if (upper.len < 2) return;
+    const base_y = chartMapY(chartBaselineValue(domain), domain, plot, 0);
+    const pair_count = @min(series.values.len, series.low.len);
+    const lower_count = if (pair_count >= 2) pair_count else 2;
+    const elements = try allocChartPathElements(upper.len + lower_count + 1);
+    for (upper, 0..) |point, index| {
+        elements[index] = .{
+            .verb = if (index == 0) .move_to else .line_to,
+            .points = .{ point, geometry.PointF.zero(), geometry.PointF.zero() },
+        };
+    }
+    var cursor = upper.len;
+    if (pair_count >= 2) {
+        // Walk the lower edge back (newest to oldest) to close the
+        // envelope. Non-finite lower values clamp to the baseline.
+        var index = pair_count;
+        while (index > 0) {
+            index -= 1;
+            const raw = series.low[index];
+            const value = if (std.math.isFinite(raw)) raw else chartBaselineValue(domain);
+            elements[cursor] = .{ .verb = .line_to, .points = .{
+                geometry.PointF.init(chartMapX(index, series.values.len, plot, 0), chartMapY(value, domain, plot, 0)),
+                geometry.PointF.zero(),
+                geometry.PointF.zero(),
+            } };
+            cursor += 1;
+        }
+    } else {
+        // No lower edge: fill down to the baseline (a stroke-less
+        // line-with-fill).
+        elements[cursor] = .{ .verb = .line_to, .points = .{ geometry.PointF.init(upper[upper.len - 1].x, base_y), geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[cursor + 1] = .{ .verb = .line_to, .points = .{ geometry.PointF.init(upper[0].x, base_y), geometry.PointF.zero(), geometry.PointF.zero() } };
+        cursor += 2;
+    }
+    elements[cursor] = .{ .verb = .close };
+    try builder.fillPath(.{
+        .id = chartCommandId(widget.id, chart_band_seed, series_index, 0),
+        .elements = elements,
+        .fill = colorFill(colorWithAlpha(color, chart_band_fill_alpha)),
+    });
+}
+
+/// Map a series into plot-space points, skipping non-finite values.
+/// Returned points live in a threadlocal scratch valid until the next
+/// series maps (each emitter consumes them before returning).
+threadlocal var chart_polyline_points: [chart_model.max_chart_points_per_series]geometry.PointF = undefined;
+
+fn chartPolylinePoints(
+    values: []const f32,
+    domain: chart_model.ChartDomain,
+    plot: geometry.RectF,
+    inset: f32,
+) Error![]const geometry.PointF {
+    const count = @min(values.len, chart_polyline_points.len);
+    var len: usize = 0;
+    for (values[0..count], 0..) |value, index| {
+        if (!std.math.isFinite(value)) continue;
+        chart_polyline_points[len] = geometry.PointF.init(
+            chartMapX(index, count, plot, inset),
+            chartMapY(value, domain, plot, inset),
+        );
+        len += 1;
+    }
+    return chart_polyline_points[0..len];
+}
+
+const chart_grid_seed: u64 = 0x5eed_c4a8_0000_0001;
+const chart_baseline_seed: u64 = 0x5eed_c4a8_0000_0002;
+const chart_line_seed: u64 = 0x5eed_c4a8_0000_0003;
+const chart_fill_seed: u64 = 0x5eed_c4a8_0000_0004;
+const chart_band_seed: u64 = 0x5eed_c4a8_0000_0005;
+const chart_bar_seed: u64 = 0x5eed_c4a8_0000_0006;
+
+/// Stable hashed command ids per (family, series, ordinal), same scheme
+/// as span runs, so retained diffing tracks chart commands across frames.
+fn chartCommandId(widget_id: ObjectId, seed: u64, series_index: usize, ordinal: usize) ObjectId {
+    var hasher = std.hash.Wyhash.init(seed);
+    hasher.update(std.mem.asBytes(&widget_id));
+    hasher.update(std.mem.asBytes(&@as(u64, series_index)));
+    hasher.update(std.mem.asBytes(&@as(u64, ordinal)));
+    const value = hasher.final();
+    return if (value == 0) 1 else value;
 }
 
 pub fn toggleWidgetKnobCommandId(id: ObjectId) ObjectId {

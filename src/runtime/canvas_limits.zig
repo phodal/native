@@ -120,6 +120,20 @@ pub const max_canvas_widget_spans_per_view: usize = 1024;
 // because a menu nobody can scan is a design bug, while this budget
 // bounds the retained declarations across all widgets of the view.
 pub const max_canvas_widget_context_menu_items_per_view: usize = 512;
+// Chart series and points retained across all `.chart` widgets of a view
+// (friction #99). `Ui.chart` downsamples every series to
+// `canvas.max_chart_points_per_series` (256) before it reaches the
+// retained tree, so the points pool is sized as 64 maximal series: a
+// dashboard of 16 charts x 3 series x 256 points fills it exactly, and
+// realistic sparkline tiles (60 points) fit hundreds of series. Memory
+// is fixed-capacity address space: series entries are ~64 B (slices +
+// flags) x 64 = 4 KiB per view, points are 4 B x 16384 = 64 KiB per
+// view, x 32 view slots = ~2.1 MiB total, pages touched only as views
+// chart. Overflow is loud (`WidgetChartSeriesLimitReached` /
+// `WidgetChartPointsLimitReached`), same contract as every widget budget;
+// series labels ride the existing widget-text budget.
+pub const max_canvas_widget_chart_series_per_view: usize = 64;
+pub const max_canvas_widget_chart_points_per_view: usize = 16384;
 pub const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_nodes_per_view * 2 + 1;
 // Scroll containers whose offset changed since the last app dispatch:
 // entries are node ids, deduped, and the dispatched event reads the

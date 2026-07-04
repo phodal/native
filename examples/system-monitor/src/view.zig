@@ -1,12 +1,13 @@
 //! system-monitor views. Markup-first where markup fits: the header bar
 //! (brand, status line, theme chips) is a compiled `.zml` view. Everything
 //! else is Zig because it needs what the closed markup grammar excludes —
-//! vector icons paired with press handlers, the sparkline bar charts
-//! (gpu-dashboard-style chart drawing built in a Zig view: one thin
-//! token-tinted bar widget per sample, bottom-aligned in a fixed-width
-//! row, so the charts live in the retained widget tree with layout,
-//! theming, and automation for free), per-row native context menus, and
-//! the modal SIGTERM confirmation overlaid through a z-stack root.
+//! vector icons paired with press handlers, the sparkline charts (one
+//! `ui.chart` widget per tile: token-tinted bar/line series in the
+//! retained widget tree, so the charts get layout, theming, invalidation,
+//! and automation semantics for free — this replaced the hand-built
+//! per-sample bar widgets that predated the chart primitive), per-row
+//! native context menus, and the modal SIGTERM confirmation overlaid
+//! through a z-stack root.
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
@@ -25,13 +26,13 @@ pub const CompiledHeaderView = canvas.CompiledMarkupView(Model, Msg, header_mark
 // ------------------------------------------------------- layout constants
 // Precision layout, calculator-style: the sparkline geometry drives the
 // tile width and the tile row drives the window. The tests assert the
-// tiles land exactly on these frames.
+// tiles land exactly on these frames. The 239 width is inherited from the
+// pre-primitive bar geometry (60 x 3px bars + 59 x 1px gaps), kept so the
+// window layout is byte-stable across the chart retrofit.
 
 pub const spark_samples = model_mod.history_len;
-pub const spark_bar_width: f32 = 3;
-pub const spark_bar_gap: f32 = 1;
 pub const spark_height: f32 = 32;
-pub const spark_width: f32 = spark_samples * spark_bar_width + (spark_samples - 1) * spark_bar_gap; // 239
+pub const spark_width: f32 = spark_samples * 4 - 1; // 239
 
 pub const tile_padding: f32 = 14;
 pub const tile_width: f32 = spark_width + tile_padding * 2; // 267
@@ -100,12 +101,13 @@ fn tilesView(ui: *Ui, model: *const Model) Ui.Node {
     });
 }
 
-/// How a stat's history maps to bar heights. `fraction` values are already
-/// 0..1 of an absolute scale (percent of all cores / of total memory);
-/// `window_band` normalizes against the window's own min..max range with a
-/// visible floor (process counts have no natural ceiling and barely move —
-/// an absolute scale would draw a featureless block; the band shows the
-/// drift like a scope trace, documented in the README).
+/// How a stat's history scales. `fraction` values are already 0..1 of an
+/// absolute scale (percent of all cores / of total memory) and draw as
+/// zero-baseline bars pinned to that domain; `window_band` stats (process
+/// counts have no natural ceiling and barely move — an absolute scale
+/// would draw a featureless block) draw as a filled line against the
+/// chart's auto domain, the window's own min..max, so the drift reads
+/// like a scope trace (documented in the README).
 const SparkScale = enum { fraction, window_band };
 
 const TileSpec = struct {
@@ -158,61 +160,32 @@ fn uptimeTile(ui: *Ui, model: *const Model) Ui.Node {
 
 // ------------------------------------------------------------ sparklines
 
-const BarCell = struct {
-    index: usize,
-    height: f32,
-};
-
-/// One sparkline: a fixed-width, bottom-aligned row of thin bars, newest
-/// at the right edge (bars fill leftward from the right as history
-/// accumulates, the way a scope trace enters the screen). Bar count is
-/// bounded by `history_len`; each bar is a token-tinted stack, so the
-/// chart re-themes with the palette like every other widget.
+/// One sparkline: a single `ui.chart` widget over the 60-sample window
+/// (friction #99 retrofit — this used to be sixty hand-built bar widgets
+/// per tile). Absolute-scale stats (`fraction`: percent of all cores, of
+/// total memory) draw zero-baseline bars pinned to the 0..1 domain;
+/// window-band stats (process counts, no natural ceiling) draw a filled
+/// line against the window's own min..max — the auto domain — so drift
+/// reads like a scope trace. Histories shorter than the window pad with
+/// leading NaN (missing samples draw nothing), so the trace still enters
+/// from the right edge as samples accumulate.
 fn sparklineView(ui: *Ui, label: []const u8, history: []const f32, scale: SparkScale) Ui.Node {
-    const cells: []BarCell = ui.arena.alloc(BarCell, history.len) catch @constCast(&[_]BarCell{});
-    var low: f32 = std.math.floatMax(f32);
-    var high: f32 = 0;
-    for (history) |value| {
-        low = @min(low, value);
-        high = @max(high, value);
-    }
-    for (cells, history, 0..) |*cell, value, index| {
-        const fraction = switch (scale) {
-            .fraction => std.math.clamp(value, 0, 1),
-            // 0.2 floor + 0.8 band: a flat series reads as a steady mid
-            // trace, and drift within the window fills the rest.
-            .window_band => if (high > low) 0.2 + 0.8 * (value - low) / (high - low) else 0.5,
-        };
-        cell.* = .{ .index = index, .height = @max(1.5, fraction * spark_height) };
-    }
-    var chart = ui.row(.{
+    var padded: [model_mod.history_len]f32 = undefined;
+    @memset(&padded, std.math.nan(f32));
+    const start = padded.len - @min(history.len, padded.len);
+    @memcpy(padded[start..], history[history.len - (padded.len - start) ..]);
+
+    const series = [_]canvas.ChartSeries{switch (scale) {
+        .fraction => .{ .kind = .bar, .values = &padded, .color = .accent },
+        .window_band => .{ .kind = .line, .values = &padded, .fill = true, .color = .accent },
+    }};
+    return ui.chart(.{
         .width = spark_width,
         .height = spark_height,
-        .gap = spark_bar_gap,
-        .cross = .end,
-        .main = .end,
+        .y_min = if (scale == .fraction) 0 else null,
+        .y_max = if (scale == .fraction) 1 else null,
         .semantics = .{ .label = ui.fmt("{s} history", .{label}) },
-    }, ui.each(cells, barKey, barView));
-    // Fixed box: the row never resizes as samples arrive.
-    chart.widget.layout.grow = 0;
-    return chart;
-}
-
-fn barKey(cell: *const BarCell) canvas.UiKey {
-    return canvas.uiKey(@as(u32, @intCast(cell.index)));
-}
-
-/// One bar. `.skeleton` on purpose: it is the one leaf that paints a
-/// plain token-tinted rounded fill in a single command and is not a hit
-/// target (`.stack` paints nothing at all; `.panel` would add a shadow,
-/// a border, and hit-testing per bar — sixty of them, three times over).
-fn barView(ui: *Ui, cell: *const BarCell) Ui.Node {
-    return ui.el(.skeleton, .{
-        .width = spark_bar_width,
-        .height = cell.height,
-        .style = .{ .radius = 1 },
-        .style_tokens = .{ .background = .accent },
-    }, .{});
+    }, &series);
 }
 
 // --------------------------------------------------------------- toolbar

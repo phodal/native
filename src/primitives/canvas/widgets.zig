@@ -4,6 +4,7 @@ const canvas = @import("root.zig");
 const text_model = @import("text.zig");
 const text_spans_model = @import("text_spans.zig");
 const token_model = @import("tokens.zig");
+const chart_model = @import("chart.zig");
 
 const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
@@ -89,6 +90,12 @@ pub const WidgetKind = enum {
     separator,
     skeleton,
     spinner,
+    /// Data chart leaf (line/bar/band series in `Widget.chart`), rendered
+    /// through the vector path pipeline with token-driven series colors.
+    /// Display-only: not a hit target, so presses fall through to the
+    /// nearest pressable ancestor like text and icons. Appended last so
+    /// existing structural ids (which hash the kind ordinal) are stable.
+    chart,
 };
 
 pub const WidgetCursor = enum {
@@ -200,6 +207,10 @@ pub const WidgetRole = enum {
     switch_control,
     slider,
     progressbar,
+    /// Data visualization (the `.chart` widget kind). Platform
+    /// accessibility bridges without a chart role expose it as an image
+    /// with the chart's summary label.
+    chart,
 };
 
 pub const BuiltinComponentStyle = enum {
@@ -477,6 +488,12 @@ pub const Widget = struct {
     /// `.scroll_view`: the engine's drawn scrollbar and kinetic physics
     /// stand down — the OS scroller owns feel and the overlay scroller.
     native_scroll: bool = false,
+    /// Plot data for `.chart` widgets: model-derived series (values,
+    /// token colors, kind) plus domain/grid options. The retained tree
+    /// copies series and points into per-view storage like text/spans,
+    /// bounded by `canvas_limits.max_canvas_widget_chart_*` budgets.
+    /// `Ui.chart` downsamples long series before they land here.
+    chart: chart_model.ChartData = .{},
     children: []const Widget = &.{},
 };
 

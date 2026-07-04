@@ -688,6 +688,104 @@ pub fn Ui(comptime Msg: type) type {
             return self.el(.stack, .{ .grow = grow }, .{});
         }
 
+        pub const ChartOptions = struct {
+            key: ?UiKey = null,
+            global_key: ?UiKey = null,
+            /// Definite plot width/height (same contract as
+            /// `ElementOptions.width`/`height`); 0 keeps the intrinsic
+            /// sparkline-sized default (160x48), and `grow` flexes.
+            width: f32 = 0,
+            height: f32 = 0,
+            grow: f32 = 0,
+            padding: f32 = 0,
+            /// Explicit y domain; null derives each side from the data
+            /// (bar series force 0 into a derived domain — bars always
+            /// have an honest zero baseline).
+            y_min: ?f32 = null,
+            y_max: ?f32 = null,
+            /// Horizontal token-hairline gridlines at even divisions
+            /// (0 = none; gridlines are opt-in, never default).
+            grid_lines: u8 = 0,
+            /// Hairline at the baseline (zero clamped into the domain).
+            baseline: bool = false,
+            /// Line stroke width override (default 1.5).
+            stroke_width: ?f32 = null,
+            /// Role defaults to `chart`; an empty label gets a generated
+            /// series summary ("chart: line cpu 60 pts last 0.42; ...")
+            /// so automation can assert on the data without pixels, and
+            /// `semantics.value` reports the first series' latest point.
+            semantics: canvas.WidgetSemantics = .{},
+        };
+
+        /// A data chart leaf (friction #99): line (optional area fill),
+        /// bar, and band series over uniform x steps, drawn through the
+        /// vector path pipeline with token-driven colors. Series are
+        /// copied into the build arena and DOWNSAMPLED deterministically
+        /// to `canvas.max_chart_points_per_series` points (index-bucket
+        /// min/max, spikes preserved), so a 10k-point star-history series
+        /// renders within the path budget instead of erroring. Display-
+        /// only and not a hit target — presses fall through like text.
+        /// Compose axis labels from `text` widgets around the plot; the
+        /// widget itself draws no text. Zig-only: markup's scalar
+        /// bindings cannot carry series arrays (documented exclusion).
+        pub fn chart(self: *Self, options: ChartOptions, series: []const canvas.ChartSeries) Node {
+            var node = self.el(.chart, .{
+                .key = options.key,
+                .global_key = options.global_key,
+                .width = options.width,
+                .height = options.height,
+                .grow = options.grow,
+                .padding = options.padding,
+                .style = .{ .stroke_width = options.stroke_width },
+                .semantics = options.semantics,
+            }, .{});
+            const stored = self.arena.alloc(canvas.ChartSeries, series.len) catch {
+                self.failed = true;
+                return node;
+            };
+            for (series, stored) |source, *entry| {
+                entry.* = source;
+                entry.values = self.downsampledChartCopy(source.values);
+                entry.low = if (source.kind == .band) self.downsampledChartCopy(source.low) else &.{};
+            }
+            node.widget.chart = .{
+                .series = stored,
+                .y_min = options.y_min,
+                .y_max = options.y_max,
+                .grid_lines = options.grid_lines,
+                .baseline = options.baseline,
+            };
+            if (node.widget.semantics.label.len == 0) {
+                node.widget.semantics.label = self.chartSummary(series);
+            }
+            return node;
+        }
+
+        fn downsampledChartCopy(self: *Self, values: []const f32) []const f32 {
+            if (values.len == 0) return &.{};
+            const output = self.arena.alloc(f32, canvas.downsampledChartLen(values.len)) catch {
+                self.failed = true;
+                return &.{};
+            };
+            return canvas.downsampleChartValues(values, output);
+        }
+
+        /// The generated semantics summary describes the SOURCE series
+        /// (pre-downsampling counts and the true latest values), so
+        /// automation asserts on the data the app handed over.
+        fn chartSummary(self: *Self, series: []const canvas.ChartSeries) []const u8 {
+            var summary: []const u8 = "chart:";
+            for (series, 0..) |entry, index| {
+                const name = if (entry.label.len > 0) entry.label else @tagName(entry.kind);
+                const joiner: []const u8 = if (index == 0) " " else "; ";
+                summary = if (entry.values.len > 0)
+                    self.fmt("{s}{s}{s} {d} pts last {d:.2}", .{ summary, joiner, name, entry.values.len, entry.values[entry.values.len - 1] })
+                else
+                    self.fmt("{s}{s}{s} empty", .{ summary, joiner, name });
+            }
+            return summary;
+        }
+
         /// Visual state of a stepper step, derived from its index against
         /// `StepperOptions.active`.
         pub const StepState = enum { completed, active, pending };

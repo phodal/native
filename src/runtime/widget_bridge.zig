@@ -60,6 +60,7 @@ pub fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
         .switch_control => "switch",
         .slider => "slider",
         .progressbar => "progressbar",
+        .chart => "chart",
     };
 }
 
@@ -90,6 +91,9 @@ pub fn platformWidgetAccessibilityRole(role: canvas.WidgetRole) platform.WidgetA
         .switch_control => .switch_control,
         .slider => .slider,
         .progressbar => .progressbar,
+        // The platform accessibility enum has no chart role; a chart is
+        // exposed as an image carrying the series-summary label.
+        .chart => .image,
     };
 }
 

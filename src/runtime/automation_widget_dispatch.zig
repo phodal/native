@@ -103,7 +103,14 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             const node = layout.findById(target.id) orelse return error.InvalidCommand;
             const bounds = node.frame.normalized();
             if (bounds.isEmpty()) return error.InvalidCommand;
-            const point = bounds.center();
+            // Aim where the control actually renders, not the geometric
+            // center: a stretched selection control (switch as a bare
+            // column child) draws its glyph at the left edge of a wide
+            // frame, and the frame's center can sit under an overlapping
+            // later-painted sibling — a real user clicks the knob (#97).
+            var aim_widget = node.widget;
+            aim_widget.frame = node.frame;
+            const point = canvas.widgetControlAimPoint(aim_widget, self.views[view_index].widget_tokens);
             const window_id = self.views[view_index].window_id;
             const label = self.views[view_index].label;
             const timestamp_ns = automationInputTimestampNs();

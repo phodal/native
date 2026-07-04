@@ -195,6 +195,22 @@ pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
     return widget_render.toggleWidgetKnobTravel(widget, tokens);
 }
 
+/// The point synthesized pointer input (automation `widget-click`) should
+/// aim at. Selection controls draw their glyph as a small sub-rect of the
+/// widget frame — a switch stretched to fill a column still renders a
+/// ~36px track at its left edge — so aiming at the geometric center of a
+/// stretched frame can land far from the visible control (or under an
+/// overlapping later-painted sibling) and miss. Aim at the rendered
+/// control glyph for those kinds; everything else keeps the frame center.
+pub fn widgetControlAimPoint(widget: Widget, tokens: DesignTokens) geometry.PointF {
+    return switch (widget.kind) {
+        .switch_control, .toggle => widget_render.toggleWidgetTrackRect(widget, tokens).center(),
+        .checkbox => widget_render.checkboxWidgetBoxRect(widget, tokens).center(),
+        .radio => widget_render.radioWidgetCircleRect(widget, tokens).center(),
+        else => widget.frame.normalized().center(),
+    };
+}
+
 pub fn widgetPartId(id: ObjectId, slot: ObjectId) ObjectId {
     return widget_render.widgetPartId(id, slot);
 }

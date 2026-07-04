@@ -22,6 +22,7 @@ pub const Action = enum {
     widget_key,
     menu_command,
     shortcut,
+    tray_action,
     focus_view,
     focus_next_view,
     focus_previous_view,
@@ -50,6 +51,7 @@ pub const Command = struct {
         if (std.mem.eql(u8, action_text, "widget-key") and value.len > 0) return .{ .action = .widget_key, .value = value };
         if (std.mem.eql(u8, action_text, "menu-command") and value.len > 0) return .{ .action = .menu_command, .value = value };
         if (std.mem.eql(u8, action_text, "shortcut") and value.len > 0) return .{ .action = .shortcut, .value = value };
+        if (std.mem.eql(u8, action_text, "tray-action") and value.len > 0) return .{ .action = .tray_action, .value = value };
         if (std.mem.eql(u8, action_text, "focus") and value.len > 0) return .{ .action = .focus_view, .value = value };
         if (std.mem.eql(u8, action_text, "focus-next")) return .{ .action = .focus_next_view };
         if (std.mem.eql(u8, action_text, "focus-previous")) return .{ .action = .focus_previous_view };
@@ -128,6 +130,10 @@ test "commands parse reload and wait" {
     try std.testing.expectEqual(Action.menu_command, menu_command.action);
     const shortcut = try Command.parse("shortcut app.refresh");
     try std.testing.expectEqual(Action.shortcut, shortcut.action);
+    const tray_action = try Command.parse("tray-action 4");
+    try std.testing.expectEqual(Action.tray_action, tray_action.action);
+    try std.testing.expectEqualStrings("4", tray_action.value);
+    try std.testing.expectError(error.InvalidCommand, Command.parse("tray-action"));
     const focus = try Command.parse("focus refresh-button");
     try std.testing.expectEqual(Action.focus_view, focus.action);
     try std.testing.expectEqualStrings("refresh-button", focus.value);

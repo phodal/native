@@ -37,6 +37,7 @@ const parseAutomationWidgetWheel = automation_commands.parseAutomationWidgetWhee
 const parseAutomationWidgetKey = automation_commands.parseAutomationWidgetKey;
 const parseAutomationWidgetPointerDrag = automation_commands.parseAutomationWidgetPointerDrag;
 const parseAutomationResizeCommand = automation_commands.parseAutomationResizeCommand;
+const parseAutomationTrayItemId = automation_commands.parseAutomationTrayItemId;
 const parseAutomationScreenshotCommand = automation_commands.parseAutomationScreenshotCommand;
 const canvas = @import("canvas");
 
@@ -630,6 +631,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .widget_drag => "automation.widget_drag",
                 .widget_wheel => "automation.widget_wheel",
                 .widget_key => "automation.widget_key",
+                .tray_action => "automation.tray_action",
                 else => "automation.command",
             };
         }
@@ -692,6 +694,17 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         .key = "",
                         .window_id = 1,
                     } });
+                },
+                .tray_action => {
+                    // Drive a status-item dropdown row (#95) through the
+                    // SAME platform event a real NSStatusItem menu click
+                    // emits, so command resolution, `.tray` source, and
+                    // UiApp's window fallback are all the real path. A
+                    // stale or unknown item id is loud driver misuse,
+                    // like widget-click on an unmounted widget.
+                    const item_id = try parseAutomationTrayItemId(command.value);
+                    if (!self.tray_created or !SystemServiceMethods().trayItemExists(self, item_id)) return error.InvalidCommand;
+                    try dispatchPlatformEvent(self, app, .{ .tray_action = item_id });
                 },
                 .focus_view => {
                     try WindowViewMethods().focusView(self, 1, try parseAutomationViewLabel(command.value));

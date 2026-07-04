@@ -650,3 +650,72 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
     try std.testing.expect(!saw_stale_focused_ring);
     try std.testing.expect(!saw_hidden_button_part);
 }
+
+test "runtime applies source-driven autofocus on the edge, never on the level" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-autofocus", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    // No autofocus declared: nothing focuses.
+    const plain = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 10, 96, 32), .text = "New" },
+    };
+    var plain_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const plain_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &plain }, geometry.RectF.init(0, 0, 320, 240), &plain_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", plain_layout);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
+
+    // An editor MOUNTING with autofocus takes keyboard focus (view focus
+    // included) on the rebuild that applies it.
+    const editing = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 10, 96, 32), .text = "New" },
+        .{ .id = 7, .kind = .text_field, .frame = geometry.RectF.init(10, 56, 200, 32), .autofocus = true },
+    };
+    var editing_nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const editing_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &editing }, geometry.RectF.init(0, 0, 320, 240), &editing_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", editing_layout);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expect(harness.runtime.views[0].focused);
+
+    // The user moves focus; re-applying the SAME layout (flag held true)
+    // must not steal it back — edge-triggered, level-ignored.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 24,
+        .y = 20,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = 24,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", editing_layout);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    // Dropping the flag and raising it again is a fresh edge: focus moves.
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", plain_layout);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", editing_layout);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_widget_focused_id);
+}

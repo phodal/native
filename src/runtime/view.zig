@@ -233,6 +233,11 @@ pub const RuntimeView = struct {
     /// state wins).
     widget_source_control_entries: [canvas_limits.max_canvas_widget_nodes_per_view]canvas_widget_runtime.CanvasWidgetSourceControlEntry = undefined,
     widget_source_control_count: usize = 0,
+    /// SOURCE-side autofocus ids on the previous rebuild: the edge
+    /// detector — a rebuild only moves focus to a widget whose flag was
+    /// NOT in this set (newly mounted or freshly flipped on).
+    widget_autofocus_ids: [canvas_limits.max_canvas_widget_autofocus_per_view]canvas.ObjectId = undefined,
+    widget_autofocus_count: usize = 0,
     /// Native scroll-driver tracking (#66): each installed driver's id and
     /// the last offset it reported (or was pushed), so the sync only
     /// forces `set_offset` when a non-driver source moved the offset.
@@ -368,6 +373,7 @@ pub const RuntimeView = struct {
     pub const widgetSourceScrollEntries = CanvasWidgetTreeMethods.widgetSourceScrollEntries;
     pub const copyCanvasWidgetSourceScroll = CanvasWidgetTreeMethods.copyCanvasWidgetSourceScroll;
     pub const widgetSourceControlEntries = CanvasWidgetTreeMethods.widgetSourceControlEntries;
+    pub const canvasWidgetAutofocusTarget = CanvasWidgetTreeMethods.canvasWidgetAutofocusTarget;
     pub const copyCanvasWidgetSourceControls = CanvasWidgetTreeMethods.copyCanvasWidgetSourceControls;
     pub const copyWidgetLayoutTree = CanvasWidgetTreeMethods.copyWidgetLayoutTree;
     pub const canvasWidgetCursorForId = CanvasWidgetTreeMethods.canvasWidgetCursorForId;

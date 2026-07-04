@@ -651,7 +651,8 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
     .{ .name = "role", .doc = "Accessibility role (listitem, button, ...)." },
     .{ .name = "label", .doc = "Accessible name." },
-    .{ .name = "icon", .doc = "button only: built-in vector icon drawn inline before the label (literal name, comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw). Icon-only when the content is empty — add a label. One hit target, one enabled/disabled tint." },
+    .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
+    .{ .name = "icon", .doc = "button, toggle-button, list-item, menu-item: built-in vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot; literal name, comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw). Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint." },
     .{ .name = "background", .doc = "Background color token (literal ColorTokens field name: background, surface, surface_subtle, ...)." },
     .{ .name = "foreground", .doc = "Foreground/text color token (literal ColorTokens field name, e.g. text, text_muted, success, warning, info)." },
     .{ .name = "accent", .doc = "Accent color token (literal ColorTokens field name, e.g. accent, destructive, success, warning, info)." },
@@ -690,6 +691,7 @@ pub const stepper_attr_docs = [_]Doc{
     .{ .name = "key", .doc = "Sibling-scoped identity key." },
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
     .{ .name = "label", .doc = "Accessible name." },
+    .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
 };
 
 pub const timeline_attr_docs = [_]Doc{
@@ -698,6 +700,7 @@ pub const timeline_attr_docs = [_]Doc{
     .{ .name = "key", .doc = "Sibling-scoped identity key." },
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
     .{ .name = "label", .doc = "Accessible name." },
+    .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
 };
 
 pub const timeline_item_attr_docs = [_]Doc{

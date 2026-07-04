@@ -656,7 +656,10 @@ test "stepper derives completed/active/pending states from the active index" {
     try testing.expectEqual(canvas.WidgetRole.listitem, done.semantics.role);
     try testing.expect(!done.state.selected);
     const done_badge = findByKind(done, .badge).?;
-    try testing.expectEqualStrings("✓", done_badge.text);
+    // Completed steps wear the vector check icon, not the ✓ text glyph
+    // (outside the bundled face's coverage — tofu on reference paths).
+    try testing.expectEqualStrings("check", done_badge.icon);
+    try testing.expectEqualStrings("", done_badge.text);
     try testing.expectEqual(canvas.WidgetVariant.primary, done_badge.variant);
 
     const active = findSemanticsLabel(tree.root, "Review (active)").?;
@@ -697,7 +700,7 @@ test "timeline items compose indicator, content, chevron, and a root press" {
         }),
         ui.timelineItem(.{
             .key = ui_model.uiKey(2),
-            .indicator = "✗",
+            .icon = "x",
             .variant = .destructive,
             .title = "Review failed",
             .connector = false,
@@ -743,7 +746,9 @@ test "timeline items compose indicator, content, chevron, and a root press" {
     try testing.expect(findKindText(second, "›") == null);
     try testing.expectEqual(@as(usize, 0), countKindIn(second, .separator));
     const badge2 = findByKind(second, .badge).?;
-    try testing.expectEqualStrings("✗", badge2.text);
+    // The failure indicator rides the vector icon channel — the ✗ text
+    // glyph is outside the bundled face's coverage (#98).
+    try testing.expectEqualStrings("x", badge2.icon);
     try testing.expectEqual(@as(f32, 0), badge2.layout.min_size.width);
 }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
+const platform = @import("../platform/root.zig");
 
 pub const AutomationNativeCommand = struct {
     name: []const u8,
@@ -123,6 +124,17 @@ pub fn parseAutomationCommandName(value: []const u8) ![]const u8 {
     if (trimmed.len == 0) return error.InvalidCommand;
     const separator = std.mem.indexOfAny(u8, trimmed, " \n\r\t") orelse return trimmed;
     return trimmed[0..separator];
+}
+
+/// `tray-action <item-id>`: the numeric dropdown item id printed by the
+/// snapshot's `tray-item #N` lines (bare number, like widget ids).
+pub fn parseAutomationTrayItemId(value: []const u8) !platform.TrayItemId {
+    const trimmed = std.mem.trim(u8, value, " \n\r\t");
+    if (trimmed.len == 0) return error.InvalidCommand;
+    if (std.mem.indexOfAny(u8, trimmed, " \n\r\t") != null) return error.InvalidCommand;
+    const id = std.fmt.parseInt(platform.TrayItemId, trimmed, 10) catch return error.InvalidCommand;
+    if (id == 0) return error.InvalidCommand;
+    return id;
 }
 
 pub fn parseAutomationViewLabel(value: []const u8) ![]const u8 {
@@ -483,6 +495,15 @@ test "runtime parses automation widget actions" {
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 drop-files"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 dismiss extra"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetAction("canvas 42 unknown"));
+}
+
+test "runtime parses automation tray item ids" {
+    try std.testing.expectEqual(@as(platform.TrayItemId, 4), try parseAutomationTrayItemId("4"));
+    try std.testing.expectEqual(@as(platform.TrayItemId, 12), try parseAutomationTrayItemId("  12  "));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationTrayItemId(""));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationTrayItemId("0"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationTrayItemId("open"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationTrayItemId("4 5"));
 }
 
 test "runtime parses automation widget click targets" {

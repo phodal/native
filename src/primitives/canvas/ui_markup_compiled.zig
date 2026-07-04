@@ -160,6 +160,11 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         if (std.mem.startsWith(u8, attribute.name, "on-") and markup.deadHandlerOnNonHitTarget(attribute.name)) {
                             fail(node, markup.non_hit_target_handler_message);
                         }
+                        // Autofocus can never land here: nothing about
+                        // this element is focusable.
+                        if (std.mem.eql(u8, attribute.name, "autofocus")) {
+                            fail(node, markup.autofocus_element_message);
+                        }
                     }
                 }
                 // Interpreter parity: stacking kinds give every child the
@@ -559,6 +564,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     if (std.mem.eql(u8, attribute.name, "description")) continue;
                     if (std.mem.eql(u8, attribute.name, "meta")) continue;
                     if (std.mem.eql(u8, attribute.name, "indicator")) continue;
+                    if (std.mem.eql(u8, attribute.name, "icon")) continue;
                     if (std.mem.eql(u8, attribute.name, "variant")) continue;
                     if (std.mem.eql(u8, attribute.name, "connector")) continue;
                     if (std.mem.eql(u8, attribute.name, "selected")) continue;
@@ -579,6 +585,16 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             }
             if (comptime (node.attr("indicator") != null)) {
                 options.indicator = stringAttr(node, entries, comptime node.attr("indicator").?, ui, model, scope, markup.timeline_item_text_attr_message);
+            }
+            if (comptime (node.attr("icon") != null)) {
+                // Vector icon indicator: closed literal vocabulary,
+                // resolved at comptime like every icon attribute.
+                options.icon = comptime blk: {
+                    const expression = markup.parseAttrExpression(node.attr("icon").?) orelse fail(node, markup.button_icon_message);
+                    if (expression != .literal) fail(node, markup.button_icon_message);
+                    if (canvas.icons.find(expression.literal) == null) fail(node, markup.button_icon_message);
+                    break :blk expression.literal;
+                };
             }
             if (comptime (node.attr("variant") != null)) {
                 const raw = comptime node.attr("variant").?;
@@ -864,12 +880,13 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     // validator parity).
                     comptime if (!std.mem.eql(u8, node.name, "icon")) fail(node, markup.icon_name_element_message);
                 } else if (comptime std.mem.eql(u8, attribute.name, "icon")) {
-                    // Button-scoped inline icon: the same closed literal
-                    // vocabulary as <icon name>, resolved at comptime so
-                    // a typo is a compile error (interpreter and
-                    // validator parity).
+                    // Inline icon scoped to the labeled interactive
+                    // elements (button, toggle-button, list-item,
+                    // menu-item): the same closed literal vocabulary as
+                    // <icon name>, resolved at comptime so a typo is a
+                    // compile error (interpreter and validator parity).
                     options.icon = comptime blk: {
-                        if (!std.mem.eql(u8, node.name, "button")) fail(node, markup.button_icon_element_message);
+                        if (!markup.iconAttrElement(node.name)) fail(node, markup.button_icon_element_message);
                         const expression = markup.parseAttrExpression(attribute.value) orelse fail(node, markup.button_icon_message);
                         if (expression != .literal) fail(node, markup.button_icon_message);
                         if (canvas.icons.find(expression.literal) == null) fail(node, markup.button_icon_message);

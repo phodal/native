@@ -191,6 +191,11 @@ pub const NullPlatform = struct {
     shortcut_count: usize = 0,
     window_sources: [max_windows]?WebViewSource = [_]?WebViewSource{null} ** max_windows,
     windows: [max_windows]WindowInfo = undefined,
+    /// Captured `WindowOptions.resizable` per created window, indexed
+    /// like `windows` — `WindowInfo` does not carry it, and tests need
+    /// to assert the flag survives to the platform seam (the macOS host
+    /// used to drop it at the C ABI).
+    window_resizable: [max_windows]bool = [_]bool{true} ** max_windows,
     window_count: usize = 0,
     views: [max_views]NullView = undefined,
     view_count: usize = 0,
@@ -564,6 +569,7 @@ pub const NullPlatform = struct {
             .focused = false,
         };
         self.windows[self.window_count] = info;
+        self.window_resizable[self.window_count] = options.resizable;
         self.window_count += 1;
         return info;
     }

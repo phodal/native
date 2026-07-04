@@ -69,7 +69,11 @@ pub const RuntimeWebView = struct {
 pub const RuntimeTrayItem = struct {
     id: platform.TrayItemId = 0,
     command: []const u8 = "",
+    label: []const u8 = "",
+    separator: bool = false,
+    enabled: bool = true,
     command_storage: [platform.max_tray_item_command_bytes]u8 = undefined,
+    label_storage: [platform.max_tray_item_label_bytes]u8 = undefined,
 };
 
 pub const ShellApplyMode = enum {

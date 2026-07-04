@@ -67,6 +67,30 @@ pub fn widgetButtonIconGap(widget: Widget, tokens: DesignTokens) f32 {
     return widgetControlInset(widget, tokens, tokens.spacing.sm);
 }
 
+/// Extent of a vector icon inside a badge (`widget.icon`): sized just
+/// above the badge's label text. Shared by intrinsic layout and render.
+pub fn widgetBadgeIconExtent(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetLabelTextSize(widget, tokens) + 2;
+}
+
+/// Gap between a badge's inline icon and its label.
+pub fn widgetBadgeIconGap(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetControlInset(widget, tokens, tokens.spacing.sm);
+}
+
+/// Extent of a leading vector icon in row-shaped controls (`list_item`,
+/// `menu_item` via `widget.icon`): sized just above the body text so
+/// icon and label read as one line. Shared by intrinsic layout and
+/// render so measured widths and painted pixels agree.
+pub fn widgetRowIconExtent(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetBodyTextSize(widget, tokens) + 2;
+}
+
+/// Gap between a row's leading icon and its label.
+pub fn widgetRowIconGap(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetControlInset(widget, tokens, tokens.spacing.sm);
+}
+
 pub fn widgetDefaultRowHeight(widget: Widget, tokens: DesignTokens) f32 {
     return widgetSizedDensityValue(widget, tokens, default_widget_row_extent);
 }

@@ -472,6 +472,7 @@ pub const emitWidgetLayout = widget_runtime.emitWidgetLayout;
 pub const toggleWidgetKnobCommandId = widget_runtime.toggleWidgetKnobCommandId;
 pub const textSelectionCommandId = widget_runtime.textSelectionCommandId;
 pub const toggleWidgetKnobTravel = widget_runtime.toggleWidgetKnobTravel;
+pub const widgetControlAimPoint = widget_runtime.widgetControlAimPoint;
 pub const textSelectionForWidgetPoint = widget_runtime.textSelectionForWidgetPoint;
 pub const textOffsetForWidgetPoint = widget_runtime.textOffsetForWidgetPoint;
 

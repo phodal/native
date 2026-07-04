@@ -255,11 +255,17 @@ test "structural validation reports positions for grammar misuse" {
     var icon_parser = markup.Parser.init(arena_state.allocator(), icon_source);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try icon_parser.parse()));
 
-    // Buttons take an inline icon (with or without a label): one hit
-    // target, one tint.
-    const button_icon_source = "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"save\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"refresh\" label=\"Refresh\"></button>\n</row>";
+    // The labeled interactive elements take an inline icon (with or
+    // without a label): one hit target, one tint. Toggle-buttons cover
+    // chips and tab strips; list/menu items get a leading slot (#96).
+    const button_icon_source = "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"save\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"refresh\" label=\"Refresh\"></button>\n  <toggle-button icon=\"arrow-up\" on-toggle=\"sort\">Newest</toggle-button>\n  <list-item icon=\"folder\" on-press=\"open\">Projects</list-item>\n  <menu-item icon=\"trash\" on-press=\"remove\">Delete</menu-item>\n  <badge icon=\"check\">3</badge>\n</row>";
     var button_icon_parser = markup.Parser.init(arena_state.allocator(), button_icon_source);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try button_icon_parser.parse()));
+
+    // Autofocus on focusable controls: literal or bound.
+    const autofocus_source = "<column gap=\"8\">\n  <text-field autofocus=\"true\" on-input=\"edit\" />\n  <textarea autofocus=\"{editing}\" on-input=\"edit\" />\n</column>";
+    var autofocus_parser = markup.Parser.init(arena_state.allocator(), autofocus_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try autofocus_parser.parse()));
 
     const cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<column>\n  <weird />\n</column>", .message = "unknown element" },
@@ -289,8 +295,13 @@ test "structural validation reports positions for grammar misuse" {
         // Button icon attr: closed literal vocabulary, button-scoped.
         .{ .source = "<row>\n  <button icon=\"sparkle-pony\">Save</button>\n</row>", .message = markup.button_icon_message },
         .{ .source = "<row>\n  <button icon=\"{binding}\">Save</button>\n</row>", .message = markup.button_icon_message },
-        .{ .source = "<row>\n  <badge icon=\"save\">3</badge>\n</row>", .message = markup.button_icon_element_message },
-        .{ .source = "<row>\n  <toggle-button icon=\"save\">Bold</toggle-button>\n</row>", .message = markup.button_icon_element_message },
+        .{ .source = "<row>\n  <badge icon=\"sparkle-pony\">3</badge>\n</row>", .message = markup.button_icon_message },
+        .{ .source = "<row>\n  <toggle-button icon=\"sparkle-pony\">Bold</toggle-button>\n</row>", .message = markup.button_icon_message },
+        .{ .source = "<column>\n  <checkbox icon=\"check\">Done</checkbox>\n</column>", .message = markup.button_icon_element_message },
+        // Autofocus needs a focusable control; layout and decoration
+        // elements can never take the keyboard.
+        .{ .source = "<column>\n  <row autofocus=\"true\">\n    <text>x</text>\n  </row>\n</column>", .message = markup.autofocus_element_message },
+        .{ .source = "<column>\n  <badge autofocus=\"true\">3</badge>\n</column>", .message = markup.autofocus_element_message },
     };
     for (cases) |case| {
         var case_parser = markup.Parser.init(arena_state.allocator(), case.source);
@@ -300,6 +311,61 @@ test "structural validation reports positions for grammar misuse" {
     }
 }
 
+
+test "the tofu guard flags markup literals outside the bundled font's coverage" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    // Everything the showcase apps ship passes: typographic punctuation,
+    // accents, arrows are in the bundled face.
+    const covered_source = "<column gap=\"8\">\n  <text>Cafe\xc3\xa9 \xe2\x80\xa6 \xc2\xb7 \xe2\x86\x92</text>\n  <text-field placeholder=\"Search albums\xe2\x80\xa6\" on-input=\"edit\" />\n</column>";
+    var covered_parser = markup.Parser.init(arena_state.allocator(), covered_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try covered_parser.parse()));
+
+    // Binding spans are skipped: dynamic values are the runtime Debug
+    // warning's job, not the static guard's.
+    const binding_source = "<column>\n  <text>{shortcutHint} to send</text>\n</column>";
+    var binding_parser = markup.Parser.init(arena_state.allocator(), binding_source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try binding_parser.parse()));
+
+    // A ⌘ in text content errors AT the character's position.
+    const text_source = "<column>\n  <text>Press \xe2\x8c\x98K to search</text>\n</column>";
+    var text_parser = markup.Parser.init(arena_state.allocator(), text_source);
+    const text_info = markup.validate(try text_parser.parse()) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(markup.font_coverage_message, text_info.message);
+    try testing.expectEqual(@as(usize, 2), text_info.line);
+    try testing.expectEqual(@as(usize, 15), text_info.column);
+
+    // Text-bearing attribute literals ride the same guard.
+    const attr_cases = [_][]const u8{
+        "<row>\n  <button label=\"\xe2\x8c\x98K\" on-press=\"go\">Go</button>\n</row>",
+        "<column>\n  <text-field placeholder=\"\xe2\x8c\x98 to focus\" on-input=\"edit\" />\n</column>",
+        "<timeline>\n  <timeline-item title=\"Done\" indicator=\"\xe2\x9c\x93\" />\n</timeline>",
+        "<column>\n  <stepper active=\"{page}\">\n    <step>Work \xe2\x8c\x98</step>\n  </stepper>\n</column>",
+    };
+    for (attr_cases) |source| {
+        var case_parser = markup.Parser.init(arena_state.allocator(), source);
+        const info = markup.validate(try case_parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(markup.font_coverage_message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}
+
+test "the coverage scanner finds the first uncovered codepoint and skips bindings" {
+    try testing.expectEqual(@as(?markup.UncoveredCodepoint, null), markup.firstUncoveredCodepoint("plain words"));
+    try testing.expectEqual(@as(?markup.UncoveredCodepoint, null), markup.firstUncoveredCodepoint("caf\xc3\xa9 \xe2\x80\xa6 \xc2\xb7"));
+    try testing.expectEqual(@as(?markup.UncoveredCodepoint, null), markup.firstUncoveredCodepoint("{anything \xe2\x8c\x98 inside} stays dynamic"));
+
+    const found = markup.firstUncoveredCodepoint("Press \xe2\x8c\x98K").?;
+    try testing.expectEqual(@as(usize, 6), found.offset);
+    try testing.expectEqual(@as(u21, 0x2318), found.codepoint);
+    try testing.expectEqualStrings("\xe2\x8c\x98", found.bytes);
+
+    // Invalid UTF-8 reports as U+FFFD at the offending byte.
+    const invalid = markup.firstUncoveredCodepoint("ok \xff bytes").?;
+    try testing.expectEqual(@as(u21, 0xFFFD), invalid.codepoint);
+    try testing.expectEqual(@as(usize, 3), invalid.offset);
+}
 test "for accepts multiple element children and a trailing else for the empty case" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

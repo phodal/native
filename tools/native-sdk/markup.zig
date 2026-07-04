@@ -50,10 +50,38 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
         return err;
     };
     if (ui_markup.validate(document)) |info| {
+        // The tofu guard's position points at the exact character; name
+        // the codepoint so the fix is one glance (#98).
+        if (info.message.ptr == ui_markup.font_coverage_message.ptr) {
+            if (codepointAt(source, info.line, info.column)) |found| {
+                std.debug.print("{s}:{d}:{d}: error: {s} (found \"{s}\" U+{X:0>4})\n", .{ file_path, info.line, info.column, info.message, found.bytes, found.codepoint });
+                return error.MarkupInvalid;
+            }
+        }
         std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, info.line, info.column, info.message });
         return error.MarkupInvalid;
     }
     std.debug.print("{s}: ok\n", .{file_path});
+}
+
+const FoundCodepoint = struct { bytes: []const u8, codepoint: u21 };
+
+/// Decode the codepoint at a 1-based line/column (columns count bytes,
+/// matching the parser's positions).
+fn codepointAt(source: []const u8, line: usize, column: usize) ?FoundCodepoint {
+    if (line == 0 or column == 0) return null;
+    var current_line: usize = 1;
+    var index: usize = 0;
+    while (index < source.len and current_line < line) : (index += 1) {
+        if (source[index] == '\n') current_line += 1;
+    }
+    if (current_line != line) return null;
+    const offset = index + (column - 1);
+    if (offset >= source.len) return null;
+    const len = std.unicode.utf8ByteSequenceLength(source[offset]) catch return null;
+    if (offset + len > source.len) return null;
+    const codepoint = std.unicode.utf8Decode(source[offset .. offset + len]) catch return null;
+    return .{ .bytes = source[offset .. offset + len], .codepoint = codepoint };
 }
 
 fn readFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) ![]u8 {
@@ -70,8 +98,11 @@ fn usage() void {
         \\       native markup lsp
         \\
         \\check: parses and validates markup views: grammar, expression forms,
-        \\elements, attributes, and structure tags. Binding paths and message
-        \\tags are validated against your Model/Msg when the app builds.
+        \\elements, attributes, structure tags, and font coverage (literal text
+        \\outside the bundled face renders as tofu boxes on reference paths -
+        \\the error names the character; use icons or plain words). Binding
+        \\paths and message tags are validated against your Model/Msg when the
+        \\app builds.
         \\
         \\lsp: speaks the Language Server Protocol over stdio (diagnostics,
         \\completion, hover) for .zml files; wire it into your editor's LSP

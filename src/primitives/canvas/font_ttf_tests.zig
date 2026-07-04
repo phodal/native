@@ -186,3 +186,16 @@ test "out of range glyph ids error instead of reading wild" {
     var builder = vector.PathBuilder(256){};
     try std.testing.expectError(error.FontParseFailed, face.glyphOutline(60000, Affine.identity(), &builder));
 }
+
+test "font_coverage answers identically to the face's cmap" {
+    // The std-only coverage module (markup tofu guard, #98) re-reads the
+    // same embedded bytes with its own minimal cmap walk; it must never
+    // drift from the renderer's `Face.glyphIndex`.
+    const font_coverage = @import("font_coverage.zig");
+    const face = &font_ttf.geist_regular;
+    var codepoint: u21 = 0x20;
+    while (codepoint < 0x3000) : (codepoint += 1) {
+        try std.testing.expectEqual(face.glyphIndex(codepoint) != 0, font_coverage.covers(codepoint));
+    }
+    try std.testing.expectEqual(face.glyphIndex(0x1F600) != 0, font_coverage.covers(0x1F600));
+}

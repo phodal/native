@@ -270,6 +270,75 @@ test "runtime automation widget click dispatches pointer input" {
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 9"));
 }
 
+test "runtime automation widget click aims at the rendered control of a stretched switch" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-stretched-switch", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 760, 400),
+    });
+
+    // The #97 shape: a switch as a bare column child stretches to the
+    // full 718px content width while its track renders ~42px at the left
+    // edge. A static-text sibling painted later covers the frame's
+    // geometric center — pointer synthesis that aims at the center lands
+    // on the text and the click never reaches the switch.
+    const column_children = [_]canvas.Widget{
+        .{ .id = 5, .kind = .switch_control, .text = "Group" },
+    };
+    const overlay_children = [_]canvas.Widget{
+        .{ .kind = .column, .children = &column_children },
+        .{ .id = 9, .kind = .text, .frame = geometry.RectF.init(300, 0, 140, 24), .text = "covering sibling" },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &overlay_children }, geometry.RectF.init(0, 0, 718, 400), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    const switch_frame = retained.findById(5).?.frame;
+    try std.testing.expect(switch_frame.width > 700);
+    // The stretched frame's geometric center resolves to the covering
+    // text sibling, not the switch — the pre-#97 aim point.
+    try std.testing.expectEqual(@as(canvas.ObjectId, 9), retained.hitTest(switch_frame.normalized().center()).?.id);
+
+    // widget-click aims at the rendered track and toggles the switch.
+    try harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 5");
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(5).?.widget.state.selected);
+
+    // widget-action toggle (focus + space) stays geometry-independent.
+    try harness.runtime.dispatchAutomationCommand(app, "widget-action canvas 5 toggle");
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(5).?.widget.state.selected);
+
+    // The default intrinsic-width layout drives through the same verbs.
+    const sized = [_]canvas.Widget{
+        .{ .id = 5, .kind = .switch_control, .frame = geometry.RectF.init(10, 10, 120, 28), .text = "Group" },
+    };
+    var sized_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const sized_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &sized }, geometry.RectF.init(0, 0, 718, 400), &sized_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", sized_layout);
+    try harness.runtime.dispatchAutomationCommand(app, "widget-click canvas 5");
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.findById(5).?.widget.state.selected);
+    try harness.runtime.dispatchAutomationCommand(app, "widget-action canvas 5 toggle");
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(5).?.widget.state.selected);
+}
+
 test "runtime batches pointer widget display list refreshes" {
     const TestApp = struct {
         fn app(self: *@This()) App {

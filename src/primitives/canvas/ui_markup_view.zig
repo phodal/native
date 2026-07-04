@@ -174,6 +174,12 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     if (std.mem.startsWith(u8, attribute.name, "on-") and markup.deadHandlerOnNonHitTarget(attribute.name)) {
                         return self.failNode(node, markup.non_hit_target_handler_message);
                     }
+                    // Autofocus can never land here: nothing about this
+                    // element is focusable. Mirrors the validator and
+                    // the compiled engine's compile error.
+                    if (std.mem.eql(u8, attribute.name, "autofocus")) {
+                        return self.failNode(node, markup.autofocus_element_message);
+                    }
                 }
             }
             // Stacking kinds give every child the full content box, so a
@@ -547,6 +553,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     options.indicator = try self.stringAttr(scope, node, attribute.value, markup.timeline_item_text_attr_message);
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "icon")) {
+                    // Vector icon indicator: closed literal vocabulary,
+                    // like every icon attribute.
+                    const expression = markup.parseAttrExpression(attribute.value) orelse {
+                        return self.failVoid(node, markup.button_icon_message);
+                    };
+                    if (expression != .literal) return self.failVoid(node, markup.button_icon_message);
+                    if (canvas.icons.find(expression.literal) == null) return self.failVoid(node, markup.button_icon_message);
+                    options.icon = expression.literal;
+                    continue;
+                }
                 if (std.mem.eql(u8, attribute.name, "variant")) {
                     const text = try self.stringAttr(scope, node, attribute.value, "expected an option name");
                     options.variant = std.meta.stringToEnum(canvas.WidgetVariant, text) orelse {
@@ -871,12 +888,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             };
         }
 
-        /// `icon="save"` on button: the same closed literal vocabulary
-        /// as `<icon name>` (a typo can never rot silently), drawn inside
-        /// the button so icon + label are one hit target with one tint.
-        /// Mirrors the validator and the compiled engine's compile error.
+        /// `icon="save"` on button, toggle-button, list-item, or
+        /// menu-item: the same closed literal vocabulary as `<icon name>`
+        /// (a typo can never rot silently), drawn inside the element so
+        /// icon + label are one hit target with one tint. Mirrors the
+        /// validator and the compiled engine's compile error.
         fn applyButtonIconAttr(self: *Self, node: markup.MarkupNode, options: *Ui.ElementOptions, raw: []const u8) BuildError!void {
-            if (!std.mem.eql(u8, node.name, "button")) {
+            if (!markup.iconAttrElement(node.name)) {
                 return self.failVoid(node, markup.button_icon_element_message);
             }
             const expression = markup.parseAttrExpression(raw) orelse {
@@ -1180,6 +1198,7 @@ pub const attr_names: []const AttrName = &.{
     .{ .markup = "value", .zig = "value" },
     .{ .markup = "checked", .zig = "checked" },
     .{ .markup = "selected", .zig = "selected" },
+    .{ .markup = "autofocus", .zig = "autofocus" },
     .{ .markup = "disabled", .zig = "disabled" },
     .{ .markup = "variant", .zig = "variant" },
     .{ .markup = "size", .zig = "size" },

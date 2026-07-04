@@ -899,7 +899,13 @@ fn intrinsicAvatarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
 fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const text_width = measuredTextWidth(tokens, widget.text, widgetLabelTextSize(widget, tokens));
     const inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
-    return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 22));
+    // An inline icon (#96) widens the badge by the same shared metrics
+    // the renderer paints with (gap only when a label follows).
+    const icon_width = if (widget.icon.len > 0)
+        widget_metrics.widgetBadgeIconExtent(widget, tokens) + (if (widget.text.len > 0) widget_metrics.widgetBadgeIconGap(widget, tokens) else 0)
+    else
+        0;
+    return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), icon_width + text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 22));
 }
 
 fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
@@ -917,7 +923,13 @@ fn intrinsicRowTextWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Siz
     const text_size = widgetBodyTextSize(widget, tokens);
     const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
     const text_width = measuredTextWidth(tokens, widget.text, text_size);
-    return geometry.SizeF.init(text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
+    // A leading icon (#96) widens the row by the same shared metrics the
+    // renderer paints with, so measured widths and pixels agree.
+    const icon_width = if (widget.icon.len > 0)
+        widget_metrics.widgetRowIconExtent(widget, tokens) + widget_metrics.widgetRowIconGap(widget, tokens)
+    else
+        0;
+    return geometry.SizeF.init(icon_width + text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
 }
 
 fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {

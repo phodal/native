@@ -647,7 +647,7 @@ test "markup buttons take an inline icon with validated names" {
     const arena = arena_state.allocator();
     const model = Model{};
 
-    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"add\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"add\"></button>\n</row>");
+    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"add\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"add\"></button>\n  <toggle-button icon=\"arrow-up\" on-toggle=\"add\">Newest</toggle-button>\n  <list-item icon=\"folder\" on-press=\"add\">Projects</list-item>\n  <menu-item icon=\"trash\" on-press=\"add\">Delete</menu-item>\n</row>");
     var ui = InboxUi.init(arena);
     const tree = try ui.finalize(try view.build(&ui, &model));
     const labeled = tree.root.children[0];
@@ -661,14 +661,29 @@ test "markup buttons take an inline icon with validated names" {
     // icon child to duplicate the handler onto.
     try testing.expectEqual(@as(usize, 0), labeled.children.len);
     try testing.expect(tree.msgFor(labeled.id, .press) != null);
+    // The rest of the labeled interactive set (#96): toggle-buttons
+    // (chips, tab strips), list items, and menu items carry the icon in
+    // the same field with the same closed vocabulary.
+    const chip = tree.root.children[2];
+    try testing.expectEqual(canvas.WidgetKind.toggle_button, chip.kind);
+    try testing.expectEqualStrings("arrow-up", chip.icon);
+    try testing.expectEqualStrings("Newest", chip.text);
+    try testing.expect(tree.msgFor(chip.id, .toggle) != null);
+    const row_item = tree.root.children[3];
+    try testing.expectEqual(canvas.WidgetKind.list_item, row_item.kind);
+    try testing.expectEqualStrings("folder", row_item.icon);
+    const menu_row = tree.root.children[4];
+    try testing.expectEqual(canvas.WidgetKind.menu_item, menu_row.kind);
+    try testing.expectEqualStrings("trash", menu_row.icon);
 
-    // Unknown names, bindings, and non-button elements fail the build
+    // Unknown names, bindings, and out-of-scope elements fail the build
     // with the validator's messages.
     const failing = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<row>\n  <button icon=\"sparkle-pony\">Save</button>\n</row>", .message = canvas.ui_markup.button_icon_message },
+        .{ .source = "<row>\n  <toggle-button icon=\"sparkle-pony\">Bold</toggle-button>\n</row>", .message = canvas.ui_markup.button_icon_message },
         .{ .source = "<row>\n  <button icon=\"{filter}\">Save</button>\n</row>", .message = canvas.ui_markup.button_icon_message },
-        .{ .source = "<row>\n  <badge icon=\"save\">3</badge>\n</row>", .message = canvas.ui_markup.button_icon_element_message },
-        .{ .source = "<row>\n  <toggle-button icon=\"save\">Bold</toggle-button>\n</row>", .message = canvas.ui_markup.button_icon_element_message },
+        .{ .source = "<row>\n  <badge icon=\"sparkle-pony\">3</badge>\n</row>", .message = canvas.ui_markup.button_icon_message },
+        .{ .source = "<column>\n  <checkbox icon=\"check\">Done</checkbox>\n</column>", .message = canvas.ui_markup.button_icon_element_message },
     };
     for (failing) |case| {
         var failing_view = try InboxMarkup.init(arena, case.source);
@@ -676,6 +691,25 @@ test "markup buttons take an inline icon with validated names" {
         try testing.expectError(error.MarkupBuild, failing_view.build(&failing_ui, &model));
         try testing.expectEqualStrings(case.message, failing_view.diagnostic.message);
     }
+}
+
+test "markup autofocus binds to focusable controls in both shapes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    var view = try InboxMarkup.init(arena, "<column gap=\"8\">\n  <text-field autofocus=\"true\" on-input=\"draft\" />\n  <text-field on-input=\"draft\" />\n</column>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    try testing.expect(tree.root.children[0].autofocus);
+    try testing.expect(!tree.root.children[1].autofocus);
+
+    // Non-focusable elements reject the request with the teaching error.
+    var failing_view = try InboxMarkup.init(arena, "<column>\n  <row autofocus=\"true\">\n    <text>x</text>\n  </row>\n</column>");
+    var failing_ui = InboxUi.init(arena);
+    try testing.expectError(error.MarkupBuild, failing_view.build(&failing_ui, &model));
+    try testing.expectEqualStrings(canvas.ui_markup.autofocus_element_message, failing_view.diagnostic.message);
 }
 
 test "the validator's icon name list matches the comptime registry" {
@@ -1279,7 +1313,7 @@ pub const catalog_markup_source =
     \\    </button-group>
     \\  </row>
     \\  <row gap="8">
-    \\    <input text="{query}" placeholder="Name" on-input="query_edit" on-submit="submit_query" grow="1" />
+    \\    <input text="{query}" placeholder="Name" autofocus="true" on-input="query_edit" on-submit="submit_query" grow="1" />
     \\    <combobox text="{query}" placeholder="Search fruit" on-input="query_edit" />
     \\  </row>
     \\  <radio-group gap="4">
@@ -1313,7 +1347,7 @@ pub const catalog_markup_source =
     \\    <for each="rows" key="id" as="entry">
     \\      <timeline-item title="{entry.name}" description="Step summary" meta="claude · sonnet" variant="primary" on-press="pick_row:{entry.id}" />
     \\    </for>
-    \\    <timeline-item title="Ready for review" indicator="✓" variant="secondary" connector="false" selected="true" />
+    \\    <timeline-item title="Ready for review" icon="check" variant="secondary" connector="false" selected="true" />
     \\  </timeline>
     \\  <pagination gap="4">
     \\    <button size="sm" on-press="set_page:{prevPage}">Prev</button>
@@ -1406,7 +1440,7 @@ pub fn handCatalogView(ui: *CatalogUi, model: *const CatalogModel) CatalogUi.Nod
             }),
         }),
         ui.row(.{ .gap = 8 }, .{
-            ui.el(.input, .{ .text = model.query, .placeholder = "Name", .on_input = CatalogUi.inputMsg(.query_edit), .on_submit = .submit_query, .grow = 1 }, .{}),
+            ui.el(.input, .{ .text = model.query, .placeholder = "Name", .autofocus = true, .on_input = CatalogUi.inputMsg(.query_edit), .on_submit = .submit_query, .grow = 1 }, .{}),
             ui.el(.combobox, .{ .text = model.query, .placeholder = "Search fruit", .on_input = CatalogUi.inputMsg(.query_edit) }, .{}),
         }),
         ui.el(.radio_group, .{ .gap = 4 }, .{
@@ -1435,7 +1469,7 @@ pub fn handCatalogView(ui: *CatalogUi, model: *const CatalogModel) CatalogUi.Nod
             ui.each(model.rows, CatalogRow.key, catalogTimelineEntry),
             ui.timelineItem(.{
                 .title = "Ready for review",
-                .indicator = "✓",
+                .icon = "check",
                 .variant = .secondary,
                 .connector = false,
                 .selected = true,

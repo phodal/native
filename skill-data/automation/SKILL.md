@@ -110,7 +110,8 @@ Semantics:
 9. Use `native automate widget-wheel <view-label> <widget-id> <delta-y>` for retained widget scroll input.
 10. Use `native automate widget-key <view-label> <key> [text]` for focused retained widget keyboard input. The key accepts modifier chords — `cmd+a`, `cmd+c`, `cmd+v`, `cmd+x`, `ctrl+shift+arrowleft` (`cmd` sets the primary shortcut modifier on every platform) — so select-all/copy/cut/paste and shift-extended selection are drivable; after a copy, widget lines in the snapshot show the live selection as `selection=a..b`, and the copied text lands on the real system clipboard (`pbpaste` on macOS).
 11. Use `native automate screenshot <view-label> [scale]` to capture the named `gpu_surface` view's canvas as `screenshot-<view-label>.png` (the CLI prints the artifact path and waits for the file).
-12. Use `native automate reload` to request a WebView reload.
+12. Use `native automate tray-action <item-id>` to select a status-item dropdown row through the same platform event a real menu-bar click emits (command dispatch with source `.tray`). The live tray is visible in `snapshot.txt` as a `tray title="..." items=N` line followed by `  tray-item #id label="..." command="..." enabled=...` rows — the macOS menu bar is outside every window capture, so the snapshot is the only automation evidence the model-driven tray exists, and the `#id` there is what `tray-action` takes. Unknown ids degrade into the dispatch-error ring as `automation.tray_action`.
+13. Use `native automate reload` to request a WebView reload.
 
 ## Screenshots
 

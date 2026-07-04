@@ -1129,6 +1129,128 @@ test "automation set_text routes through the input path so the elm mirror stays 
     }
 }
 
+// ------------------------------------------------- autofocus (notes flow)
+
+const autofocus_canvas_label = "autofocus-canvas"; // shell scene label below
+
+const AutofocusModel = struct {
+    editing: bool = false,
+    draft: canvas.TextBuffer(64) = .{},
+    edit_count: u32 = 0,
+};
+
+const AutofocusMsg = union(enum) {
+    begin_edit,
+    draft_edit: canvas.TextInputEvent,
+};
+
+const AutofocusApp = ui_app_model.UiApp(AutofocusModel, AutofocusMsg);
+
+fn autofocusUpdate(model: *AutofocusModel, msg: AutofocusMsg) void {
+    switch (msg) {
+        .begin_edit => model.editing = true,
+        .draft_edit => |edit| {
+            model.draft.apply(edit);
+            model.edit_count += 1;
+        },
+    }
+}
+
+/// The notes shape: Cmd-N-style command mounts an inline editor that
+/// must receive the keyboard without a click.
+fn autofocusView(ui: *AutofocusApp.Ui, model: *const AutofocusModel) AutofocusApp.Ui.Node {
+    if (!model.editing) {
+        return ui.column(.{ .gap = 8, .padding = 12 }, .{
+            ui.button(.{ .on_press = AutofocusMsg.begin_edit }, "New note"),
+        });
+    }
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.button(.{ .on_press = AutofocusMsg.begin_edit }, "New note"),
+        ui.textField(.{
+            .autofocus = true,
+            .text = model.draft.text(),
+            .on_input = AutofocusApp.Ui.inputMsg(.draft_edit),
+        }),
+    });
+}
+
+fn autofocusCommand(name: []const u8) ?AutofocusMsg {
+    if (std.mem.eql(u8, name, "note.new")) return .begin_edit;
+    return null;
+}
+
+const autofocus_views = [_]app_manifest.ShellView{
+    .{ .label = autofocus_canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const autofocus_windows = [_]app_manifest.ShellWindow{.{
+    .label = "main",
+    .title = "Autofocus",
+    .width = 400,
+    .height = 300,
+    .views = &autofocus_views,
+}};
+const autofocus_scene: app_manifest.ShellConfig = .{ .windows = &autofocus_windows };
+
+test "ui app autofocus moves the keyboard to a freshly mounted editor through the real dispatch path" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(AutofocusApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = AutofocusApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-autofocus",
+        .scene = autofocus_scene,
+        .canvas_label = autofocus_canvas_label,
+        .update = autofocusUpdate,
+        .view = autofocusView,
+        .on_command = autofocusCommand,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = autofocus_canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    var view_index: usize = 0;
+    for (harness.runtime.views[0..harness.runtime.view_count], 0..) |view, index| {
+        if (std.mem.eql(u8, view.label, autofocus_canvas_label)) view_index = index;
+    }
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[view_index].canvas_widget_focused_id);
+
+    // The Cmd-N-shaped command mounts the editor; the rebuild's
+    // autofocus edge moves keyboard focus to it — no click.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .menu_command = .{ .name = "note.new", .window_id = 1 } });
+    try std.testing.expect(app_state.model.editing);
+    const field_id = findWidgetIdByKind(app_state.tree.?.root, .text_field).?;
+    try std.testing.expectEqual(field_id, harness.runtime.views[view_index].canvas_widget_focused_id);
+
+    // Typing lands in the model through the ordinary input path.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = autofocus_canvas_label,
+        .kind = .text_input,
+        .text = "Groceries",
+    } });
+    try std.testing.expectEqualStrings("Groceries", app_state.model.draft.text());
+    try std.testing.expect(app_state.model.edit_count > 0);
+
+    // A later rebuild with the flag still true never re-steals focus:
+    // click the button (its press dispatches begin_edit and rebuilds).
+    const button_id = findWidgetIdByKind(app_state.tree.?.root, .button).?;
+    var command_buffer: [96]u8 = undefined;
+    const click_command = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ autofocus_canvas_label, button_id });
+    try harness.runtime.dispatchAutomationCommand(app, click_command);
+    try std.testing.expectEqual(button_id, harness.runtime.views[view_index].canvas_widget_focused_id);
+}
+
 // -------------------------------------------------- layout capacity (#56)
 
 const CapacityModel = struct {
@@ -1688,6 +1810,82 @@ test "ui app status_item_fn drives the tray title and menu from the model" {
     try std.testing.expectEqual(updates_after_install + 1, harness.null_platform.trayUpdateCount());
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayTitleUpdateCount());
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
+}
+
+test "ui app tray state rides automation snapshots and tray-action drives a row" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(TrayStateApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = TrayStateApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-tray-automation",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = trayStateUpdate,
+        .view = trayStateView,
+        .on_command = trayStateCommand,
+        .status_item = .{ .tooltip = "issue tracker" },
+        .status_item_fn = trayStateStatusItem,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // Before the tray installs, snapshots carry no tray lines.
+    {
+        var buffer: [32768]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        try automation.snapshot.writeText(harness.runtime.automationSnapshot("Tray"), &writer);
+        try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "tray title=") == null);
+    }
+
+    const frame_event = zero_platform.GpuSurfaceFrameEvent{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = frame_event });
+
+    // The snapshot exposes the applied tray: model-derived title, every
+    // dropdown row with id/label/command/enabled, and separators (#95) —
+    // the menu bar is outside every window capture, so this is the only
+    // automation-visible evidence the model-driven tray exists.
+    {
+        var buffer: [32768]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        try automation.snapshot.writeText(harness.runtime.automationSnapshot("Tray"), &writer);
+        const text = writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, text, "tray title=\"ZN 3\" items=4\n") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #1 label=\"Refresh\" command=\"app.refresh\" enabled=true\n") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item separator\n") != null);
+        // The fixture disables the SELECTED row (initially issue 0).
+        try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #10 label=\"Fix crash on resize\" command=\"issue.select.0\" enabled=false\n") != null);
+    }
+
+    // `tray-action <id>` drives a dropdown row through the same platform
+    // event a real NSStatusItem menu click emits: command -> Msg -> model,
+    // and the re-derived tray re-applies.
+    try harness.runtime.dispatchAutomationCommand(app, "tray-action 11");
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.selected_issue);
+    {
+        var buffer: [32768]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        try automation.snapshot.writeText(harness.runtime.automationSnapshot("Tray"), &writer);
+        const text = writer.buffered();
+        try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #11 label=\"Adopt the tray seam\" command=\"issue.select.1\" enabled=false\n") != null);
+        try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #10 label=\"Fix crash on resize\" command=\"issue.select.0\" enabled=true\n") != null);
+    }
+
+    // Unknown or malformed item ids are loud driver misuse, never a
+    // silent no-op or a fallback command dispatch.
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "tray-action 99"));
+    try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, "tray-action open"));
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.selected_issue);
 }
 
 const TaskModel = struct {

@@ -112,6 +112,8 @@ pub fn RuntimeSystemServices(comptime Runtime: type) type {
             try validateTrayOptions(options);
             try self.options.platform.services.createTray(options);
             try storeTrayItems(self, options.items);
+            self.tray_title = try copyInto(&self.tray_title_storage, options.title);
+            self.tray_created = true;
         }
 
         pub fn updateTrayMenu(self: *Runtime, items: []const platform.TrayMenuItem) anyerror!void {
@@ -126,11 +128,21 @@ pub fn RuntimeSystemServices(comptime Runtime: type) type {
         pub fn updateTrayTitle(self: *Runtime, title: []const u8) anyerror!void {
             try validateTrayTitle(title);
             try self.options.platform.services.updateTrayTitle(title);
+            self.tray_title = try copyInto(&self.tray_title_storage, title);
         }
 
         pub fn removeTray(self: *Runtime) anyerror!void {
             try self.options.platform.services.removeTray();
             self.tray_item_count = 0;
+            self.tray_created = false;
+            self.tray_title = "";
+        }
+
+        pub fn trayItemExists(self: *const Runtime, item_id: platform.TrayItemId) bool {
+            for (self.tray_items[0..self.tray_item_count]) |item| {
+                if (item.id == item_id) return true;
+            }
+            return false;
         }
 
         pub fn trayCommandNameForItem(self: *const Runtime, item_id: platform.TrayItemId) []const u8 {
@@ -355,6 +367,9 @@ fn storeTrayItems(self: anytype, items: []const platform.TrayMenuItem) !void {
     for (items, 0..) |item, index| {
         self.tray_items[index].id = item.id;
         self.tray_items[index].command = try copyInto(&self.tray_items[index].command_storage, item.command);
+        self.tray_items[index].label = try copyInto(&self.tray_items[index].label_storage, item.label);
+        self.tray_items[index].separator = item.separator;
+        self.tray_items[index].enabled = item.enabled;
     }
     self.tray_item_count = items.len;
 }

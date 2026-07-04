@@ -2740,3 +2740,44 @@ test "widget emitter reports depth and display list overflow" {
     var builder = Builder.init(&commands);
     try std.testing.expectError(error.WidgetDepthExceeded, emitWidgetTree(&builder, widgets[0], .{}));
 }
+
+test "widget control aim point targets the rendered glyph of stretched selection controls" {
+    const tokens: canvas.DesignTokens = .{};
+    // A stretched switch: 718px frame, ~42px track at the left edge.
+    const stretched: canvas.Widget = .{
+        .id = 5,
+        .kind = .switch_control,
+        .frame = geometry.RectF.init(0, 100, 718, 24),
+        .text = "Group",
+    };
+    const switch_aim = canvas.widgetControlAimPoint(stretched, tokens);
+    try std.testing.expect(switch_aim.x < 60);
+    try std.testing.expectApproxEqAbs(@as(f32, 112), switch_aim.y, 1);
+
+    const checkbox: canvas.Widget = .{
+        .id = 6,
+        .kind = .checkbox,
+        .frame = geometry.RectF.init(0, 0, 500, 28),
+        .text = "Live",
+    };
+    try std.testing.expect(canvas.widgetControlAimPoint(checkbox, tokens).x < 30);
+
+    const radio: canvas.Widget = .{
+        .id = 7,
+        .kind = .radio,
+        .frame = geometry.RectF.init(0, 0, 500, 28),
+        .text = "Monthly",
+    };
+    try std.testing.expect(canvas.widgetControlAimPoint(radio, tokens).x < 30);
+
+    // Non-selection controls keep the frame center.
+    const button: canvas.Widget = .{
+        .id = 8,
+        .kind = .button,
+        .frame = geometry.RectF.init(0, 0, 500, 44),
+        .text = "Save",
+    };
+    const button_aim = canvas.widgetControlAimPoint(button, tokens);
+    try std.testing.expectApproxEqAbs(@as(f32, 250), button_aim.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 22), button_aim.y, 0.01);
+}

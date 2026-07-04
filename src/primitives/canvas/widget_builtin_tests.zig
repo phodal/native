@@ -533,6 +533,60 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
     try std.testing.expect(icon_only_list.findCommandById(widgetPartId(63, 6)) != null);
 }
 
+test "list and menu items draw a leading vector icon with the label shifted right" {
+    const tokens = DesignTokens{};
+    const plain = Widget{
+        .id = 70,
+        .kind = WidgetKind.list_item,
+        .frame = geometry.RectF.init(0, 0, 180, 32),
+        .text = "Projects",
+    };
+    var plain_commands: [8]CanvasCommand = undefined;
+    var plain_builder = Builder.init(&plain_commands);
+    try emitWidgetTree(&plain_builder, plain, tokens);
+    const plain_label = switch (plain_builder.displayList().findCommandById(widgetPartId(70, 3)).?.command) {
+        .draw_text => |text| text,
+        else => return error.TestUnexpectedResult,
+    };
+
+    var iconed = plain;
+    iconed.icon = "folder";
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, iconed, tokens);
+    const display_list = builder.displayList();
+    const label = switch (display_list.findCommandById(widgetPartId(70, 3)).?.command) {
+        .draw_text => |text| text,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Projects", label.text);
+    // The label shifts right to clear the leading icon slot.
+    try std.testing.expect(label.origin.x > plain_label.origin.x);
+    const icon_stroke = switch (display_list.findCommandById(widgetPartId(70, 5)).?.command) {
+        .stroke_path => |stroke| stroke,
+        else => return error.TestUnexpectedResult,
+    };
+    // Icon and label share the row's content tint (#96).
+    try expectFillColor(label.color, icon_stroke.stroke.fill);
+    const registered = canvas.icons.find("folder").?;
+    try std.testing.expectEqual(registered.elements.ptr, icon_stroke.elements.ptr);
+
+    // menu_item shares the emitter, so the same slot carries its icon.
+    var menu = iconed;
+    menu.kind = WidgetKind.menu_item;
+    menu.icon = "trash";
+    var menu_commands: [16]CanvasCommand = undefined;
+    var menu_builder = Builder.init(&menu_commands);
+    try emitWidgetTree(&menu_builder, menu, tokens);
+    try std.testing.expect(menu_builder.displayList().findCommandById(widgetPartId(70, 5)) != null);
+
+    // Intrinsic row width grows by the shared icon metrics; height holds.
+    const plain_size = canvas.intrinsicWidgetSize(plain, tokens);
+    const iconed_size = canvas.intrinsicWidgetSize(iconed, tokens);
+    try std.testing.expect(iconed_size.width > plain_size.width);
+    try std.testing.expectEqual(plain_size.height, iconed_size.height);
+}
+
 test "icon buttons draw registry names as vector icons and keep the glyph fallback" {
     const tokens = DesignTokens{};
     const vector = Widget{

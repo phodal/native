@@ -12,6 +12,7 @@
 //! the feedback loop markup authors (human or agent) rely on.
 
 const std = @import("std");
+const font_coverage = @import("font_coverage.zig");
 
 pub const MarkupErrorInfo = struct {
     line: usize = 0,
@@ -177,14 +178,29 @@ pub const Parser = struct {
                 try children.append(self.arena, try self.parseElement());
                 continue;
             }
+            // Record the position of the run's first VISIBLE byte, so
+            // messages that point into text content (the tofu guard)
+            // land on the character, not the run's end.
+            const text_line = self.line;
+            const text_column = self.column;
             const text = self.takeText();
             const trimmed = std.mem.trim(u8, text, " \t\r\n");
             if (trimmed.len > 0) {
+                var line = text_line;
+                var column = text_column;
+                for (text[0 .. textLeadingTrim(text)]) |lead_byte| {
+                    if (lead_byte == '\n') {
+                        line += 1;
+                        column = 1;
+                    } else {
+                        column += 1;
+                    }
+                }
                 try children.append(self.arena, .{
                     .kind = .text,
                     .text = trimmed,
-                    .line = self.line,
-                    .column = self.column,
+                    .line = line,
+                    .column = column,
                 });
             }
         }
@@ -412,14 +428,26 @@ fn parseElementComptime(comptime parser: *Parser) MarkupNode {
             children = children ++ &[_]MarkupNode{parseElementComptime(parser)};
             continue;
         }
+        const text_line = parser.line;
+        const text_column = parser.column;
         const text = parser.takeText();
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
         if (trimmed.len > 0) {
+            var line = text_line;
+            var column = text_column;
+            for (text[0 .. textLeadingTrim(text)]) |lead_byte| {
+                if (lead_byte == '\n') {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += 1;
+                }
+            }
             children = children ++ &[_]MarkupNode{.{
                 .kind = .text,
                 .text = trimmed,
-                .line = parser.line,
-                .column = parser.column,
+                .line = line,
+                .column = column,
             }};
         }
     }
@@ -546,6 +574,7 @@ pub const known_option_attrs = [_][]const u8{
     "variant",        "size",        "width",       "height",              "grow",     "gap",
     "padding",        "main",        "cross",       "wrap",                "key",      "global-key",
     "text-alignment", "columns",     "virtualized", "virtual-item-extent", "role",     "label",
+    "autofocus",
 };
 
 pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input", "scroll" };
@@ -580,6 +609,8 @@ pub fn deadHandlerOnNonHitTarget(attr_name: []const u8) bool {
         std.mem.eql(u8, attr_name, "on-submit") or
         std.mem.eql(u8, attr_name, "on-input");
 }
+
+pub const autofocus_element_message = "autofocus is only supported on focusable controls (text fields, buttons, checkboxes, ...) - it moves keyboard focus to the element when it mounts or when the flag turns on, and nothing about this element can take focus";
 
 pub const non_hit_target_handler_message = "on-change/on-submit/on-input never fire here: this element has no control or text behavior - put them on a control (input, checkbox, slider) inside it (on-press/on-toggle are fine anywhere: a bound press handler makes any element pressable, and clicks on plain text or icons inside it fall through to it)";
 
@@ -625,8 +656,89 @@ pub const icon_name_element_message = "name is only supported on icon - it selec
 pub const icon_missing_name_message = "icon requires a name attribute selecting a built-in vector icon (e.g. <icon name=\"search\"/>)";
 pub const icon_children_message = "icon is a leaf - it takes no children";
 
-pub const button_icon_message = "icon takes a literal built-in icon name drawn inside the button (see canvas.icons.known_icon_names, e.g. save, plus, refresh-cw)";
-pub const button_icon_element_message = "icon is only supported on button - it draws a vector icon inside the button as one hit target; for a bare icon use <icon name=\"...\"/>";
+pub const button_icon_message = "icon takes a literal built-in icon name drawn inside the element (see canvas.icons.known_icon_names, e.g. save, plus, refresh-cw)";
+pub const button_icon_element_message = "icon is only supported on button, toggle-button, list-item, menu-item, and badge - it draws a vector icon inside the element as one hit target; for a bare icon use <icon name=\"...\"/>";
+
+/// Elements whose `icon` attribute draws an inline vector icon as part
+/// of the element's OWN rendering (one hit target, one tint following
+/// enabled/disabled state). Mirrors the engine kinds that consume
+/// `Widget.icon`: buttons and toggle-buttons draw it before the label
+/// (tab strips are toggle-button children, so tabs get icons through
+/// this), list items and menu items draw it as a leading slot.
+pub const known_icon_attr_element_names = [_][]const u8{ "button", "toggle-button", "list-item", "menu-item", "badge" };
+
+pub fn iconAttrElement(name: []const u8) bool {
+    return nameInList(name, &known_icon_attr_element_names);
+}
+
+pub const font_coverage_message = "this text contains a character outside the bundled font's coverage - it renders as a tofu box on the reference/screenshot and mobile paths; use a vector icon (<icon name=\"...\"/> or the icon attribute) or plain words";
+
+pub const UncoveredCodepoint = struct {
+    /// Byte offset of the codepoint within the scanned literal.
+    offset: usize,
+    /// The codepoint's bytes (a slice of the scanned literal).
+    bytes: []const u8,
+    codepoint: u21,
+};
+
+/// First codepoint in a markup literal that the bundled face cannot
+/// render (#98): the tofu guard's shared predicate. `{...}` binding
+/// spans are skipped — dynamic values are the runtime Debug warning's
+/// job — and control characters are layout, not glyphs. Invalid UTF-8
+/// reports as U+FFFD at the offending byte. Comptime-callable, so the
+/// compiled engine names the character in its compile error.
+pub fn firstUncoveredCodepoint(text: []const u8) ?UncoveredCodepoint {
+    var index: usize = 0;
+    while (index < text.len) {
+        if (text[index] == '{') {
+            const close = std.mem.indexOfScalarPos(u8, text, index + 1, '}') orelse text.len;
+            index = @min(text.len, close + 1);
+            continue;
+        }
+        const len = std.unicode.utf8ByteSequenceLength(text[index]) catch {
+            return .{ .offset = index, .bytes = text[index .. index + 1], .codepoint = 0xFFFD };
+        };
+        if (index + len > text.len) {
+            return .{ .offset = index, .bytes = text[index..], .codepoint = 0xFFFD };
+        }
+        const codepoint = std.unicode.utf8Decode(text[index .. index + len]) catch {
+            return .{ .offset = index, .bytes = text[index .. index + len], .codepoint = 0xFFFD };
+        };
+        if (codepoint >= 0x20 and codepoint != 0x7F and !font_coverage.covers(codepoint)) {
+            return .{ .offset = index, .bytes = text[index .. index + len], .codepoint = codepoint };
+        }
+        index += len;
+    }
+    return null;
+}
+
+/// Markup attributes whose literal values are rendered as text (so the
+/// tofu guard applies): labels, placeholders, control text, and the
+/// timeline item's copy channels.
+pub const known_text_attr_names = [_][]const u8{ "text", "placeholder", "label", "value", "title", "description", "meta", "indicator" };
+
+fn textNodeCoverageError(node: MarkupNode) ?MarkupErrorInfo {
+    const found = firstUncoveredCodepoint(node.text) orelse return null;
+    var line = node.line;
+    var column = node.column;
+    for (node.text[0..found.offset]) |byte| {
+        if (byte == '\n') {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    return .{ .line = line, .column = column, .message = font_coverage_message };
+}
+
+fn attrCoverageError(attribute: MarkupAttr) ?MarkupErrorInfo {
+    if (!nameInList(attribute.name, &known_text_attr_names)) return null;
+    const expression = parseAttrExpression(attribute.value) orelse return null;
+    if (expression != .literal) return null;
+    if (firstUncoveredCodepoint(expression.literal) == null) return null;
+    return .{ .line = attribute.line, .column = attribute.column, .message = font_coverage_message };
+}
 
 /// Markup attributes that reference a color design token by name. Values
 /// must be literal `ColorTokens` field names (`known_color_token_names`);
@@ -674,7 +786,7 @@ pub const step_attr_message = "step takes no attributes - its content is the lab
 pub const timeline_attr_message = "unknown attribute for timeline - it takes gap, grow, key, global-key, and label";
 pub const timeline_item_parent_message = "timeline-item is only allowed inside a timeline (structure tags in between are fine)";
 pub const timeline_item_title_message = "timeline-item requires a title attribute (a literal or one {binding})";
-pub const timeline_item_attr_message = "unknown attribute for timeline-item - it takes title, description, meta, indicator, variant, connector, selected, on-press, key, and global-key";
+pub const timeline_item_attr_message = "unknown attribute for timeline-item - it takes title, description, meta, indicator, icon, variant, connector, selected, on-press, key, and global-key";
 pub const timeline_item_text_attr_message = "title, description, meta, and indicator expect text (a literal or one {binding})";
 pub const timeline_item_children_message = "timeline-item takes no children - the title, description, and meta attributes provide the content";
 pub const timeline_item_press_only_message = "timeline-item dispatches presses only - use on-press (other on-* events have no surface here)";
@@ -846,6 +958,7 @@ fn validateStepper(node: MarkupNode) ?MarkupErrorInfo {
             if (run.kind != .text) return errorAt(run, text_leaf_children_message);
             text_runs += 1;
             if (text_runs > 1) return errorAt(run, text_leaf_single_run_message);
+            if (textNodeCoverageError(run)) |info| return info;
         }
     }
     return null;
@@ -892,6 +1005,7 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
             if (parseAttrExpression(attribute.value) == null) {
                 return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_title_message };
             }
+            if (attrCoverageError(attribute)) |info| return info;
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "on-press")) {
@@ -902,6 +1016,20 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
         }
         if (std.mem.startsWith(u8, attribute.name, "on-")) {
             return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_press_only_message };
+        }
+        if (std.mem.eql(u8, attribute.name, "icon")) {
+            // Vector icon indicator: the same closed literal vocabulary
+            // as <icon name> (#96/#98 — symbols belong on the icon
+            // channel, not in text glyphs).
+            const expression = parseAttrExpression(attribute.value);
+            const literal = if (expression) |value|
+                (if (value == .literal) value.literal else null)
+            else
+                null;
+            if (literal == null or !nameInList(literal.?, &known_icon_names)) {
+                return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_message };
+            }
+            continue;
         }
         const known = std.mem.eql(u8, attribute.name, "description") or
             std.mem.eql(u8, attribute.name, "meta") or
@@ -917,6 +1045,7 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
         if (parseAttrExpression(attribute.value) == null) {
             return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
         }
+        if (attrCoverageError(attribute)) |info| return info;
     }
     if (!has_title) return errorAt(node, timeline_item_title_message);
     return null;
@@ -927,7 +1056,10 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
 /// at a template body root.
 fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]const u8, template_limit: usize) ?MarkupErrorInfo {
     switch (node.kind) {
-        .text => return null,
+        // Literal text content rides the tofu guard (#98): a codepoint
+        // the bundled face cannot render is a teaching error at its
+        // exact position.
+        .text => return textNodeCoverageError(node),
         .template_block => return errorAt(node, template_top_level_message),
         .use_block => return validateUse(document, node, template_limit),
         .element => {
@@ -1034,11 +1166,25 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     }
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "autofocus")) {
+                    // A focus request needs a focusable element; layout
+                    // and decoration kinds can never take the keyboard.
+                    if (nameInList(node.name, &known_non_hit_target_element_names)) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = autofocus_element_message };
+                    }
+                    if (parseAttrExpression(attribute.value) == null) {
+                        return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+                    }
+                    continue;
+                }
                 if (std.mem.eql(u8, attribute.name, "icon")) {
-                    // Button-scoped vector icon: the same closed literal
-                    // vocabulary as <icon name>, drawn inside the button
-                    // so icon + label are one hit target with one tint.
-                    if (!std.mem.eql(u8, node.name, "button")) {
+                    // Inline vector icon, scoped to the labeled
+                    // interactive elements that render it themselves
+                    // (`known_icon_attr_element_names`): the same closed
+                    // literal vocabulary as <icon name>, drawn inside the
+                    // element so icon + label are one hit target with one
+                    // tint.
+                    if (!iconAttrElement(node.name)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_element_message };
                     }
                     const expression = parseAttrExpression(attribute.value);
@@ -1078,6 +1224,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                 if (parseAttrExpression(attribute.value) == null) {
                     return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
                 }
+                if (attrCoverageError(attribute)) |info| return info;
             }
         },
         .for_block => {
@@ -1135,6 +1282,19 @@ fn isTemplateName(text: []const u8) bool {
         if (!valid) return false;
     }
     return true;
+}
+
+/// Length of the leading whitespace `std.mem.trim` removes from a text
+/// run (comptime-callable; the comptime parser cannot do pointer math).
+fn textLeadingTrim(text: []const u8) usize {
+    var lead: usize = 0;
+    while (lead < text.len) : (lead += 1) {
+        switch (text[lead]) {
+            ' ', '\t', '\r', '\n' => {},
+            else => break,
+        }
+    }
+    return lead;
 }
 
 fn nameInList(name: []const u8, list: []const []const u8) bool {

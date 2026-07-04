@@ -142,3 +142,12 @@ pub const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_no
 // moving scrollables; ids past the bound are dropped (the offsets still
 // apply and repaint — only the observation Msg is skipped).
 pub const max_canvas_widget_scroll_events_per_view: usize = 8;
+
+/// Autofocus requests tracked per view for edge detection: the ids whose
+/// SOURCE `autofocus` flag was set on the last applied layout, so a
+/// rebuild only moves focus when the flag TURNS ON (or its widget
+/// mounts), never while it merely stays on. 8 B x 16 x 32 view slots =
+/// 4 KiB fixed address space; layouts declaring more than 16 autofocus
+/// widgets track the first 16 (one focus target per rebuild wins
+/// anyway).
+pub const max_canvas_widget_autofocus_per_view: usize = 16;

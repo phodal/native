@@ -20,6 +20,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const font_coverage = @import("font_coverage.zig");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 
@@ -47,6 +48,36 @@ fn warnStackContainerGap(kind: WidgetKind, gap: f32) void {
         "gap does nothing on {s}: this container layers its children on top of each other - wrap them in a column (or row) inside it for flow, or drop the gap",
         .{@tagName(kind)},
     );
+}
+
+/// Debug-build diagnostic for text the bundled face cannot fully render
+/// (#98): the codepoint draws as a tofu box wherever the bundled
+/// outlines are the only glyph source — reference screenshots
+/// (`automate screenshot`), mobile embeds, provider-less measurement.
+/// Markup literals get the same lesson as a validation error; this
+/// diagnostic is the net for DYNAMIC strings (model-derived text
+/// reaches no static check) and Zig-authored literals. Logs the first
+/// uncovered codepoint per text run and keeps building — live macOS
+/// rendering falls back through CoreText, so this must never fail an
+/// app, and it logs at .debug (the `logAxisChildrenOverflow`
+/// precedent) because a .warn inside a test-built view would fail the
+/// whole suite for a rendering nit.
+fn warnUncoveredText(kind: WidgetKind, text: []const u8) void {
+    if (builtin.mode != .Debug) return;
+    var index: usize = 0;
+    while (index < text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(text[index]) catch return;
+        if (index + len > text.len) return;
+        const codepoint = std.unicode.utf8Decode(text[index .. index + len]) catch return;
+        if (codepoint >= 0x20 and codepoint != 0x7F and !font_coverage.covers(codepoint)) {
+            ui_log.debug(
+                "{s} text contains \"{s}\" (U+{X:0>4}), outside the bundled font's coverage - it renders as a tofu box on the reference/screenshot and mobile paths; use a vector icon (icon option, <icon name>) or plain words",
+                .{ @tagName(kind), text[index .. index + len], codepoint },
+            );
+            return;
+        }
+        index += len;
+    }
 }
 
 fn warnUnknownIconName(name: []const u8) void {
@@ -189,14 +220,26 @@ pub fn Ui(comptime Msg: type) type {
             /// falls back to initials).
             image: canvas.ImageId = 0,
             /// Vector icon name drawn inside icon-bearing controls
-            /// (`button`, `icon_button`): a built-in registry name
+            /// (`button`, `toggle_button`, `icon_button`, `list_item`,
+            /// `menu_item`): a built-in registry name
             /// (`canvas.icons.known_icon_names`) or an app icon
             /// registered at boot (`canvas.icons.registerAppIcons`).
-            /// Buttons draw the icon before the label — icon-only when
-            /// the label is empty — as ONE hit target that follows the
-            /// button's enabled/disabled tint. Empty = no icon; unknown
-            /// names draw nothing (a Debug-build warning names them).
+            /// Buttons and toggle buttons draw the icon before the label
+            /// — icon-only when the label is empty — and list/menu items
+            /// draw it as a leading slot, always as ONE hit target that
+            /// follows the widget's enabled/disabled tint. Empty = no
+            /// icon; unknown names draw nothing (a Debug-build warning
+            /// names them).
             icon: []const u8 = "",
+            /// Source-driven focus request: when this turns on for the
+            /// element (it mounts with the flag set, or the value flips
+            /// false→true), the runtime moves keyboard focus to it on
+            /// the rebuild that applies it — the TEA way to focus the
+            /// editor on note-create or give a keyboard-first app its
+            /// first focus. Edge-triggered: holding it true never
+            /// re-steals focus from the user. Only focusable widgets
+            /// (interactive controls) can take it.
+            autofocus: bool = false,
             variant: canvas.WidgetVariant = .default,
             size: canvas.WidgetSize = .default,
             /// Definite width: the widget is exactly this wide (the value
@@ -849,9 +892,13 @@ pub fn Ui(comptime Msg: type) type {
 
         fn stepperStepNode(self: *Self, active: usize, index: usize, count: usize, step: StepperStep) Node {
             const state = stepState(active, index);
+            // Completed steps wear the vector `check` icon — the ✓ text
+            // glyph is outside the bundled face's coverage and rendered
+            // as tofu on the reference/screenshot paths (#98).
             const indicator = self.el(.badge, .{
                 .variant = if (state == .pending) canvas.WidgetVariant.outline else .primary,
-                .text = if (state == .completed) "✓" else self.fmt("{d}", .{index + 1}),
+                .icon = if (state == .completed) "check" else "",
+                .text = if (state == .completed) "" else self.fmt("{d}", .{index + 1}),
             }, .{});
             const label: Node = switch (state) {
                 .active => self.paragraph(.{}, &.{.{ .text = step.label, .weight = .bold }}),
@@ -899,8 +946,15 @@ pub fn Ui(comptime Msg: type) type {
         pub const TimelineItemOptions = struct {
             key: ?UiKey = null,
             global_key: ?UiKey = null,
-            /// Indicator badge text ("✓", "3"); empty renders a small dot.
+            /// Indicator badge text ("3"); empty (with no `icon`) renders
+            /// a small dot. Prefer `icon` for symbols — text glyphs
+            /// outside the bundled face render as tofu on the
+            /// reference/screenshot paths (#98).
             indicator: []const u8 = "",
+            /// Vector icon indicator (registry name, e.g. "check"):
+            /// drawn inside the badge with the variant's tint. Wins the
+            /// badge's content slot alongside `indicator` text.
+            icon: []const u8 = "",
             /// Indicator color variant — map run outcomes here (primary
             /// for done, destructive for errors, outline for stopped, ...).
             variant: canvas.WidgetVariant = .outline,
@@ -926,10 +980,11 @@ pub fn Ui(comptime Msg: type) type {
         /// pressable — a trailing chevron with `on_press` bound to the
         /// item's root (presses on the content fall through to it).
         pub fn timelineItem(self: *Self, options: TimelineItemOptions) Node {
-            const dot = options.indicator.len == 0;
+            const dot = options.indicator.len == 0 and options.icon.len == 0;
             const indicator = self.el(.badge, .{
                 .variant = options.variant,
                 .text = options.indicator,
+                .icon = options.icon,
                 .width = if (dot) 10 else 0,
                 .height = if (dot) 10 else 0,
             }, .{});
@@ -1124,6 +1179,8 @@ pub fn Ui(comptime Msg: type) type {
             tokens: *const canvas.DesignTokens,
         ) error{OutOfMemory}!Widget {
             var widget = node.widget;
+            warnUncoveredText(widget.kind, widget.text);
+            warnUncoveredText(widget.kind, widget.placeholder);
             applyStyleTokens(&widget.style, node.style_tokens, tokens);
             // Opt-in text wrapping reuses the span paragraph machinery: a
             // wrapped text leaf becomes a single-span paragraph over its
@@ -1275,6 +1332,7 @@ pub fn Ui(comptime Msg: type) type {
                 .placeholder = options.placeholder,
                 .icon = options.icon,
                 .text_alignment = options.text_alignment,
+                .autofocus = options.autofocus,
                 .image_id = options.image,
                 .value = options.value,
                 .variant = options.variant,

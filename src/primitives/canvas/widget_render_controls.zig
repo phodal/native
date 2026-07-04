@@ -48,6 +48,8 @@ const widgetButtonInset = widget_metrics.widgetButtonInset;
 const widgetControlInset = widget_metrics.widgetControlInset;
 const widgetSizedDensityValue = widget_metrics.widgetSizedDensityValue;
 const widgetButtonIconExtent = widget_metrics.widgetButtonIconExtent;
+const widgetRowIconExtent = widget_metrics.widgetRowIconExtent;
+const widgetRowIconGap = widget_metrics.widgetRowIconGap;
 const widgetButtonIconGap = widget_metrics.widgetButtonIconGap;
 const estimateTextWidth = text_model.estimateTextWidth;
 const measureTextWidthForFont = text_model.measureTextWidthForFont;
@@ -591,14 +593,38 @@ pub fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignToken
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 2);
     const text_size = widgetBodyTextSize(widget, tokens);
     const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
+    const content_color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
+    // Leading icon slot (#96): drawn as part of the row's own rendering
+    // so icon + label are one hit target with one tint, mirroring the
+    // button's inline icon. The label shifts right by the shared metric
+    // the intrinsic size also accounts for.
+    var text_frame = widget.frame;
+    const icon = if (widget.icon.len > 0) icon_model.resolve(widget.icon) else null;
+    if (icon) |resolved| {
+        const icon_extent = widgetRowIconExtent(widget, tokens);
+        const icon_frame = geometry.RectF.init(
+            widget.frame.x + text_inset,
+            widget.frame.y + (widget.frame.height - icon_extent) * 0.5,
+            icon_extent,
+            icon_extent,
+        );
+        try emitVectorIcon(builder, widget.id, 4, icon_frame, content_color, resolved);
+        const shift = icon_extent + widgetRowIconGap(widget, tokens);
+        text_frame = geometry.RectF.init(
+            widget.frame.x + shift,
+            widget.frame.y,
+            @max(1, widget.frame.width - shift),
+            widget.frame.height,
+        );
+    }
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 3),
         .font_id = tokens.typography.font_id,
         .size = text_size,
-        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-        .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
+        .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, text_inset)),
+        .color = content_color,
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, tokens),
+        .text_layout = boundedTextLayout(text_frame, text_size, text_inset, .start, .none, tokens),
     });
 }
 

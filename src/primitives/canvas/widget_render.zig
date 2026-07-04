@@ -810,13 +810,52 @@ fn emitBadgeWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Erro
             .width = badgeStrokeWidth(widget, tokens, visual),
         },
     });
+    const content_color = badgeTextColor(widget, tokens, visual);
+    // Inline vector icon (#96): icon-only badges center it (the stepper's
+    // completed check, status chips); icon + text draws it before the
+    // label. One widget, one tint — and no text glyph outside the bundled
+    // face's coverage (#98's stepper checkmark fix).
+    const icon = if (widget.icon.len > 0) icon_model.resolve(widget.icon) else null;
+    if (icon) |resolved| {
+        const icon_extent = widget_metrics.widgetBadgeIconExtent(widget, tokens);
+        const icon_y = widget.frame.y + (widget.frame.height - icon_extent) * 0.5;
+        if (widget.text.len == 0) {
+            const icon_frame = geometry.RectF.init(
+                widget.frame.x + (widget.frame.width - icon_extent) * 0.5,
+                icon_y,
+                icon_extent,
+                icon_extent,
+            );
+            try widget_render_controls.emitVectorIcon(builder, widget.id, 4, icon_frame, content_color, resolved);
+            return;
+        }
+        const icon_frame = geometry.RectF.init(widget.frame.x + text_inset, icon_y, icon_extent, icon_extent);
+        try widget_render_controls.emitVectorIcon(builder, widget.id, 4, icon_frame, content_color, resolved);
+        const shift = icon_extent + widget_metrics.widgetBadgeIconGap(widget, tokens);
+        const text_frame = geometry.RectF.init(
+            widget.frame.x + shift,
+            widget.frame.y,
+            @max(1, widget.frame.width - shift),
+            widget.frame.height,
+        );
+        try builder.drawText(.{
+            .id = widgetPartId(widget.id, 3),
+            .font_id = tokens.typography.font_id,
+            .size = text_size,
+            .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, text_inset)),
+            .color = content_color,
+            .text = widget.text,
+            .text_layout = boundedTextLayout(text_frame, text_size, text_inset, .center, .none, tokens),
+        });
+        return;
+    }
     if (widget.text.len > 0) {
         try builder.drawText(.{
             .id = widgetPartId(widget.id, 3),
             .font_id = tokens.typography.font_id,
             .size = text_size,
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-            .color = badgeTextColor(widget, tokens, visual),
+            .color = content_color,
             .text = widget.text,
             .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, tokens),
         });

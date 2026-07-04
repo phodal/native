@@ -98,7 +98,7 @@ const shortcut_modifier_control: u32 = 1 << 2;
 const shortcut_modifier_option: u32 = 1 << 3;
 const shortcut_modifier_shift: u32 = 1 << 4;
 
-extern fn native_sdk_appkit_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) ?*AppKitHost;
+extern fn native_sdk_appkit_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int) ?*AppKitHost;
 extern fn native_sdk_appkit_destroy(host: *AppKitHost) void;
 extern fn native_sdk_appkit_run(host: *AppKitHost, callback: AppKitCallback, context: ?*anyopaque) void;
 extern fn native_sdk_appkit_stop(host: *AppKitHost) void;
@@ -113,7 +113,7 @@ extern fn native_sdk_appkit_set_security_policy(host: *AppKitHost, allowed_origi
 extern fn native_sdk_appkit_set_menus(host: *AppKitHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
 extern fn native_sdk_appkit_set_shortcuts(host: *AppKitHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
 extern fn native_sdk_appkit_set_automation_frame_polling(host: *AppKitHost, enabled: c_int) void;
-extern fn native_sdk_appkit_create_window(host: *AppKitHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) c_int;
+extern fn native_sdk_appkit_create_window(host: *AppKitHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int) c_int;
 extern fn native_sdk_appkit_focus_window(host: *AppKitHost, window_id: u64) c_int;
 extern fn native_sdk_appkit_close_window(host: *AppKitHost, window_id: u64) c_int;
 extern fn native_sdk_appkit_create_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, kind: c_int, parent: [*]const u8, parent_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, visible: c_int, enabled: c_int, role: [*]const u8, role_len: usize, accessibility_label: [*]const u8, accessibility_label_len: usize, text: [*]const u8, text_len: usize, command: [*]const u8, command_len: usize) c_int;
@@ -312,7 +312,7 @@ pub const MacPlatform = struct {
         const window_options = app_info.resolvedMainWindow();
         const window_title = window_options.resolvedTitle(app_info.app_name);
         const frame = window_options.default_frame;
-        const host = native_sdk_appkit_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0) orelse return error.CreateFailed;
+        const host = native_sdk_appkit_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0, if (window_options.resizable) 1 else 0) orelse return error.CreateFailed;
         return .{
             .host = host,
             .web_engine = web_engine,
@@ -721,7 +721,7 @@ fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyer
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     const title = options.resolvedTitle(self.app_info.app_name);
     const frame = options.default_frame;
-    if (native_sdk_appkit_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0) == 0) return error.CreateFailed;
+    if (native_sdk_appkit_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0, if (options.resizable) 1 else 0) == 0) return error.CreateFailed;
     return .{
         .id = options.id,
         .label = options.label,

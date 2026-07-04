@@ -176,6 +176,9 @@ pub const Runtime = struct {
     webview_count: usize = 0,
     tray_items: [platform.max_tray_items]RuntimeTrayItem = undefined,
     tray_item_count: usize = 0,
+    tray_created: bool = false,
+    tray_title: []const u8 = "",
+    tray_title_storage: [platform.max_tray_title_bytes]u8 = undefined,
     shell_layouts: [platform.max_windows]RuntimeShellLayout = undefined,
     shell_layout_count: usize = 0,
     next_window_id: platform.WindowId = 2,
@@ -208,6 +211,7 @@ pub const Runtime = struct {
     automation_windows: [automation.snapshot.max_windows]automation.snapshot.Window = undefined,
     automation_views: [automation.snapshot.max_views]platform.ViewInfo = undefined,
     automation_widgets: [automation.snapshot.max_widgets]automation.snapshot.Widget = undefined,
+    automation_tray_items: [platform.max_tray_items]automation.snapshot.TrayItem = undefined,
     widget_event_route_entries: [canvas.max_widget_depth * 2]canvas.WidgetEventRouteEntry = undefined,
     /// The in-flight native context-menu request (#67): set when the
     /// platform is asked to present, resolved by the matching

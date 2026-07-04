@@ -459,13 +459,24 @@ pub const Widget = struct {
     placeholder: []const u8 = "",
     /// Vector icon name (built-in registry or an app-registered icon)
     /// drawn INSIDE the widget as part of its own rendering — buttons
-    /// draw it before the label (icon-only when `text` is empty), icon
-    /// buttons draw it centered — so icon + label stay one hit target
-    /// and follow the widget's enabled/disabled tint. Empty = no icon.
-    /// Unknown names draw nothing (registration is a boot-time act; the
-    /// markup engines and `Ui.icon` validate built-in names up front).
+    /// and toggle buttons draw it before the label (icon-only when
+    /// `text` is empty), icon buttons draw it centered, list items and
+    /// menu items draw it as a leading slot — so icon + label stay one
+    /// hit target and follow the widget's enabled/disabled tint. Empty
+    /// = no icon. Unknown names draw nothing (registration is a
+    /// boot-time act; the markup engines and `Ui.icon` validate
+    /// built-in names up front).
     icon: []const u8 = "",
     text_alignment: TextAlign = .start,
+    /// Source-driven focus request: when this turns ON for a widget —
+    /// newly mounted with it set, or the source flips it false→true —
+    /// the runtime moves keyboard focus to the widget on the rebuild
+    /// that applies it. Holding it true does NOT re-steal focus on
+    /// later rebuilds (edge-triggered, like the source-wins control
+    /// reconcile), so keyboard-first flows can declare focus in the
+    /// view: a note editor that mounts with `autofocus` receives the
+    /// keyboard the moment it appears.
+    autofocus: bool = false,
     command: []const u8 = "",
     image_id: ImageId = 0,
     image_src: ?geometry.RectF = null,
@@ -507,6 +518,15 @@ pub const BuiltinComponentOptions = struct {
     text: []const u8 = "",
     placeholder: []const u8 = "",
     text_alignment: TextAlign = .start,
+    /// Source-driven focus request: when this turns ON for a widget —
+    /// newly mounted with it set, or the source flips it false→true —
+    /// the runtime moves keyboard focus to the widget on the rebuild
+    /// that applies it. Holding it true does NOT re-steal focus on
+    /// later rebuilds (edge-triggered, like the source-wins control
+    /// reconcile), so keyboard-first flows can declare focus in the
+    /// view: a note editor that mounts with `autofocus` receives the
+    /// keyboard the moment it appears.
+    autofocus: bool = false,
     command: []const u8 = "",
     image_id: ImageId = 0,
     image_src: ?geometry.RectF = null,

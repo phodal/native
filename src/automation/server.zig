@@ -220,4 +220,9 @@ test "server consumes automation command files" {
     const widget_key = (try server.takeCommand(&command_buffer)).?;
     try std.testing.expectEqual(protocol.Action.widget_key, widget_key.action);
     try std.testing.expectEqualStrings("canvas tab", widget_key.value);
+
+    try writePath(std.testing.io, command_path, "tray-action 11\n");
+    const tray_action = (try server.takeCommand(&command_buffer)).?;
+    try std.testing.expectEqual(protocol.Action.tray_action, tray_action.action);
+    try std.testing.expectEqualStrings("11", tray_action.value);
 }

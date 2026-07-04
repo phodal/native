@@ -72,6 +72,37 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_source_scroll_count = entries.len;
         }
 
+        /// Resolve the SOURCE layout's autofocus request (edge-triggered)
+        /// and refresh the tracked set: returns the first widget in tree
+        /// order whose `autofocus` flag is set now but was not on the
+        /// previous rebuild — newly mounted editors and freshly flipped
+        /// flags focus, level-held flags never re-steal.
+        pub fn canvasWidgetAutofocusTarget(self: *RuntimeView, layout: canvas.WidgetLayoutTree) ?canvas.ObjectId {
+            var target: ?canvas.ObjectId = null;
+            var new_ids: [canvas_limits.max_canvas_widget_autofocus_per_view]canvas.ObjectId = undefined;
+            var new_count: usize = 0;
+            for (layout.nodes) |node| {
+                if (!node.widget.autofocus or node.widget.id == 0) continue;
+                if (target == null) {
+                    var seen = false;
+                    for (self.widget_autofocus_ids[0..self.widget_autofocus_count]) |previous_id| {
+                        if (previous_id == node.widget.id) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen) target = node.widget.id;
+                }
+                if (new_count < new_ids.len) {
+                    new_ids[new_count] = node.widget.id;
+                    new_count += 1;
+                }
+            }
+            @memcpy(self.widget_autofocus_ids[0..new_count], new_ids[0..new_count]);
+            self.widget_autofocus_count = new_count;
+            return target;
+        }
+
         pub fn widgetSourceControlEntries(self: *const RuntimeView) []const canvas_widget_runtime.CanvasWidgetSourceControlEntry {
             return self.widget_source_control_entries[0..self.widget_source_control_count];
         }

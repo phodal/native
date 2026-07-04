@@ -77,6 +77,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
     } else if (std.mem.eql(u8, command, "shortcut")) {
         if (args.len != 2) return usage();
         try sendCommand(allocator, io, "shortcut", args[1]);
+    } else if (std.mem.eql(u8, command, "tray-action")) {
+        if (args.len != 2) return usage();
+        try sendCommand(allocator, io, "tray-action", args[1]);
     } else if (std.mem.eql(u8, command, "focus")) {
         if (args.len != 2) return usage();
         try sendCommand(allocator, io, "focus", args[1]);
@@ -118,6 +121,7 @@ fn usage() void {
         \\  widget-wheel <view-label> <widget-id> <delta-y>
         \\  widget-key <view-label> <key> [text]
         \\  shortcut <id>
+        \\  tray-action <item-id>   (status-item dropdown row; snapshots print tray-item #id)
         \\  focus <view-label>
         \\  focus-next
         \\  focus-previous

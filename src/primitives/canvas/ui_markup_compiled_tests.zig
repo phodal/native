@@ -488,6 +488,9 @@ const button_icon_markup_source =
     "<row gap=\"8\">\n" ++
     "  <button icon=\"save\" on-press=\"add\">Save</button>\n" ++
     "  <button icon=\"refresh-cw\" on-press=\"add\" label=\"Refresh\"></button>\n" ++
+    "  <toggle-button icon=\"arrow-up\" on-toggle=\"add\">Newest</toggle-button>\n" ++
+    "  <list-item icon=\"folder\" on-press=\"add\">Projects</list-item>\n" ++
+    "  <menu-item icon=\"trash\" on-press=\"add\">Delete</menu-item>\n" ++
     "</row>";
 
 test "compiled button icons match the interpreter and carry the validated name" {
@@ -518,6 +521,17 @@ test "compiled button icons match the interpreter and carry the validated name" 
         try testing.expectEqualStrings("refresh-cw", icon_only.icon);
         try testing.expectEqualStrings("", icon_only.text);
         try testing.expectEqualStrings("Refresh", icon_only.semantics.label);
+        // The wider labeled interactive set (#96) compiles to the same
+        // widgets in both engines.
+        const chip = tree.root.children[2];
+        try testing.expectEqual(canvas.WidgetKind.toggle_button, chip.kind);
+        try testing.expectEqualStrings("arrow-up", chip.icon);
+        const row_item = tree.root.children[3];
+        try testing.expectEqual(canvas.WidgetKind.list_item, row_item.kind);
+        try testing.expectEqualStrings("folder", row_item.icon);
+        const menu_row = tree.root.children[4];
+        try testing.expectEqual(canvas.WidgetKind.menu_item, menu_row.kind);
+        try testing.expectEqualStrings("trash", menu_row.icon);
     }
 }
 

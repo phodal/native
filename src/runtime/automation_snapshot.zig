@@ -30,6 +30,7 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                     .views = &.{},
                     .widgets = &.{},
                     .diagnostics = automationDiagnostics(self),
+                    .tray = automationTray(self),
                     .errors = self.dispatchErrors(),
                     .source = self.loaded_source,
                     .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
@@ -59,6 +60,7 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .views = self.automation_views[0..view_count],
                 .widgets = self.automation_widgets[0..widget_count],
                 .diagnostics = automationDiagnostics(self),
+                .tray = automationTray(self),
                 .errors = self.dispatchErrors(),
                 .source = self.loaded_source,
                 .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
@@ -66,6 +68,28 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .widget_context_menu_item_budget = canvas_limits.max_canvas_widget_context_menu_items_per_view,
                 .text_layout_plan_budget = canvas_limits.max_canvas_text_layouts_per_view,
                 .text_layout_line_budget = canvas_limits.max_canvas_text_layout_lines_per_view,
+            };
+        }
+
+        /// The live tray as the runtime last applied it (#95): title +
+        /// dropdown rows, or null when no status item exists. The menu
+        /// bar is outside every window capture, so the snapshot is the
+        /// only automation-visible evidence of the model-driven tray.
+        fn automationTray(self: *Runtime) ?automation.snapshot.Tray {
+            if (!self.tray_created) return null;
+            const count = @min(self.tray_item_count, self.automation_tray_items.len);
+            for (self.tray_items[0..count], 0..) |item, index| {
+                self.automation_tray_items[index] = .{
+                    .id = item.id,
+                    .label = item.label,
+                    .command = item.command,
+                    .separator = item.separator,
+                    .enabled = item.enabled,
+                };
+            }
+            return .{
+                .title = self.tray_title,
+                .items = self.automation_tray_items[0..count],
             };
         }
 

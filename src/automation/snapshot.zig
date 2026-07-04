@@ -135,6 +135,26 @@ pub const Widget = struct {
     text_composition: ?TextRange = null,
 };
 
+/// One status-item dropdown row as the runtime last applied it. Slices
+/// reference the runtime's bounded tray storage (labels/commands are
+/// copied there on every create/update), so snapshot inputs are plain
+/// values.
+pub const TrayItem = struct {
+    id: platform.TrayItemId = 0,
+    label: []const u8 = "",
+    command: []const u8 = "",
+    separator: bool = false,
+    enabled: bool = true,
+};
+
+/// The live status item (tray): current button title + dropdown items.
+/// The macOS menu bar is outside every window capture, so this is the
+/// only automation-visible evidence a model-driven tray exists (#95).
+pub const Tray = struct {
+    title: []const u8 = "",
+    items: []const TrayItem = &.{},
+};
+
 pub const Input = struct {
     windows: []const Window,
     views: []const platform.ViewInfo = &.{},
@@ -152,6 +172,8 @@ pub const Input = struct {
     /// headroom (#94).
     text_layout_plan_budget: usize = 0,
     text_layout_line_budget: usize = 0,
+    /// The live status item, when the app created one (#95).
+    tray: ?Tray = null,
     /// The most recent degraded dispatch errors, oldest first (bounded
     /// ring; `diagnostics.dispatch_error_count` is the lifetime total).
     errors: []const DispatchError = &.{},
@@ -382,6 +404,21 @@ pub fn writeText(input: Input, writer: anytype) !void {
         try writeWidgetTextRanges(widget, writer);
         try writer.writeByte('\n');
     }
+    if (input.tray) |tray| {
+        try writer.print("tray title=\"{s}\" items={d}\n", .{ tray.title, tray.items.len });
+        for (tray.items) |item| {
+            if (item.separator) {
+                try writer.writeAll("  tray-item separator\n");
+                continue;
+            }
+            try writer.print("  tray-item #{d} label=\"{s}\" command=\"{s}\" enabled={any}\n", .{
+                item.id,
+                item.label,
+                item.command,
+                item.enabled,
+            });
+        }
+    }
     for (input.errors) |dispatch_error| {
         try writer.print("  error event={s} name={s} timestamp_ns={d}\n", .{
             dispatch_error.event,
@@ -590,6 +627,32 @@ test "snapshot emits window and source" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "text=\"Main content\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "focused=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "source kind=html") != null);
+}
+
+test "snapshot emits tray title and dropdown items" {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    const windows = [_]Window{.{ .title = "Test", .bounds = geometry.RectF.init(0, 0, 100, 100) }};
+    const items = [_]TrayItem{
+        .{ .id = 1, .label = "Refresh", .command = "app.refresh" },
+        .{ .separator = true },
+        .{ .id = 10, .label = "Fix crash on resize", .command = "issue.select.0", .enabled = false },
+    };
+    try writeText(.{
+        .windows = &windows,
+        .tray = .{ .title = "ZN 3", .items = &items },
+    }, &writer);
+    const text = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, text, "\ntray title=\"ZN 3\" items=3\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #1 label=\"Refresh\" command=\"app.refresh\" enabled=true\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item separator\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "  tray-item #10 label=\"Fix crash on resize\" command=\"issue.select.0\" enabled=false\n") != null);
+
+    // No tray -> no tray lines.
+    var empty_buffer: [512]u8 = undefined;
+    var empty_writer = std.Io.Writer.fixed(&empty_buffer);
+    try writeText(.{ .windows = &windows }, &empty_writer);
+    try std.testing.expect(std.mem.indexOf(u8, empty_writer.buffered(), "tray") == null);
 }
 
 test "accessibility snapshot uses visible view text as name" {

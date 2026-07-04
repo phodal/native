@@ -454,6 +454,62 @@ test "runtime applies mobile viewport insets to shell layout" {
     try std.testing.expectEqual(@as(f32, 425), main.frame.height);
 }
 
+test "shell window resizable reaches the platform create seam" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "shell-resizable", .source = platform.WebViewSource.html("<h1>Host</h1>") };
+        }
+    };
+
+    // The friction: app.zon said `resizable = false`, the runtime carried
+    // it, and the macOS host dropped it at the C ABI (hardcoded
+    // NSWindowStyleMaskResizable). Lock the runtime-to-platform half:
+    // the created window's options arrive with the flag intact.
+    const shell_views = [_]app_manifest.ShellView{
+        .{ .label = "content", .kind = .webview, .url = "zero://app/content.html", .fill = true },
+    };
+    const fixed_window: app_manifest.ShellWindow = .{
+        .label = "fixed",
+        .title = "Fixed",
+        .width = 320,
+        .height = 480,
+        .resizable = false,
+        .views = &shell_views,
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    const window = try harness.runtime.createShellWindow(fixed_window, platform.WebViewSource.html("<h1>Fixed</h1>"));
+    var window_index: usize = 0;
+    var found = false;
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
+        if (info.id == window.id) {
+            window_index = index;
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(!harness.null_platform.window_resizable[window_index]);
+
+    // The default stays resizable.
+    const open_window: app_manifest.ShellWindow = .{
+        .label = "open",
+        .title = "Open",
+        .width = 640,
+        .height = 480,
+        .views = &shell_views,
+    };
+    const second = try harness.runtime.createShellWindow(open_window, platform.WebViewSource.html("<h1>Open</h1>"));
+    for (harness.null_platform.windows[0..harness.null_platform.window_count], 0..) |info, index| {
+        if (info.id == second.id) {
+            try std.testing.expect(harness.null_platform.window_resizable[index]);
+        }
+    }
+}
+
 test "runtime lays out created shell windows with native returned bounds" {
     const ShellCreatePlatform = struct {
         create_count: usize = 0,

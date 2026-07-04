@@ -34,6 +34,10 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
             if (layout.nodes.len > max_canvas_widget_nodes_per_view) return error.WidgetNodeLimitReached;
 
+            // Source-driven autofocus resolves against the PREVIOUS
+            // rebuild's flags (edge-triggered) before any state is
+            // replaced; the focus applies after the new tree lands.
+            const autofocus_target = self.views[index].canvasWidgetAutofocusTarget(layout);
             const previous_layout = self.views[index].widgetLayoutTree();
             const source_semantics = try layout.collectSemantics(&self.canvas_widget_source_semantics_scratch);
             const reconciled_nodes = &self.canvas_widget_reconcile_nodes;
@@ -83,6 +87,14 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             CanvasWidgetEventMethods(Runtime).invalidateForWidgetInvalidations(self, self.views[index].frame, invalidations);
             if (render_state_changed) CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetRenderStateDirty(self, index, render_state_dirty);
             const layout_dirty = invalidations.len > 0 or render_state_changed;
+            if (autofocus_target) |autofocus_id| {
+                // The same focus write every other focus source performs
+                // (view focus + focused/visible ids + invalidation);
+                // widgets that are not focusable ignore the request.
+                if (self.views[index].widgetLayoutTree().focusTargetById(autofocus_id) != null) {
+                    try AutomationWidgetMethods(Runtime).focusAutomationCanvasWidget(self, index, autofocus_id);
+                }
+            }
             const requested_frame = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);
             if ((layout_dirty or widget_revision_changed) and !requested_frame) try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
             return self.views[index].info();

@@ -306,7 +306,10 @@ static NSString *GuestMacString(const char *bytes, size_t len) {
 
     if (shareDir.length > 0 && shareTag.length > 0) {
         if (![VZVirtioFileSystemDeviceConfiguration validateTag:shareTag error:error]) return nil;
-        VZSharedDirectory *directory = [[VZSharedDirectory alloc] initWithURL:[NSURL fileURLWithPath:shareDir] readOnly:NO];
+        // Read-only: the guest reads the repo and builds into its own disk
+        // (ZIG_LOCAL_CACHE_DIR); a writable share lets a stray `rm -rf` in
+        // the guest delete host files through the mount.
+        VZSharedDirectory *directory = [[VZSharedDirectory alloc] initWithURL:[NSURL fileURLWithPath:shareDir] readOnly:YES];
         VZVirtioFileSystemDeviceConfiguration *fs = [[VZVirtioFileSystemDeviceConfiguration alloc] initWithTag:shareTag];
         fs.share = [[VZSingleDirectoryShare alloc] initWithDirectory:directory];
         configuration.directorySharingDevices = @[ fs ];

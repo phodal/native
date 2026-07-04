@@ -42,7 +42,7 @@ Notes on honesty and mechanics:
 - `start` prints `running ip=<addr>` on stdout once the lease appears, so you can also capture it from the start process's output.
 - Two SIGTERMs (or `stop` twice) escalate to a force stop; `stop --force` SIGKILLs the owner process (the VM dies with it). Prefer graceful.
 - Live-GUI tests that capture the screen need the Screen Recording grant from provisioning; SSH sessions drive the GUI via the normal automation entry points (`zig build test-*-smoke`, `native automate`, ...) exactly as on the host.
-- The share is read-write. Build inside the guest into the shared tree only if you want artifacts on the host; prefer building in a guest-local directory (e.g. `rsync` the tree or set a guest-side zig cache) when churn matters — virtio-fs is correct but not fast for heavy `.zig-cache` traffic: `export ZIG_LOCAL_CACHE_DIR=$HOME/zig-cache` before building from the share.
+- The share is read-write. Build inside the guest into the shared tree only if you want artifacts on the host; prefer building in a guest-local directory (e.g. `rsync` the tree or set a guest-side zig cache) when churn matters — virtio-fs is correct but not fast for heavy `.zig-cache` traffic: `export ZIG_LOCAL_CACHE_DIR (required: the repo share is READ-ONLY in the guest — build caches and zig-out must live on the guest disk)=$HOME/zig-cache` before building from the share.
 
 ## Files this tool owns
 

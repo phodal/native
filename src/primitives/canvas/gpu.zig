@@ -291,6 +291,15 @@ pub const CanvasGpuPacket = struct {
     pub fn writeJson(self: CanvasGpuPacket, writer: anytype) !void {
         try canvas.writeCanvasGpuPacketJson(self, writer);
     }
+
+    /// Compact binary wire encoding (see serialization.zig's binary
+    /// section for the layout): ~5-10x denser than `writeJson` on
+    /// text-heavy frames, so long rich views stay under the packet
+    /// transport bound instead of falling back to the software pixel
+    /// path.
+    pub fn writeBinary(self: CanvasGpuPacket, writer: anytype) !void {
+        try canvas.writeCanvasGpuPacketBinary(self, writer);
+    }
 };
 
 pub const CanvasGpuPacketSummary = struct {

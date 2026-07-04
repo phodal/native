@@ -308,7 +308,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         markup_diagnostic: ?canvas.ui_markup.MarkupErrorInfo = null,
         layout_nodes: [canvas_limits.max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
         gpu_commands: [canvas_limits.max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined,
-        packet_json: [platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
+        /// Packet transport buffer, sized for the larger of the two wire
+        /// encodings (the compact binary bound; the JSON bound is
+        /// smaller and the runtime clamps JSON encodes to it), so a
+        /// text-heavy frame that fits either encoding rides the packet
+        /// path.
+        packet_bytes: [platform.max_gpu_surface_packet_binary_bytes]u8 = undefined,
         /// Allocator backing the arenas and the lazily grown pixel
         /// presentation buffers below.
         backing: std.mem.Allocator,
@@ -995,7 +1000,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const services = runtime.options.platform.services;
             const clear_color = self.effectiveTokens().colors.background;
             var packet_attempted = false;
-            if (services.present_gpu_surface_packet_fn != null) {
+            if (services.present_gpu_surface_packet_fn != null or services.present_gpu_surface_packet_binary_fn != null) {
                 packet_attempted = true;
                 const packet_presented = blk: {
                     _ = runtime.presentNextCanvasGpuPacketWithScale(
@@ -1011,7 +1016,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                         runtime.canvasFrameScratchStorage(),
                         clear_color,
                         &self.gpu_commands,
-                        &self.packet_json,
+                        &self.packet_bytes,
                         null,
                     ) catch |err| switch (err) {
                         error.UnsupportedService => break :blk false,

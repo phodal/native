@@ -529,6 +529,9 @@ pub const virtualWidgetScrollContentExtent = widget_runtime.virtualWidgetScrollC
 pub const virtualWidgetScrollContentExtentWithTokens = widget_runtime.virtualWidgetScrollContentExtentWithTokens;
 
 pub const writeCanvasGpuPacketJson = serialization.writeCanvasGpuPacketJson;
+pub const writeCanvasGpuPacketBinary = serialization.writeCanvasGpuPacketBinary;
+pub const binary_packet_magic = serialization.binary_packet_magic;
+pub const binary_packet_version = serialization.binary_packet_version;
 
 test {
     _ = @import("tests.zig");

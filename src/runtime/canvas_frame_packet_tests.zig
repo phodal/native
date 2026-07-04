@@ -951,3 +951,403 @@ test "runtime pixel fallback renders provided canvas image resources" {
     try std.testing.expectEqual(@as(usize, 1), result.frame.image_plan.images[0].height);
     try std.testing.expectEqualSlices(u8, &image_pixels, result.frame.image_plan.images[0].pixels);
 }
+
+test "packet JSON overflow records loud fallback telemetry and packet recovery clears it" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-fallback-telemetry", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 4, 4),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(1, 1, 2, 2),
+        .fill = .{ .color = canvas.Color.rgb8(37, 99, 235) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var tiny_packet_buffer: [32]u8 = undefined;
+    var pixels: [4 * 4 * 4]u8 = undefined;
+    var scratch: [4 * 4 * 4]u8 = undefined;
+    const fallback_result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 30,
+        .timestamp_ns = 100_000,
+        .surface_size = geometry.SizeF.init(4, 4),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, &tiny_packet_buffer, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0), null);
+
+    try std.testing.expectEqual(CanvasPresentationMode.pixels, fallback_result.mode);
+    const fallback_info = harness.runtime.views[0].info();
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.json_overflow, fallback_info.gpu_present_fallback_reason);
+    try std.testing.expect(fallback_info.gpu_present_fallback_needed_bytes > tiny_packet_buffer.len);
+    try std.testing.expectEqual(tiny_packet_buffer.len, fallback_info.gpu_present_fallback_limit_bytes);
+    try std.testing.expectEqual(@as(usize, 1), fallback_info.gpu_present_fallback_frame_count);
+    try std.testing.expectEqual(platform.GpuPresentPath.pixels, fallback_info.gpu_present_path);
+
+    // The automation snapshot names the reason on the view line.
+    var snapshot_buffer: [32768]u8 = undefined;
+    var snapshot_writer = std.Io.Writer.fixed(&snapshot_buffer);
+    try automation.snapshot.writeText(harness.runtime.automationSnapshot("Fallback"), &snapshot_writer);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_writer.buffered(), "present_fallback=json_overflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_writer.buffered(), "present_fallback_limit=32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_writer.buffered(), "present_fallback_frames=1") != null);
+
+    // A packet-sized buffer recovers the packet path; the sticky reason
+    // clears while the cumulative fallback counter survives as the
+    // oscillation record.
+    var packet_buffer: [16 * 1024]u8 = undefined;
+    const recovered_result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 31,
+        .timestamp_ns = 101_000,
+        .surface_size = geometry.SizeF.init(4, 4),
+        .scale = 1,
+        .full_repaint = true,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, &packet_buffer, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0), null);
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, recovered_result.mode);
+    const recovered_info = harness.runtime.views[0].info();
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.none, recovered_info.gpu_present_fallback_reason);
+    try std.testing.expectEqual(@as(usize, 0), recovered_info.gpu_present_fallback_needed_bytes);
+    try std.testing.expectEqual(@as(usize, 1), recovered_info.gpu_present_fallback_frame_count);
+    try std.testing.expectEqual(platform.GpuPresentPath.packet, recovered_info.gpu_present_path);
+
+    var recovered_snapshot_buffer: [32768]u8 = undefined;
+    var recovered_writer = std.Io.Writer.fixed(&recovered_snapshot_buffer);
+    try automation.snapshot.writeText(harness.runtime.automationSnapshot("Recovered"), &recovered_writer);
+    try std.testing.expect(std.mem.indexOf(u8, recovered_writer.buffered(), "present_fallback=none") != null);
+    try std.testing.expect(std.mem.indexOf(u8, recovered_writer.buffered(), "present_fallback_frames=1") != null);
+}
+
+test "runtime prefers the compact binary packet encoding when the platform decodes it" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-binary-packet", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    harness.null_platform.gpu_surface_packet_binary = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 96, 48),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 7,
+        .rect = geometry.RectF.init(8, 6, 32, 20),
+        .fill = .{ .color = canvas.Color.rgb8(37, 99, 235) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_buffer: [16 * 1024]u8 = undefined;
+    var pixels: [96 * 48 * 4]u8 = undefined;
+    var scratch: [96 * 48 * 4]u8 = undefined;
+    const result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 40,
+        .timestamp_ns = 120_000,
+        .surface_size = geometry.SizeF.init(96, 48),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, &packet_buffer, &pixels, &scratch, canvas.Color.rgb8(20, 24, 32), null);
+
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, result.mode);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_binary_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_count);
+    try std.testing.expect(harness.null_platform.gpu_surface_packet_present_binary_len > 0);
+    // JSON never rode this present: binary is the sole payload.
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_packet_present_json_len);
+    // Wire framing: magic + version pin the format both sides agreed on.
+    try std.testing.expectEqualSlices(u8, "NSGP", harness.null_platform.gpu_surface_packet_present_binary_prefix[0..4]);
+    try std.testing.expectEqual(canvas.binary_packet_version, harness.null_platform.gpu_surface_packet_present_binary_prefix[4]);
+    try std.testing.expectEqual(platform.GpuPresentPath.packet, harness.runtime.views[0].gpu_present_path);
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.none, harness.runtime.views[0].info().gpu_present_fallback_reason);
+}
+
+test "chat-transcript-shaped heavy frame stays on the packet path through the binary encoding" {
+    // Shaped like a long rich chat transcript: hundreds of measured text
+    // runs (each with wrap layout and a measured glyph array), message
+    // bubbles, and separators. The JSON encoding of this frame exceeds
+    // the 128 KiB packet transport bound, which used to bounce every
+    // such frame to the CPU pixel path each time it repainted; the
+    // binary encoding keeps it on the packet path with >=5x headroom.
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-chat-heavy", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    const surface_width: f32 = 480;
+    const row_count: usize = 200;
+    const row_height: f32 = 16;
+    const surface_height: f32 = @as(f32, @floatFromInt(row_count)) * row_height + 64;
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, surface_width, surface_height),
+    });
+
+    // 200 unique ~140-char runs with 40 measured glyphs each plus a
+    // bubble rect per message: ~28 KiB of text and 8000 glyphs, inside
+    // the per-view budgets, with per-run wrap layout so measured lines
+    // ride the packet.
+    var text_storage: [row_count][144]u8 = undefined;
+    var glyph_storage: [row_count][40]canvas.Glyph = undefined;
+    var command_storage: [row_count * 2]canvas.CanvasCommand = undefined;
+    var command_count: usize = 0;
+    for (0..row_count) |row| {
+        const text = std.fmt.bufPrint(&text_storage[row], "message {d:0>4}: the quick brown fox jumps over the lazy dog while the transcript keeps growing line after line after line", .{row}) catch unreachable;
+        for (0..glyph_storage[row].len) |glyph_index| {
+            glyph_storage[row][glyph_index] = .{
+                .id = @intCast(32 + (glyph_index * 7 + row) % 90),
+                .x = @floatFromInt(glyph_index * 7),
+                .y = 0,
+                .advance = 7,
+                .text_start = glyph_index,
+                .text_len = 1,
+            };
+        }
+        const y: f32 = @as(f32, @floatFromInt(row)) * row_height + 8;
+        command_storage[command_count] = .{ .fill_rounded_rect = .{
+            .id = @intCast(10_000 + row),
+            .rect = geometry.RectF.init(8, y - 4, surface_width - 16, row_height - 2),
+            .radius = canvas.Radius.all(6),
+            .fill = .{ .color = canvas.Color.rgb8(30, 41, 59) },
+        } };
+        command_count += 1;
+        command_storage[command_count] = .{ .draw_text = .{
+            .id = @intCast(20_000 + row),
+            .font_id = 1,
+            .size = 13,
+            .origin = geometry.PointF.init(16, y + 8),
+            .color = canvas.Color.rgb8(226, 232, 240),
+            .text = text,
+            .glyphs = &glyph_storage[row],
+            .text_layout = .{ .max_width = surface_width - 40, .line_height = 15, .wrap = .word },
+        } };
+        command_count += 1;
+    }
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = command_storage[0..command_count] });
+
+    const gpu_commands = try std.testing.allocator.alloc(canvas.CanvasGpuCommand, max_canvas_commands_per_view);
+    defer std.testing.allocator.free(gpu_commands);
+    const packet_buffer = try std.testing.allocator.alloc(u8, platform.max_gpu_surface_packet_binary_bytes);
+    defer std.testing.allocator.free(packet_buffer);
+    const pixel_len: usize = @as(usize, @intFromFloat(surface_width)) * @as(usize, @intFromFloat(surface_height)) * 4;
+    const pixels = try std.testing.allocator.alloc(u8, pixel_len);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_len);
+    defer std.testing.allocator.free(scratch);
+
+    // JSON-only host first: the frame overflows the JSON transport and
+    // falls back, recording how many bytes it actually needed.
+    const json_result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 50,
+        .timestamp_ns = 200_000,
+        .surface_size = geometry.SizeF.init(surface_width, surface_height),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), gpu_commands, packet_buffer, pixels, scratch, canvas.Color.rgb8(15, 23, 42), null);
+    try std.testing.expectEqual(CanvasPresentationMode.pixels, json_result.mode);
+    const overflow_info = harness.runtime.views[0].info();
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.json_overflow, overflow_info.gpu_present_fallback_reason);
+    const json_needed_bytes = overflow_info.gpu_present_fallback_needed_bytes;
+    try std.testing.expect(json_needed_bytes > platform.max_gpu_surface_packet_json_bytes);
+
+    // Binary-decoding host: the same frame stays on the packet path.
+    harness.null_platform.gpu_surface_packet_binary = true;
+    const binary_result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 51,
+        .timestamp_ns = 216_000,
+        .surface_size = geometry.SizeF.init(surface_width, surface_height),
+        .scale = 1,
+        .full_repaint = true,
+    }, canvasFrameScratchStorage(&harness.runtime), gpu_commands, packet_buffer, pixels, scratch, canvas.Color.rgb8(15, 23, 42), null);
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, binary_result.mode);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_packet_present_binary_count);
+    const binary_len = harness.null_platform.gpu_surface_packet_present_binary_len;
+    try std.testing.expect(binary_len > 0);
+    try std.testing.expect(binary_len <= platform.max_gpu_surface_packet_binary_bytes);
+    // The size win that makes the ceiling real: >=5x denser than the
+    // JSON encoding on this text-heavy frame.
+    try std.testing.expect(binary_len * 5 <= json_needed_bytes);
+    try std.testing.expectEqual(platform.GpuPresentPath.packet, harness.runtime.views[0].gpu_present_path);
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.none, harness.runtime.views[0].info().gpu_present_fallback_reason);
+
+    var snapshot_buffer: [32768]u8 = undefined;
+    var snapshot_writer = std.Io.Writer.fixed(&snapshot_buffer);
+    try automation.snapshot.writeText(harness.runtime.automationSnapshot("Chat"), &snapshot_writer);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_writer.buffered(), "gpu_present_path=packet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_writer.buffered(), "present_fallback=none") != null);
+}
+
+test "packet fallback pixel present honors dirty bounds instead of full-frame rasters" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-fallback-dirty", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    harness.null_platform.gpu_surface_packets = false;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 64, 64),
+    });
+
+    const commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(2, 2, 60, 60),
+        .fill = .{ .color = canvas.Color.rgb8(255, 0, 0) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    var packet_buffer: [16 * 1024]u8 = undefined;
+    var pixels: [64 * 64 * 4]u8 = undefined;
+    var scratch: [64 * 64 * 4]u8 = undefined;
+    _ = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 60,
+        .timestamp_ns = 300_000,
+        .surface_size = geometry.SizeF.init(64, 64),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, &packet_buffer, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0), null);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+
+    // Small change: the fallback frame's pixel present carries the
+    // change's dirty bounds, not the whole surface — the packet attempt
+    // and the pixel fallback share ONE planned frame, so the diff
+    // survives the failed attempt.
+    const changed_commands = [_]canvas.CanvasCommand{.{ .fill_rect = .{
+        .id = 1,
+        .rect = geometry.RectF.init(4, 4, 8, 8),
+        .fill = .{ .color = canvas.Color.rgb8(0, 128, 255) },
+    } }};
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &changed_commands });
+    const changed_result = try harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = 61,
+        .timestamp_ns = 316_000,
+        .surface_size = geometry.SizeF.init(64, 64),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands, &packet_buffer, &pixels, &scratch, canvas.Color.rgb8(0, 0, 0), null);
+    try std.testing.expectEqual(CanvasPresentationMode.pixels, changed_result.mode);
+    try std.testing.expect(!changed_result.frame.full_repaint);
+    const dirty = harness.null_platform.gpu_surface_present_dirty_bounds.?;
+    try std.testing.expect(dirty.width < 64);
+    try std.testing.expect(dirty.height < 64);
+    try std.testing.expectEqual(platform.GpuPresentFallbackReason.missing_service, harness.runtime.views[0].info().gpu_present_fallback_reason);
+}
+
+test "every display-list command kind is representable on the packet path" {
+    // Coverage audit for the packet planner: one of each draw command,
+    // wrapped in the structural commands (clip/opacity/transform) that
+    // the render planner flattens into per-command state. If a future
+    // display-list command reaches the packet as `.unsupported`, this
+    // is the test that names it before users meet the silent pixel
+    // fallback's different glyph rasterization.
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-kind-audit", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 256, 256),
+    });
+
+    const stops = [_]canvas.GradientStop{
+        .{ .offset = 0, .color = canvas.Color.rgb8(255, 255, 255) },
+        .{ .offset = 1, .color = canvas.Color.rgb8(37, 99, 235) },
+    };
+    const path_elements = [_]canvas.PathElement{
+        .{ .verb = .move_to, .points = .{ geometry.PointF.init(10, 10), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .quad_to, .points = .{ geometry.PointF.init(20, 0), geometry.PointF.init(30, 10), geometry.PointF.zero() } },
+        .{ .verb = .cubic_to, .points = .{ geometry.PointF.init(35, 20), geometry.PointF.init(40, 25), geometry.PointF.init(45, 30) } },
+        .{ .verb = .line_to, .points = .{ geometry.PointF.init(10, 30), geometry.PointF.zero(), geometry.PointF.zero() } },
+        .{ .verb = .close, .points = .{ geometry.PointF.zero(), geometry.PointF.zero(), geometry.PointF.zero() } },
+    };
+    const commands = [_]canvas.CanvasCommand{
+        .{ .push_clip = .{ .id = 1, .rect = geometry.RectF.init(0, 0, 256, 256) } },
+        .{ .push_opacity = 0.9 },
+        .{ .transform = .{ .a = 1, .b = 0, .c = 0, .d = 1, .tx = 2, .ty = 2 } },
+        .{ .fill_rect = .{ .id = 10, .rect = geometry.RectF.init(0, 0, 32, 32), .fill = .{ .color = canvas.Color.rgb8(255, 0, 0) } } },
+        .{ .fill_rect = .{ .id = 11, .rect = geometry.RectF.init(32, 0, 32, 32), .fill = .{ .linear_gradient = .{ .start = geometry.PointF.init(32, 0), .end = geometry.PointF.init(64, 32), .stops = &stops } } } },
+        .{ .fill_rounded_rect = .{ .id = 12, .rect = geometry.RectF.init(0, 32, 32, 32), .radius = canvas.Radius.all(6), .fill = .{ .color = canvas.Color.rgb8(0, 255, 0) } } },
+        .{ .stroke_rect = .{ .id = 13, .rect = geometry.RectF.init(32, 32, 32, 32), .radius = canvas.Radius.all(4), .stroke = .{ .width = 2, .fill = .{ .color = canvas.Color.rgb8(0, 0, 255) } } } },
+        .{ .draw_line = .{ .id = 14, .from = geometry.PointF.init(0, 70), .to = geometry.PointF.init(64, 70), .stroke = .{ .width = 1, .fill = .{ .color = canvas.Color.rgb8(128, 128, 128) } } } },
+        .{ .fill_path = .{ .id = 15, .elements = &path_elements, .fill = .{ .color = canvas.Color.rgb8(200, 100, 50) } } },
+        .{ .stroke_path = .{ .id = 16, .elements = &path_elements, .stroke = .{ .width = 1.5, .fill = .{ .color = canvas.Color.rgb8(50, 100, 200) } } } },
+        .{ .draw_image = .{ .id = 17, .image_id = 3, .dst = geometry.RectF.init(80, 80, 24, 24), .radius = canvas.Radius.all(12) } },
+        .{ .draw_text = .{ .id = 18, .font_id = 1, .size = 13, .origin = geometry.PointF.init(8, 120), .color = canvas.Color.rgb8(30, 30, 30), .text = "audit", .text_layout = .{ .max_width = 200, .line_height = 16, .wrap = .word } } },
+        .{ .shadow = .{ .id = 19, .rect = geometry.RectF.init(10, 140, 40, 20), .radius = canvas.Radius.all(4), .offset = .{ .dx = 0, .dy = 2 }, .blur = 6, .spread = 1, .color = canvas.Color.rgba8(0, 0, 0, 90) } },
+        .{ .blur = .{ .id = 20, .rect = geometry.RectF.init(60, 140, 40, 20), .radius = 4 } },
+        .{ .pop_opacity = {} },
+        .{ .pop_clip = {} },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+
+    var gpu_commands: [max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined;
+    const packet = try harness.runtime.nextCanvasGpuPacket(1, "canvas", .{
+        .frame_index = 70,
+        .timestamp_ns = 400_000,
+        .surface_size = geometry.SizeF.init(256, 256),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), &gpu_commands);
+
+    try std.testing.expect(packet.requiresRender());
+    try std.testing.expectEqual(@as(usize, 0), packet.unsupported_command_count);
+    try std.testing.expect(packet.fullyRepresentable());
+    // Structural commands never reach the packet: 11 draw commands.
+    try std.testing.expectEqual(@as(usize, 11), packet.commandCount());
+
+    // Both encodings accept the full kind coverage.
+    var json_buffer: [64 * 1024]u8 = undefined;
+    var json_writer = std.Io.Writer.fixed(&json_buffer);
+    try packet.writeJson(&json_writer);
+    var binary_buffer: [64 * 1024]u8 = undefined;
+    var binary_writer = std.Io.Writer.fixed(&binary_buffer);
+    try packet.writeBinary(&binary_writer);
+    try std.testing.expect(binary_writer.buffered().len > 0);
+    try std.testing.expect(binary_writer.buffered().len < json_writer.buffered().len);
+}

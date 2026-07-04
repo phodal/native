@@ -99,6 +99,21 @@ pub const RuntimeView = struct {
     /// packet attempt that fell back to pixels reports `.pixels`, and
     /// idle skips (no repaint needed) keep the previous value.
     gpu_present_path: platform.GpuPresentPath = .none,
+    /// Why the most recent packet attempt fell back to the pixel path
+    /// (`.none` while packets present cleanly). Cleared on every
+    /// successful packet present; the frame counter below never resets,
+    /// so a view that oscillates between paths shows a climbing count
+    /// even when a snapshot lands on a healthy frame.
+    gpu_present_fallback_reason: platform.GpuPresentFallbackReason = .none,
+    gpu_present_fallback_needed_bytes: usize = 0,
+    gpu_present_fallback_limit_bytes: usize = 0,
+    gpu_present_fallback_command_kind_storage: [platform.max_gpu_present_fallback_detail_bytes]u8 = undefined,
+    gpu_present_fallback_command_kind_len: usize = 0,
+    gpu_present_fallback_frame_count: usize = 0,
+    /// Fallback count at the last emitted debug diagnostic — the log is
+    /// rate-limited to the first fallback and every interval after, so a
+    /// per-frame oscillation cannot flood stderr.
+    gpu_present_fallback_logged_count: usize = 0,
     canvas_commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined,
     canvas_command_count: usize = 0,
     canvas_revision: u64 = 0,
@@ -450,6 +465,11 @@ pub const RuntimeView = struct {
             .gpu_vsync = self.gpu_vsync,
             .gpu_status = self.gpu_status,
             .gpu_present_path = self.gpu_present_path,
+            .gpu_present_fallback_reason = self.gpu_present_fallback_reason,
+            .gpu_present_fallback_needed_bytes = self.gpu_present_fallback_needed_bytes,
+            .gpu_present_fallback_limit_bytes = self.gpu_present_fallback_limit_bytes,
+            .gpu_present_fallback_command_kind = self.gpu_present_fallback_command_kind_storage[0..self.gpu_present_fallback_command_kind_len],
+            .gpu_present_fallback_frame_count = self.gpu_present_fallback_frame_count,
             .canvas_revision = self.canvas_revision,
             .canvas_command_count = self.canvas_command_count,
             .canvas_frame_requires_render = self.canvas_frame_requires_render,

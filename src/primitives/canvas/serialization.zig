@@ -489,11 +489,12 @@ const max_packet_text_layout_lines: usize = 64;
 /// intrinsic single-line boxes mid-word. Uses the same
 /// `layoutTextRun` the reference renderer and selection geometry draw from,
 /// including the injected measure provider carried by the layout options.
-/// Serializes `null` when the run exceeds the line budget, which keeps the
-/// host's legacy wrapping fallback.
-fn writeCanvasGpuTextLinesJson(value: CanvasGpuText, options: TextLayoutOptions, writer: anytype) !void {
-    var lines: [max_packet_text_layout_lines]TextLine = undefined;
-    const layout = text_model.layoutTextRun(.{
+/// Both packet encodings (JSON and binary) draw from this one layout so
+/// they can never disagree on line breaks. Returns null when the run
+/// exceeds the line budget, which keeps the host's legacy wrapping
+/// fallback.
+fn packetTextLayout(value: CanvasGpuText, options: TextLayoutOptions, lines: []TextLine) ?text_model.TextLayout {
+    return text_model.layoutTextRun(.{
         .font_id = value.font_id,
         .size = value.size,
         .origin = value.origin,
@@ -501,7 +502,12 @@ fn writeCanvasGpuTextLinesJson(value: CanvasGpuText, options: TextLayoutOptions,
         .text = value.text,
         .glyphs = value.glyphs,
         .text_layout = options,
-    }, options, &lines) catch {
+    }, options, lines) catch null;
+}
+
+fn writeCanvasGpuTextLinesJson(value: CanvasGpuText, options: TextLayoutOptions, writer: anytype) !void {
+    var lines: [max_packet_text_layout_lines]TextLine = undefined;
+    const layout = packetTextLayout(value, options, &lines) orelse {
         try writer.writeAll("null");
         return;
     };
@@ -944,4 +950,349 @@ fn writeGlyphsJson(glyphs: []const Glyph, writer: anytype) !void {
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
+}
+
+// ---------------------------------------------------------------------------
+// Compact binary gpu-surface packet encoding (wire format v1).
+//
+// Little-endian, length-prefixed throughout, no field names, no decimal
+// formatting, and no glyph arrays (the packet host draws text through the
+// system text stack from the run's UTF-8 text plus the engine-measured
+// lines, so glyph payloads — the bulk of a text-heavy JSON packet — never
+// ride the wire). The AppKit host decoder
+// (`NativeSdkPacketDictionaryFromBinary` in appkit_host.m) pins the same
+// layout and tag tables independently; a disagreement fails the host
+// decode loudly (refused present -> recorded fallback) instead of drawing
+// garbage. Bump `binary_packet_version` on ANY layout change.
+//
+// Layout:
+//   "NSGP" u8[4] | version u8 | load_action u8 | flags u8 (bit0 scissor)
+//   | reserved u8 | [scissor f32[4]]
+//   | image_count u32 | images { image_id u64, fingerprint u64,
+//       width u32, height u32 }
+//   | image_action_count u32 | actions { kind u8 (0 upload / 1 retain /
+//       2 evict), key_image_id u64, key_fingerprint u64,
+//       image_index u32 (0xFFFFFFFF = none) }
+//   | command_count u32 | commands (see writeCanvasGpuCommandBinary)
+
+pub const binary_packet_magic = "NSGP";
+pub const binary_packet_version: u8 = 1;
+
+const binary_image_index_none: u32 = 0xFFFF_FFFF;
+
+pub fn writeCanvasGpuPacketBinary(packet: CanvasGpuPacket, writer: anytype) !void {
+    try writer.writeAll(binary_packet_magic);
+    try writer.writeByte(binary_packet_version);
+    try writer.writeByte(switch (packet.load_action) {
+        .skip => 0,
+        .load => 1,
+        .clear => 2,
+    });
+    var flags: u8 = 0;
+    if (packet.scissor != null) flags |= 0x01;
+    try writer.writeByte(flags);
+    try writer.writeByte(0);
+    if (packet.scissor) |scissor| try writeBinaryRect(scissor, writer);
+
+    try writer.writeInt(u32, @intCast(packet.images.len), .little);
+    for (packet.images) |image| {
+        try writer.writeInt(u64, image.image_id, .little);
+        try writer.writeInt(u64, image.fingerprint, .little);
+        try writer.writeInt(u32, @intCast(image.width), .little);
+        try writer.writeInt(u32, @intCast(image.height), .little);
+    }
+
+    try writer.writeInt(u32, @intCast(packet.image_actions.len), .little);
+    for (packet.image_actions) |action| {
+        try writer.writeByte(switch (action.kind) {
+            .upload => 0,
+            .retain => 1,
+            .evict => 2,
+        });
+        try writer.writeInt(u64, action.key.image_id, .little);
+        try writer.writeInt(u64, action.key.fingerprint, .little);
+        try writer.writeInt(u32, if (action.image_index) |index| @intCast(index) else binary_image_index_none, .little);
+    }
+
+    try writer.writeInt(u32, @intCast(packet.commands.len), .little);
+    for (packet.commands) |command| {
+        try writeCanvasGpuCommandBinary(command, writer);
+    }
+}
+
+const binary_command_flag_id: u8 = 0x01;
+const binary_command_flag_clip: u8 = 0x02;
+const binary_command_flag_transform: u8 = 0x04;
+const binary_command_flag_shape: u8 = 0x08;
+const binary_command_flag_paint: u8 = 0x10;
+const binary_command_flag_image: u8 = 0x20;
+const binary_command_flag_text: u8 = 0x40;
+const binary_command_flag_effect: u8 = 0x80;
+
+/// Command layout: kind u8 | flags u8 | bounds f32[4] | opacity f32
+/// | stroke_width f32 | [id u64] | [clip f32[4]] | [transform f32[6]]
+/// | [shape] | [paint] | [image] | [text] | [effect] — each optional
+/// section present exactly when its flag bit is set. The identity
+/// transform is elided (the flag doubles as "non-identity").
+fn writeCanvasGpuCommandBinary(command: CanvasGpuCommand, writer: anytype) !void {
+    try writer.writeByte(binaryCommandKindCode(command.kind));
+    var flags: u8 = 0;
+    if (command.id != null) flags |= binary_command_flag_id;
+    if (command.clip != null) flags |= binary_command_flag_clip;
+    const identity_transform = command.transform.a == 1 and command.transform.b == 0 and
+        command.transform.c == 0 and command.transform.d == 1 and
+        command.transform.tx == 0 and command.transform.ty == 0;
+    if (!identity_transform) flags |= binary_command_flag_transform;
+    if (command.shape != .none) flags |= binary_command_flag_shape;
+    if (command.paint != .none) flags |= binary_command_flag_paint;
+    if (command.image != null) flags |= binary_command_flag_image;
+    if (command.text != null) flags |= binary_command_flag_text;
+    if (command.effect != .none) flags |= binary_command_flag_effect;
+    try writer.writeByte(flags);
+    try writeBinaryRect(command.bounds, writer);
+    try writeBinaryF32(command.opacity, writer);
+    try writeBinaryF32(command.stroke_width, writer);
+    if (command.id) |id| try writer.writeInt(u64, id, .little);
+    if (command.clip) |clip| try writeBinaryRect(clip, writer);
+    if (!identity_transform) try writeBinaryAffine(command.transform, writer);
+    if (command.shape != .none) try writeBinaryShape(command.shape, writer);
+    if (command.paint != .none) try writeBinaryPaint(command.paint, writer);
+    if (command.image) |image| try writeBinaryImage(image, writer);
+    if (command.text) |text| try writeBinaryText(text, writer);
+    if (command.effect != .none) try writeBinaryEffect(command.effect, writer);
+}
+
+/// Stable wire codes for the command kind — pinned independently of the
+/// Zig enum's declaration order so a reordered enum cannot silently
+/// change the wire format. `.unsupported` maps to 255: hosts refuse it,
+/// and the runtime never presents unrepresentable packets anyway.
+fn binaryCommandKindCode(kind: gpu_model.CanvasGpuCommandKind) u8 {
+    return switch (kind) {
+        .fill_rect_solid => 0,
+        .fill_rect_gradient => 1,
+        .fill_rounded_rect_solid => 2,
+        .fill_rounded_rect_gradient => 3,
+        .stroke_rect_solid => 4,
+        .stroke_rect_gradient => 5,
+        .draw_line_solid => 6,
+        .draw_line_gradient => 7,
+        .fill_path => 8,
+        .stroke_path => 9,
+        .draw_image => 10,
+        .draw_text => 11,
+        .shadow => 12,
+        .blur => 13,
+        .unsupported => 255,
+    };
+}
+
+/// Shape: tag u8 (1 rect / 2 rounded_rect / 3 stroke_rect / 4 line /
+/// 5 path) + payload.
+fn writeBinaryShape(shape: CanvasGpuShape, writer: anytype) !void {
+    switch (shape) {
+        .none => unreachable, // callers gate on the shape flag
+        .rect => |rect| {
+            try writer.writeByte(1);
+            try writeBinaryRect(rect, writer);
+        },
+        .rounded_rect => |rounded_rect| {
+            try writer.writeByte(2);
+            try writeBinaryRect(rounded_rect.rect, writer);
+            try writeBinaryRadius(rounded_rect.radius, writer);
+        },
+        .stroke_rect => |stroke_rect| {
+            try writer.writeByte(3);
+            try writeBinaryRect(stroke_rect.rect, writer);
+            try writeBinaryRadius(stroke_rect.radius, writer);
+            try writeBinaryF32(stroke_rect.width, writer);
+        },
+        .line => |line| {
+            try writer.writeByte(4);
+            try writeBinaryPoint(line.from, writer);
+            try writeBinaryPoint(line.to, writer);
+            try writeBinaryF32(line.width, writer);
+        },
+        .path => |elements| {
+            try writer.writeByte(5);
+            try writer.writeInt(u32, @intCast(elements.len), .little);
+            for (elements) |element| {
+                const verb_code: u8 = switch (element.verb) {
+                    .move_to => 0,
+                    .line_to => 1,
+                    .quad_to => 2,
+                    .cubic_to => 3,
+                    .close => 4,
+                };
+                try writer.writeByte(verb_code);
+                const point_count: usize = switch (element.verb) {
+                    .move_to, .line_to => 1,
+                    .quad_to => 2,
+                    .cubic_to => 3,
+                    .close => 0,
+                };
+                for (element.points[0..point_count]) |point| {
+                    try writeBinaryPoint(point, writer);
+                }
+            }
+        },
+    }
+}
+
+/// Paint: tag u8 (1 color / 2 linear_gradient) + payload.
+fn writeBinaryPaint(paint: CanvasGpuPaint, writer: anytype) !void {
+    switch (paint) {
+        .none => unreachable, // callers gate on the paint flag
+        .color => |color| {
+            try writer.writeByte(1);
+            try writeBinaryColor(color, writer);
+        },
+        .linear_gradient => |gradient| {
+            try writer.writeByte(2);
+            try writeBinaryPoint(gradient.start, writer);
+            try writeBinaryPoint(gradient.end, writer);
+            try writer.writeInt(u32, @intCast(gradient.stops.len), .little);
+            for (gradient.stops) |stop| {
+                try writeBinaryF32(stop.offset, writer);
+                try writeBinaryColor(stop.color, writer);
+            }
+        },
+    }
+}
+
+/// Image draw: image_id u64 | has_src u8 [src f32[4]] | dst f32[4]
+/// | opacity f32 | fit u8 (0 stretch / 1 contain / 2 cover)
+/// | sampling u8 (0 nearest / 1 linear) | radius f32[4].
+fn writeBinaryImage(image: CanvasGpuImage, writer: anytype) !void {
+    try writer.writeInt(u64, image.image_id, .little);
+    if (image.src) |src| {
+        try writer.writeByte(1);
+        try writeBinaryRect(src, writer);
+    } else {
+        try writer.writeByte(0);
+    }
+    try writeBinaryRect(image.dst, writer);
+    try writeBinaryF32(image.opacity, writer);
+    try writer.writeByte(switch (image.fit) {
+        .stretch => 0,
+        .contain => 1,
+        .cover => 2,
+    });
+    try writer.writeByte(switch (image.sampling) {
+        .nearest => 0,
+        .linear => 1,
+    });
+    try writeBinaryRadius(image.radius, writer);
+}
+
+/// Text draw: font_id u64 | size f32 | origin f32[2] | color f32[4]
+/// | text u32+bytes | has_layout u8 | layout { max_width f32,
+/// line_height f32, wrap u8 (0 none / 1 word / 2 character), align u8
+/// (0 start / 1 center / 2 end), has_lines u8, [line_count u32, lines
+/// { x f32, baseline f32, text u32+bytes }] }. Lines carry the same
+/// engine-measured breaks the JSON encoding serializes; has_lines = 0
+/// keeps the host's legacy wrapping fallback for runs past the line
+/// budget.
+fn writeBinaryText(text: CanvasGpuText, writer: anytype) !void {
+    try writer.writeInt(u64, text.font_id, .little);
+    try writeBinaryF32(text.size, writer);
+    try writeBinaryPoint(text.origin, writer);
+    try writeBinaryColor(text.color, writer);
+    try writeBinarySlice(text.text, writer);
+    const options = text.text_layout orelse {
+        try writer.writeByte(0);
+        return;
+    };
+    try writer.writeByte(1);
+    try writeBinaryF32(nonNegative(options.max_width), writer);
+    try writeBinaryF32(nonNegative(options.line_height), writer);
+    try writer.writeByte(switch (options.wrap) {
+        .none => 0,
+        .word => 1,
+        .character => 2,
+    });
+    try writer.writeByte(switch (options.alignment) {
+        .start => 0,
+        .center => 1,
+        .end => 2,
+    });
+    var lines: [max_packet_text_layout_lines]TextLine = undefined;
+    const layout = packetTextLayout(text, options, &lines) orelse {
+        try writer.writeByte(0);
+        return;
+    };
+    try writer.writeByte(1);
+    try writer.writeInt(u32, @intCast(layout.lines.len), .little);
+    for (layout.lines) |line| {
+        const start = @min(line.text_start, text.text.len);
+        const end = @min(text.text.len, start + line.text_len);
+        try writeBinaryF32(line.bounds.x, writer);
+        try writeBinaryF32(line.baseline, writer);
+        try writeBinarySlice(text.text[start..end], writer);
+    }
+}
+
+/// Effect: tag u8 (1 shadow / 2 blur) + payload.
+fn writeBinaryEffect(effect: CanvasGpuEffect, writer: anytype) !void {
+    switch (effect) {
+        .none => unreachable, // callers gate on the effect flag
+        .shadow => |shadow| {
+            try writer.writeByte(1);
+            try writeBinaryRect(shadow.rect, writer);
+            try writeBinaryRadius(shadow.radius, writer);
+            try writeBinaryF32(shadow.offset.dx, writer);
+            try writeBinaryF32(shadow.offset.dy, writer);
+            try writeBinaryF32(shadow.blur, writer);
+            try writeBinaryF32(shadow.spread, writer);
+            try writeBinaryColor(shadow.color, writer);
+        },
+        .blur => |blur| {
+            try writer.writeByte(2);
+            try writeBinaryRect(blur.rect, writer);
+            try writeBinaryF32(blur.radius, writer);
+        },
+    }
+}
+
+fn writeBinarySlice(bytes: []const u8, writer: anytype) !void {
+    try writer.writeInt(u32, @intCast(bytes.len), .little);
+    try writer.writeAll(bytes);
+}
+
+fn writeBinaryF32(value: f32, writer: anytype) !void {
+    try writer.writeInt(u32, @bitCast(value), .little);
+}
+
+fn writeBinaryRect(rect: geometry.RectF, writer: anytype) !void {
+    try writeBinaryF32(rect.x, writer);
+    try writeBinaryF32(rect.y, writer);
+    try writeBinaryF32(rect.width, writer);
+    try writeBinaryF32(rect.height, writer);
+}
+
+fn writeBinaryPoint(point: geometry.PointF, writer: anytype) !void {
+    try writeBinaryF32(point.x, writer);
+    try writeBinaryF32(point.y, writer);
+}
+
+fn writeBinaryColor(color: Color, writer: anytype) !void {
+    try writeBinaryF32(color.r, writer);
+    try writeBinaryF32(color.g, writer);
+    try writeBinaryF32(color.b, writer);
+    try writeBinaryF32(color.a, writer);
+}
+
+fn writeBinaryRadius(radius: Radius, writer: anytype) !void {
+    try writeBinaryF32(radius.top_left, writer);
+    try writeBinaryF32(radius.top_right, writer);
+    try writeBinaryF32(radius.bottom_right, writer);
+    try writeBinaryF32(radius.bottom_left, writer);
+}
+
+fn writeBinaryAffine(matrix: Affine, writer: anytype) !void {
+    try writeBinaryF32(matrix.a, writer);
+    try writeBinaryF32(matrix.b, writer);
+    try writeBinaryF32(matrix.c, writer);
+    try writeBinaryF32(matrix.d, writer);
+    try writeBinaryF32(matrix.tx, writer);
+    try writeBinaryF32(matrix.ty, writer);
 }

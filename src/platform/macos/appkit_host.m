@@ -346,6 +346,8 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)updateDrawableSize;
 - (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (NSInteger)presentGpuPacketWithSurfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength;
+- (NSInteger)presentGpuPacketBinaryWithSurfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable packet:(const uint8_t *)packet byteLength:(NSUInteger)byteLength;
+- (NSInteger)presentGpuPacketObject:(NSDictionary *)packet surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA commandCount:(NSUInteger)commandCount;
 - (BOOL)ensureCanvasPresenter;
 - (void)updateWidgetAccessibilityWithNodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (void)stopDisplayTimer;
@@ -451,6 +453,7 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (BOOL)focusNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (NSInteger)presentGpuSurfacePacketInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength;
+- (NSInteger)presentGpuSurfacePacketBinaryInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable packet:(const uint8_t *)packet byteLength:(NSUInteger)byteLength;
 - (BOOL)requestGpuSurfaceFrameInWindow:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)setGpuSurfaceScrollDriversInWindow:(uint64_t)windowId label:(NSString *)label drivers:(const native_sdk_appkit_scroll_driver_t *)drivers count:(NSUInteger)count;
 - (BOOL)showContextMenuInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y token:(uint64_t)token items:(const native_sdk_appkit_context_menu_item_t *)items count:(NSUInteger)count;
@@ -1686,6 +1689,445 @@ static BOOL NativeSdkPacketDrawCommand(NSDictionary *command, CGContextRef conte
     return ok;
 }
 
+/* ---------------------------------------------------------------------------
+ * Compact binary gpu-surface packet decoding (wire format v1).
+ *
+ * Little-endian, length-prefixed, mirror of the engine's binary packet
+ * encoder (serialization.zig, `writeCanvasGpuPacketBinary`). Both sides
+ * pin the layout and tag tables independently: any disagreement makes a
+ * bounds-checked read fail here, the present is refused (return 0), and
+ * the runtime records the refusal and paints the frame through its pixel
+ * fallback — never garbage on the glass. The decoder reconstructs the
+ * exact dictionary shape the JSON path produces, so every draw function
+ * above serves both encodings unchanged.
+ */
+
+typedef struct {
+    const uint8_t *bytes;
+    NSUInteger length;
+    NSUInteger offset;
+    BOOL failed;
+} NativeSdkBinaryPacketReader;
+
+static BOOL NativeSdkBinaryHasBytes(NativeSdkBinaryPacketReader *reader, NSUInteger count) {
+    if (reader->failed || reader->length - reader->offset < count) {
+        reader->failed = YES;
+        return NO;
+    }
+    return YES;
+}
+
+static uint8_t NativeSdkBinaryReadU8(NativeSdkBinaryPacketReader *reader) {
+    if (!NativeSdkBinaryHasBytes(reader, 1)) return 0;
+    return reader->bytes[reader->offset++];
+}
+
+static uint32_t NativeSdkBinaryReadU32(NativeSdkBinaryPacketReader *reader) {
+    if (!NativeSdkBinaryHasBytes(reader, 4)) return 0;
+    uint32_t value = 0;
+    memcpy(&value, reader->bytes + reader->offset, 4);
+    reader->offset += 4;
+    return CFSwapInt32LittleToHost(value);
+}
+
+static uint64_t NativeSdkBinaryReadU64(NativeSdkBinaryPacketReader *reader) {
+    if (!NativeSdkBinaryHasBytes(reader, 8)) return 0;
+    uint64_t value = 0;
+    memcpy(&value, reader->bytes + reader->offset, 8);
+    reader->offset += 8;
+    return CFSwapInt64LittleToHost(value);
+}
+
+static CGFloat NativeSdkBinaryReadF32(NativeSdkBinaryPacketReader *reader) {
+    uint32_t bits = NativeSdkBinaryReadU32(reader);
+    float value = 0;
+    memcpy(&value, &bits, 4);
+    return (CGFloat)value;
+}
+
+static NSNumber *NativeSdkBinaryReadF32Number(NativeSdkBinaryPacketReader *reader) {
+    return @(NativeSdkBinaryReadF32(reader));
+}
+
+/* n consecutive f32s as the NSNumber array shape the JSON parse yields
+ * for rects (4), points (2), colors (4), radii (4), and affines (6). */
+static NSArray *NativeSdkBinaryReadF32Array(NativeSdkBinaryPacketReader *reader, NSUInteger count) {
+    NSMutableArray *values = [NSMutableArray arrayWithCapacity:count];
+    for (NSUInteger index = 0; index < count; index++) {
+        [values addObject:NativeSdkBinaryReadF32Number(reader)];
+    }
+    return reader->failed ? nil : values;
+}
+
+static NSString *NativeSdkBinaryReadString(NativeSdkBinaryPacketReader *reader) {
+    uint32_t length = NativeSdkBinaryReadU32(reader);
+    if (!NativeSdkBinaryHasBytes(reader, length)) return nil;
+    NSString *value = [[NSString alloc] initWithBytes:reader->bytes + reader->offset length:length encoding:NSUTF8StringEncoding];
+    reader->offset += length;
+    if (!value) reader->failed = YES;
+    return value;
+}
+
+/* Stable wire codes for the command kind; must match the engine's
+ * `binaryCommandKindCode` table. */
+static NSString *NativeSdkBinaryCommandKindName(uint8_t code) {
+    switch (code) {
+    case 0: return @"fill_rect_solid";
+    case 1: return @"fill_rect_gradient";
+    case 2: return @"fill_rounded_rect_solid";
+    case 3: return @"fill_rounded_rect_gradient";
+    case 4: return @"stroke_rect_solid";
+    case 5: return @"stroke_rect_gradient";
+    case 6: return @"draw_line_solid";
+    case 7: return @"draw_line_gradient";
+    case 8: return @"fill_path";
+    case 9: return @"stroke_path";
+    case 10: return @"draw_image";
+    case 11: return @"draw_text";
+    case 12: return @"shadow";
+    case 13: return @"blur";
+    default: return nil;
+    }
+}
+
+static NSDictionary *NativeSdkBinaryReadShape(NativeSdkBinaryPacketReader *reader) {
+    uint8_t tag = NativeSdkBinaryReadU8(reader);
+    switch (tag) {
+    case 1: {
+        NSArray *rect = NativeSdkBinaryReadF32Array(reader, 4);
+        if (!rect) return nil;
+        return @{ @"kind" : @"rect", @"rect" : rect };
+    }
+    case 2: {
+        NSArray *rect = NativeSdkBinaryReadF32Array(reader, 4);
+        NSArray *radius = NativeSdkBinaryReadF32Array(reader, 4);
+        if (!rect || !radius) return nil;
+        return @{ @"kind" : @"rounded_rect", @"rect" : rect, @"radius" : radius };
+    }
+    case 3: {
+        NSArray *rect = NativeSdkBinaryReadF32Array(reader, 4);
+        NSArray *radius = NativeSdkBinaryReadF32Array(reader, 4);
+        NSNumber *width = NativeSdkBinaryReadF32Number(reader);
+        if (!rect || !radius || reader->failed) return nil;
+        return @{ @"kind" : @"stroke_rect", @"rect" : rect, @"radius" : radius, @"width" : width };
+    }
+    case 4: {
+        NSArray *from = NativeSdkBinaryReadF32Array(reader, 2);
+        NSArray *to = NativeSdkBinaryReadF32Array(reader, 2);
+        NSNumber *width = NativeSdkBinaryReadF32Number(reader);
+        if (!from || !to || reader->failed) return nil;
+        return @{ @"kind" : @"line", @"from" : from, @"to" : to, @"width" : width };
+    }
+    case 5: {
+        uint32_t elementCount = NativeSdkBinaryReadU32(reader);
+        /* Each element carries at least its verb byte; a count past the
+         * remaining bytes is a corrupt packet, refused before any
+         * allocation grows around it. */
+        if (reader->failed || elementCount > reader->length - reader->offset) {
+            reader->failed = YES;
+            return nil;
+        }
+        NSMutableArray *elements = [NSMutableArray arrayWithCapacity:elementCount];
+        for (uint32_t index = 0; index < elementCount; index++) {
+            uint8_t verbCode = NativeSdkBinaryReadU8(reader);
+            NSString *verb = nil;
+            NSUInteger pointCount = 0;
+            switch (verbCode) {
+            case 0: verb = @"move_to"; pointCount = 1; break;
+            case 1: verb = @"line_to"; pointCount = 1; break;
+            case 2: verb = @"quad_to"; pointCount = 2; break;
+            case 3: verb = @"cubic_to"; pointCount = 3; break;
+            case 4: verb = @"close"; pointCount = 0; break;
+            default: reader->failed = YES; return nil;
+            }
+            NSMutableArray *points = [NSMutableArray arrayWithCapacity:pointCount];
+            for (NSUInteger pointIndex = 0; pointIndex < pointCount; pointIndex++) {
+                NSArray *point = NativeSdkBinaryReadF32Array(reader, 2);
+                if (!point) return nil;
+                [points addObject:point];
+            }
+            [elements addObject:@{ @"verb" : verb, @"points" : points }];
+        }
+        return @{ @"kind" : @"path", @"path" : elements };
+    }
+    default:
+        reader->failed = YES;
+        return nil;
+    }
+}
+
+static NSDictionary *NativeSdkBinaryReadPaint(NativeSdkBinaryPacketReader *reader) {
+    uint8_t tag = NativeSdkBinaryReadU8(reader);
+    switch (tag) {
+    case 1: {
+        NSArray *color = NativeSdkBinaryReadF32Array(reader, 4);
+        if (!color) return nil;
+        return @{ @"kind" : @"color", @"color" : color };
+    }
+    case 2: {
+        NSArray *start = NativeSdkBinaryReadF32Array(reader, 2);
+        NSArray *end = NativeSdkBinaryReadF32Array(reader, 2);
+        uint32_t stopCount = NativeSdkBinaryReadU32(reader);
+        if (reader->failed || stopCount > reader->length - reader->offset) {
+            reader->failed = YES;
+            return nil;
+        }
+        NSMutableArray *stops = [NSMutableArray arrayWithCapacity:stopCount];
+        for (uint32_t index = 0; index < stopCount; index++) {
+            NSNumber *offset = NativeSdkBinaryReadF32Number(reader);
+            NSArray *color = NativeSdkBinaryReadF32Array(reader, 4);
+            if (!color) return nil;
+            [stops addObject:@{ @"offset" : offset, @"color" : color }];
+        }
+        if (!start || !end) return nil;
+        return @{ @"kind" : @"linear_gradient", @"start" : start, @"end" : end, @"stops" : stops };
+    }
+    default:
+        reader->failed = YES;
+        return nil;
+    }
+}
+
+static NSDictionary *NativeSdkBinaryReadImage(NativeSdkBinaryPacketReader *reader) {
+    uint64_t imageId = NativeSdkBinaryReadU64(reader);
+    uint8_t hasSrc = NativeSdkBinaryReadU8(reader);
+    NSArray *src = hasSrc ? NativeSdkBinaryReadF32Array(reader, 4) : nil;
+    NSArray *dst = NativeSdkBinaryReadF32Array(reader, 4);
+    NSNumber *opacity = NativeSdkBinaryReadF32Number(reader);
+    uint8_t fitCode = NativeSdkBinaryReadU8(reader);
+    uint8_t samplingCode = NativeSdkBinaryReadU8(reader);
+    NSArray *radius = NativeSdkBinaryReadF32Array(reader, 4);
+    if (reader->failed || !dst || !radius || (hasSrc && !src)) return nil;
+    NSString *fit = fitCode == 1 ? @"contain" : (fitCode == 2 ? @"cover" : @"stretch");
+    NSString *sampling = samplingCode == 0 ? @"nearest" : @"linear";
+    NSMutableDictionary *image = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"image" : @(imageId),
+        @"dst" : dst,
+        @"opacity" : opacity,
+        @"fit" : fit,
+        @"sampling" : sampling,
+        @"radius" : radius,
+    }];
+    if (src) image[@"src"] = src;
+    return image;
+}
+
+static NSDictionary *NativeSdkBinaryReadText(NativeSdkBinaryPacketReader *reader) {
+    uint64_t fontId = NativeSdkBinaryReadU64(reader);
+    NSNumber *size = NativeSdkBinaryReadF32Number(reader);
+    NSArray *origin = NativeSdkBinaryReadF32Array(reader, 2);
+    NSArray *color = NativeSdkBinaryReadF32Array(reader, 4);
+    NSString *text = NativeSdkBinaryReadString(reader);
+    if (reader->failed || !origin || !color || !text) return nil;
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"font" : @(fontId),
+        @"size" : size,
+        @"origin" : origin,
+        @"color" : color,
+        @"text" : text,
+    }];
+    uint8_t hasLayout = NativeSdkBinaryReadU8(reader);
+    if (reader->failed) return nil;
+    if (!hasLayout) return result;
+
+    NSNumber *maxWidth = NativeSdkBinaryReadF32Number(reader);
+    NSNumber *lineHeight = NativeSdkBinaryReadF32Number(reader);
+    uint8_t wrapCode = NativeSdkBinaryReadU8(reader);
+    uint8_t alignCode = NativeSdkBinaryReadU8(reader);
+    if (reader->failed) return nil;
+    NSString *wrap = wrapCode == 0 ? @"none" : (wrapCode == 2 ? @"character" : @"word");
+    NSString *align = alignCode == 1 ? @"center" : (alignCode == 2 ? @"end" : @"start");
+    result[@"layout"] = @{ @"maxWidth" : maxWidth, @"lineHeight" : lineHeight, @"wrap" : wrap, @"align" : align };
+
+    uint8_t hasLines = NativeSdkBinaryReadU8(reader);
+    if (reader->failed) return nil;
+    /* No measured lines = the run exceeded the engine's line budget;
+     * omitting the key keeps the host's legacy wrapping fallback, same
+     * as JSON's "lines":null. */
+    if (!hasLines) return result;
+    uint32_t lineCount = NativeSdkBinaryReadU32(reader);
+    if (reader->failed || lineCount > reader->length - reader->offset) {
+        reader->failed = YES;
+        return nil;
+    }
+    NSMutableArray *lines = [NSMutableArray arrayWithCapacity:lineCount];
+    for (uint32_t index = 0; index < lineCount; index++) {
+        NSNumber *x = NativeSdkBinaryReadF32Number(reader);
+        NSNumber *baseline = NativeSdkBinaryReadF32Number(reader);
+        NSString *lineText = NativeSdkBinaryReadString(reader);
+        if (reader->failed || !lineText) return nil;
+        [lines addObject:@{ @"x" : x, @"baseline" : baseline, @"text" : lineText }];
+    }
+    result[@"lines"] = lines;
+    return result;
+}
+
+static NSDictionary *NativeSdkBinaryReadEffect(NativeSdkBinaryPacketReader *reader) {
+    uint8_t tag = NativeSdkBinaryReadU8(reader);
+    switch (tag) {
+    case 1: {
+        NSArray *rect = NativeSdkBinaryReadF32Array(reader, 4);
+        NSArray *radius = NativeSdkBinaryReadF32Array(reader, 4);
+        NSArray *offset = NativeSdkBinaryReadF32Array(reader, 2);
+        NSNumber *blur = NativeSdkBinaryReadF32Number(reader);
+        NSNumber *spread = NativeSdkBinaryReadF32Number(reader);
+        NSArray *color = NativeSdkBinaryReadF32Array(reader, 4);
+        if (reader->failed || !rect || !radius || !offset || !color) return nil;
+        return @{ @"kind" : @"shadow", @"rect" : rect, @"radius" : radius, @"offset" : offset, @"blur" : blur, @"spread" : spread, @"color" : color };
+    }
+    case 2: {
+        NSArray *rect = NativeSdkBinaryReadF32Array(reader, 4);
+        NSNumber *radius = NativeSdkBinaryReadF32Number(reader);
+        if (reader->failed || !rect) return nil;
+        return @{ @"kind" : @"blur", @"rect" : rect, @"radius" : radius };
+    }
+    default:
+        reader->failed = YES;
+        return nil;
+    }
+}
+
+/* Command flag bits; must match the engine's binary_command_flag_* set. */
+enum {
+    NativeSdkBinaryCommandFlagId = 0x01,
+    NativeSdkBinaryCommandFlagClip = 0x02,
+    NativeSdkBinaryCommandFlagTransform = 0x04,
+    NativeSdkBinaryCommandFlagShape = 0x08,
+    NativeSdkBinaryCommandFlagPaint = 0x10,
+    NativeSdkBinaryCommandFlagImage = 0x20,
+    NativeSdkBinaryCommandFlagText = 0x40,
+    NativeSdkBinaryCommandFlagEffect = 0x80,
+};
+
+static NSDictionary *NativeSdkBinaryReadCommand(NativeSdkBinaryPacketReader *reader) {
+    uint8_t kindCode = NativeSdkBinaryReadU8(reader);
+    uint8_t flags = NativeSdkBinaryReadU8(reader);
+    NSString *kind = NativeSdkBinaryCommandKindName(kindCode);
+    NSArray *bounds = NativeSdkBinaryReadF32Array(reader, 4);
+    NSNumber *opacity = NativeSdkBinaryReadF32Number(reader);
+    NSNumber *strokeWidth = NativeSdkBinaryReadF32Number(reader);
+    if (reader->failed || !kind || !bounds) {
+        reader->failed = YES;
+        return nil;
+    }
+    NSMutableDictionary *command = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"kind" : kind,
+        @"bounds" : bounds,
+        @"opacity" : opacity,
+        @"strokeWidth" : strokeWidth,
+    }];
+    if (flags & NativeSdkBinaryCommandFlagId) command[@"id"] = @(NativeSdkBinaryReadU64(reader));
+    if (flags & NativeSdkBinaryCommandFlagClip) {
+        NSArray *clip = NativeSdkBinaryReadF32Array(reader, 4);
+        if (!clip) return nil;
+        command[@"clip"] = clip;
+    }
+    if (flags & NativeSdkBinaryCommandFlagTransform) {
+        NSArray *transform = NativeSdkBinaryReadF32Array(reader, 6);
+        if (!transform) return nil;
+        command[@"transform"] = transform;
+    }
+    if (flags & NativeSdkBinaryCommandFlagShape) {
+        NSDictionary *shape = NativeSdkBinaryReadShape(reader);
+        if (!shape) return nil;
+        command[@"shape"] = shape;
+    }
+    if (flags & NativeSdkBinaryCommandFlagPaint) {
+        NSDictionary *paint = NativeSdkBinaryReadPaint(reader);
+        if (!paint) return nil;
+        command[@"paint"] = paint;
+    }
+    if (flags & NativeSdkBinaryCommandFlagImage) {
+        NSDictionary *image = NativeSdkBinaryReadImage(reader);
+        if (!image) return nil;
+        command[@"image"] = image;
+    }
+    if (flags & NativeSdkBinaryCommandFlagText) {
+        NSDictionary *text = NativeSdkBinaryReadText(reader);
+        if (!text) return nil;
+        command[@"text"] = text;
+    }
+    if (flags & NativeSdkBinaryCommandFlagEffect) {
+        NSDictionary *effect = NativeSdkBinaryReadEffect(reader);
+        if (!effect) return nil;
+        command[@"effect"] = effect;
+    }
+    return reader->failed ? nil : command;
+}
+
+/* Decode a whole binary packet into the exact dictionary shape the JSON
+ * parse produces, so the shared present path serves both encodings.
+ * Returns nil on any framing violation (bad magic, unknown version or
+ * tag, truncated payload, trailing bytes). */
+static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, NSUInteger length) {
+    if (!bytes || length < 8) return nil;
+    NativeSdkBinaryPacketReader reader = { .bytes = bytes, .length = length, .offset = 0, .failed = NO };
+    if (memcmp(bytes, "NSGP", 4) != 0) return nil;
+    reader.offset = 4;
+    uint8_t version = NativeSdkBinaryReadU8(&reader);
+    if (version != 1) return nil;
+    uint8_t loadActionCode = NativeSdkBinaryReadU8(&reader);
+    uint8_t packetFlags = NativeSdkBinaryReadU8(&reader);
+    (void)NativeSdkBinaryReadU8(&reader); /* reserved */
+    NSString *loadAction = loadActionCode == 1 ? @"load" : (loadActionCode == 2 ? @"clear" : nil);
+    if (!loadAction) return nil;
+
+    NSMutableDictionary *packet = [NSMutableDictionary dictionaryWithDictionary:@{ @"loadAction" : loadAction }];
+    if (packetFlags & 0x01) {
+        NSArray *scissor = NativeSdkBinaryReadF32Array(&reader, 4);
+        if (!scissor) return nil;
+        packet[@"scissorBounds"] = scissor;
+    }
+
+    uint32_t imageCount = NativeSdkBinaryReadU32(&reader);
+    if (reader.failed || imageCount > reader.length - reader.offset) return nil;
+    NSMutableArray *images = [NSMutableArray arrayWithCapacity:imageCount];
+    for (uint32_t index = 0; index < imageCount; index++) {
+        uint64_t imageId = NativeSdkBinaryReadU64(&reader);
+        uint64_t fingerprint = NativeSdkBinaryReadU64(&reader);
+        uint32_t width = NativeSdkBinaryReadU32(&reader);
+        uint32_t height = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed) return nil;
+        [images addObject:@{ @"imageId" : @(imageId), @"fingerprint" : @(fingerprint), @"width" : @(width), @"height" : @(height) }];
+    }
+    packet[@"images"] = images;
+
+    uint32_t actionCount = NativeSdkBinaryReadU32(&reader);
+    if (reader.failed || actionCount > reader.length - reader.offset) return nil;
+    NSMutableArray *actions = [NSMutableArray arrayWithCapacity:actionCount];
+    for (uint32_t index = 0; index < actionCount; index++) {
+        uint8_t kindCode = NativeSdkBinaryReadU8(&reader);
+        uint64_t keyImageId = NativeSdkBinaryReadU64(&reader);
+        uint64_t keyFingerprint = NativeSdkBinaryReadU64(&reader);
+        uint32_t imageIndex = NativeSdkBinaryReadU32(&reader);
+        if (reader.failed) return nil;
+        NSString *kind = kindCode == 0 ? @"upload" : (kindCode == 1 ? @"retain" : (kindCode == 2 ? @"evict" : nil));
+        if (!kind) return nil;
+        NSMutableDictionary *action = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"kind" : kind,
+            @"key" : @{ @"imageId" : @(keyImageId), @"fingerprint" : @(keyFingerprint) },
+        }];
+        if (imageIndex != 0xFFFFFFFFu) action[@"imageIndex"] = @(imageIndex);
+        [actions addObject:action];
+    }
+    packet[@"imageActions"] = actions;
+
+    uint32_t commandCount = NativeSdkBinaryReadU32(&reader);
+    if (reader.failed || commandCount > reader.length - reader.offset) return nil;
+    NSMutableArray *commands = [NSMutableArray arrayWithCapacity:commandCount];
+    for (uint32_t index = 0; index < commandCount; index++) {
+        NSDictionary *command = NativeSdkBinaryReadCommand(&reader);
+        if (!command) return nil;
+        [commands addObject:command];
+    }
+    packet[@"commands"] = commands;
+
+    /* Trailing bytes mean the encoder and decoder disagree about the
+     * layout — refuse rather than trust a partial parse. */
+    if (reader.failed || reader.offset != reader.length) return nil;
+    return packet;
+}
+
 @implementation NativeSdkScrollDriverDocumentView
 
 - (BOOL)isFlipped {
@@ -1956,17 +2398,36 @@ static BOOL NativeSdkPacketDrawCommand(NSDictionary *command, CGContextRef conte
     if (![self isAvailable]) return -1;
     if (!requiresRender) return 1;
     if (!representable || unsupportedCommandCount != 0 || !json || byteLength == 0 || surfaceWidth <= 0 || surfaceHeight <= 0) return 0;
-    CGFloat normalizedScale = scale > 0 ? scale : 1;
-    NSUInteger pixelWidth = (NSUInteger)ceil(surfaceWidth * normalizedScale);
-    NSUInteger pixelHeight = (NSUInteger)ceil(surfaceHeight * normalizedScale);
-    if (pixelWidth == 0 || pixelHeight == 0) return 0;
-    if (pixelWidth > 8192 || pixelHeight > 8192) return 0;
 
     NSData *packetData = [NSData dataWithBytes:json length:byteLength];
     NSError *jsonError = nil;
     id packetObject = [NSJSONSerialization JSONObjectWithData:packetData options:0 error:&jsonError];
     NSDictionary *packet = NativeSdkPacketDictionary(packetObject);
     if (!packet || jsonError) return 0;
+    return [self presentGpuPacketObject:packet surfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA commandCount:commandCount];
+}
+
+/* Compact binary packet present: same guards and same shared present
+ * path as the JSON entry — only the payload decode differs, so the two
+ * encodings can never draw differently. */
+- (NSInteger)presentGpuPacketBinaryWithSurfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable packet:(const uint8_t *)packet byteLength:(NSUInteger)byteLength {
+    if (![self isAvailable]) return -1;
+    if (!requiresRender) return 1;
+    if (!representable || unsupportedCommandCount != 0 || !packet || byteLength == 0 || surfaceWidth <= 0 || surfaceHeight <= 0) return 0;
+
+    NSDictionary *decoded = NativeSdkPacketDictionaryFromBinary(packet, byteLength);
+    if (!decoded) return 0;
+    return [self presentGpuPacketObject:decoded surfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA commandCount:commandCount];
+}
+
+- (NSInteger)presentGpuPacketObject:(NSDictionary *)packet surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA commandCount:(NSUInteger)commandCount {
+    if (!packet) return 0;
+    CGFloat normalizedScale = scale > 0 ? scale : 1;
+    NSUInteger pixelWidth = (NSUInteger)ceil(surfaceWidth * normalizedScale);
+    NSUInteger pixelHeight = (NSUInteger)ceil(surfaceHeight * normalizedScale);
+    if (pixelWidth == 0 || pixelHeight == 0) return 0;
+    if (pixelWidth > 8192 || pixelHeight > 8192) return 0;
+
     NSString *loadAction = [packet[@"loadAction"] isKindOfClass:[NSString class]] ? packet[@"loadAction"] : @"";
     BOOL clearLoadAction = [loadAction isEqualToString:@"clear"];
     BOOL retainedLoadAction = [loadAction isEqualToString:@"load"];
@@ -3616,6 +4077,13 @@ static BOOL NativeSdkPacketDrawCommand(NSDictionary *command, CGContextRef conte
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
     return [(NativeSdkMetalSurfaceView *)view presentGpuPacketWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable json:json byteLength:byteLength];
+}
+
+- (NSInteger)presentGpuSurfacePacketBinaryInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable packet:(const uint8_t *)packet byteLength:(NSUInteger)byteLength {
+    NSString *key = [self nativeViewKeyForWindow:windowId label:label];
+    NSView *view = self.nativeViews[key];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
+    return [(NativeSdkMetalSurfaceView *)view presentGpuPacketBinaryWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable packet:packet byteLength:byteLength];
 }
 
 - (BOOL)requestGpuSurfaceFrameInWindow:(uint64_t)windowId label:(NSString *)label {
@@ -5362,6 +5830,12 @@ int native_sdk_appkit_present_gpu_surface_packet(native_sdk_appkit_host_t *host,
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return (int)[object presentGpuSurfacePacketInWindow:window_id label:labelString ?: @"" surfaceWidth:surface_width height:surface_height scale:scale clearR:clear_r clearG:clear_g clearB:clear_b clearA:clear_a requiresRender:(requires_render != 0) commandCount:command_count unsupportedCommandCount:unsupported_command_count representable:(representable != 0) json:json byteLength:json_len];
+}
+
+int native_sdk_appkit_present_gpu_surface_packet_binary(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double surface_width, double surface_height, double scale, uint8_t clear_r, uint8_t clear_g, uint8_t clear_b, uint8_t clear_a, int requires_render, size_t command_count, size_t unsupported_command_count, int representable, const uint8_t *packet, size_t packet_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
+    return (int)[object presentGpuSurfacePacketBinaryInWindow:window_id label:labelString ?: @"" surfaceWidth:surface_width height:surface_height scale:scale clearR:clear_r clearG:clear_g clearB:clear_b clearA:clear_a requiresRender:(requires_render != 0) commandCount:command_count unsupportedCommandCount:unsupported_command_count representable:(representable != 0) packet:packet byteLength:packet_len];
 }
 
 int native_sdk_appkit_request_gpu_surface_frame(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {

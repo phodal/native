@@ -178,6 +178,22 @@ pub const max_shortcut_id_bytes: usize = 64;
 pub const max_shortcut_key_bytes: usize = 32;
 pub const max_widget_accessibility_nodes: usize = 64;
 pub const max_gpu_surface_packet_json_bytes: usize = 128 * 1024;
+/// Payload bound for the compact binary gpu-surface packet encoding
+/// (`present_gpu_surface_packet_binary_fn`). Sized so a worst-case
+/// text-heavy frame still rides the packet path instead of falling back
+/// to the software pixel raster: the per-view budgets allow 2048 draw
+/// commands (~96 B of fixed binary fields each ≈ 192 KiB), every
+/// measured wrapped line (8192 lines × 12 B of pen data ≈ 96 KiB), and
+/// the view's whole text pool carried twice — once on the run, once
+/// sliced across its lines (2 × 32 KiB = 64 KiB) — totalling ≈ 352 KiB;
+/// 512 KiB leaves headroom for gradients, paths, and format growth. The
+/// buffer is a single static per UiApp instance, so the cost is fixed
+/// address space, not per-frame allocation.
+pub const max_gpu_surface_packet_binary_bytes: usize = 512 * 1024;
+/// Bound for the fallback-detail command-kind name recorded when a
+/// packet present falls back because a command is not representable
+/// (fits every `CanvasCommand` tag name).
+pub const max_gpu_present_fallback_detail_bytes: usize = 32;
 /// Per-image bound for the binary gpu-surface image upload side-channel;
 /// matches the runtime registry's per-slot bound
 /// (`canvas_limits.max_registered_canvas_image_pixel_bytes`).
@@ -449,6 +465,29 @@ pub const GpuPresentPath = enum {
     pixels,
 };
 
+/// WHY the most recent frame left the GPU packet path for the CPU pixel
+/// fallback. `.none` while frames present through the packet path (or
+/// before the first present). The two paths rasterize text and shapes
+/// differently, so an oscillating view flips visibly between CoreText
+/// and bundled-face glyphs — this reason plus the running
+/// `gpu_present_fallback_frame_count` make every silent flip loud in
+/// automation snapshots.
+pub const GpuPresentFallbackReason = enum {
+    none,
+    /// The packet JSON did not fit the transport buffer; the view info
+    /// carries needed vs available bytes.
+    json_overflow,
+    /// The compact binary packet encoding did not fit the transport
+    /// buffer; the view info carries needed vs available bytes.
+    binary_overflow,
+    /// At least one planned command is not representable as a packet
+    /// command; the view info names the first offending command kind.
+    unsupported_command,
+    /// The platform declared no packet presenter (or refused the
+    /// present call with `error.UnsupportedService`).
+    missing_service,
+};
+
 pub const GpuSurfaceAlphaMode = enum {
     none,
     @"opaque",
@@ -585,6 +624,22 @@ pub const ViewInfo = struct {
     gpu_status: GpuSurfaceStatus = .unavailable,
     /// The path that last painted this surface (see `GpuPresentPath`).
     gpu_present_path: GpuPresentPath = .none,
+    /// Why the most recent packet attempt fell back to pixels (see
+    /// `GpuPresentFallbackReason`); `.none` while the packet path holds.
+    gpu_present_fallback_reason: GpuPresentFallbackReason = .none,
+    /// Encoded packet bytes the last overflow fallback needed (0 unless
+    /// the reason is an overflow).
+    gpu_present_fallback_needed_bytes: usize = 0,
+    /// Transport bytes that were available to that overflowing encode.
+    gpu_present_fallback_limit_bytes: usize = 0,
+    /// First unrepresentable command kind behind an
+    /// `unsupported_command` fallback ("" otherwise).
+    gpu_present_fallback_command_kind: []const u8 = "",
+    /// Running count of frames this view painted through the pixel
+    /// fallback after a packet attempt (never resets while the view is
+    /// open, so snapshots catch oscillation that self-heals between
+    /// polls).
+    gpu_present_fallback_frame_count: usize = 0,
     canvas_revision: u64 = 0,
     canvas_command_count: usize = 0,
     canvas_frame_requires_render: bool = false,
@@ -1280,7 +1335,16 @@ pub const GpuSurfacePacket = struct {
     cached_resource_command_count: usize = 0,
     unsupported_command_count: usize = 0,
     representable: bool = true,
+    /// UTF-8 JSON packet payload (`present_gpu_surface_packet_fn`).
+    /// Exactly one of `json`/`binary` is non-empty per present call.
     json: []const u8 = "",
+    /// Compact binary packet payload
+    /// (`present_gpu_surface_packet_binary_fn`): the length-prefixed
+    /// little-endian encoding produced by
+    /// `CanvasGpuPacket.writeBinary`, ~5-10x denser than the JSON
+    /// encoding on text-heavy frames because field names, decimal
+    /// formatting, and the host-unused glyph arrays never ride it.
+    binary: []const u8 = "",
 };
 
 pub const WidgetAccessibilityRole = enum(c_int) {
@@ -1541,6 +1605,14 @@ pub const PlatformServices = struct {
     wake_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     present_gpu_surface_pixels_fn: ?*const fn (context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void = null,
     present_gpu_surface_packet_fn: ?*const fn (context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void = null,
+    /// Compact binary variant of the packet presenter: same packet
+    /// metadata, payload in `packet.binary` instead of `packet.json`.
+    /// This fn's presence is the capability flag — the runtime prefers
+    /// it when wired and drops to the JSON presenter when the call
+    /// itself answers `error.UnsupportedService`, so negotiation is a
+    /// per-present conversation and the JSON path survives for
+    /// compatibility and wire-level debugging.
+    present_gpu_surface_packet_binary_fn: ?*const fn (context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void = null,
     /// Binary side-channel for gpu-surface image pixels: create or
     /// replace the host texture for `image.id` out-of-band, so packets
     /// carry only id + fingerprint references. Host-wide (not per view);
@@ -1882,6 +1954,13 @@ pub const PlatformServices = struct {
         if (packet.label.len == 0 or packet.label.len > max_view_label_bytes) return error.InvalidGpuSurfacePacket;
         if (packet.json.len == 0 or packet.json.len > max_gpu_surface_packet_json_bytes) return error.InvalidGpuSurfacePacket;
         const present_fn = self.present_gpu_surface_packet_fn orelse return error.UnsupportedService;
+        return present_fn(self.context, packet);
+    }
+
+    pub fn presentGpuSurfacePacketBinary(self: PlatformServices, packet: GpuSurfacePacket) anyerror!void {
+        if (packet.label.len == 0 or packet.label.len > max_view_label_bytes) return error.InvalidGpuSurfacePacket;
+        if (packet.binary.len == 0 or packet.binary.len > max_gpu_surface_packet_binary_bytes) return error.InvalidGpuSurfacePacket;
+        const present_fn = self.present_gpu_surface_packet_binary_fn orelse return error.UnsupportedService;
         return present_fn(self.context, packet);
     }
 

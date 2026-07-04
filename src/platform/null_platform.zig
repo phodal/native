@@ -173,6 +173,12 @@ pub const NullPlatform = struct {
     app_info: AppInfo = .{},
     gpu_surfaces: bool = false,
     gpu_surface_packets: bool = true,
+    /// Model a host that decodes the compact binary packet encoding.
+    /// Off by default so existing JSON-asserting tests keep exercising
+    /// the JSON wire format; the runtime's per-present negotiation
+    /// (binary refused -> JSON attempt in the same frame) is exactly
+    /// what a disabled toggle exercises.
+    gpu_surface_packet_binary: bool = false,
     /// Enable the deterministic test image decoder: strict PNGs in the
     /// exact subset `canvas.png.writeRgba8` emits decode through the seam
     /// real platforms serve with CGImageSource/gdk-pixbuf/WIC. Tests
@@ -280,6 +286,12 @@ pub const NullPlatform = struct {
     gpu_surface_packet_present_unsupported_command_count: usize = 0,
     gpu_surface_packet_present_representable: bool = true,
     gpu_surface_packet_present_json_len: usize = 0,
+    gpu_surface_packet_present_binary_len: usize = 0,
+    /// First bytes of the last binary packet payload (magic + version +
+    /// header), enough for tests to pin the wire framing without
+    /// retaining whole packets.
+    gpu_surface_packet_present_binary_prefix: [16]u8 = [_]u8{0} ** 16,
+    gpu_surface_packet_present_binary_count: usize = 0,
     gpu_surface_packet_present_count: usize = 0,
     gpu_surface_frame_request_window_id: WindowId = 0,
     gpu_surface_frame_request_label_storage: [max_view_label_bytes]u8 = undefined,
@@ -413,6 +425,7 @@ pub const NullPlatform = struct {
                 .request_gpu_surface_frame_fn = requestGpuSurfaceFrame,
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
+                .present_gpu_surface_packet_binary_fn = presentGpuSurfacePacketBinary,
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
                 .decode_image_fn = decodeImage,
@@ -1099,6 +1112,41 @@ pub const NullPlatform = struct {
         self.gpu_surface_packet_present_unsupported_command_count = packet.unsupported_command_count;
         self.gpu_surface_packet_present_representable = packet.representable;
         self.gpu_surface_packet_present_json_len = packet.json.len;
+        self.gpu_surface_packet_present_count += 1;
+    }
+
+    /// Binary-encoding twin of `presentGpuSurfacePacket`: same recorder
+    /// fields plus the binary length and a payload prefix, gated by the
+    /// `gpu_surface_packet_binary` toggle so tests choose which wire
+    /// encoding a modeled host accepts.
+    fn presentGpuSurfacePacketBinary(context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        if (!self.gpu_surfaces) return error.UnsupportedService;
+        if (!self.gpu_surface_packets) return error.UnsupportedService;
+        if (!self.gpu_surface_packet_binary) return error.UnsupportedService;
+        const view_index = self.findViewIndex(packet.window_id, packet.label) orelse return error.ViewNotFound;
+        if (self.views[view_index].kind != .gpu_surface) return error.InvalidGpuSurfacePacket;
+        if (packet.binary.len == 0 or packet.binary.len > types.max_gpu_surface_packet_binary_bytes) return error.InvalidGpuSurfacePacket;
+
+        self.gpu_surface_packet_present_window_id = packet.window_id;
+        self.gpu_surface_packet_present_label_storage = undefined;
+        self.gpu_surface_packet_present_label_len = (try copyInto(&self.gpu_surface_packet_present_label_storage, packet.label)).len;
+        self.gpu_surface_packet_present_frame_index = packet.frame_index;
+        self.gpu_surface_packet_present_timestamp_ns = packet.timestamp_ns;
+        self.gpu_surface_packet_present_surface_size = packet.surface_size;
+        self.gpu_surface_packet_present_scale_factor = packet.scale_factor;
+        self.gpu_surface_packet_present_clear_color_rgba8 = packet.clear_color_rgba8;
+        self.gpu_surface_packet_present_requires_render = packet.requires_render;
+        self.gpu_surface_packet_present_command_count = packet.command_count;
+        self.gpu_surface_packet_present_cache_action_count = packet.cache_action_count;
+        self.gpu_surface_packet_present_cached_resource_command_count = packet.cached_resource_command_count;
+        self.gpu_surface_packet_present_unsupported_command_count = packet.unsupported_command_count;
+        self.gpu_surface_packet_present_representable = packet.representable;
+        self.gpu_surface_packet_present_json_len = 0;
+        self.gpu_surface_packet_present_binary_len = packet.binary.len;
+        const prefix_len = @min(packet.binary.len, self.gpu_surface_packet_present_binary_prefix.len);
+        @memcpy(self.gpu_surface_packet_present_binary_prefix[0..prefix_len], packet.binary[0..prefix_len]);
+        self.gpu_surface_packet_present_binary_count += 1;
         self.gpu_surface_packet_present_count += 1;
     }
 

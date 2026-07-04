@@ -131,6 +131,7 @@ extern fn native_sdk_appkit_cancel_timer(host: *AppKitHost, timer_id: u64) void;
 extern fn native_sdk_appkit_wake(host: *AppKitHost) void;
 extern fn native_sdk_appkit_present_gpu_surface_pixels(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, width: usize, height: usize, scale: f64, has_dirty_rect: c_int, dirty_x: f64, dirty_y: f64, dirty_width: f64, dirty_height: f64, rgba8: [*]const u8, rgba8_len: usize) c_int;
 extern fn native_sdk_appkit_present_gpu_surface_packet(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, surface_width: f64, surface_height: f64, scale: f64, clear_r: u8, clear_g: u8, clear_b: u8, clear_a: u8, requires_render: c_int, command_count: usize, unsupported_command_count: usize, representable: c_int, json: [*]const u8, json_len: usize) c_int;
+extern fn native_sdk_appkit_present_gpu_surface_packet_binary(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, surface_width: f64, surface_height: f64, scale: f64, clear_r: u8, clear_g: u8, clear_b: u8, clear_a: u8, requires_render: c_int, command_count: usize, unsupported_command_count: usize, representable: c_int, packet: [*]const u8, packet_len: usize) c_int;
 extern fn native_sdk_appkit_upload_gpu_surface_image(host: *AppKitHost, image_id: u64, width: usize, height: usize, rgba8: [*]const u8, rgba8_len: usize) c_int;
 extern fn native_sdk_appkit_remove_gpu_surface_image(host: *AppKitHost, image_id: u64) c_int;
 extern fn native_sdk_appkit_update_widget_accessibility(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, nodes: [*]const AppKitWidgetAccessibilityNode, node_count: usize) c_int;
@@ -391,6 +392,7 @@ pub const MacPlatform = struct {
                 .show_context_menu_fn = showContextMenu,
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
+                .present_gpu_surface_packet_binary_fn = presentGpuSurfacePacketBinary,
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
@@ -959,6 +961,39 @@ fn presentGpuSurfacePacket(context: ?*anyopaque, packet: platform_mod.GpuSurface
         if (packet.representable) 1 else 0,
         packet.json.ptr,
         packet.json.len,
+    );
+    switch (result) {
+        1 => return,
+        0 => return error.UnsupportedService,
+        -1 => return error.ViewNotFound,
+        else => return error.InvalidGpuSurfacePacket,
+    }
+}
+
+/// Compact binary twin of `presentGpuSurfacePacket`: identical result
+/// contract (0 = refused, which the runtime answers by retrying the
+/// JSON encoding in the same frame before its pixel fallback).
+fn presentGpuSurfacePacketBinary(context: ?*anyopaque, packet: platform_mod.GpuSurfacePacket) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedService;
+    const result = native_sdk_appkit_present_gpu_surface_packet_binary(
+        self.host,
+        packet.window_id,
+        packet.label.ptr,
+        packet.label.len,
+        packet.surface_size.width,
+        packet.surface_size.height,
+        packet.scale_factor,
+        packet.clear_color_rgba8[0],
+        packet.clear_color_rgba8[1],
+        packet.clear_color_rgba8[2],
+        packet.clear_color_rgba8[3],
+        if (packet.requires_render) 1 else 0,
+        packet.command_count,
+        packet.unsupported_command_count,
+        if (packet.representable) 1 else 0,
+        packet.binary.ptr,
+        packet.binary.len,
     );
     switch (result) {
         1 => return,

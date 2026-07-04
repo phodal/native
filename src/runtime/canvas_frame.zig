@@ -181,30 +181,31 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             var packet = try canvas_frame.gpuPacket(output);
             packet.scale = normalizedCanvasPresentationScale(packet_scale, canvas_frame.scale);
             if (!packet.requiresRender()) return packet;
-            try uploadCanvasPacketImages(self, packet);
-            var writer = std.Io.Writer.fixed(packet_json_buffer);
-            packet.writeJson(&writer) catch return error.UnsupportedService;
-            try self.options.platform.services.presentGpuSurfacePacket(.{
-                .window_id = window_id,
-                .label = label,
-                .frame_index = packet.frame_index,
-                .timestamp_ns = packet.timestamp_ns,
-                .surface_size = packet.surface_size,
-                .scale_factor = packet.scale,
-                .clear_color_rgba8 = canvasColorToRgba8(clear_color),
-                .requires_render = packet.requiresRender(),
-                .command_count = packet.commandCount(),
-                .cache_action_count = packet.cacheActionCount(),
-                .cached_resource_command_count = packet.cachedResourceCommandCount(),
-                .unsupported_command_count = packet.unsupported_command_count,
-                .representable = packet.fullyRepresentable(),
-                .json = writer.buffered(),
-            });
+            uploadCanvasPacketImages(self, packet) catch |err| {
+                if (err == error.UnsupportedService) {
+                    recordCanvasPacketFallback(self, window_id, label, .{ .reason = .missing_service });
+                }
+                return err;
+            };
+            // A refused present surfaces as error.UnsupportedService so
+            // callers (UiApp's frame loop) take their existing pixel
+            // fallback; the refusal reason was already recorded on the
+            // view. Packets with unrepresentable commands are still
+            // offered — the null platform accepts them for inspection —
+            // but a real host's refusal is attributed to the command,
+            // not to a missing service.
+            const refusal: CanvasPacketRefusal = if (packet.fullyRepresentable())
+                .{ .reason = .missing_service }
+            else
+                .{ .reason = .unsupported_command, .command_kind = firstUnsupportedCommandName(canvas_frame, packet) };
+            const presented = try presentCanvasPacketEncoded(self, window_id, label, packet, clear_color, packet_json_buffer, refusal);
+            if (!presented) return error.UnsupportedService;
             if (runtimeFindViewIndex(self, window_id, label)) |index| {
                 self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
                 // The platform present call succeeded: this frame painted
                 // through the packet path. A failed attempt never stamps.
                 self.views[index].gpu_present_path = .packet;
+                clearCanvasPacketFallback(&self.views[index]);
             }
             return packet;
         }
@@ -228,54 +229,52 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 return .{ .frame = canvas_frame, .mode = .skipped };
             }
 
-            if (gpu_commands.len > 0 and packet_json_buffer.len > 0 and self.options.platform.services.present_gpu_surface_packet_fn != null) {
-                var packet = try canvas_frame.gpuPacket(gpu_commands);
-                packet.scale = normalizedCanvasPresentationScale(pixel_scale, canvas_frame.scale);
-                const result = CanvasPresentationResult{
-                    .frame = canvas_frame,
-                    .mode = .gpu_packet,
-                    .packet_command_count = packet.commandCount(),
-                    .packet_cache_action_count = packet.cacheActionCount(),
-                    .packet_cached_resource_command_count = packet.cachedResourceCommandCount(),
-                    .packet_unsupported_command_count = packet.unsupported_command_count,
-                    .packet_representable = packet.fullyRepresentable(),
-                };
-                if (packet.fullyRepresentable()) {
-                    var writer = std.Io.Writer.fixed(packet_json_buffer);
-                    const packet_presented = blk: {
-                        uploadCanvasPacketImages(self, packet) catch |err| switch (err) {
-                            error.UnsupportedService => break :blk false,
-                            else => return err,
-                        };
-                        packet.writeJson(&writer) catch break :blk false;
-                        self.options.platform.services.presentGpuSurfacePacket(.{
-                            .window_id = window_id,
-                            .label = label,
-                            .frame_index = packet.frame_index,
-                            .timestamp_ns = packet.timestamp_ns,
-                            .surface_size = packet.surface_size,
-                            .scale_factor = packet.scale,
-                            .clear_color_rgba8 = canvasColorToRgba8(clear_color),
-                            .requires_render = packet.requiresRender(),
-                            .command_count = packet.commandCount(),
-                            .cache_action_count = packet.cacheActionCount(),
-                            .cached_resource_command_count = packet.cachedResourceCommandCount(),
-                            .unsupported_command_count = packet.unsupported_command_count,
-                            .representable = packet.fullyRepresentable(),
-                            .json = writer.buffered(),
-                        }) catch |err| switch (err) {
-                            error.UnsupportedService => break :blk false,
-                            else => return err,
-                        };
-                        break :blk true;
+            const services = self.options.platform.services;
+            const packet_service_available = services.present_gpu_surface_packet_fn != null or
+                services.present_gpu_surface_packet_binary_fn != null;
+            if (gpu_commands.len > 0 and packet_json_buffer.len > 0) {
+                if (packet_service_available) {
+                    var packet = try canvas_frame.gpuPacket(gpu_commands);
+                    packet.scale = normalizedCanvasPresentationScale(pixel_scale, canvas_frame.scale);
+                    const result = CanvasPresentationResult{
+                        .frame = canvas_frame,
+                        .mode = .gpu_packet,
+                        .packet_command_count = packet.commandCount(),
+                        .packet_cache_action_count = packet.cacheActionCount(),
+                        .packet_cached_resource_command_count = packet.cachedResourceCommandCount(),
+                        .packet_unsupported_command_count = packet.unsupported_command_count,
+                        .packet_representable = packet.fullyRepresentable(),
                     };
-                    if (packet_presented) {
-                        if (runtimeFindViewIndex(self, window_id, label)) |index| {
-                            self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
-                            self.views[index].gpu_present_path = .packet;
+                    if (packet.fullyRepresentable()) {
+                        const packet_presented = blk: {
+                            uploadCanvasPacketImages(self, packet) catch |err| switch (err) {
+                                error.UnsupportedService => {
+                                    recordCanvasPacketFallback(self, window_id, label, .{ .reason = .missing_service });
+                                    break :blk false;
+                                },
+                                else => return err,
+                            };
+                            break :blk try presentCanvasPacketEncoded(self, window_id, label, packet, clear_color, packet_json_buffer, .{ .reason = .missing_service });
+                        };
+                        if (packet_presented) {
+                            if (runtimeFindViewIndex(self, window_id, label)) |index| {
+                                self.views[index].recordCanvasFramePresentationComplete(canvas_frame);
+                                self.views[index].gpu_present_path = .packet;
+                                clearCanvasPacketFallback(&self.views[index]);
+                            }
+                            return result;
                         }
-                        return result;
+                    } else {
+                        recordCanvasPacketFallback(self, window_id, label, .{
+                            .reason = .unsupported_command,
+                            .command_kind = firstUnsupportedCommandName(canvas_frame, packet),
+                        });
                     }
+                } else {
+                    // The caller offered packet transport buffers, so a
+                    // packet was wanted; the platform simply has no
+                    // packet presenter.
+                    recordCanvasPacketFallback(self, window_id, label, .{ .reason = .missing_service });
                 }
             }
 
@@ -380,6 +379,105 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                     .rgba8 = image.pixels,
                 });
             }
+        }
+
+        /// Encode `packet` and push it through the platform's packet
+        /// presenter. The compact binary encoding is preferred whenever
+        /// the platform wires the binary presenter; a platform that
+        /// wires it but refuses the call itself
+        /// (`error.UnsupportedService`) gets the JSON attempt in the
+        /// same frame, so capability negotiation is a per-present
+        /// conversation rather than a boot-time contract and the JSON
+        /// path stays alive for compatibility and wire debugging.
+        /// Returns true when a present succeeded. Every refusal records
+        /// its fallback reason on the view BEFORE returning, so
+        /// automation snapshots explain WHY a frame left the packet
+        /// path; `refusal` names the reason to record when a presenter
+        /// exists but declines (the caller knows whether the packet was
+        /// representable — this helper does not).
+        fn presentCanvasPacketEncoded(
+            self: *Runtime,
+            window_id: platform.WindowId,
+            label: []const u8,
+            packet: canvas.CanvasGpuPacket,
+            clear_color: canvas.Color,
+            packet_bytes_buffer: []u8,
+            refusal: CanvasPacketRefusal,
+        ) anyerror!bool {
+            const services = self.options.platform.services;
+            var base = platform.GpuSurfacePacket{
+                .window_id = window_id,
+                .label = label,
+                .frame_index = packet.frame_index,
+                .timestamp_ns = packet.timestamp_ns,
+                .surface_size = packet.surface_size,
+                .scale_factor = packet.scale,
+                .clear_color_rgba8 = canvasColorToRgba8(clear_color),
+                .requires_render = packet.requiresRender(),
+                .command_count = packet.commandCount(),
+                .cache_action_count = packet.cacheActionCount(),
+                .cached_resource_command_count = packet.cachedResourceCommandCount(),
+                .unsupported_command_count = packet.unsupported_command_count,
+                .representable = packet.fullyRepresentable(),
+            };
+            if (services.present_gpu_surface_packet_binary_fn != null) binary: {
+                const binary_buffer = packet_bytes_buffer[0..@min(packet_bytes_buffer.len, platform.max_gpu_surface_packet_binary_bytes)];
+                var writer = std.Io.Writer.fixed(binary_buffer);
+                packet.writeBinary(&writer) catch {
+                    // A frame too big for the binary encoding might
+                    // still matter to a JSON-only host (whose binary
+                    // presenter would have refused anyway), so the JSON
+                    // attempt below delivers the single per-frame
+                    // verdict — unless there is no JSON presenter at
+                    // all, in which case this overflow IS the verdict.
+                    if (services.present_gpu_surface_packet_fn == null) {
+                        recordCanvasPacketFallback(self, window_id, label, .{
+                            .reason = .binary_overflow,
+                            .needed_bytes = canvasPacketEncodedByteSize(packet, .binary),
+                            .limit_bytes = binary_buffer.len,
+                        });
+                        return false;
+                    }
+                    break :binary;
+                };
+                base.binary = writer.buffered();
+                base.json = "";
+                services.presentGpuSurfacePacketBinary(base) catch |err| switch (err) {
+                    // The platform wires the binary seam but declines at
+                    // call time: negotiate down to JSON.
+                    error.UnsupportedService => break :binary,
+                    else => return err,
+                };
+                return true;
+            }
+            if (services.present_gpu_surface_packet_fn == null) {
+                recordCanvasPacketFallback(self, window_id, label, .{ .reason = .missing_service });
+                return false;
+            }
+            // The transport buffer may exceed the JSON wire bound (it is
+            // sized for the larger binary encoding); clamp so an
+            // oversized encode fails HERE as a recorded overflow instead
+            // of tripping the service wrapper's validation.
+            const json_buffer = packet_bytes_buffer[0..@min(packet_bytes_buffer.len, platform.max_gpu_surface_packet_json_bytes)];
+            var writer = std.Io.Writer.fixed(json_buffer);
+            packet.writeJson(&writer) catch {
+                recordCanvasPacketFallback(self, window_id, label, .{
+                    .reason = .json_overflow,
+                    .needed_bytes = canvasPacketEncodedByteSize(packet, .json),
+                    .limit_bytes = json_buffer.len,
+                });
+                return false;
+            };
+            base.json = writer.buffered();
+            base.binary = "";
+            services.presentGpuSurfacePacket(base) catch |err| switch (err) {
+                error.UnsupportedService => {
+                    recordCanvasPacketFallback(self, window_id, label, refusal);
+                    return false;
+                },
+                else => return err,
+            };
+            return true;
         }
 
         fn recordCanvasClearColor(self: *Runtime, window_id: platform.WindowId, label: []const u8, clear_color: canvas.Color) void {
@@ -773,6 +871,100 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             if (!emitted_dirty_region and changes.len > 0) self.invalidateFor(.state, view_frame);
         }
     };
+}
+
+/// What to record when a packet attempt fails: the reason plus the
+/// overflow byte math or the offending command kind, whichever applies.
+const CanvasPacketRefusal = struct {
+    reason: platform.GpuPresentFallbackReason,
+    needed_bytes: usize = 0,
+    limit_bytes: usize = 0,
+    command_kind: []const u8 = "",
+};
+
+/// Emit the rate-limited fallback diagnostic on the first fallback, on
+/// every reason change, and every this-many fallback frames while the
+/// reason holds — loud enough to notice a steady oscillation in a debug
+/// build, quiet enough that a 60 fps fallback loop cannot flood stderr
+/// (one line every ~2 s).
+const canvas_packet_fallback_log_interval_frames: usize = 120;
+
+const CanvasPacketEncoding = enum { json, binary };
+
+/// Full encoded size of `packet` in the given encoding, measured with a
+/// discarding writer — used only on the overflow path to report how many
+/// bytes the frame actually needed against the transport limit.
+fn canvasPacketEncodedByteSize(packet: canvas.CanvasGpuPacket, encoding: CanvasPacketEncoding) usize {
+    var trailing: [128]u8 = undefined;
+    var discarding = std.Io.Writer.Discarding.init(&trailing);
+    switch (encoding) {
+        .json => packet.writeJson(&discarding.writer) catch return 0,
+        .binary => packet.writeBinary(&discarding.writer) catch return 0,
+    }
+    return @intCast(discarding.fullCount());
+}
+
+/// Name of the first display-list command the packet planner could not
+/// represent — the plan keeps the source command at `command_index`, so
+/// the diagnostic names the author-facing kind (`draw_text`, ...), not
+/// the packet's opaque `unsupported` tag.
+fn firstUnsupportedCommandName(canvas_frame: canvas.CanvasFrame, packet: canvas.CanvasGpuPacket) []const u8 {
+    for (packet.commands) |command| {
+        if (command.supported()) continue;
+        const render_commands = canvas_frame.render_plan.commands;
+        if (command.command_index < render_commands.len) {
+            return @tagName(render_commands[command.command_index].command);
+        }
+        return @tagName(command.kind);
+    }
+    return "";
+}
+
+/// Record WHY a packet attempt failed on the view (reason, overflow byte
+/// math, offending command kind, and a running fallback-frame counter
+/// that never resets while the view is open), then emit the rate-limited
+/// debug diagnostic. Every packet-attempt failure funnels through here so
+/// no fallback is ever silent again: automation snapshots surface the
+/// fields as `present_fallback=...` on the view line.
+fn recordCanvasPacketFallback(self: anytype, window_id: platform.WindowId, label: []const u8, refusal: CanvasPacketRefusal) void {
+    const index = runtimeFindViewIndex(self, window_id, label) orelse return;
+    const view = &self.views[index];
+    const reason_changed = view.gpu_present_fallback_reason != refusal.reason;
+    view.gpu_present_fallback_reason = refusal.reason;
+    view.gpu_present_fallback_needed_bytes = refusal.needed_bytes;
+    view.gpu_present_fallback_limit_bytes = refusal.limit_bytes;
+    const kind_len = @min(refusal.command_kind.len, view.gpu_present_fallback_command_kind_storage.len);
+    @memcpy(view.gpu_present_fallback_command_kind_storage[0..kind_len], refusal.command_kind[0..kind_len]);
+    view.gpu_present_fallback_command_kind_len = kind_len;
+    view.gpu_present_fallback_frame_count += 1;
+
+    const should_log = view.gpu_present_fallback_frame_count == 1 or
+        reason_changed or
+        view.gpu_present_fallback_frame_count - view.gpu_present_fallback_logged_count >= canvas_packet_fallback_log_interval_frames;
+    if (!should_log) return;
+    view.gpu_present_fallback_logged_count = view.gpu_present_fallback_frame_count;
+    canvas_frame_log.debug(
+        "gpu packet present fell back to the CPU pixel path for view \"{s}\": reason={s} needed={d}B limit={d}B command={s} fallback_frames={d} - the pixel path rasterizes text and shapes differently, so a steady fallback reads as flickering glyphs; snapshots carry the same fields as present_fallback= on the view line",
+        .{
+            label,
+            @tagName(refusal.reason),
+            refusal.needed_bytes,
+            refusal.limit_bytes,
+            refusal.command_kind,
+            view.gpu_present_fallback_frame_count,
+        },
+    );
+}
+
+/// A successful packet present clears the sticky reason and details; the
+/// cumulative fallback-frame counter deliberately survives, so snapshots
+/// taken on a healthy frame still expose that the view has been
+/// oscillating.
+fn clearCanvasPacketFallback(view: anytype) void {
+    view.gpu_present_fallback_reason = .none;
+    view.gpu_present_fallback_needed_bytes = 0;
+    view.gpu_present_fallback_limit_bytes = 0;
+    view.gpu_present_fallback_command_kind_len = 0;
 }
 
 fn validateCanvasRenderAnimations(animations: []const canvas.CanvasRenderAnimation) !void {

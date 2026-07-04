@@ -20,6 +20,19 @@ interface ShowcaseApp {
 // `zig build -Doptimize=ReleaseFast` on macOS arm64.
 const apps: ShowcaseApp[] = [
   {
+    id: "markdown-viewer",
+    name: "Markdown Viewer",
+    tagline: "A split-pane editor whose preview is native widgets.",
+    detail:
+      "Headings, tables, task lists, links, and blockquotes on the right are ordinary widgets rendered live from the editor on the left — keystroke for keystroke, with no WebView and no HTML.",
+    facts: [
+      { label: "App source", value: "701 lines" },
+      { label: "Binary", value: "2.4 MB" },
+    ],
+    width: 2400,
+    height: 1520,
+  },
+  {
     id: "soundboard",
     name: "Soundboard",
     tagline: "A music library with album art, search, and a live transport.",
@@ -43,19 +56,6 @@ const apps: ShowcaseApp[] = [
       { label: "Binary", value: "2.4 MB" },
     ],
     width: 2360,
-    height: 1520,
-  },
-  {
-    id: "markdown-viewer",
-    name: "Markdown Viewer",
-    tagline: "A split-pane editor whose preview is native widgets.",
-    detail:
-      "Headings, tables, task lists, links, and blockquotes on the right are ordinary widgets rendered live from the editor on the left — keystroke for keystroke, with no WebView and no HTML.",
-    facts: [
-      { label: "App source", value: "701 lines" },
-      { label: "Binary", value: "2.4 MB" },
-    ],
-    width: 2400,
     height: 1520,
   },
   {
@@ -131,7 +131,7 @@ export function Showcase() {
             <Image
               key={`${active.id}-${scheme}`}
               src={`/home/${active.id}-${scheme}.webp`}
-              alt={`The ${active.name} example app rendered by the framework's engine (${scheme} theme)`}
+              alt={`The ${active.name} example app rendered by the Native SDK engine (${scheme} theme)`}
               width={active.width}
               height={active.height}
               quality={90}

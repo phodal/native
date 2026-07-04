@@ -3,12 +3,13 @@ import Image from "next/image";
 import { Code } from "@/components/code";
 import { Showcase } from "@/components/home/showcase";
 import { CopyCommand } from "@/components/home/copy-command";
+import { HeroCollage } from "@/components/home/hero-collage";
 import { githubUrl, npmCli, siteName } from "@/lib/site";
 
 // ---------------------------------------------------------------- samples
 // Both excerpts are real source from examples/ui-inbox in this repository.
 
-const installCommands = [`npm install -g ${npmCli}`, "native init my_app", "cd my_app && zig build run"];
+const installCommand = `npm install -g ${npmCli}`;
 
 const zmlSample = `<column gap="12" padding="16">
   <row gap="8" cross="center">
@@ -102,7 +103,7 @@ function CodePane({ title, lang, code }: { title: string; lang: string; code: st
 
 function Terminal({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-950">
+    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white text-left shadow-sm dark:border-neutral-800 dark:bg-neutral-950">
       <div className="flex items-center gap-1.5 border-b border-neutral-200 bg-neutral-50 px-4 py-2.5 dark:border-neutral-800 dark:bg-neutral-900">
         <span className="h-2.5 w-2.5 rounded-full bg-neutral-300 dark:bg-neutral-700" />
         <span className="h-2.5 w-2.5 rounded-full bg-neutral-300 dark:bg-neutral-700" />
@@ -129,6 +130,14 @@ function Muted({ children }: { children: React.ReactNode }) {
   return <span className="block text-neutral-500 dark:text-neutral-400">{children}</span>;
 }
 
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-[14px] dark:bg-neutral-800">
+      {children}
+    </code>
+  );
+}
+
 // ----------------------------------------------------------------- data
 
 // Verified in this repository: sizes are `ls -lh` of
@@ -149,7 +158,7 @@ const stats = [
   },
   {
     value: "5",
-    label: "Real apps in examples/, screenshotted below from actual builds.",
+    label: "Real apps in examples/, screenshotted on this page from actual builds.",
   },
 ];
 
@@ -210,42 +219,72 @@ export default function HomePage() {
       <section className="relative overflow-hidden">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle,#d4d4d4_1px,transparent_1px)] [background-size:22px_22px] [mask-image:radial-gradient(ellipse_70%_65%_at_50%_35%,black_30%,transparent_75%)] dark:bg-[radial-gradient(circle,#2e2e2e_1px,transparent_1px)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle,#d4d4d4_1px,transparent_1px)] [background-size:22px_22px] [mask-image:radial-gradient(ellipse_75%_55%_at_50%_0%,black_25%,transparent_75%)] dark:bg-[radial-gradient(circle,#2e2e2e_1px,transparent_1px)]"
         />
         <div
           aria-hidden
-          className="pointer-events-none absolute left-1/2 top-[-12rem] h-[26rem] w-[52rem] -translate-x-1/2 rounded-[100%] bg-gradient-to-b from-neutral-200/70 to-transparent blur-3xl dark:from-neutral-800/50"
+          className="pointer-events-none absolute left-1/2 top-[-16rem] h-[36rem] w-[80rem] -translate-x-1/2 rounded-[100%] bg-gradient-to-b from-neutral-200/80 to-transparent blur-3xl dark:from-indigo-500/[0.28] dark:via-indigo-500/[0.08]"
         />
-        <div className="relative mx-auto max-w-6xl px-6 pb-20 pt-20 text-center sm:pb-24 sm:pt-28">
-          <h1 className="mx-auto max-w-4xl text-4xl font-semibold tracking-tight text-neutral-900 sm:text-6xl lg:text-7xl dark:text-neutral-100">
-            Write markup.
-            <br />
-            Ship native pixels.
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-neutral-600 sm:text-lg dark:text-neutral-400">
-            A cross-platform UI framework where views are HTML-like markup, styling is design
-            tokens, and logic is plain Zig on one Elm-style loop — rendered by its own engine into
-            real OS windows. No browser, no JS runtime.
+        <div className="relative mx-auto max-w-6xl px-6 pt-16 text-center sm:pt-20">
+          <p className="hero-rise font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-400 sm:text-xs sm:tracking-[0.25em] dark:text-neutral-500">
+            macOS · Linux · Windows · iOS · Android
           </p>
-          <div className="mx-auto mt-9 max-w-md">
-            <CopyCommand lines={installCommands} />
+          <h1 className="hero-rise hero-rise-1 mx-auto mt-4 max-w-5xl text-4xl font-semibold tracking-tight text-neutral-900 sm:text-6xl lg:text-7xl dark:text-neutral-100">
+            The complete toolkit
+            <br />
+            for native apps.
+          </h1>
+          <p className="hero-rise hero-rise-2 mx-auto mt-5 max-w-2xl text-base leading-relaxed text-neutral-600 sm:text-lg dark:text-neutral-400">
+            {siteName} builds native desktop and mobile applications from one codebase. Views are
+            markup. Styling is tokens. Logic is Zig. The pixels come from its own engine — no
+            browser, no JS runtime, one small binary.
+          </p>
+          <div className="hero-rise hero-rise-3 mx-auto mt-7 flex max-w-2xl flex-col items-center justify-center gap-3 sm:flex-row">
+            <div className="w-full max-w-xs sm:w-auto sm:min-w-[21rem]">
+              <CopyCommand lines={[installCommand]} />
+            </div>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/quick-start"
+                className="rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+              >
+                Get started
+              </Link>
+              <a
+                href={githubUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-full border border-neutral-300 bg-white/60 px-5 py-2.5 text-sm font-medium text-neutral-900 backdrop-blur-sm transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-950/60 dark:text-neutral-100 dark:hover:bg-neutral-900"
+              >
+                GitHub
+              </a>
+            </div>
           </div>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <Link
-              href="/quick-start"
-              className="rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
-            >
-              Get started
-            </Link>
-            <a
-              href={githubUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-full border border-neutral-300 bg-white/60 px-5 py-2.5 text-sm font-medium text-neutral-900 backdrop-blur-sm transition-colors hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-950/60 dark:text-neutral-100 dark:hover:bg-neutral-900"
-            >
-              View on GitHub
-            </a>
+        </div>
+        <div className="hero-rise hero-rise-4 relative mt-10 pb-20 sm:mt-12 sm:pb-24">
+          <HeroCollage />
+        </div>
+      </section>
+
+      {/* Numbers */}
+      <section className="border-t border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900/40">
+        <div className="mx-auto max-w-6xl px-6 py-14 sm:py-16">
+          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+            {stats.map((stat) => (
+              <div key={stat.value} className="text-center lg:text-left">
+                <div className="font-mono text-5xl font-semibold tracking-tight text-neutral-900 sm:text-6xl dark:text-neutral-100">
+                  {stat.value}
+                </div>
+                <p className="mt-3 text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
+                  {stat.label}
+                </p>
+              </div>
+            ))}
           </div>
+          <p className="mt-10 text-center text-xs text-neutral-400 dark:text-neutral-500">
+            Measured in this repository: <code>zig build -Doptimize=ReleaseFast</code> on macOS
+            arm64; line counts are app source with tests excluded.
+          </p>
         </div>
       </section>
 
@@ -255,14 +294,10 @@ export default function HomePage() {
           <SectionLabel>The architecture</SectionLabel>
           <SectionTitle>One view. One update. Real pixels.</SectionTitle>
           <SectionLede>
-            This is{" "}
-            <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-[14px] dark:bg-neutral-800">
-              examples/ui-inbox
-            </code>{" "}
-            from the repository. The entire UI is one markup file; the logic is a Model, a Msg
-            union, and an update function. Markup compiles at comptime — view mistakes are compile
-            errors with line and column — and in dev you edit the view while the app runs, keeping
-            model state.
+            This is <InlineCode>examples/ui-inbox</InlineCode> from the repository. The UI is one
+            markup file. The logic is a Model, a Msg union, and an update function. Markup compiles
+            at comptime — view mistakes are compile errors with line and column — and in dev you
+            edit the view while the app runs, keeping model state.
           </SectionLede>
           <div className="mt-12 grid gap-6 lg:grid-cols-2">
             <CodePane title="src/inbox.zml" lang="html" code={zmlSample} />
@@ -281,32 +316,10 @@ export default function HomePage() {
               </div>
             </div>
             <figcaption className="mx-auto mt-4 max-w-3xl text-center text-sm text-neutral-500 dark:text-neutral-500">
-              Built from the source above and captured running on macOS. The pixels come from the
-              framework&apos;s engine; the window and scroll physics come from the OS.
+              Built from the source above and captured running on macOS. The pixels come from{" "}
+              {siteName}&apos;s engine; the window and scroll physics come from the OS.
             </figcaption>
           </figure>
-        </div>
-      </section>
-
-      {/* Numbers */}
-      <section className="border-t border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900/40">
-        <div className="mx-auto max-w-6xl px-6 py-14 sm:py-16">
-          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
-            {stats.map((stat) => (
-              <div key={stat.value} className="text-center lg:text-left">
-                <div className="font-mono text-4xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-                  {stat.value}
-                </div>
-                <p className="mt-2 text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
-                  {stat.label}
-                </p>
-              </div>
-            ))}
-          </div>
-          <p className="mt-10 text-center text-xs text-neutral-400 dark:text-neutral-500">
-            Measured in this repository: <code>zig build -Doptimize=ReleaseFast</code> on macOS
-            arm64; line counts are app source with tests excluded.
-          </p>
         </div>
       </section>
 
@@ -316,10 +329,9 @@ export default function HomePage() {
           <SectionLabel>Showcase</SectionLabel>
           <SectionTitle>Five real apps, in the repo</SectionTitle>
           <SectionLede>
-            Every screenshot below is rendered by the framework&apos;s deterministic engine from
-            the example apps in <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-[14px] dark:bg-neutral-800">examples/</code>{" "}
-            — the same state captured once per color scheme. Flip the site theme and the apps flip
-            with it.
+            Every screenshot is rendered by {siteName}&apos;s deterministic engine from the example
+            apps in <InlineCode>examples/</InlineCode> — the same state captured once per color
+            scheme. Flip the site theme and the apps flip with it.
           </SectionLede>
           <div className="mt-12">
             <Showcase />
@@ -425,7 +437,7 @@ export default function HomePage() {
                 Markup compiles into the executable, so release builds carry no parser, no
                 interpreter, and no JS engine — just your logic and the engine, linking the
                 system&apos;s own frameworks. Effects run HTTP fetches, process spawns, file I/O,
-                and timers off the loop; results come back into <code className="rounded bg-neutral-100 px-1 py-0.5 text-[14px] dark:bg-neutral-800">update</code> as
+                and timers off the loop; results come back into <InlineCode>update</InlineCode> as
                 plain messages. And when part of your product is the web, WebView panes coexist
                 with the canvas in the same window.
               </p>
@@ -490,14 +502,26 @@ export default function HomePage() {
       </section>
 
       {/* Footer CTA */}
-      <section className="border-t border-neutral-200 dark:border-neutral-800">
-        <div className="mx-auto max-w-6xl px-6 py-20 text-center sm:py-28">
+      <section className="relative overflow-hidden border-t border-neutral-200 dark:border-neutral-800">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 bottom-[-14rem] h-[28rem] w-[64rem] -translate-x-1/2 rounded-[100%] bg-gradient-to-t from-neutral-200/70 to-transparent blur-3xl dark:from-indigo-500/[0.14]"
+        />
+        <div className="relative mx-auto max-w-6xl px-6 py-20 text-center sm:py-28">
           <h2 className="text-3xl font-semibold tracking-tight text-neutral-900 sm:text-4xl dark:text-neutral-100">
             Build something native
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-neutral-600 dark:text-neutral-400">
             Scaffold an app, open a real window, and edit the view while it runs.
           </p>
+          <div className="mx-auto mt-8 max-w-md">
+            <Terminal title="terminal">
+              <Prompt>npm install -g {npmCli}</Prompt>
+              <Prompt>native init my_app</Prompt>
+              <Prompt>cd my_app && zig build run</Prompt>
+              <Muted>a real window opens — edit src/app.zml while it runs</Muted>
+            </Terminal>
+          </div>
           <div className="mt-8 flex items-center justify-center gap-3">
             <Link
               href="/quick-start"

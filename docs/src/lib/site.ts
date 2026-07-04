@@ -1,5 +1,5 @@
 /**
- * The single source of truth for the framework's public name and every
+ * The single source of truth for the project's public name and every
  * name-bearing string on the site. Rename day touches this file only —
  * all copy elsewhere is written name-neutral and pulls from here.
  */
@@ -15,8 +15,8 @@ export const githubUrl = "https://github.com/vercel-labs/zero-native";
 export const siteUrl = "https://zero-native.dev";
 
 /** The one-line tagline used in titles and Open Graph text. */
-export const tagline = "Write Markup. Ship Native Pixels.";
+export const tagline = "The Complete Toolkit for Native Apps";
 
 /** The one-sentence description used in metadata. */
 export const description =
-  "Cross-platform native UI: declarative markup views, design-token styling, and Zig logic on an Elm-style loop — rendered into real OS windows with no browser in the binary.";
+  "Native SDK is the complete toolkit for building native desktop and mobile applications: markup views, design-token styling, and Zig logic on one Elm-style loop — rendered by its own engine into real OS windows, with no browser in the binary.";

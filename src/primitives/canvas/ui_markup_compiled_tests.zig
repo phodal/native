@@ -1056,3 +1056,41 @@ test "compiled anchored picker (anchor, on-dismiss, on-hold) matches the interpr
     try testing.expect(compiled.msgFor(crumb.id, .hold) != null);
     try testing.expect(crumb.semantics.actions.press);
 }
+
+// -------------------------------------------------- split panes and trees
+
+const PaneCompiled = canvas.CompiledMarkupView(fixture.PaneModel, fixture.PaneMsg, fixture.pane_markup_source);
+
+test "compiled split and tree match the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.PaneModel{};
+
+    var view = try markup_view.MarkupView(fixture.PaneModel, fixture.PaneMsg).init(arena, fixture.pane_markup_source);
+    var interpreter_ui = fixture.PaneUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try view.build(&interpreter_ui, &model));
+    var compiled_ui = fixture.PaneUi.init(arena);
+    const compiled = try compiled_ui.finalize(PaneCompiled.build(&compiled_ui, &model));
+    try expectSameTree(fixture.PaneMsg, interpreted, compiled);
+
+    var hand_ui = fixture.PaneUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handPaneView(&hand_ui, &model));
+    try expectSameTree(fixture.PaneMsg, hand, compiled);
+
+    // The synthesized divider and the resize dispatch agree across engines.
+    try testing.expectEqual(canvas.WidgetKind.split_divider, compiled.root.children[1].kind);
+    try testing.expectEqual(@as(f32, 0.7), compiled.msgForResize(compiled.root.id, 0.7).?.sidebar_resized);
+    try testing.expectEqual(
+        interpreted.msgForResize(interpreted.root.id, 0.7).?.sidebar_resized,
+        compiled.msgForResize(compiled.root.id, 0.7).?.sidebar_resized,
+    );
+
+    // Tree rows: role, expanded state, and both dispatch channels.
+    const row = fixture.findByKind(compiled.root, .panel).?;
+    try testing.expectEqual(canvas.WidgetRole.treeitem, row.semantics.role);
+    try testing.expectEqual(@as(?bool, true), row.state.expanded);
+    try testing.expectEqual(@as(u32, 1), compiled.msgForPointer(row.id, .up).?.select_folder);
+    try testing.expectEqual(@as(u32, 1), compiled.msgFor(row.id, .toggle).?.toggle_folder);
+}

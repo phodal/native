@@ -66,13 +66,20 @@ pub fn canvasWidgetSourceScrollById(entries: []const CanvasWidgetSourceScrollEnt
     return null;
 }
 
+/// Scroll offsets and split fractions share the entry shape (id +
+/// value) and the source-wins reconcile rule, so one collector serves
+/// both.
+pub fn canvasWidgetSourceValueKind(kind: canvas.WidgetKind) bool {
+    return kind == .scroll_view or kind == .split;
+}
+
 pub fn collectCanvasWidgetScrollOffsetEntries(
     nodes: []const canvas.WidgetLayoutNode,
     output: []CanvasWidgetSourceScrollEntry,
 ) []const CanvasWidgetSourceScrollEntry {
     var len: usize = 0;
     for (nodes) |node| {
-        if (node.widget.kind != .scroll_view or node.widget.id == 0) continue;
+        if (!canvasWidgetSourceValueKind(node.widget.kind) or node.widget.id == 0) continue;
         if (len >= output.len) break;
         output[len] = .{ .id = node.widget.id, .value = node.widget.value };
         len += 1;
@@ -580,9 +587,35 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
         &text_len,
     );
 
-    for (next.nodes, 0..) |node, index| {
-        const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, next, index, previous_text_states);
-        const control_copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, next, index, previous_control_states, previous_source_control_entries);
+    // Split fractions reconcile FIRST, as a staged copy of the laid-out
+    // tree: a restored runtime-owned fraction re-runs the split's child
+    // layout in place (same children, same node sequence — only frames
+    // move), so the per-node passes below see final geometry. Outer
+    // splits restore before nested ones (ascending node order), so a
+    // nested split re-laid by its ancestor still restores its own
+    // fraction afterwards.
+    const staged_nodes = node_buffer[0..next.nodes.len];
+    @memcpy(staged_nodes, next.nodes);
+    for (staged_nodes, 0..) |node, index| {
+        if (node.widget.kind != .split or node.widget.id == 0) continue;
+        const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse continue;
+        const previous_source = canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id) orelse continue;
+        // Source-wins: the runtime-owned fraction survives rebuilds only
+        // while the SOURCE fraction is unchanged; a source-side change
+        // (the model echoing or driving the fraction) wins.
+        if (node.widget.value != previous_source) continue;
+        if (node.widget.value == previous_runtime) continue;
+        staged_nodes[index].widget.value = previous_runtime;
+        // Retained trees clear children; a split without them keeps the
+        // value restore only (frames follow on the next full layout).
+        if (node.widget.children.len == 0) continue;
+        try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, tokens);
+    }
+
+    const staged = canvas.WidgetLayoutTree{ .nodes = staged_nodes };
+    for (staged_nodes, 0..) |node, index| {
+        const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, staged, index, previous_text_states);
+        const control_copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, staged, index, previous_control_states, previous_source_control_entries);
         const scroll_copy = canvasWidgetLayoutNodeWithScrollReconcileState(control_copy, previous_runtime_offsets, previous_source_scroll_entries);
         node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(scroll_copy, source_semantics);
     }
@@ -924,6 +957,134 @@ pub fn canvasWidgetAdjacentGroupFocusTarget(
         } else {
             previous = target;
         }
+    }
+    return null;
+}
+
+// ---------------------------------------------------------- tree focus
+//
+// The ARIA tree's roving focus: rows are widgets carrying
+// `role = .treeitem` at ANY depth under the nearest `.tree` ancestor,
+// walked in node (DFS) order. Collapsed subtrees are model-owned — the
+// view does not render them — so "visible rows" is simply every row in
+// the layout that can take focus.
+
+/// Index of the nearest `.tree` ancestor of `node_index`, or null when
+/// the node sits outside any tree.
+pub fn canvasWidgetTreeScopeIndex(layout: canvas.WidgetLayoutTree, node_index: usize) ?usize {
+    if (node_index >= layout.nodes.len) return null;
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return null;
+        if (layout.nodes[index].widget.kind == .tree) return index;
+        current = layout.nodes[index].parent_index;
+    }
+    return null;
+}
+
+fn canvasWidgetTreeRowFocusTarget(layout: canvas.WidgetLayoutTree, node_index: usize) ?canvas.WidgetFocusTarget {
+    if (layout.nodes[node_index].widget.semantics.role != .treeitem) return null;
+    return layout.focusTargetById(layout.nodes[node_index].widget.id);
+}
+
+/// The tree keymap's focus moves. Up/Down walk the scope's rows in node
+/// order; Home/End jump to its edges; Left moves to the PARENT row when
+/// the focused row is a leaf or collapsed (an expanded row collapses
+/// instead — no focus move, the routed toggle intent handles it); Right
+/// moves to the FIRST CHILD row when the focused row is expanded (a
+/// collapsed row expands instead). Null = no tree move (the caller
+/// falls through to group/spatial focus).
+pub fn canvasWidgetTreeDirectionalFocusTarget(
+    layout: canvas.WidgetLayoutTree,
+    focused: canvas.WidgetFocusTarget,
+    direction: canvas.WidgetFocusDirection,
+) ?canvas.WidgetFocusTarget {
+    if (focused.index >= layout.nodes.len) return null;
+    if (layout.nodes[focused.index].widget.semantics.role != .treeitem) return null;
+    const tree_index = canvasWidgetTreeScopeIndex(layout, focused.index) orelse return null;
+    return switch (direction) {
+        .up => canvasWidgetTreeAdjacentRow(layout, tree_index, focused.index, .previous) orelse focused,
+        .down => canvasWidgetTreeAdjacentRow(layout, tree_index, focused.index, .next) orelse focused,
+        .left => blk: {
+            const expanded = layout.nodes[focused.index].widget.state.expanded orelse false;
+            if (expanded) break :blk null; // collapse intent, not a move
+            break :blk canvasWidgetTreeParentRow(layout, tree_index, focused.index) orelse focused;
+        },
+        .right => blk: {
+            const expanded = layout.nodes[focused.index].widget.state.expanded orelse false;
+            if (!expanded) break :blk null; // expand intent (or leaf no-op)
+            break :blk canvasWidgetTreeFirstChildRow(layout, focused.index) orelse focused;
+        },
+        .forward, .backward => null,
+    };
+}
+
+/// Home/End inside a tree: the scope's first/last focusable row.
+pub fn canvasWidgetTreeFocusEdgeTarget(
+    layout: canvas.WidgetLayoutTree,
+    focused: canvas.WidgetFocusTarget,
+    edge: CanvasWidgetGroupFocusEdge,
+) ?canvas.WidgetFocusTarget {
+    if (focused.index >= layout.nodes.len) return null;
+    if (layout.nodes[focused.index].widget.semantics.role != .treeitem) return null;
+    const tree_index = canvasWidgetTreeScopeIndex(layout, focused.index) orelse return null;
+    switch (edge) {
+        .first => {
+            var index = tree_index + 1;
+            while (index < layout.nodes.len and layout.nodes[index].depth > layout.nodes[tree_index].depth) : (index += 1) {
+                if (canvasWidgetTreeRowFocusTarget(layout, index)) |target| return target;
+            }
+        },
+        .last => {
+            var last: ?canvas.WidgetFocusTarget = null;
+            var index = tree_index + 1;
+            while (index < layout.nodes.len and layout.nodes[index].depth > layout.nodes[tree_index].depth) : (index += 1) {
+                if (canvasWidgetTreeRowFocusTarget(layout, index)) |target| last = target;
+            }
+            return last;
+        },
+    }
+    return null;
+}
+
+fn canvasWidgetTreeAdjacentRow(
+    layout: canvas.WidgetLayoutTree,
+    tree_index: usize,
+    focused_index: usize,
+    direction: CanvasWidgetGroupDirection,
+) ?canvas.WidgetFocusTarget {
+    const tree_depth = layout.nodes[tree_index].depth;
+    var previous: ?canvas.WidgetFocusTarget = null;
+    var saw_focused = false;
+    var index = tree_index + 1;
+    while (index < layout.nodes.len and layout.nodes[index].depth > tree_depth) : (index += 1) {
+        if (index == focused_index) {
+            if (direction == .previous) return previous;
+            saw_focused = true;
+            continue;
+        }
+        const target = canvasWidgetTreeRowFocusTarget(layout, index) orelse continue;
+        if (saw_focused) return target;
+        previous = target;
+    }
+    return null;
+}
+
+fn canvasWidgetTreeParentRow(layout: canvas.WidgetLayoutTree, tree_index: usize, focused_index: usize) ?canvas.WidgetFocusTarget {
+    var current = layout.nodes[focused_index].parent_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len or index == tree_index) return null;
+        if (canvasWidgetTreeRowFocusTarget(layout, index)) |target| return target;
+        current = layout.nodes[index].parent_index;
+    }
+    return null;
+}
+
+fn canvasWidgetTreeFirstChildRow(layout: canvas.WidgetLayoutTree, focused_index: usize) ?canvas.WidgetFocusTarget {
+    const row_depth = layout.nodes[focused_index].depth;
+    var index = focused_index + 1;
+    while (index < layout.nodes.len and layout.nodes[index].depth > row_depth) : (index += 1) {
+        if (canvasWidgetTreeRowFocusTarget(layout, index)) |target| return target;
     }
     return null;
 }

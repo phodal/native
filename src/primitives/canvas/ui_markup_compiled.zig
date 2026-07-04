@@ -177,6 +177,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         }
                     }
                 }
+                // Interpreter parity: splits take exactly two static
+                // pane children (the divider sits between fixed panes).
+                if (kind == .split) {
+                    var pane_count: usize = 0;
+                    for (node.children) |child| {
+                        switch (child.kind) {
+                            .element, .use_block => pane_count += 1,
+                            else => fail(child, markup.split_children_message),
+                        }
+                    }
+                    if (pane_count != 2) fail(node, markup.split_children_message);
+                }
             }
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);
@@ -1002,6 +1014,9 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     };
                 },
                 .bool => @field(options, zig_field) = evalExpr(node, entries, raw, ui, model, scope).truthy(),
+                // Optional bools (`expanded`): the attribute's PRESENCE
+                // makes the state non-null; the value sets it.
+                .optional => @field(options, zig_field) = evalExpr(node, entries, raw, ui, model, scope).truthy(),
                 .int => {
                     comptime requireVariant(variant, &.{.integer}, node, "expected a whole number");
                     @field(options, zig_field) = switch (evalExpr(node, entries, raw, ui, model, scope)) {
@@ -1080,6 +1095,13 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 options.on_scroll = comptime (scrollConstructor(expression.tag) orelse fail(node, markup.on_scroll_payload_message));
                 return;
             }
+            if (comptime std.mem.eql(u8, event, "resize")) {
+                comptime {
+                    if (!std.mem.eql(u8, node.name, "split")) fail(node, markup.on_resize_element_message);
+                }
+                options.on_resize = comptime (resizeConstructor(expression.tag) orelse fail(node, markup.on_resize_payload_message));
+                return;
+            }
             const msg = constructMessage(node, expression, entries, ui, model, scope);
             if (comptime std.mem.eql(u8, event, "press")) {
                 options.on_press = msg;
@@ -1123,6 +1145,18 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 for (@typeInfo(MsgT).@"union".fields) |field| {
                     if (field.type == canvas.ScrollState and std.mem.eql(u8, field.name, tag)) {
                         return Ui.scrollMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+                return null;
+            }
+        }
+
+        fn resizeConstructor(comptime tag: []const u8) ?Ui.ValueMsgFn {
+            comptime {
+                @setEvalBranchQuota(10_000);
+                for (@typeInfo(MsgT).@"union".fields) |field| {
+                    if (field.type == f32 and std.mem.eql(u8, field.name, tag)) {
+                        return Ui.valueMsg(@field(std.meta.Tag(MsgT), field.name));
                     }
                 }
                 return null;

@@ -61,6 +61,9 @@ pub fn widgetRoleName(role: canvas.WidgetRole) []const u8 {
         .slider => "slider",
         .progressbar => "progressbar",
         .chart => "chart",
+        .tree => "tree",
+        .treeitem => "treeitem",
+        .separator => "separator",
     };
 }
 
@@ -94,6 +97,13 @@ pub fn platformWidgetAccessibilityRole(role: canvas.WidgetRole) platform.WidgetA
         // The platform accessibility enum has no chart role; a chart is
         // exposed as an image carrying the series-summary label.
         .chart => .image,
+        // The platform accessibility enum has no tree/treeitem/separator
+        // roles yet; trees expose as lists (rows as list items, still
+        // focusable and selectable from assistive tech) and the split
+        // divider as a plain group whose value carries the fraction.
+        .tree => .list,
+        .treeitem => .listitem,
+        .separator => .group,
     };
 }
 

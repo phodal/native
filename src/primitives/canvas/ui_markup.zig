@@ -544,7 +544,7 @@ fn isBindingPath(text: []const u8) bool {
 /// ui_markup_view_tests.zig — write those as Zig view functions.
 pub const known_element_names =
     // Flex, overlay, and scrolling containers.
-    [_][]const u8{ "row", "column", "stack", "panel", "scroll", "list", "grid", "card" } ++
+    [_][]const u8{ "row", "column", "stack", "panel", "scroll", "list", "grid", "card", "split", "tree" } ++
     // Row containers (children flow along the horizontal main axis).
     [_][]const u8{ "breadcrumb", "button-group", "pagination", "radio-group", "tabs", "toggle-group" } ++
     // Vertical containers.
@@ -574,13 +574,17 @@ pub const known_option_attrs = [_][]const u8{
     "variant",        "size",        "width",       "height",              "grow",     "gap",
     "padding",        "main",        "cross",       "wrap",                "key",      "global-key",
     "text-alignment", "columns",     "virtualized", "virtual-item-extent", "role",     "label",
-    "autofocus",
+    "autofocus",      "min-width",   "expanded",
 };
 
-pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input", "scroll", "dismiss", "hold" };
+pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "input", "scroll", "dismiss", "hold", "resize" };
 
 pub const on_scroll_element_message = "on-scroll is only supported on scroll - the runtime emits scroll offsets for scroll containers, so the handler belongs on the scroll element itself";
 pub const on_scroll_payload_message = "on-scroll takes a bare Msg tag whose payload is the post-scroll state (a canvas.ScrollState variant, like activity_scrolled: canvas.ScrollState)";
+
+pub const on_resize_element_message = "on-resize is only supported on split - the runtime emits fraction changes for split dividers, so the handler belongs on the split element itself";
+pub const on_resize_payload_message = "on-resize takes a bare Msg tag whose payload is the new first-pane fraction (an f32 variant, like sidebar_resized: f32)";
+pub const split_children_message = "split takes exactly two element children (the panes) - put conditional or repeated content inside a pane container, and nest splits for more panes";
 
 /// Elements the runtime's dismissal machinery closes (Escape, click
 /// outside, automation/accessibility dismiss) — the markup subset of the
@@ -616,7 +620,7 @@ pub const known_non_hit_target_element_names = [_][]const u8{
     "list",       "table",       "table-row", "breadcrumb",   "button-group",
     "pagination", "radio-group", "tabs",      "toggle-group", "tooltip",
     "avatar",     "badge",       "separator", "skeleton",     "spinner",
-    "icon",
+    "icon",       "split",       "tree",
 };
 
 /// The handlers that stay dead on layout/decoration elements: press and
@@ -1137,6 +1141,19 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                 if (node.attr("name") == null) return errorAt(node, icon_missing_name_message);
                 if (node.children.len > 0) return errorAt(node.children[0], icon_children_message);
             }
+            if (std.mem.eql(u8, node.name, "split")) {
+                // Exactly two pane children, statically: the divider sits
+                // between fixed panes, so conditional/repeated content
+                // belongs inside a pane container.
+                var pane_count: usize = 0;
+                for (node.children) |child| {
+                    switch (child.kind) {
+                        .element, .use_block => pane_count += 1,
+                        else => return errorAt(child, split_children_message),
+                    }
+                }
+                if (pane_count != 2) return errorAt(node, split_children_message);
+            }
             for (node.attrs) |attribute| {
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {
                     if (!nameInList(attribute.name[3..], &known_events)) {
@@ -1155,6 +1172,13 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         // fire.
                         if (!nameInList(node.name, &known_dismiss_element_names)) {
                             return .{ .line = attribute.line, .column = attribute.column, .message = on_dismiss_element_message };
+                        }
+                    } else if (std.mem.eql(u8, attribute.name, "on-resize")) {
+                        // The runtime emits fraction changes for split
+                        // dividers only; anywhere else the handler could
+                        // never fire.
+                        if (!std.mem.eql(u8, node.name, "split")) {
+                            return .{ .line = attribute.line, .column = attribute.column, .message = on_resize_element_message };
                         }
                     } else if (nameInList(node.name, &known_non_hit_target_element_names) and deadHandlerOnNonHitTarget(attribute.name)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = non_hit_target_handler_message };

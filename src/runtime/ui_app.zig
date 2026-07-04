@@ -908,6 +908,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .canvas_widget_context_menu => |menu_event| try self.handleContextMenu(runtime, menu_event),
                 .canvas_widget_dismiss => |dismiss_event| try self.handleDismiss(runtime, dismiss_event),
                 .canvas_widget_context_press => |press_event| try self.handleContextPress(runtime, press_event),
+                .canvas_widget_resize => |resize_event| try self.handleWidgetResize(runtime, resize_event),
                 else => {},
             }
         }
@@ -1184,6 +1185,18 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const target = keyboard_event.target orelse return;
             if (tree.msgForKeyboard(target.id, keyboard_event.keyboard)) |msg| {
                 try self.dispatch(runtime, keyboard_event.window_id, msg);
+            }
+        }
+
+        /// Split-fraction changes route through the split's `on_resize`
+        /// constructor. The payload is the fraction the runtime already
+        /// applied, so a model that stores it and echoes it back into
+        /// `value` never fights the split reconcile rule.
+        fn handleWidgetResize(self: *Self, runtime: *Runtime, resize_event: core.CanvasWidgetResizeEvent) anyerror!void {
+            if (!std.mem.eql(u8, resize_event.view_label, self.options.canvas_label)) return;
+            const tree = self.tree orelse return;
+            if (tree.msgForResize(resize_event.id, resize_event.fraction)) |msg| {
+                try self.dispatch(runtime, resize_event.window_id, msg);
             }
         }
 

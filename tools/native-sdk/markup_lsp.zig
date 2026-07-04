@@ -572,6 +572,8 @@ pub const element_docs = [_]Doc{
     .{ .name = "scroll", .doc = "Scroll view; wrap multiple children in a single column inside it." },
     .{ .name = "list", .doc = "Vertical stack of items; supports virtualized and virtual-item-extent." },
     .{ .name = "grid", .doc = "Cell grid container." },
+    .{ .name = "split", .doc = "Two-pane horizontal splitter with a draggable divider between exactly two element children. value binds the model-owned first-pane fraction (0 lays out at 0.5), on-resize dispatches the applied fraction (echo it back into value), min-width on the panes bounds the drag; gap sets the divider band thickness. Nest splits for more panes." },
+    .{ .name = "tree", .doc = "Disclosure-tree container (vertical flow): descendant rows carrying role=\"treeitem\" form one roving keyboard focus set — Up/Down walk visible rows (selection follows focus via each row's on-press), Left collapses or moves to the parent row, Right expands or moves to the first child row, Home/End jump to the edges. Expandable rows bind expanded and on-toggle; the model owns both states." },
     .{ .name = "text", .doc = "Text leaf; content supports {} interpolation. Single-line by default; wrap=\"true\" word-wraps." },
     .{ .name = "badge", .doc = "Text leaf badge; content supports {} interpolation." },
     .{ .name = "button", .doc = "Text-bearing control; the label is the text content. Dispatch with on-press. icon draws a vector icon inline before the label (icon-only when the content is empty; give it a label) — one hit target, one enabled/disabled tint." },
@@ -653,7 +655,9 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "virtual-item-extent", .doc = "Fixed item extent for virtualized lists (plain number)." },
     .{ .name = "key", .doc = "Sibling-scoped identity key; on for, names an item field." },
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
-    .{ .name = "role", .doc = "Accessibility role (listitem, button, ...)." },
+    .{ .name = "role", .doc = "Accessibility role (listitem, treeitem, button, ...). treeitem also makes the row part of its tree's roving keyboard focus set." },
+    .{ .name = "min-width", .doc = "Width floor (plain number) without width's definite max: the element may grow past it but never shrink below. On split panes it bounds the divider drag." },
+    .{ .name = "expanded", .doc = "Tree rows (role=\"treeitem\"): disclosure state (true/false or a {binding}). Omit on leaves; expanded rows collapse on Left, collapsed ones expand on Right, both through on-toggle - the model owns the state." },
     .{ .name = "label", .doc = "Accessible name." },
     .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
     .{ .name = "icon", .doc = "button, toggle-button, list-item, menu-item: built-in vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot; literal name, comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw). Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint." },
@@ -739,6 +743,7 @@ pub const event_docs = [_]Doc{
     .{ .name = "on-scroll", .doc = "scroll element only: names a Msg variant with canvas.ScrollState payload; delivers the post-scroll offset/viewport/content extents after wheel, kinetic, keyboard, and accessibility scrolls." },
     .{ .name = "on-dismiss", .doc = "Dismissible surfaces only (dialog, drawer, sheet, dropdown-menu): Msg dispatched when Escape or a click outside dismisses the surface, so the MODEL owns the close (clear the open flag in update). The engine hides the surface immediately as an optimistic echo; the source tree wins on the next rebuild." },
     .{ .name = "on-hold", .doc = "Press-and-hold Msg: a pointer held ~350 ms dispatches it and the release then presses nothing; a quick click dispatches on-press as usual. A right/ctrl-click with no context menu on the route dispatches it immediately. Like on-press, binding it makes any element pressable." },
+    .{ .name = "on-resize", .doc = "split element only: names a Msg variant with f32 payload; delivers the applied first-pane fraction after every divider drag, keyboard adjustment, and assistive increment/decrement. Echo it back into value - the delivered fraction never fights the reconcile." },
 };
 
 pub fn elementDoc(name: []const u8) ?[]const u8 {

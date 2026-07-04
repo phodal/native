@@ -74,6 +74,12 @@ pub const WidgetKeyboardEvent = struct {
     focused_id: ?ObjectId = null,
     key: []const u8 = "",
     text: []const u8 = "",
+    /// True when the runtime moved keyboard focus in response to this
+    /// key BEFORE routing, so the event targets the newly focused
+    /// widget (tree row navigation, group focus moves). Tree rows use
+    /// it to tell "selection followed focus onto me" (dispatch select)
+    /// from "an arrow landed on me in place" (collapse/expand intent).
+    focus_moved: bool = false,
     edit: ?TextInputEvent = null,
     /// True when the runtime clamped a clipboard paste to fit capacity
     /// before building `edit`; apps that care about lost bytes must check
@@ -296,6 +302,12 @@ fn widgetKeyboardSelectAllTextEditEvent(event: WidgetKeyboardEvent) ?TextInputEv
 pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent) ?WidgetControlIntent {
     if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return null;
     if (widget.state.disabled) return null;
+    // Tree rows are ROLE-driven (any pressable row becomes one by
+    // carrying `role = .treeitem`), so their keymap resolves before the
+    // kind switch.
+    if (widget.semantics.role == .treeitem) {
+        if (widgetTreeItemKeyboardControlIntent(widget, keyboard)) |intent| return intent;
+    }
     return switch (widget.kind) {
         .button, .icon_button, .select, .combobox => if (isWidgetActivationKey(keyboard.key))
             .{ .kind = .press, .actions = .{ .press = true } }
@@ -316,6 +328,21 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
         else
             null,
         .slider => if (widgetSliderKeyboardValue(widget.value, keyboard)) |next_value|
+            .{
+                .kind = .set_value,
+                .actions = .{
+                    .increment = next_value > widget.value,
+                    .decrement = next_value < widget.value,
+                },
+                .value = std.math.clamp(next_value, 0, 1),
+            }
+        else
+            null,
+        // The split divider is the ARIA separator: horizontal arrows
+        // adjust the parent split's fraction, Home/End jump to the
+        // clamp edges (the runtime clamps against the panes' min
+        // widths when it applies the value).
+        .split_divider => if (widgetSplitDividerKeyboardValue(widget.value, keyboard)) |next_value|
             .{
                 .kind = .set_value,
                 .actions = .{
@@ -363,6 +390,15 @@ pub fn widgetSemanticControlIntentWithActions(widget: Widget, action: WidgetSema
 }
 
 fn widgetSemanticPressControlIntent(widget: Widget, actions: WidgetActions) WidgetControlIntent {
+    if (widget.semantics.role == .treeitem and actions.select) {
+        return .{
+            .kind = .select,
+            .actions = .{
+                .press = true,
+                .select = true,
+            },
+        };
+    }
     return switch (widget.kind) {
         .radio, .list_item, .menu_item, .data_cell, .segmented_control => if (actions.select)
             .{
@@ -393,6 +429,65 @@ pub fn widgetSliderKeyboardValue(current: f32, keyboard: WidgetKeyboardEvent) ?f
     }
     if (std.ascii.eqlIgnoreCase(keyboard.key, "home")) return 0;
     if (std.ascii.eqlIgnoreCase(keyboard.key, "end")) return 1;
+    return null;
+}
+
+/// Fraction steps for the split divider: the slider's step sizes, on the
+/// horizontal axis only (the vertical arrows stay free for tree/list
+/// focus travel around the divider).
+pub fn widgetSplitDividerKeyboardValue(current: f32, keyboard: WidgetKeyboardEvent) ?f32 {
+    if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return null;
+    const step: f32 = if (keyboard.modifiers.shift) 0.1 else 0.05;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft")) return current - step;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowright")) return current + step;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "home")) return 0;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "end")) return 1;
+    return null;
+}
+
+/// The ARIA tree-row keymap, resolved on the routed keyboard target:
+/// - Enter/Space activate (select, plus press when a command is bound).
+/// - A key that MOVED focus onto this row (`focus_moved`) selects it —
+///   selection follows focus, dispatched through the row's press
+///   handler so the model owns it.
+/// - Left on an expanded row collapses, Right on a collapsed row
+///   expands (both as toggle intents — the model owns the state through
+///   `on_toggle`; the runtime's focus pass already handled the
+///   move-to-parent / move-to-first-child cases by moving focus, which
+///   arrives here as `focus_moved`).
+fn widgetTreeItemKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent) ?WidgetControlIntent {
+    if (isWidgetActivationKey(keyboard.key)) {
+        return .{
+            .kind = .select,
+            .actions = .{
+                .select = true,
+                .press = widget.command.len > 0,
+            },
+        };
+    }
+    const navigation_key = std.ascii.eqlIgnoreCase(keyboard.key, "arrowup") or
+        std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown") or
+        std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft") or
+        std.ascii.eqlIgnoreCase(keyboard.key, "arrowright") or
+        std.ascii.eqlIgnoreCase(keyboard.key, "home") or
+        std.ascii.eqlIgnoreCase(keyboard.key, "end");
+    if (!navigation_key) return null;
+    if (keyboard.focus_moved) {
+        return .{
+            .kind = .select,
+            .actions = .{
+                .select = true,
+                .press = widget.command.len > 0,
+            },
+        };
+    }
+    const expanded = widget.state.expanded orelse return null;
+    if (expanded and std.ascii.eqlIgnoreCase(keyboard.key, "arrowleft")) {
+        return .{ .kind = .toggle, .actions = .{ .toggle = true } };
+    }
+    if (!expanded and std.ascii.eqlIgnoreCase(keyboard.key, "arrowright")) {
+        return .{ .kind = .toggle, .actions = .{ .toggle = true } };
+    }
     return null;
 }
 
@@ -511,6 +606,11 @@ pub fn defaultSemanticActions(widget: Widget) WidgetActions {
             actions.decrement = true;
         },
         .resizable => actions.drag = true,
+        .split_divider => {
+            actions.drag = true;
+            actions.increment = true;
+            actions.decrement = true;
+        },
         .dialog, .drawer, .sheet, .popover, .menu_surface, .dropdown_menu, .tooltip => actions.dismiss = true,
         .list_item, .segmented_control, .data_cell => {
             actions.select = true;
@@ -518,12 +618,21 @@ pub fn defaultSemanticActions(widget: Widget) WidgetActions {
         },
         else => {},
     }
+    // Tree rows are role-driven: any row carrying `role = .treeitem` is
+    // selectable through the tree keymap and assistive select actions.
+    if (widget.semantics.role == .treeitem) {
+        actions.select = true;
+        if (widget.command.len > 0) actions.press = true;
+    }
     return actions;
 }
 
 pub fn defaultFocusable(widget: Widget) bool {
+    // Tree rows are role-driven: `role = .treeitem` on any row makes it
+    // part of the tree's roving keyboard focus set.
+    if (widget.semantics.role == .treeitem) return !widget.state.disabled;
     return switch (widget.kind) {
-        .scroll_view, .accordion, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider => !widget.state.disabled,
+        .scroll_view, .accordion, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .split_divider => !widget.state.disabled,
         else => false,
     };
 }

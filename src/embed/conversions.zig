@@ -276,6 +276,12 @@ pub fn mobileWidgetRole(role: canvas.WidgetRole) MobileWidgetRole {
         // The mobile ABI predates the chart role; expose charts as images
         // carrying the series-summary label.
         .chart => .image,
+        // The mobile ABI predates the tree/treeitem/separator roles;
+        // trees expose as lists (rows as list items) and the split
+        // divider as a group whose value carries the fraction.
+        .tree => .list,
+        .treeitem => .listitem,
+        .separator => .group,
     };
 }
 

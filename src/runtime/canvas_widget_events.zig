@@ -596,38 +596,57 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             try dispatchCanvasWidgetCommandForId(self, app, index, target.id);
         }
 
-        pub fn updateCanvasWidgetFocusFromKeyboardInput(self: *Runtime, input_event: GpuSurfaceInputEvent) anyerror!void {
-            if (input_event.kind != .key_down) return;
-            const index = runtimeFindViewIndex(self, input_event.window_id, input_event.label) orelse return;
-            if (self.views[index].kind != .gpu_surface) return;
+        /// Returns true when the key moved keyboard focus to a DIFFERENT
+        /// widget — the caller stamps it onto the routed keyboard event
+        /// (`focus_moved`) so tree rows can tell selection-follows-focus
+        /// arrivals from in-place collapse/expand intents.
+        pub fn updateCanvasWidgetFocusFromKeyboardInput(self: *Runtime, input_event: GpuSurfaceInputEvent) anyerror!bool {
+            if (input_event.kind != .key_down) return false;
+            const index = runtimeFindViewIndex(self, input_event.window_id, input_event.label) orelse return false;
+            if (self.views[index].kind != .gpu_surface) return false;
 
             const current_id: ?canvas.ObjectId = if (self.views[index].canvas_widget_focused_id == 0) null else self.views[index].canvas_widget_focused_id;
             if (std.ascii.eqlIgnoreCase(input_event.key, "tab")) {
                 const direction: canvas.WidgetFocusDirection = if (input_event.modifiers.shift) .backward else .forward;
                 const target = if (current_id) |id|
-                    self.views[index].canvasWidgetScopedFocusTarget(id, direction) orelse self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return
+                    self.views[index].canvasWidgetScopedFocusTarget(id, direction) orelse self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return false
                 else
-                    self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return;
-                try setCanvasWidgetFocusFromKeyboard(self, index, target.id);
-                return;
+                    self.views[index].widgetLayoutTree().focusTarget(current_id, direction) orelse return false;
+                return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
             }
 
-            const focused_id = current_id orelse return;
+            const focused_id = current_id orelse return false;
             const layout = self.views[index].widgetLayoutTree();
-            const focused = layout.focusTargetById(focused_id) orelse return;
+            const focused = layout.focusTargetById(focused_id) orelse return false;
             if (canvasWidgetGroupFocusEdgeFromInput(input_event)) |edge| {
-                const target = canvasWidgetGroupFocusEdgeTarget(layout, focused, edge) orelse return;
-                try setCanvasWidgetFocusFromKeyboard(self, index, target.id);
-                return;
+                // A tree row's Home/End jump to the SCOPE's edges (rows
+                // nest, so the group edge walk's same-parent rule would
+                // stop at one level).
+                if (canvas_widget_runtime.canvasWidgetTreeFocusEdgeTarget(layout, focused, edge)) |target| {
+                    return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
+                }
+                const target = canvasWidgetGroupFocusEdgeTarget(layout, focused, edge) orelse return false;
+                return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
             }
-            const direction = canvasWidgetSpatialFocusDirection(input_event) orelse return;
+            const direction = canvasWidgetSpatialFocusDirection(input_event) orelse return false;
+            // The ARIA tree keymap first: Up/Down walk the scope's
+            // visible rows, Left/Right move to parent / first child when
+            // they are moves (collapse/expand stay routed intents).
+            if (canvas_widget_runtime.canvasWidgetTreeDirectionalFocusTarget(layout, focused, direction)) |target| {
+                return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
+            }
             if (canvasWidgetGroupDirectionalFocusTarget(layout, focused, direction)) |target| {
-                try setCanvasWidgetFocusFromKeyboard(self, index, target.id);
-                return;
+                return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
             }
-            const target = layout.focusTarget(focused_id, direction) orelse return;
-            if (!canvasWidgetSpatialFocusAllowed(layout, focused, target, direction)) return;
-            try setCanvasWidgetFocusFromKeyboard(self, index, target.id);
+            const target = layout.focusTarget(focused_id, direction) orelse return false;
+            if (!canvasWidgetSpatialFocusAllowed(layout, focused, target, direction)) return false;
+            return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
+        }
+
+        fn setCanvasWidgetFocusFromKeyboardMoved(self: *Runtime, view_index: usize, previous_id: ?canvas.ObjectId, target_id: canvas.ObjectId) anyerror!bool {
+            try setCanvasWidgetFocusFromKeyboard(self, view_index, target_id);
+            const previous = previous_id orelse 0;
+            return target_id != 0 and target_id != previous;
         }
 
         pub fn setCanvasWidgetFocusFromKeyboard(self: *Runtime, view_index: usize, target_id: canvas.ObjectId) anyerror!void {

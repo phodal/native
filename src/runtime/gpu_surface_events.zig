@@ -156,7 +156,10 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             const keyboard_dismissed_id = try CanvasWidgetEventMethods().dismissCanvasWidgetSurfaceFromKeyboardInput(self, input_event);
             if (keyboard_dismissed_id != 0) dismissed_surface_id = keyboard_dismissed_id;
             const widget_surface_dismissed = keyboard_dismissed_id != 0;
-            if (!widget_surface_dismissed) try CanvasWidgetEventMethods().updateCanvasWidgetFocusFromKeyboardInput(self, input_event);
+            const widget_focus_moved = if (widget_surface_dismissed)
+                false
+            else
+                try CanvasWidgetEventMethods().updateCanvasWidgetFocusFromKeyboardInput(self, input_event);
             var widget_keyboard_event = if (widget_surface_dismissed)
                 null
             else
@@ -167,6 +170,12 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     => null,
                     else => return err,
                 };
+            // The routed event targets the (possibly just-moved) focused
+            // widget; the flag lets tree rows tell "focus arrived here"
+            // from "an arrow landed here in place".
+            if (widget_keyboard_event) |*keyboard_event| {
+                keyboard_event.keyboard.focus_moved = widget_focus_moved;
+            }
             // Clipboard shortcuts resolve against the raw input (copy has
             // no routed target when a static text selection is live) and
             // may stamp a paste/cut edit onto the routed keyboard event;
@@ -227,8 +236,11 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             // Wheel and keyboard scroll mutations above noted pending
             // scroll events on the view; deliver them after the input's
             // own dispatches so the app observes inputs before offsets.
+            // Split-fraction changes (divider drag, keyboard steps)
+            // follow the same drain discipline.
             if (runtimeFindViewIndex(self, input_event.window_id, input_event.label)) |index| {
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
+                try dispatchPendingCanvasWidgetResizeEvents(self, app, index);
             }
             try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
         }
@@ -257,6 +269,33 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     .view_label = self.views[view_index].label,
                     .id = id,
                     .scroll = scroll,
+                } });
+            }
+        }
+
+        /// Drain the view's pending split-resize set into
+        /// `canvas_widget_resize` app events. Each entry reads the
+        /// node's CURRENT fraction, so several coalesced drag steps
+        /// deliver the final value (the scroll-drain contract).
+        pub fn dispatchPendingCanvasWidgetResizeEvents(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            if (self.views[view_index].widget_resize_event_count == 0) return;
+
+            // Copy-then-reset: app dispatch can rebuild the view, which
+            // may note fresh entries for the next drain.
+            const pending_ids = self.views[view_index].widget_resize_event_ids;
+            const pending_count = self.views[view_index].widget_resize_event_count;
+            self.views[view_index].widget_resize_event_count = 0;
+            for (pending_ids[0..pending_count]) |id| {
+                const node_index = self.views[view_index].canvasWidgetNodeIndexById(id) orelse continue;
+                const widget = self.views[view_index].widget_layout_nodes[node_index].widget;
+                if (widget.kind != .split) continue;
+                try self.dispatchEvent(app, .{ .canvas_widget_resize = .{
+                    .window_id = self.views[view_index].window_id,
+                    .view_label = self.views[view_index].label,
+                    .id = id,
+                    .fraction = widget.value,
                 } });
             }
         }

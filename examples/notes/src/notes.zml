@@ -25,16 +25,20 @@
       <button variant="primary" icon="plus" on-press="new_note" label="New note">New note</button>
     </row>
     <separator />
-    <row grow="1">
-      <column width="216" gap="8" padding="10" background="surface">
+    <!-- Nested splitters: the outer seam resizes the folder sidebar, the
+         inner one the note list vs the editor. Fractions are MODEL-OWNED:
+         the runtime applies the drag, dispatches on-resize with the new
+         fraction, and the model echoes it back through value. -->
+    <split grow="1" value="{sidebar_split}" on-resize="sidebar_resized">
+      <column min-width="150" gap="8" padding="10" background="surface">
         <text size="sm" foreground="text_muted">Folders</text>
-        <column gap="2">
-          <!-- Pressable rows are just pressable panels: the handler on
-               the panel makes it the press target, and clicks on the
-               plain text, icon, and badge inside fall through to it
-               (dragging still selects the text). -->
+        <!-- The folder rail is a disclosure tree (flat today — every row a
+             leaf): Up/Down move the selection through the rows, Home/End
+             jump to the edges, Enter/Space select, and selection follows
+             focus through each row's on-press. -->
+        <tree gap="2" label="Folders">
           <for each="folderRows" key="id" as="f">
-            <panel on-press="select_folder:{f.id}" selected="{f.selected}" padding="8" role="listitem" label="{f.label}">
+            <panel on-press="select_folder:{f.id}" selected="{f.selected}" padding="8" role="treeitem" label="{f.label}">
               <row gap="8" cross="center">
                 <icon name="folder" width="14" height="14" foreground="text_muted" />
                 <text grow="1">{f.name}</text>
@@ -42,72 +46,72 @@
               </row>
             </panel>
           </for>
-        </column>
+        </tree>
         <spacer grow="1" />
         <column gap="4">
           <button size="sm" variant="outline" on-press="open_create_folder" disabled="{foldersFull}" label="New folder">New Folder</button>
           <button size="sm" variant="ghost" on-press="open_rename_folder" disabled="{renameDisabled}" label="Rename folder">Rename</button>
         </column>
       </column>
-      <separator />
-      <column width="304" gap="8" padding="10">
-        <row gap="8" cross="center">
-          <text size="sm" foreground="text_muted" grow="1">{listTitle}</text>
-          <badge variant="secondary">{noteCount}</badge>
-        </row>
-        <scroll grow="1" label="Note list">
-          <column gap="4">
-            <for each="noteRows" key="id" as="n">
-              <panel on-press="open_note:{n.id}" selected="{n.active}" padding="10" role="listitem" label="{n.title}">
-                <column gap="4">
-                  <text>{n.title}</text>
-                  <row gap="8" cross="center">
-                    <text size="sm" foreground="text_muted" width="36">{n.time}</text>
-                    <text size="sm" foreground="text_muted" grow="1">{n.snippet}</text>
-                  </row>
-                </column>
-              </panel>
-            </for>
-            <else>
-              <panel padding="14" label="Empty note list">
-                <column gap="4">
-                  <text>{emptyTitle}</text>
-                  <text size="sm" foreground="text_muted">{emptyHint}</text>
-                </column>
-              </panel>
-            </else>
-          </column>
-        </scroll>
-      </column>
-      <separator />
-      <column grow="1">
-        <if test="{hasActiveNote}">
-          <row padding="10" gap="8" cross="center">
-            <text size="sm" foreground="text_muted" grow="1">{editorMeta}</text>
-            <button size="sm" variant="outline" on-press="copy_note" label="Copy note text">Copy</button>
-            <button size="sm" variant="ghost" on-press="delete_note" label="Delete note">Delete</button>
+      <split value="{list_split}" on-resize="list_resized">
+        <column min-width="220" gap="8" padding="10">
+          <row gap="8" cross="center">
+            <text size="sm" foreground="text_muted" grow="1">{listTitle}</text>
+            <badge variant="secondary">{noteCount}</badge>
           </row>
-          <column grow="1" padding="10">
-            <textarea text="{editorText}" on-input="edit" grow="1" placeholder="Start writing — the first line becomes the title" label="Note editor" />
-          </column>
-        </if>
-        <else>
-          <column grow="1" padding="24" main="center" cross="center" gap="10">
-            <text>No note selected</text>
-            <text size="sm" foreground="text_muted">Create one with Cmd+N, or pick a note from the list.</text>
-            <spacer height="8" />
-            <column gap="3" width="320">
-              <for each="shortcut_hints" as="s">
-                <row gap="10">
-                  <text size="sm" foreground="text_muted" width="130">{s.keys}</text>
-                  <text size="sm" grow="1">{s.action}</text>
-                </row>
+          <scroll grow="1" label="Note list">
+            <column gap="4">
+              <for each="noteRows" key="id" as="n">
+                <panel on-press="open_note:{n.id}" selected="{n.active}" padding="10" role="listitem" label="{n.title}">
+                  <column gap="4">
+                    <text>{n.title}</text>
+                    <row gap="8" cross="center">
+                      <text size="sm" foreground="text_muted" width="36">{n.time}</text>
+                      <text size="sm" foreground="text_muted" grow="1">{n.snippet}</text>
+                    </row>
+                  </column>
+                </panel>
               </for>
+              <else>
+                <panel padding="14" label="Empty note list">
+                  <column gap="4">
+                    <text>{emptyTitle}</text>
+                    <text size="sm" foreground="text_muted">{emptyHint}</text>
+                  </column>
+                </panel>
+              </else>
             </column>
-          </column>
-        </else>
-      </column>
-    </row>
+          </scroll>
+        </column>
+        <column min-width="280">
+          <if test="{hasActiveNote}">
+            <row padding="10" gap="8" cross="center">
+              <text size="sm" foreground="text_muted" grow="1">{editorMeta}</text>
+              <button size="sm" variant="outline" on-press="copy_note" label="Copy note text">Copy</button>
+              <button size="sm" variant="ghost" on-press="delete_note" label="Delete note">Delete</button>
+            </row>
+            <column grow="1" padding="10">
+              <textarea text="{editorText}" on-input="edit" grow="1" placeholder="Start writing — the first line becomes the title" label="Note editor" />
+            </column>
+          </if>
+          <else>
+            <column grow="1" padding="24" main="center" cross="center" gap="10">
+              <text>No note selected</text>
+              <text size="sm" foreground="text_muted">Create one with Cmd+N, or pick a note from the list.</text>
+              <spacer height="8" />
+              <column gap="3" width="320">
+                <for each="shortcut_hints" as="s">
+                  <row gap="10">
+                    <text size="sm" foreground="text_muted" width="130">{s.keys}</text>
+                    <text size="sm" grow="1">{s.action}</text>
+                  </row>
+                </for>
+              </column>
+            </column>
+          </else>
+        </column>
+      </split>
+    </split>
     <status-bar>{statusLine}</status-bar>
   </column>
   <if test="{dialogOpen}">

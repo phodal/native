@@ -868,8 +868,11 @@ test "the validator's text-leaf element list matches the interpreter's takes-tex
 ///   scalar bindings cannot carry arrays (the documented select-options
 ///   constraint, one level deeper). Charts are Zig views via `Ui.chart`;
 ///   a markup chart element waits for an array-binding channel.
+/// - split_divider: never authored — the builder synthesizes the drag
+///   handle between a split's two panes, so both markup engines get it
+///   through the same finalize that Zig views do.
 const markup_excluded_widget_kinds = [_]canvas.WidgetKind{
-    .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control, .chart,
+    .image, .icon_button, .data_grid, .popover, .menu_surface, .segmented_control, .chart, .split_divider,
 };
 
 fn kindExpressible(kind: canvas.WidgetKind) bool {
@@ -1975,4 +1978,152 @@ test "columns off grid and misshapen alignment values fail with teaching message
         try testing.expectEqualStrings(case.message, view.diagnostic.message);
         try testing.expect(view.diagnostic.line > 0);
     }
+}
+
+// -------------------------------------------------- split panes and trees
+
+pub const Folder = struct {
+    id: u32,
+    name: []const u8,
+    expanded: bool = false,
+
+    fn key(folder: *const Folder) canvas.UiKey {
+        return canvas.uiKey(folder.id);
+    }
+};
+
+pub const PaneMsg = union(enum) {
+    sidebar_resized: f32,
+    select_folder: u32,
+    toggle_folder: u32,
+};
+
+pub const PaneModel = struct {
+    sidebar_fraction: f32 = 0.4,
+    pub const folders = [_]Folder{
+        .{ .id = 1, .name = "Inbox", .expanded = true },
+        .{ .id = 2, .name = "Archive" },
+    };
+};
+
+pub const PaneUi = canvas.Ui(PaneMsg);
+const PaneMarkup = markup_view.MarkupView(PaneModel, PaneMsg);
+
+pub const pane_markup_source =
+    \\<split value="{sidebar_fraction}" on-resize="sidebar_resized">
+    \\  <tree label="Folders">
+    \\    <for each="folders" key="id" as="f">
+    \\      <panel role="treeitem" expanded="{f.expanded}" on-press="select_folder:{f.id}" on-toggle="toggle_folder:{f.id}" label="{f.name}">
+    \\        <text>{f.name}</text>
+    \\      </panel>
+    \\    </for>
+    \\  </tree>
+    \\  <column min-width="120">
+    \\    <text>Editor</text>
+    \\  </column>
+    \\</split>
+;
+
+pub fn handPaneView(ui: *PaneUi, model: *const PaneModel) PaneUi.Node {
+    return ui.split(.{ .value = model.sidebar_fraction, .on_resize = PaneUi.valueMsg(.sidebar_resized) }, .{
+        ui.tree(.{ .semantics = .{ .label = "Folders" } }, ui.each(PaneModel.folders[0..], Folder.key, folderRow)),
+        ui.column(.{ .min_width = 120 }, .{
+            ui.text(.{}, "Editor"),
+        }),
+    });
+}
+
+fn folderRow(ui: *PaneUi, folder: *const Folder) PaneUi.Node {
+    return ui.panel(.{
+        .expanded = folder.expanded,
+        .on_press = PaneMsg{ .select_folder = folder.id },
+        .on_toggle = PaneMsg{ .toggle_folder = folder.id },
+        .semantics = .{ .role = .treeitem, .label = folder.name },
+    }, .{
+        ui.text(.{}, folder.name),
+    });
+}
+
+test "markup split and tree build the hand-written view with the divider synthesized" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = PaneModel{};
+    var view = try PaneMarkup.init(arena, pane_markup_source);
+    var markup_ui = PaneUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = PaneUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handPaneView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+
+    // The synthesized divider sits between the panes in both engines.
+    try testing.expectEqual(@as(usize, 3), markup_tree.root.children.len);
+    try testing.expectEqual(canvas.WidgetKind.split_divider, markup_tree.root.children[1].kind);
+
+    // on-resize binds the f32 fraction constructor on the split.
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+    try testing.expectEqual(@as(f32, 0.7), markup_tree.msgForResize(markup_tree.root.id, 0.7).?.sidebar_resized);
+
+    // Tree rows carry the treeitem role, the model-owned expanded state,
+    // and both the press (selection) and toggle (disclosure) handlers.
+    const row = findByKind(markup_tree.root, .panel).?;
+    try testing.expectEqual(canvas.WidgetRole.treeitem, row.semantics.role);
+    try testing.expectEqual(@as(?bool, true), row.state.expanded);
+    try testing.expectEqual(@as(u32, 1), markup_tree.msgForPointer(row.id, .up).?.select_folder);
+    try testing.expectEqual(@as(u32, 1), markup_tree.msgFor(row.id, .toggle).?.toggle_folder);
+
+    // min-width lands as a floor only (no definite max).
+    const editor = markup_tree.root.children[2];
+    try testing.expectEqual(@as(f32, 120), editor.layout.min_size.width);
+    try testing.expectEqual(@as(f32, 0), editor.layout.max_size.width);
+}
+
+test "split and tree misuse is validated with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            .source = "<split>\n  <column></column>\n</split>",
+            .message = canvas.ui_markup.split_children_message,
+        },
+        .{
+            .source = "<split>\n  <column></column>\n  <column></column>\n  <column></column>\n</split>",
+            .message = canvas.ui_markup.split_children_message,
+        },
+        .{
+            .source = "<split>\n  <if test=\"{ready}\"><column></column></if>\n  <column></column>\n</split>",
+            .message = canvas.ui_markup.split_children_message,
+        },
+        .{
+            .source = "<column on-resize=\"resized\">\n</column>",
+            .message = canvas.ui_markup.on_resize_element_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = canvas.ui_markup.Parser.init(arena, case.source);
+        const info = canvas.ui_markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+        try testing.expect(info.column > 0);
+    }
+
+    // The interpreter mirrors the validator: a resize tag without an f32
+    // payload variant fails the build with the payload teaching message.
+    const bad_payload_source = "<split value=\"0.5\" on-resize=\"select_folder\"><column></column><column></column></split>";
+    var view = try PaneMarkup.init(arena, bad_payload_source);
+    var ui = PaneUi.init(arena);
+    const model = PaneModel{};
+    try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+    try testing.expectEqualStrings(canvas.ui_markup.on_resize_payload_message, view.diagnostic.message);
 }

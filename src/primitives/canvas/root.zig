@@ -523,6 +523,14 @@ pub const widgetPressTargetIndexFromNode = @import("widget_routing.zig").widgetP
 pub const widgetKindStacksChildren = @import("widget_layout.zig").widgetKindStacksChildren;
 pub const widgetIsAnchored = @import("widget_tree.zig").widgetIsAnchored;
 pub const anchoredWidgetFrame = @import("widget_layout.zig").anchoredWidgetFrame;
+/// Split-pane geometry (widget_layout.zig): divider band width, the
+/// fraction clamp band from the panes' min widths, and the in-place
+/// subtree re-layout the runtime reconcile uses when it restores a
+/// runtime-owned fraction.
+pub const splitDividerExtent = @import("widget_layout.zig").splitDividerExtent;
+pub const splitFractionBounds = @import("widget_layout.zig").splitFractionBounds;
+pub const splitEffectiveFraction = @import("widget_layout.zig").splitEffectiveFraction;
+pub const relayoutSplitChildren = @import("widget_layout.zig").relayoutSplitChildren;
 pub const WidgetTextGeometry = widget_runtime.WidgetTextGeometry;
 pub const textGeometryForWidget = widget_runtime.textGeometryForWidget;
 pub const virtualWidgetScrollContentExtent = widget_runtime.virtualWidgetScrollContentExtent;

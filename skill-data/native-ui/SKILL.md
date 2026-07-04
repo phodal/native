@@ -145,6 +145,8 @@ The deepest declaring widget on the hit route wins; disabled items and separator
 | `alert`, `bubble` | surfaces | `alert` title via `text` attr; children stack inside |
 | `dialog`, `drawer`, `sheet` | modal surfaces | rendered in place — title via `text` attr, wrap in `<if>` to show conditionally |
 | `resizable` | resizable | engine-managed drag handle; `width` sets the initial width |
+| `split` | split | two-pane horizontal splitter: exactly two element children (nest splits for more panes), the engine synthesizes the draggable divider between them. `value` binds the model-owned first-pane fraction (0 lays out at 0.5), `on-resize` names an f32 Msg variant dispatched with every applied fraction (echo it back through `value` — see Splitters), `min-width` on the panes bounds the drag, `gap` sets the divider band thickness. The divider is focusable: Left/Right (Shift for bigger steps) adjust, Home/End jump to the clamp edges |
+| `tree` | tree | disclosure-tree container (vertical flow): descendant rows carrying `role="treeitem"` — at ANY nesting depth — form one roving keyboard focus set with the ARIA tree keymap. Up/Down walk visible rows (selection follows focus through each row's `on-press`), Left collapses an expanded row or moves to the parent row, Right expands a collapsed row or moves to the first child row, Home/End jump to the edges, Enter/Space activate. Expandable rows bind `expanded` and `on-toggle`; the model owns selection and expansion (collapsed children are simply not rendered) |
 | `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed; `text` is single-line unless `wrap="true"` |
 | `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `button`, `toggle-button`, `list-item`, and `menu-item` also take `icon="save"` — a vector icon drawn inline (buttons/toggle-buttons before the label, icon-only when the content is empty: add a `label`; list/menu items as a leading slot), ONE hit target whose icon follows the element's enabled/disabled tint (no overlay stacking, no duplicated `on-press`); tab strips are `toggle-button` children, so tabs get icons this way; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials, or a runtime image via `image="{binding}"` (see the Images section) |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
@@ -161,10 +163,10 @@ Not markup-expressible (deliberately — write these as Zig view functions with 
 
 ## Attributes
 
-Layout: `gap` (flow containers only — stacking containers `stack`/`panel`/`card`/`alert`/`bubble`/`dialog`/`drawer`/`sheet`/`resizable` layer their children, so `gap` there is a validation error, not silence: wrap the children in a `column`/`row` inside), `padding` (uniform), `grow`, `width`, `height` (definite: the element is exactly that size — intrinsic content neither shrinks nor silently overflows it; `resizable` treats `width` as the initial width), `wrap` (`text` only: `wrap="true"` word-wraps at the width the element receives and reserves the wrapped height in columns; default is single-line), `text-alignment` (start|center|end — text leaves, status bars, surface titles; controls that own their label placement ignore it), `columns` (`grid` only: fixed column count, omit for the derived near-square grid; a teaching error elsewhere), `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`, `anchor` (`dropdown-menu` only, literal `below`/`above`: floats the surface against its parent instead of the flow — auto-flips when the preferred side does not fit, height clamps to the chosen side, x clamps into the window), `anchor-alignment` (with `anchor`: `start`/`end`/`stretch` — stretch also widens the surface to at least the anchor's width, the select-menu look), `anchor-offset` (with `anchor`: literal gap in points, default 4).
+Layout: `gap` (flow containers only — stacking containers `stack`/`panel`/`card`/`alert`/`bubble`/`dialog`/`drawer`/`sheet`/`resizable` layer their children, so `gap` there is a validation error, not silence: wrap the children in a `column`/`row` inside; on `split` it sets the divider band thickness), `padding` (uniform), `grow`, `width`, `height` (definite: the element is exactly that size — intrinsic content neither shrinks nor silently overflows it; `resizable` treats `width` as the initial width), `min-width` (a floor WITHOUT `width`'s definite max — the element may grow past it but never shrink below; on split panes it bounds the divider drag), `wrap` (`text` only: `wrap="true"` word-wraps at the width the element receives and reserves the wrapped height in columns; default is single-line), `text-alignment` (start|center|end — text leaves, status bars, surface titles; controls that own their label placement ignore it), `columns` (`grid` only: fixed column count, omit for the derived near-square grid; a teaching error elsewhere), `main` (start|center|end|space_between), `cross` (stretch|start|center|end), `virtualized`, `virtual-item-extent`, `anchor` (`dropdown-menu` only, literal `below`/`above`: floats the surface against its parent instead of the flow — auto-flips when the preferred side does not fit, height clamps to the chosen side, x clamps into the window), `anchor-alignment` (with `anchor`: `start`/`end`/`stretch` — stretch also widens the surface to at least the anchor's width, the select-menu look), `anchor-offset` (with `anchor`: literal gap in points, default 4).
 Appearance/state: `variant` (default|primary|secondary|outline|ghost|destructive), `size` (default|sm|lg|icon), `disabled`, `checked`, `selected`, `value`, `placeholder`, `icon` (`button`, `toggle-button`, `list-item`, `menu-item`: literal built-in icon name drawn inline — buttons/toggle-buttons before the label, list/menu items as a leading slot; a teaching error anywhere else).
 Focus: `autofocus` (focusable controls only — a teaching error elsewhere): moves keyboard focus to the element when it MOUNTS or when the bound value turns on, edge-triggered so holding it true never re-steals focus from the user. The TEA way to focus an editor on note-create (`<text-field autofocus="{editing}" ...>` or mount the field under an `<if>` with `autofocus="true"`; Zig views use `ElementOptions.autofocus`) and to give keyboard-first apps their first focus without a click.
-Semantics: `role` (listitem, button, ...), `label` (accessible name).
+Semantics: `role` (listitem, treeitem, button, ...; `treeitem` also makes the row part of its tree's roving keyboard focus set), `label` (accessible name), `expanded` (tree rows: disclosure state, model-owned — omit on leaves).
 Identity: `key` (sibling-scoped), `global-key` (parent-independent — use for items that move between containers, e.g. board cards; ids then survive reparenting).
 Render channel (Zig-only, no markup attributes): `ElementOptions.opacity` and `ElementOptions.transform` wrap the element's emitted commands without reflowing siblings — the defaults (1, identity) emit nothing, opacity 0 culls painting (pair with `disabled` when fading interactive content), and a transform moves both rendering and pointer hit-testing while accessibility frames stay at the layout frame. Pair with `UiApp.Options.animations` for tweening.
 
@@ -213,6 +215,46 @@ How the pieces fit, all model-owned (TEA):
 - **Automation sees everything**: the floating menu and its items appear in widget snapshots at their real frames and `widget-click <item-id>` works while it is open.
 
 `combobox` composes the same way (the model filters the `for` source as the user types via `on-input`). The Zig mirror is `ElementOptions.anchor`/`anchor_alignment`/`anchor_offset` + `on_dismiss` on a `dropdown_menu` (or `popover`/`menu_surface`, which stay Zig-only) built with `ui.eachCtx` for the options. Budget: at most 16 anchored surfaces may be mounted per view (`max_canvas_widget_anchored_per_view`, loud `error.WidgetAnchoredSurfaceLimitReached`) — an `anchor` inside a `<for>` body is almost always a mistake.
+
+### Splitters: split panes with a model-owned fraction
+
+`split` is the resizable two-pane seam: exactly two element children, and the engine synthesizes the draggable divider between them (resize cursor, focusable, ARIA separator whose value is the fraction). The fraction is MODEL-OWNED — the runtime applies each drag/keyboard step as an optimistic echo, dispatches `on-resize` with the applied fraction, and the model echoes it back through `value` so the next rebuild lays the panes exactly there:
+
+```html
+<split value="{sidebar_split}" on-resize="sidebar_resized">
+  <column min-width="150">…sidebar…</column>
+  <split value="{list_split}" on-resize="list_resized">
+    <column min-width="220">…list…</column>
+    <column min-width="280">…editor…</column>
+  </split>
+</split>
+```
+
+- **`on-resize` names an f32 Msg variant** (`sidebar_resized: f32`); `update` stores it (`model.sidebar_split = fraction`). The delivered fraction is the value the runtime already applied and clamped, so echoing it never fights the reconcile.
+- **`min-width` on the panes bounds the drag** — the divider clamps so neither pane shrinks below its floor, on drag, keyboard, and layout alike.
+- **Uncontrolled works too**: without `on-resize`, the divider position survives rebuilds under the source-wins reconcile (a source-side `value` change wins), but pane CONTENT lays out at the declared fraction until the model echoes — bind the handler for the exact controlled loop.
+- **Keyboard**: Tab reaches the divider; Left/Right step the fraction (Shift for 2x), Home/End jump to the clamp edges. Automation drives it with `widget-drag`/`widget-key`, and snapshots show the divider as `role=separator` with the fraction as its value.
+- Three panes = nested splits, as above. More than two children is a validation error (put conditional content inside a pane).
+
+### Trees: disclosure rows with the ARIA tree keymap
+
+`tree` turns a rail of pressable rows into a keyboard-navigable disclosure tree. Rows are ROLE-driven: any pressable element carrying `role="treeitem"` — at any nesting depth under the tree — joins one roving focus set:
+
+```html
+<tree gap="2" label="Folders">
+  <for each="folderRows" key="id" as="f">
+    <panel role="treeitem" expanded="{f.expanded}" on-press="select_folder:{f.id}" on-toggle="toggle_folder:{f.id}" label="{f.label}">
+      <row gap="8" cross="center"><icon name="folder"/><text grow="1">{f.name}</text></row>
+    </panel>
+  </for>
+</tree>
+```
+
+- **Up/Down walk the visible rows** in tree order, across nesting levels. Selection follows focus: each move dispatches the landed row's `on-press`, so the model owns the selection exactly like a click.
+- **Left/Right are disclosure keys**: Left on an expanded row dispatches its `on-toggle` (collapse); on a collapsed row or leaf it moves focus to the PARENT row. Right on a collapsed row dispatches `on-toggle` (expand); on an expanded row it moves to the first child row.
+- **Home/End** jump to the scope's first/last row; **Enter/Space** activate (`on-press`).
+- **Expansion is model-owned**: expandable rows bind `expanded` (omit it on leaves) and the model renders child rows only while expanded — collapsed subtrees are simply not in the tree, so "visible rows" needs no engine bookkeeping. Flat rails (the notes folder list) are honest trees of leaves: Up/Down/Home/End/Enter work, Left/Right are inert.
+- Single-select: selecting a row clears the previous selection across the WHOLE tree scope (rows nest, so this is not per-parent).
 
 ### Press-and-hold: on-hold
 

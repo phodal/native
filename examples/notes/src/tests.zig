@@ -494,7 +494,7 @@ test "boot restores the persisted store before the first paint" {
     // The restored note reached the widgets.
     const snapshot = h.snapshot();
     try testing.expect(snapshotWidgetNamed(snapshot, "listitem", "Restored plan") != null);
-    try testing.expect(snapshotWidgetNamed(snapshot, "listitem", "Projects folder") != null);
+    try testing.expect(snapshotWidgetNamed(snapshot, "treeitem", "Projects folder") != null);
 
     // A missing store (first run) keeps the seeds, quietly.
     var fresh_clock = native_sdk.TestClock{};
@@ -680,7 +680,7 @@ test "folder and note rows dispatch selection through real clicks" {
     // Clicking a folder row scopes the list and re-targets the editor at
     // that folder's newest note.
     var snapshot = h.snapshot();
-    const ideas_row = snapshotWidgetNamed(snapshot, "listitem", "Ideas folder").?;
+    const ideas_row = snapshotWidgetNamed(snapshot, "treeitem", "Ideas folder").?;
     try h.clickWidget(ideas_row.id);
     try testing.expectEqual(@as(u32, 2), model.selected_folder);
     try testing.expect(std.mem.startsWith(u8, model.activeNote().?.body.text(), "Field recorder"));
@@ -690,6 +690,89 @@ test "folder and note rows dispatch selection through real clicks" {
     const queue_row = snapshotWidgetNamed(snapshot, "listitem", "Reading queue mechanics").?;
     try h.clickWidget(queue_row.id);
     try testing.expect(std.mem.startsWith(u8, model.activeNote().?.body.text(), "Reading queue mechanics"));
+}
+
+test "splitter drags resize the panes through the model-owned fraction" {
+    var clock = native_sdk.TestClock{};
+    var h = try Harness.create(model_mod.initialModel(testClock(&clock)));
+    defer h.destroy();
+    const model = &h.app_state.model;
+    try testing.expectApproxEqAbs(@as(f32, 0.19), model.sidebar_split, 0.0001);
+
+    // The outer split's divider is the first split_divider in tree order
+    // (the sidebar seam). Drag it right through real pointer events: the
+    // runtime applies the fraction, dispatches on-resize, and the model
+    // echoes it — the rebuild lays panes at the model's value.
+    const layout = try h.harness.runtime.canvasWidgetLayout(1, "notes-canvas");
+    var divider_frame: ?geometry.RectF = null;
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .split_divider) {
+            divider_frame = node.frame;
+            break;
+        }
+    }
+    const seam = divider_frame orelse return error.TestUnexpectedResult;
+    const grab_x = seam.x + seam.width * 0.5;
+    const grab_y = seam.y + 40;
+    try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "notes-canvas", .kind = .pointer_down, .x = grab_x, .y = grab_y, .button = 0 } });
+    try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "notes-canvas", .kind = .pointer_drag, .x = grab_x + 90, .y = grab_y } });
+    try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "notes-canvas", .kind = .pointer_up, .x = grab_x + 90, .y = grab_y, .button = 0 } });
+
+    try testing.expect(model.sidebar_split > 0.24);
+    // The rebuilt layout lays the seam at the model's fraction.
+    const resized = try h.harness.runtime.canvasWidgetLayout(1, "notes-canvas");
+    var resized_seam: ?geometry.RectF = null;
+    for (resized.nodes) |node| {
+        if (node.widget.kind == .split_divider) {
+            resized_seam = node.frame;
+            break;
+        }
+    }
+    try testing.expect(resized_seam.?.x > seam.x + 80);
+
+    // The inner seam guards the editor's min width: dragging far right
+    // clamps instead of collapsing the editor pane.
+    main.update(model, .{ .list_resized = 0.99 }, &h.app_state.effects);
+    try testing.expect(model.list_split > 0.9);
+}
+
+test "folder tree keys move the selection through real key dispatch" {
+    var clock = native_sdk.TestClock{};
+    var h = try Harness.create(model_mod.initialModel(testClock(&clock)));
+    defer h.destroy();
+    const model = &h.app_state.model;
+
+    // Click the first folder row (All Notes) to land keyboard focus in
+    // the tree, then walk with the ARIA tree keymap: Down moves the
+    // selection through visible rows (selection follows focus through
+    // each row's on-press), End jumps to the last folder, Home back to
+    // the first.
+    var snapshot = h.snapshot();
+    const all_row = snapshotWidgetNamed(snapshot, "treeitem", "All Notes folder").?;
+    try h.clickWidget(all_row.id);
+    try testing.expectEqual(model_mod.all_folder_id, model.selected_folder);
+
+    const key = struct {
+        fn down(harness: *Harness, name: []const u8) !void {
+            try harness.harness.runtime.dispatchPlatformEvent(harness.app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "notes-canvas", .kind = .key_down, .key = name } });
+        }
+    };
+
+    try key.down(&h, "arrowdown");
+    try testing.expectEqual(@as(u32, 1), model.selected_folder);
+    try key.down(&h, "arrowdown");
+    try testing.expectEqual(@as(u32, 2), model.selected_folder);
+    try key.down(&h, "end");
+    try testing.expectEqual(model.folders[model.folder_count - 1].id, model.selected_folder);
+    try key.down(&h, "home");
+    try testing.expectEqual(model_mod.all_folder_id, model.selected_folder);
+    // Up at the first row stays put (no wrap).
+    try key.down(&h, "arrowup");
+    try testing.expectEqual(model_mod.all_folder_id, model.selected_folder);
+
+    // The snapshot mirrors the selection on the treeitem rows.
+    snapshot = h.snapshot();
+    try testing.expect(snapshotWidgetNamed(snapshot, "treeitem", "All Notes folder").?.selected);
 }
 
 test "the theme toggle flips the derived tokens and the system scheme flows in" {

@@ -96,6 +96,31 @@ pub const WidgetKind = enum {
     /// nearest pressable ancestor like text and icons. Appended last so
     /// existing structural ids (which hash the kind ordinal) are stable.
     chart,
+    /// Two-pane horizontal splitter: exactly two flow children (the
+    /// panes) separated by a builder-synthesized `.split_divider` handle.
+    /// `value` is the MODEL-OWNED fraction of the content width the
+    /// first pane takes (0 means "unset" and lays out at 0.5); dragging
+    /// the divider dispatches a `canvas_widget_resize` event so the
+    /// model can own the fraction (`on_resize`), and the runtime keeps
+    /// an uncontrolled divider position across rebuilds with the same
+    /// source-wins reconcile rule as scroll offsets. Appended after
+    /// `chart` so existing structural ids stay stable.
+    split,
+    /// The draggable divider handle between a `.split`'s panes. Never
+    /// authored directly: `Ui.finalizeNode` synthesizes it between the
+    /// two panes (both markup engines build through the same builder).
+    /// Focusable, `resize_horizontal` cursor, ARIA separator semantics;
+    /// arrow keys adjust the parent split's fraction when it holds
+    /// focus. `value` mirrors the parent split's fraction.
+    split_divider,
+    /// Disclosure-tree container (vertical flow like `list`): descendant
+    /// widgets carrying `role = .treeitem` form ONE roving keyboard
+    /// focus set regardless of nesting depth — Up/Down walk visible
+    /// rows, Left collapses (or moves to the parent row), Right expands
+    /// (or moves to the first child row), Home/End jump to the edges.
+    /// Expansion and selection stay model-owned: rows dispatch their
+    /// `on_toggle`/`on_press` Msgs and the view re-renders.
+    tree,
 };
 
 pub const WidgetCursor = enum {
@@ -248,6 +273,18 @@ pub const WidgetRole = enum {
     /// accessibility bridges without a chart role expose it as an image
     /// with the chart's summary label.
     chart,
+    /// A disclosure tree container (the `.tree` widget kind). Platform
+    /// bridges without a tree role expose it as a list.
+    tree,
+    /// One row of a disclosure tree. Stamping this role on any pressable
+    /// row (a panel, a list item) makes it a roving-focus tree row: the
+    /// ARIA tree keymap and selection-follows-focus apply. Platform
+    /// bridges without a treeitem role expose it as a list item.
+    treeitem,
+    /// A draggable pane divider (the `.split_divider` widget kind): the
+    /// ARIA separator with a value (the split fraction). Platform
+    /// bridges without a separator role expose it as a group.
+    separator,
 };
 
 pub const BuiltinComponentStyle = enum {

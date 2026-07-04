@@ -129,6 +129,11 @@ pub const Msg = union(enum) {
     close_dialog,
     /// Escape: close the dialog if open, otherwise clear the search.
     dismiss,
+    /// Splitter drags/keyboard: the runtime already applied the fraction;
+    /// storing it and echoing it back through the split's `value` is the
+    /// controlled pattern (rebuilds re-lay the panes exactly).
+    sidebar_resized: f32,
+    list_resized: f32,
     toggle_theme,
     system_scheme: canvas.ColorScheme,
     refresh_tick: native_sdk.EffectTimer,
@@ -173,6 +178,11 @@ pub const Model = struct {
     /// One-line activity note for the status bar ("Saved", "Copied…").
     status_storage: [max_status_bytes]u8 = undefined,
     status_len: usize = 0,
+    /// Splitter fractions (model-owned; the runtime echoes drags back
+    /// through `sidebar_resized`/`list_resized`). Defaults approximate
+    /// the classic 216 / 304 / rest three-pane proportions.
+    sidebar_split: f32 = 0.19,
+    list_split: f32 = 0.33,
 
     /// Keyboard reference rendered in the idle editor pane. Spelled-out
     /// key names on purpose: the bundled glyph set has no ⌘/⌥ coverage,
@@ -735,6 +745,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.dialog_hint = "";
         },
         .select_folder => |id| selectFolder(model, id),
+        // Echo the applied splitter fractions back through the model:
+        // the next rebuild lays panes at exactly these values, so drags
+        // never fight the reconcile.
+        .sidebar_resized => |fraction| model.sidebar_split = fraction,
+        .list_resized => |fraction| model.list_split = fraction,
         .select_folder_at => |position| {
             if (position == 0) return selectFolder(model, all_folder_id);
             if (position <= model.folder_count) selectFolder(model, model.folders[position - 1].id);

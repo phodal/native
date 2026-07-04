@@ -102,6 +102,20 @@ fn warnDismissHandlerKind(kind: WidgetKind) void {
     );
 }
 
+/// Debug-build diagnostic for `on_resize` on a kind the runtime never
+/// resizes: only `split` containers dispatch fraction changes, so the
+/// handler would sit dead anywhere else. The markup validator teaches
+/// the same rule as a hard error; the builder warns and keeps building
+/// (the shipped-app rule).
+fn warnResizeHandlerKind(kind: WidgetKind) void {
+    if (builtin.mode != .Debug) return;
+    if (kind == .split) return;
+    ui_log.warn(
+        "on_resize never fires on {s}: only split containers dispatch fraction changes - put it on the split element",
+        .{@tagName(kind)},
+    );
+}
+
 pub const UiKey = union(enum) {
     index: usize,
     int: u64,
@@ -118,6 +132,11 @@ pub const UiHandlerEvent = enum {
     context_menu,
     dismiss,
     hold,
+    /// Split-fraction changes (divider drag, keyboard adjustment,
+    /// assistive increment/decrement), dispatched with the fraction the
+    /// runtime already applied — echoing it back into `value` never
+    /// fights the split reconcile rule.
+    resize,
 };
 
 /// A color design token referenced by name (the fields of
@@ -226,6 +245,12 @@ pub fn Ui(comptime Msg: type) type {
             value: f32 = 0,
             checked: bool = false,
             selected: bool = false,
+            /// Disclosure state for tree rows (`role = .treeitem`): null
+            /// = a leaf (no disclosure), false = collapsed (Right
+            /// expands via `on_toggle`), true = expanded (Left collapses
+            /// via `on_toggle`). Model-owned: the view renders child
+            /// rows only while expanded.
+            expanded: ?bool = null,
             disabled: bool = false,
             /// Image resource reference for image-bearing widgets
             /// (`image`, `icon_button`, `avatar`): a `canvas.ImageId` the
@@ -265,6 +290,11 @@ pub fn Ui(comptime Msg: type) type {
             width: f32 = 0,
             /// Definite height; same contract as `width`.
             height: f32 = 0,
+            /// Width floor WITHOUT the definite-max side of `width`:
+            /// the widget may grow past it but never shrink below.
+            /// Split panes use it to constrain the divider drag (the
+            /// clamp band derives from both panes' floors).
+            min_width: f32 = 0,
             grow: f32 = 0,
             gap: f32 = 0,
             padding: f32 = 0,
@@ -336,6 +366,15 @@ pub fn Ui(comptime Msg: type) type {
             /// Message constructor for value changes carrying the new value
             /// (slider steps, accessibility set-value). Pair with `valueMsg`.
             on_value: ?ValueMsgFn = null,
+            /// Message constructor for split-fraction changes on a
+            /// `split` container: called with the new first-pane
+            /// fraction after every user resize — divider drag,
+            /// keyboard adjustment on the focused divider, assistive
+            /// increment/decrement. Pair with `valueMsg`. The delivered
+            /// fraction is the value the runtime already applied, so
+            /// echoing it back into `value` on the next rebuild never
+            /// fights the split reconcile rule.
+            on_resize: ?ValueMsgFn = null,
             /// Message constructor for link presses inside a `paragraph`:
             /// called at build time with each link span's payload, so a
             /// click on the link hotspot dispatches the resulting message
@@ -392,6 +431,7 @@ pub fn Ui(comptime Msg: type) type {
             on_hold: ?Msg = null,
             on_input: ?InputMsgFn = null,
             on_value: ?ValueMsgFn = null,
+            on_resize: ?ValueMsgFn = null,
             on_scroll: ?ScrollMsgFn = null,
             context_menu: []const ContextMenuItem = &.{},
             nodes: []const Node = &.{},
@@ -488,6 +528,17 @@ pub fn Ui(comptime Msg: type) type {
                 for (self.handlers) |handler| {
                     if (handler.id == id and handler.event == .change and handler.action == .value) {
                         return handler.action.value(value);
+                    }
+                }
+                return null;
+            }
+
+            /// Typed dispatch for split-fraction changes: builds the
+            /// message through the split's `on_resize` constructor.
+            pub fn msgForResize(self: Tree, id: ObjectId, fraction: f32) ?Msg {
+                for (self.handlers) |handler| {
+                    if (handler.id == id and handler.event == .resize and handler.action == .value) {
+                        return handler.action.value(fraction);
                     }
                 }
                 return null;
@@ -597,6 +648,7 @@ pub fn Ui(comptime Msg: type) type {
 
         pub fn el(self: *Self, kind: WidgetKind, options: ElementOptions, children: anytype) Node {
             if (options.on_dismiss != null) warnDismissHandlerKind(kind);
+            if (options.on_resize != null) warnResizeHandlerKind(kind);
             return .{
                 .widget = widgetFromOptions(kind, options),
                 .key = options.key,
@@ -611,6 +663,7 @@ pub fn Ui(comptime Msg: type) type {
                 .on_hold = options.on_hold,
                 .on_input = options.on_input,
                 .on_value = options.on_value,
+                .on_resize = options.on_resize,
                 .on_scroll = options.on_scroll,
                 .context_menu = self.dupeContextMenuItems(options.context_menu),
                 .nodes = self.childNodes(children),
@@ -651,6 +704,30 @@ pub fn Ui(comptime Msg: type) type {
 
         pub fn list(self: *Self, options: ElementOptions, children: anytype) Node {
             return self.el(.list, options, children);
+        }
+
+        /// Two-pane horizontal splitter. Exactly two children (the
+        /// panes); `finalize` synthesizes the draggable divider between
+        /// them. `value` is the model-owned first-pane fraction (0 lays
+        /// out at 0.5); bind `on_resize = valueMsg(.tag)` and echo the
+        /// fraction back through `value` for the controlled pattern —
+        /// an unbound split keeps its divider position across rebuilds
+        /// through the source-wins reconcile, but pane content lays out
+        /// at the declared fraction until the model echoes.
+        pub fn split(self: *Self, options: ElementOptions, children: anytype) Node {
+            return self.el(.split, options, children);
+        }
+
+        /// Disclosure-tree container: descendant rows carrying
+        /// `role = .treeitem` (at any nesting depth) form one roving
+        /// keyboard focus set with the ARIA tree keymap — Up/Down walk
+        /// visible rows (selection follows focus through each row's
+        /// `on_press`), Left collapses or moves to the parent row,
+        /// Right expands or moves to the first child row, Home/End jump
+        /// to the edges. Expansion is model-owned: expandable rows set
+        /// `expanded` and bind `on_toggle`.
+        pub fn tree(self: *Self, options: ElementOptions, children: anytype) Node {
+            return self.el(.tree, options, children);
         }
 
         /// The engine renders a status bar's own `text`; it does not lay out
@@ -1286,7 +1363,23 @@ pub fn Ui(comptime Msg: type) type {
                 widget.semantics.actions.increment = true;
                 widget.semantics.actions.decrement = true;
             }
-            if (node.nodes.len > 0) {
+            if (widget.kind == .split and node.nodes.len == 2) {
+                // Synthesize the draggable divider between the two panes.
+                // Both markup engines build through this finalize, so the
+                // handle exists everywhere a split does. Pane keys keep
+                // their author-facing indices (0 and 1) so their
+                // structural ids never depend on the synthesized child;
+                // panes clip their content so the drag's optimistic echo
+                // (and a pane narrower than its content) never paints
+                // into the neighbor.
+                const child_widgets = try self.arena.alloc(Widget, 3);
+                child_widgets[0] = try self.finalizeNode(node.nodes[0], widget.id, node.nodes[0].key orelse UiKey{ .index = 0 }, handlers, handler_len, tokens);
+                child_widgets[1] = splitDividerWidget(widget);
+                child_widgets[2] = try self.finalizeNode(node.nodes[1], widget.id, node.nodes[1].key orelse UiKey{ .index = 1 }, handlers, handler_len, tokens);
+                child_widgets[0].layout.clip_content = true;
+                child_widgets[2].layout.clip_content = true;
+                widget.children = child_widgets;
+            } else if (node.nodes.len > 0) {
                 const child_widgets = try self.arena.alloc(Widget, node.nodes.len);
                 for (node.nodes, 0..) |child, index| {
                     const child_key = child.key orelse UiKey{ .index = index };
@@ -1306,6 +1399,10 @@ pub fn Ui(comptime Msg: type) type {
             }
             if (node.on_value) |make| {
                 handlers[handler_len.*] = .{ .id = widget.id, .event = .change, .action = .{ .value = make } };
+                handler_len.* += 1;
+            }
+            if (node.on_resize) |make| {
+                handlers[handler_len.*] = .{ .id = widget.id, .event = .resize, .action = .{ .value = make } };
                 handler_len.* += 1;
             }
             if (node.on_scroll) |make| {
@@ -1349,6 +1446,7 @@ pub fn Ui(comptime Msg: type) type {
             if (node.on_hold != null) total += 1;
             if (node.on_input != null) total += 1;
             if (node.on_value != null) total += 1;
+            if (node.on_resize != null) total += 1;
             if (node.on_scroll != null) total += 1;
             if (node.context_menu.len > 0) total += 1;
             for (node.nodes) |child| total += countHandlers(child);
@@ -1423,6 +1521,7 @@ pub fn Ui(comptime Msg: type) type {
                 .size = options.size,
                 .state = .{
                     .selected = options.checked or options.selected,
+                    .expanded = options.expanded,
                     .disabled = options.disabled,
                 },
                 .layout = .{
@@ -1444,7 +1543,7 @@ pub fn Ui(comptime Msg: type) type {
                     } else null,
                     .virtualized = options.virtualized,
                     .virtual_item_extent = options.virtual_item_extent,
-                    .min_size = .{ .width = options.width, .height = options.height },
+                    .min_size = .{ .width = @max(options.width, options.min_width), .height = options.height },
                     // Explicit sizes are definite (min AND max). Resizable
                     // is the exception: width documents the initial width
                     // and the engine's drag handle keeps writing larger
@@ -1453,6 +1552,21 @@ pub fn Ui(comptime Msg: type) type {
                 },
                 .style = options.style,
                 .semantics = options.semantics,
+            };
+        }
+
+        /// The synthesized drag handle between a split's panes: the ARIA
+        /// separator, focusable, mirroring the split's disabled state.
+        /// Its `value` is stamped with the EFFECTIVE fraction by the
+        /// layout pass; the authored value seeds keyboard steps before
+        /// the first layout.
+        fn splitDividerWidget(split_widget: Widget) Widget {
+            return .{
+                .kind = .split_divider,
+                .id = structuralId(split_widget.id, .split_divider, UiKey{ .str = "divider" }),
+                .value = split_widget.value,
+                .state = .{ .disabled = split_widget.state.disabled },
+                .semantics = .{ .label = "Split divider" },
             };
         }
     };

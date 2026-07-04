@@ -121,6 +121,9 @@ fn semanticRole(widget: Widget) WidgetRole {
         .separator, .skeleton => .none,
         .spinner => .progressbar,
         .chart => .chart,
+        .split => .group,
+        .split_divider => .separator,
+        .tree => .tree,
     };
 }
 
@@ -135,6 +138,9 @@ fn semanticValue(widget: Widget) ?f32 {
         .radio, .list_item, .menu_item, .data_cell, .segmented_control => if (widget.state.selected or widget.value >= 0.5) 1 else 0,
         .accordion, .checkbox, .switch_control, .toggle, .toggle_button => if (widget_access.booleanControlSelected(widget)) 1 else 0,
         .slider, .progress => std.math.clamp(widget.value, 0, 1),
+        // The separator's aria-valuenow: the parent split's effective
+        // fraction (the layout pass mirrors it onto the handle).
+        .split_divider => std.math.clamp(widget.value, 0, 1),
         .spinner => null,
         // The latest datapoint of the first series, so automation can
         // assert on live chart data without pixel access.

@@ -144,6 +144,16 @@ pub const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_no
 // moving scrollables; ids past the bound are dropped (the offsets still
 // apply and repaint — only the observation Msg is skipped).
 pub const max_canvas_widget_scroll_events_per_view: usize = 8;
+// Split containers whose fraction changed since the last app dispatch
+// (divider drag, keyboard adjustment, assistive increment/decrement):
+// same shape as the scroll-event set above — entries are split node
+// ids, deduped, and the dispatched event reads the CURRENT fraction, so
+// coalescing several drag steps into one pending entry is lossless. A
+// pointer drags exactly one divider at a time, so 4 covers every
+// realistic view (nested splits still resize one seam per input); ids
+// past the bound are dropped (the fraction still applies and repaints —
+// only the observation Msg is skipped).
+pub const max_canvas_widget_resize_events_per_view: usize = 4;
 
 // Anchored floating surfaces (widgets with `layout.anchor` set: anchored
 // dropdown menus, popovers) mounted at once per view. Not a memory bound —

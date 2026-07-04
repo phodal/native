@@ -37,7 +37,7 @@ pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor 
         .switch_control,
         .toggle,
         => .pointing_hand,
-        .slider, .resizable => .resize_horizontal,
+        .slider, .resizable, .split_divider => .resize_horizontal,
         else => .arrow,
     };
 }
@@ -77,8 +77,8 @@ pub fn isDragSource(widget: Widget) bool {
 /// widget a hit target, so `on_press` on a row/stack/icon works.
 pub fn widgetKindHitTarget(kind: WidgetKind) bool {
     return switch (kind) {
-        .row, .column, .grid, .data_grid, .table, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner, .chart => false,
-        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .text, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress => true,
+        .row, .column, .grid, .data_grid, .table, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner, .chart, .split, .tree => false,
+        .scroll_view, .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu, .text, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .split_divider => true,
     };
 }
 
@@ -115,6 +115,7 @@ pub fn widgetKindClaimsPress(kind: WidgetKind) bool {
         .accordion,
         .slider,
         .resizable,
+        .split_divider,
         .input,
         .text_field,
         .search_field,

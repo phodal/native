@@ -143,6 +143,7 @@ pub const CanvasWidgetDragEvent = runtime_api.CanvasWidgetDragEvent;
 pub const CanvasWidgetContextMenuEvent = runtime_api.CanvasWidgetContextMenuEvent;
 pub const CanvasWidgetDismissEvent = runtime_api.CanvasWidgetDismissEvent;
 pub const CanvasWidgetContextPressEvent = runtime_api.CanvasWidgetContextPressEvent;
+pub const CanvasWidgetResizeEvent = runtime_api.CanvasWidgetResizeEvent;
 pub const InvalidationReason = runtime_api.InvalidationReason;
 pub const FrameDiagnostics = runtime_api.FrameDiagnostics;
 pub const Event = runtime_api.Event;

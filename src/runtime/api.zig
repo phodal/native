@@ -138,6 +138,22 @@ pub const CanvasWidgetDismissEvent = struct {
     id: canvas.ObjectId,
 };
 
+/// A split container's fraction changed from a user resize — divider
+/// drag, keyboard adjustment on the focused divider, or an assistive
+/// increment/decrement. The runtime already applied the fraction (the
+/// optimistic echo; the source tree is truth on the next rebuild) and
+/// delivers this event so a TEA model can OWN it: `UiApp` maps it
+/// through the tree's handler table to the split's `on_resize` Msg.
+pub const CanvasWidgetResizeEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    /// The split container's structural widget id.
+    id: canvas.ObjectId,
+    /// The applied first-pane fraction (already clamped against the
+    /// panes' min widths).
+    fraction: f32,
+};
+
 /// A secondary-button press (right/ctrl-click, touch long-press) whose
 /// route offered NO context menu — no app-declared items, no editable or
 /// selected-text default. Delivered with the resolved press target so
@@ -200,6 +216,7 @@ pub const Event = union(enum) {
     canvas_widget_context_menu: CanvasWidgetContextMenuEvent,
     canvas_widget_dismiss: CanvasWidgetDismissEvent,
     canvas_widget_context_press: CanvasWidgetContextPressEvent,
+    canvas_widget_resize: CanvasWidgetResizeEvent,
 
     pub fn name(self: Event) []const u8 {
         return switch (self) {
@@ -221,6 +238,7 @@ pub const Event = union(enum) {
             .canvas_widget_context_menu => "canvas_widget_context_menu",
             .canvas_widget_dismiss => "canvas_widget_dismiss",
             .canvas_widget_context_press => "canvas_widget_context_press",
+            .canvas_widget_resize => "canvas_widget_resize",
         };
     }
 };

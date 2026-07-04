@@ -199,6 +199,19 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     }
                 }
             }
+            // Splits take exactly two static pane children (the divider
+            // sits between fixed panes). Mirrors the validator and the
+            // compiled engine's compile error.
+            if (kind == .split) {
+                var pane_count: usize = 0;
+                for (node.children) |child| {
+                    switch (child.kind) {
+                        .element, .use_block => pane_count += 1,
+                        else => return self.failNode(child, markup.split_children_message),
+                    }
+                }
+                if (pane_count != 2) return self.failNode(node, markup.split_children_message);
+            }
             var options: Ui.ElementOptions = .{};
             try self.applyAttrs(scope, node, &options);
 
@@ -984,6 +997,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     else => return self.failVoid(node, "expected a number"),
                 },
                 .bool => @field(options, field) = value.truthy(),
+                // Optional bools (`expanded`): the attribute's PRESENCE
+                // makes the state non-null; the value sets it.
+                .optional => @field(options, field) = value.truthy(),
                 .int => @field(options, field) = switch (value) {
                     .integer => |int| if (int < 0)
                         return self.failVoid(node, "expected a non-negative whole number")
@@ -1034,6 +1050,15 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 }
                 options.on_scroll = scrollConstructor(expression.tag) orelse {
                     return self.failVoid(node, markup.on_scroll_payload_message);
+                };
+                return;
+            }
+            if (std.mem.eql(u8, event, "resize")) {
+                if (!std.mem.eql(u8, node.name, "split")) {
+                    return self.failVoid(node, markup.on_resize_element_message);
+                }
+                options.on_resize = resizeConstructor(expression.tag) orelse {
+                    return self.failVoid(node, markup.on_resize_payload_message);
                 };
                 return;
             }
@@ -1129,6 +1154,18 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 if (field.type == canvas.ScrollState) {
                     if (std.mem.eql(u8, field.name, tag)) {
                         return Ui.scrollMsg(@field(std.meta.Tag(MsgT), field.name));
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn resizeConstructor(tag: []const u8) ?Ui.ValueMsgFn {
+            @setEvalBranchQuota(scan_quota);
+            inline for (@typeInfo(MsgT).@"union".fields) |field| {
+                if (field.type == f32) {
+                    if (std.mem.eql(u8, field.name, tag)) {
+                        return Ui.valueMsg(@field(std.meta.Tag(MsgT), field.name));
                     }
                 }
             }
@@ -1278,6 +1315,8 @@ pub const attr_names: []const AttrName = &.{
     .{ .markup = "size", .zig = "size" },
     .{ .markup = "width", .zig = "width" },
     .{ .markup = "height", .zig = "height" },
+    .{ .markup = "min-width", .zig = "min_width" },
+    .{ .markup = "expanded", .zig = "expanded" },
     .{ .markup = "grow", .zig = "grow" },
     .{ .markup = "gap", .zig = "gap" },
     .{ .markup = "padding", .zig = "padding" },
@@ -1511,6 +1550,8 @@ pub fn elementKind(name: []const u8) ?canvas.WidgetKind {
         .{ "scroll", canvas.WidgetKind.scroll_view },
         .{ "list", canvas.WidgetKind.list },
         .{ "grid", canvas.WidgetKind.grid },
+        .{ "split", canvas.WidgetKind.split },
+        .{ "tree", canvas.WidgetKind.tree },
         .{ "card", canvas.WidgetKind.card },
         .{ "text", canvas.WidgetKind.text },
         .{ "button", canvas.WidgetKind.button },

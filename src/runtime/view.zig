@@ -238,6 +238,14 @@ pub const RuntimeView = struct {
     /// `canvas_limits.max_canvas_widget_scroll_events_per_view`).
     widget_scroll_event_ids: [canvas_limits.max_canvas_widget_scroll_events_per_view]canvas.ObjectId = undefined,
     widget_scroll_event_count: usize = 0,
+    /// Split nodes whose fraction changed since the last app dispatch
+    /// (divider drag, keyboard, accessibility): drained into
+    /// `canvas_widget_resize` events at the gpu-surface dispatch points.
+    /// Deduped by id; the dispatched event reads the CURRENT fraction,
+    /// so coalescing drag steps per node is lossless (see
+    /// `canvas_limits.max_canvas_widget_resize_events_per_view`).
+    widget_resize_event_ids: [canvas_limits.max_canvas_widget_resize_events_per_view]canvas.ObjectId = undefined,
+    widget_resize_event_count: usize = 0,
     widget_source_text_entries: [max_canvas_widget_source_text_entries_per_view]CanvasWidgetSourceTextEntry = undefined,
     widget_source_text_count: usize = 0,
     widget_source_scroll_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetSourceScrollEntry = undefined,
@@ -323,6 +331,11 @@ pub const RuntimeView = struct {
     pub const canvasWidgetToggleAnimationForKeyboard = CanvasWidgetControlMethods.canvasWidgetToggleAnimationForKeyboard;
     pub const applyCanvasWidgetControlPointer = CanvasWidgetControlMethods.applyCanvasWidgetControlPointer;
     pub const applyCanvasWidgetResizableDelta = CanvasWidgetControlMethods.applyCanvasWidgetResizableDelta;
+    pub const applyCanvasWidgetSplitPointer = CanvasWidgetControlMethods.applyCanvasWidgetSplitPointer;
+    pub const applyCanvasWidgetSplitFraction = CanvasWidgetControlMethods.applyCanvasWidgetSplitFraction;
+    pub const noteCanvasWidgetResizeEvent = CanvasWidgetControlMethods.noteCanvasWidgetResizeEvent;
+    pub const translateCanvasWidgetDescendantsX = CanvasWidgetControlMethods.translateCanvasWidgetDescendantsX;
+    pub const toggleCanvasWidgetTreeItemExpanded = CanvasWidgetControlMethods.toggleCanvasWidgetTreeItemExpanded;
     pub const applyCanvasWidgetControlKeyboard = CanvasWidgetControlMethods.applyCanvasWidgetControlKeyboard;
     pub const applyCanvasWidgetControlIntent = CanvasWidgetControlMethods.applyCanvasWidgetControlIntent;
     pub const applyCanvasWidgetSliderValue = CanvasWidgetControlMethods.applyCanvasWidgetSliderValue;

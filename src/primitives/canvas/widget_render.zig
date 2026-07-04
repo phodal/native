@@ -194,7 +194,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .grid, .data_grid, .table, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
+        .stack, .row, .column, .grid, .data_grid, .table, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row, .split, .tree => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
         .scroll_view => try emitScrollViewWidget(builder, paint_widget, tokens, depth),
         .alert => try emitAlertWidget(builder, paint_widget, tokens, depth),
         .card => try emitCardWidget(builder, paint_widget, tokens, depth),
@@ -226,6 +226,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .slider => try widget_render_controls.emitSliderWidget(builder, paint_widget, tokens),
         .progress => try widget_render_controls.emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
+        .split_divider => try emitSplitDividerWidget(builder, paint_widget, tokens),
         .skeleton => try emitSkeletonWidget(builder, paint_widget, tokens),
         .spinner => try emitSpinnerWidget(builder, paint_widget, tokens),
         .chart => try emitChartWidget(builder, paint_widget, tokens),
@@ -309,7 +310,7 @@ fn emitWidgetLayoutNodeContent(
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row => {},
+        .stack, .row, .column, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .data_row, .split, .tree => {},
         .grid, .data_grid, .table, .list => if (paint_widget.layout.virtualized) {
             try emitWidgetLayoutScrollableChildren(builder, layout, node_index, tokens, state, paint_widget);
             return;
@@ -354,6 +355,7 @@ fn emitWidgetLayoutNodeContent(
         .slider => try widget_render_controls.emitSliderWidget(builder, paint_widget, tokens),
         .progress => try widget_render_controls.emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
+        .split_divider => try emitSplitDividerWidget(builder, paint_widget, tokens),
         .skeleton => try emitSkeletonWidget(builder, paint_widget, tokens),
         .spinner => try emitSpinnerWidget(builder, paint_widget, tokens),
         .chart => try emitChartWidget(builder, paint_widget, tokens),
@@ -895,6 +897,47 @@ fn emitSeparatorWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         .rect = pixelSnapGeometryRect(tokens, line_rect),
         .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse visual.border orelse tokens.colors.border)),
     });
+}
+
+/// The split's drag handle: a centered vertical hairline in the divider
+/// band. Hover/press tint the line with the accent color (the band is
+/// the hit target, so the affordance appears as the pointer reaches
+/// it); keyboard focus draws the standard focus ring around the band.
+fn emitSplitDividerWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const visual = componentControlVisualTokens(widget, tokens);
+    const normalized = widget.frame.normalized();
+    if (normalized.isEmpty()) return;
+    const active = widget.state.hovered or widget.state.pressed;
+    const thickness = if (active)
+        @max(2, controlStrokeWidth(widget, visual, tokens.stroke.hairline))
+    else
+        controlStrokeWidth(widget, visual, tokens.stroke.hairline);
+    const line_rect = geometry.RectF.init(
+        normalized.x + (normalized.width - thickness) * 0.5,
+        normalized.y,
+        thickness,
+        normalized.height,
+    );
+    const line_color = if (active)
+        widgetAccentColor(widget, tokens.colors.accent)
+    else
+        widgetBorderColor(widget, visual.border orelse tokens.colors.border);
+    try builder.fillRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = pixelSnapGeometryRect(tokens, line_rect),
+        .fill = colorFill(line_color),
+    });
+    if (widget.state.focused) {
+        try builder.strokeRect(.{
+            .id = widgetPartId(widget.id, 2),
+            .rect = pixelSnapGeometryRect(tokens, normalized),
+            .radius = Radius.all(tokens.radius.sm),
+            .stroke = .{
+                .fill = widget_render_style.widgetFocusRingFill(widget, tokens),
+                .width = tokens.stroke.focus,
+            },
+        });
+    }
 }
 
 fn emitStatusBarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {

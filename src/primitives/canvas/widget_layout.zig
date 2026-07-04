@@ -90,6 +90,8 @@ pub fn layoutWidgetDepth(
             try layoutVirtualVerticalChildren(widget.children, content, index, depth, output, len, widget.value, widget.layout, tokens)
         else
             try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
+        .tree => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
+        .split => try layoutSplitChildren(widget, content, index, depth, output, len, tokens),
         .menu_surface, .dropdown_menu => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         .accordion => {
             if (accordionChildrenVisible(widget)) {
@@ -109,7 +111,7 @@ pub fn layoutWidgetDepth(
         // Span paragraphs and span-carrying table cells share the link
         // hotspot child convention (no spans or no children is a no-op).
         .text, .data_cell => try layoutTextSpanLinkChildren(widget, content, index, depth, output, len, tokens),
-        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner, .chart => {},
+        .icon, .image, .avatar, .badge, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .tooltip, .menu_item, .list_item, .status_bar, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .progress, .separator, .skeleton, .spinner, .chart, .split_divider => {},
     }
 
     // Anchored floating children are excluded from every flow above (they
@@ -712,6 +714,133 @@ fn layoutVirtualVerticalChildren(
     }
 }
 
+/// Width of a split's divider band (the hit target; the painted line is
+/// thinner). `layout.gap` overrides it, so markup `gap` on a split means
+/// "divider band thickness" — the one flow gap a splitter has.
+pub fn splitDividerExtent(widget: Widget) f32 {
+    const gap = nonNegative(widget.layout.gap);
+    return if (gap > 0) gap else 9;
+}
+
+/// The fraction band a split's divider may occupy, derived from the
+/// panes' `min_size.width` floors against the width left for panes.
+/// Degenerate spaces (mins exceed the available width) collapse to the
+/// proportional midpoint so layout never inverts.
+pub const SplitFractionBounds = struct {
+    low: f32,
+    high: f32,
+};
+
+pub fn splitFractionBounds(available: f32, first_min: f32, second_min: f32) SplitFractionBounds {
+    if (available <= 0) return .{ .low = 0, .high = 1 };
+    const low = std.math.clamp(nonNegative(first_min) / available, 0, 1);
+    const high = std.math.clamp(1 - nonNegative(second_min) / available, 0, 1);
+    if (low > high) {
+        const mid = low / @max(low + (1 - high), 0.0001);
+        return .{ .low = mid, .high = mid };
+    }
+    return .{ .low = low, .high = high };
+}
+
+/// The effective first-pane fraction a split lays out at: the authored /
+/// reconciled `value` (0 = unset lays out at 0.5) clamped into the
+/// panes' min-width band. Shared with the runtime's divider drag so the
+/// two can never disagree about clamping.
+pub fn splitEffectiveFraction(value: f32, available: f32, first_min: f32, second_min: f32) f32 {
+    const base = if (!std.math.isFinite(value) or value <= 0) 0.5 else @min(value, 1);
+    const bounds = splitFractionBounds(available, first_min, second_min);
+    return std.math.clamp(base, bounds.low, bounds.high);
+}
+
+/// Split layout: [pane 1][divider][pane 2] along the horizontal axis.
+/// The divider is the builder-synthesized `.split_divider` child; panes
+/// are the remaining flow children (exactly two by the validator's
+/// rule — extras degrade to zero-width frames rather than failing). The
+/// first pane takes `splitEffectiveFraction` of the width left after
+/// the divider band; both panes stretch the full height.
+fn layoutSplitChildren(
+    widget: Widget,
+    content: geometry.RectF,
+    parent_index: usize,
+    depth: usize,
+    output: []WidgetLayoutNode,
+    len: *usize,
+    tokens: DesignTokens,
+) Error!void {
+    var panes: [2]?Widget = .{ null, null };
+    var divider: ?Widget = null;
+    var extra_start: ?usize = null;
+    for (widget.children, 0..) |child, child_index| {
+        if (child.layout.anchor != null) continue;
+        if (child.kind == .split_divider) {
+            if (divider == null) divider = child;
+            continue;
+        }
+        if (panes[0] == null) {
+            panes[0] = child;
+        } else if (panes[1] == null) {
+            panes[1] = child;
+        } else if (extra_start == null) {
+            extra_start = child_index;
+        }
+    }
+
+    const divider_extent = if (divider != null) splitDividerExtent(widget) else 0;
+    const available = @max(0, content.width - divider_extent);
+    const first_min = if (panes[0]) |pane| nonNegative(pane.layout.min_size.width) else 0;
+    const second_min = if (panes[1]) |pane| nonNegative(pane.layout.min_size.width) else 0;
+    const fraction = splitEffectiveFraction(widget.value, available, first_min, second_min);
+    const first_width = if (panes[1] == null) available else available * fraction;
+
+    var cursor = content.x;
+    if (panes[0]) |pane| {
+        _ = try layoutWidgetDepth(pane, geometry.RectF.init(cursor, content.y, first_width, content.height), parent_index, depth + 1, output, len, tokens);
+        cursor += first_width;
+    }
+    if (divider) |handle| {
+        // The handle mirrors the EFFECTIVE fraction so keyboard steps and
+        // separator semantics read the position layout actually used.
+        var handle_copy = handle;
+        handle_copy.value = fraction;
+        _ = try layoutWidgetDepth(handle_copy, geometry.RectF.init(cursor, content.y, divider_extent, content.height), parent_index, depth + 1, output, len, tokens);
+        cursor += divider_extent;
+    }
+    if (panes[1]) |pane| {
+        const second_width = @max(0, content.maxX() - cursor);
+        _ = try layoutWidgetDepth(pane, geometry.RectF.init(cursor, content.y, second_width, content.height), parent_index, depth + 1, output, len, tokens);
+    }
+    // Panes past the first two never happen through the builder/markup
+    // (the validator enforces exactly two); raw trees degrade to empty
+    // frames so the node count still matches the source tree.
+    if (extra_start) |start| {
+        for (widget.children[start..]) |child| {
+            if (child.layout.anchor != null or child.kind == .split_divider) continue;
+            _ = try layoutWidgetDepth(child, geometry.RectF.init(content.maxX(), content.y, 0, 0), parent_index, depth + 1, output, len, tokens);
+        }
+    }
+}
+
+/// Re-run a split node's child layout IN PLACE over an already-laid
+/// node buffer: the runtime reconcile restores a runtime-owned fraction
+/// after the source laid out at its own value, and the same children
+/// produce the same node sequence, so only frames (and the handle's
+/// mirrored value) change. `widget` must still carry its source
+/// children (the reconcile runs while the app's build arena is alive);
+/// callers pass the node's laid frame and depth.
+pub fn relayoutSplitChildren(
+    widget: Widget,
+    frame: geometry.RectF,
+    node_index: usize,
+    depth: usize,
+    output: []WidgetLayoutNode,
+    tokens: DesignTokens,
+) Error!void {
+    var len: usize = node_index + 1;
+    const content = frame.inset(widget.layout.padding);
+    try layoutSplitChildren(widget, content, node_index, depth, output, &len, tokens);
+    try layoutAnchoredChildren(widget.children, frame, node_index, depth, output, &len, tokens);
+}
+
 /// Widget kinds whose layout gives every child the full content box
 /// (the `stackChildFrame` arm in `layoutWidgetDepth` — keep the two in
 /// lockstep): children layer on top of each other, so `layout.gap` can
@@ -814,7 +943,13 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         else
             intrinsicGridChildrenSize(widget, tokens, depth),
         .stack, .bubble, .resizable, .panel, .popover => intrinsicOverlayChildrenSize(widget, tokens, depth),
-        .scroll_view, .accordion, .image => geometry.SizeF.zero(),
+        .tree => intrinsicAxisChildrenSize(widget, tokens, .vertical, depth),
+        // The divider band is thin along the row and cross-sized by the
+        // panes it divides (like a bare separator in a row).
+        .split_divider => geometry.SizeF.init(splitDividerExtent(widget), 0),
+        // A split fills the space it is given (panes partition it);
+        // like scroll viewports it reports no intrinsic size of its own.
+        .scroll_view, .accordion, .image, .split => geometry.SizeF.zero(),
     };
 }
 

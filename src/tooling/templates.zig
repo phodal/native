@@ -1,6 +1,10 @@
 const std = @import("std");
 
-const fallback_icon_icns = "icns\x00\x00\x00\x08";
+/// The SDK's default app icon, rendered from vector source by
+/// `zig build generate-icon` (tools/generate_app_icon.zig). Embedded so
+/// `native init` always scaffolds a real macOS .icns regardless of the
+/// directory the CLI runs from.
+const default_icon_icns = @embedFile("default_icon.icns");
 
 pub const Frontend = enum {
     next,
@@ -90,9 +94,7 @@ pub fn writeDefaultApp(allocator: std.mem.Allocator, io: std.Io, destination: []
     try writeFile(app_dir, io, "src/main.zig", main_zig);
     try writeFile(app_dir, io, "src/runner.zig", runnerZig());
     try writeFile(app_dir, io, "app.zon", app_zon);
-    const icon_bytes = readFile(allocator, io, "assets/icon.icns") catch fallback_icon_icns;
-    defer if (icon_bytes.ptr != fallback_icon_icns.ptr) allocator.free(icon_bytes);
-    try writeFile(app_dir, io, "assets/icon.icns", icon_bytes);
+    try writeFile(app_dir, io, "assets/icon.icns", default_icon_icns);
     try writeFile(app_dir, io, ".github/workflows/ci.yml", ci_yaml);
     try writeFile(app_dir, io, "README.md", readme_md);
 
@@ -124,9 +126,7 @@ fn writeNativeApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir,
     try writeFile(app_dir, io, "src/app.zml", nativeAppZml());
     try writeFile(app_dir, io, "src/tests.zig", tests_zig);
     try writeFile(app_dir, io, "app.zon", app_zon);
-    const icon_bytes = readFile(allocator, io, "assets/icon.icns") catch fallback_icon_icns;
-    defer if (icon_bytes.ptr != fallback_icon_icns.ptr) allocator.free(icon_bytes);
-    try writeFile(app_dir, io, "assets/icon.icns", icon_bytes);
+    try writeFile(app_dir, io, "assets/icon.icns", default_icon_icns);
     try writeFile(app_dir, io, ".vscode/settings.json", nativeVscodeSettings());
     try writeFile(app_dir, io, ".github/workflows/ci.yml", ci_yaml);
     try writeFile(app_dir, io, ".gitignore", nativeGitignore());
@@ -685,14 +685,6 @@ fn frontendCiYaml(allocator: std.mem.Allocator, names: TemplateNames) ![]const u
 
 fn writeFile(dir: std.Io.Dir, io: std.Io, path: []const u8, bytes: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = path, .data = bytes });
-}
-
-fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var read_buffer: [4096]u8 = undefined;
-    var reader = file.reader(io, &read_buffer);
-    return reader.interface.allocRemaining(allocator, .limited(16 * 1024 * 1024));
 }
 
 const TemplateNames = struct {

@@ -1687,23 +1687,33 @@ pub fn build(b: *std.Build) void {
     const package_android_step = b.step("package-android", "Create local Android host skeleton");
     package_android_step.dependOn(&package_android_run.step);
 
-    const generate_icon_step = b.step("generate-icon", "Generate .icns and .ico from assets/icon.png");
+    // Default app icon: rendered from vector geometry (tools/
+    // generate_app_icon.zig) through the SDK's own path rasterizer, so
+    // the checked-in .icns/.ico/.png/.svg all regenerate from source.
+    // `iconutil` assembles and round-trip-validates the .icns (macOS
+    // only), and the CLI's embedded scaffold copy is kept in sync.
+    const generate_icon_step = b.step("generate-icon", "Regenerate the default app icon (.icns/.ico/.png/.svg) from vector source");
+    const generate_icon_mod = module(b, target, optimize, "tools/generate_app_icon.zig");
+    generate_icon_mod.addImport("native_sdk", desktop_mod);
+    const generate_icon_exe = b.addExecutable(.{
+        .name = "generate-app-icon",
+        .root_module = generate_icon_mod,
+    });
+    const generate_icon_run = b.addRunArtifact(generate_icon_exe);
+    generate_icon_run.addArgs(&.{ "zig-out/icon.iconset", "assets/icon.png", "assets/icon.ico", "assets/icon.svg" });
+    generate_icon_run.has_side_effects = true;
     const iconset_script = b.addSystemCommand(&.{
         "sh", "-c",
         \\set -e
-        \\command -v python3 >/dev/null || { echo "python3 required for icon generation" >&2; exit 1; }
-        \\python3 -c "
-        \\from PIL import Image; import os
-        \\img = Image.open('assets/icon.png')
-        \\iconset = 'zig-out/icon.iconset'
-        \\os.makedirs(iconset, exist_ok=True)
-        \\for name, sz in {'icon_16x16.png':16,'icon_16x16@2x.png':32,'icon_32x32.png':32,'icon_32x32@2x.png':64,'icon_128x128.png':128,'icon_128x128@2x.png':256,'icon_256x256.png':256,'icon_256x256@2x.png':512,'icon_512x512.png':512,'icon_512x512@2x.png':1024}.items():
-        \\    img.resize((sz,sz),Image.LANCZOS).save(os.path.join(iconset,name),'PNG')
-        \\img.save('assets/icon.ico',format='ICO',sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-        \\"
+        \\command -v iconutil >/dev/null || { echo "iconutil required (macOS) to assemble .icns" >&2; exit 1; }
         \\iconutil -c icns zig-out/icon.iconset -o assets/icon.icns
-        \\echo "generated assets/icon.icns and assets/icon.ico"
+        \\cp assets/icon.icns src/tooling/default_icon.icns
+        \\rm -rf zig-out/icon-roundtrip.iconset
+        \\iconutil -c iconset assets/icon.icns -o zig-out/icon-roundtrip.iconset
+        \\test -f zig-out/icon-roundtrip.iconset/icon_512x512@2x.png
+        \\echo "generated assets/icon.{icns,ico,png,svg} and src/tooling/default_icon.icns"
     });
+    iconset_script.step.dependOn(&generate_icon_run.step);
     generate_icon_step.dependOn(&iconset_script.step);
 
     const notarize_run = b.addRunArtifact(host_cli_exe);

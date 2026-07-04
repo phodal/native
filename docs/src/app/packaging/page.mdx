@@ -246,13 +246,13 @@ This gated check requires a local CEF layout or `-Dcef-auto-install=true` and ve
 
 ## Icon generation
 
-Generate platform-specific icon files from a source PNG:
+Regenerate the SDK's default app icon from its vector source (`tools/generate_app_icon.zig`):
 
 ```bash
 zig build generate-icon
 ```
 
-This produces `icon.icns` (macOS) and `icon.ico` (Windows) from `assets/icon.png`.
+This renders the full macOS iconset (16 through 1024 px with @2x variants) through the SDK's own path rasterizer, assembles and round-trip-validates `assets/icon.icns` with `iconutil` (macOS only), and also emits `assets/icon.ico` (Windows), `assets/icon.png` (1024 px, used for Linux packaging), and an `assets/icon.svg` mirror for design handoff. The default follows Apple's icon grid — a centered 824x824 rounded-rect plate on the 1024 canvas with standard margins — so it sits correctly in the Dock next to system apps. `native init` embeds the same icon, and packaging warns if `assets/icon.icns` is not a structurally valid `.icns`; replace the file (or edit the generator's geometry) to ship your own mark.
 
 ## Validation
 

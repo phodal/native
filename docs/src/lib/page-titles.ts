@@ -25,7 +25,7 @@ export const PAGE_TITLES: Record<string, string> = {
   updates: "Updates",
   "app-zon": "app.zon Reference",
   debugging: "Debugging",
-  "debugging/doctor": "zero-native doctor",
+  "debugging/doctor": "native doctor",
   automation: "Automation",
   testing: "Testing",
   "testing/ci": "Testing in CI",

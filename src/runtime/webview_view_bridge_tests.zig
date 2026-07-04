@@ -81,7 +81,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"x\":10,\"y\":20,\"width\":300,\"height\":200},\"layer\":2,\"transparent\":true,\"bridge\":false}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"x\":10,\"y\":20,\"width\":300,\"height\":200},\"layer\":2,\"transparent\":true,\"bridge\":false}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -94,21 +94,21 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expect(!harness.null_platform.webviews[0].bridge_enabled);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.webview.setFrame\",\"payload\":{\"label\":\"preview\",\"frame\":{\"x\":11,\"y\":22,\"width\":333,\"height\":222}}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.webview.setFrame\",\"payload\":{\"label\":\"preview\",\"frame\":{\"x\":11,\"y\":22,\"width\":333,\"height\":222}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expectEqual(@as(f32, 333), harness.null_platform.webviews[0].frame.width);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"3\",\"command\":\"zero-native.webview.navigate\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.org\"}}",
+        .bytes = "{\"id\":\"3\",\"command\":\"native-sdk.webview.navigate\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.org\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expectEqualStrings("https://example.org", harness.null_platform.webviews[0].url);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"4\",\"command\":\"zero-native.webview.setZoom\",\"payload\":{\"label\":\"preview\",\"zoom\":1.25}}",
+        .bytes = "{\"id\":\"4\",\"command\":\"native-sdk.webview.setZoom\",\"payload\":{\"label\":\"preview\",\"zoom\":1.25}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -116,14 +116,14 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"zoom\":1.25") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"5\",\"command\":\"zero-native.webview.setLayer\",\"payload\":{\"label\":\"preview\",\"layer\":10}}",
+        .bytes = "{\"id\":\"5\",\"command\":\"native-sdk.webview.setLayer\",\"payload\":{\"label\":\"preview\",\"layer\":10}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expectEqual(@as(i32, 10), harness.null_platform.webviews[0].layer);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"6\",\"command\":\"zero-native.webview.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"6\",\"command\":\"native-sdk.webview.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -132,7 +132,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"layer\":10") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"7\",\"command\":\"zero-native.webview.setFrame\",\"payload\":{\"label\":\"main\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":80}}}",
+        .bytes = "{\"id\":\"7\",\"command\":\"native-sdk.webview.setFrame\",\"payload\":{\"label\":\"main\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":80}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -141,7 +141,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"zoom\":1") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"8\",\"command\":\"zero-native.webview.setZoom\",\"payload\":{\"label\":\"main\",\"zoom\":1.1}}",
+        .bytes = "{\"id\":\"8\",\"command\":\"native-sdk.webview.setZoom\",\"payload\":{\"label\":\"main\",\"zoom\":1.1}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -150,7 +150,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"zoom\":1.1") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"9\",\"command\":\"zero-native.webview.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"9\",\"command\":\"native-sdk.webview.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
         .webview_label = "preview",
@@ -158,7 +158,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expectEqualStrings("preview", harness.null_platform.lastBridgeResponseWebViewLabel());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"9\",\"command\":\"zero-native.webview.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"9\",\"command\":\"native-sdk.webview.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
         .webview_label = "main",
@@ -166,7 +166,7 @@ test "runtime handles built-in JavaScript webview bridge commands" {
     try std.testing.expectEqualStrings("main", harness.null_platform.lastBridgeResponseWebViewLabel());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"10\",\"command\":\"zero-native.webview.close\",\"payload\":{\"label\":\"preview\"}}",
+        .bytes = "{\"id\":\"10\",\"command\":\"native-sdk.webview.close\",\"payload\":{\"label\":\"preview\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -208,7 +208,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.view.create\",\"payload\":{\"label\":\"toolbar\",\"kind\":\"toolbar\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":44},\"role\":\"toolbar\",\"accessibilityLabel\":\"Main tools\",\"text\":\"Tools\",\"command\":\"app.tools\",\"layer\":3}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.view.create\",\"payload\":{\"label\":\"toolbar\",\"kind\":\"toolbar\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":44},\"role\":\"toolbar\",\"accessibilityLabel\":\"Main tools\",\"text\":\"Tools\",\"command\":\"app.tools\",\"layer\":3}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -233,7 +233,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expectEqualStrings("toolbar", app_state.last_view_label);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.view.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -241,7 +241,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"label\":\"toolbar\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"3\",\"command\":\"zero-native.view.focus\",\"payload\":{\"label\":\"toolbar\"}}",
+        .bytes = "{\"id\":\"3\",\"command\":\"native-sdk.view.focus\",\"payload\":{\"label\":\"toolbar\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -249,7 +249,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"3-next\",\"command\":\"zero-native.view.focusNext\",\"payload\":{}}",
+        .bytes = "{\"id\":\"3-next\",\"command\":\"native-sdk.view.focusNext\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -257,7 +257,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"3-prev\",\"command\":\"zero-native.view.focusPrevious\",\"payload\":{}}",
+        .bytes = "{\"id\":\"3-prev\",\"command\":\"native-sdk.view.focusPrevious\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -265,14 +265,14 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"4\",\"command\":\"zero-native.view.setFrame\",\"payload\":{\"label\":\"toolbar\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":52}}}",
+        .bytes = "{\"id\":\"4\",\"command\":\"native-sdk.view.setFrame\",\"payload\":{\"label\":\"toolbar\",\"frame\":{\"x\":0,\"y\":0,\"width\":640,\"height\":52}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"height\":52") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"5\",\"command\":\"zero-native.view.setVisible\",\"payload\":{\"label\":\"toolbar\",\"visible\":false}}",
+        .bytes = "{\"id\":\"5\",\"command\":\"native-sdk.view.setVisible\",\"payload\":{\"label\":\"toolbar\",\"visible\":false}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -280,7 +280,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":false") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"5-list\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"5-list\",\"command\":\"native-sdk.view.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -288,7 +288,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"6\",\"command\":\"zero-native.view.update\",\"payload\":{\"label\":\"toolbar\",\"visible\":true,\"enabled\":false,\"role\":\"banner\",\"accessibilityLabel\":\"Primary actions\",\"text\":\"Actions\",\"command\":\"app.actions\"}}",
+        .bytes = "{\"id\":\"6\",\"command\":\"native-sdk.view.update\",\"payload\":{\"label\":\"toolbar\",\"visible\":true,\"enabled\":false,\"role\":\"banner\",\"accessibilityLabel\":\"Primary actions\",\"text\":\"Actions\",\"command\":\"app.actions\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -301,7 +301,7 @@ test "runtime handles built-in JavaScript view bridge commands" {
     try std.testing.expectEqualStrings("app.actions", harness.null_platform.views[0].command);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"7\",\"command\":\"zero-native.view.close\",\"payload\":{\"label\":\"toolbar\"}}",
+        .bytes = "{\"id\":\"7\",\"command\":\"native-sdk.view.close\",\"payload\":{\"label\":\"toolbar\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -327,7 +327,7 @@ test "runtime handles GPU surface options in JavaScript view bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"gpu\",\"command\":\"zero-native.view.create\",\"payload\":{\"label\":\"canvas\",\"kind\":\"gpuSurface\",\"frame\":{\"width\":320,\"height\":240},\"gpuBackend\":\"metal\",\"gpuPixelFormat\":\"bgra8_unorm\",\"gpuPresentMode\":\"timer\",\"gpuAlphaMode\":\"opaque\",\"gpuColorSpace\":\"srgb\",\"gpuVsync\":true}}",
+        .bytes = "{\"id\":\"gpu\",\"command\":\"native-sdk.view.create\",\"payload\":{\"label\":\"canvas\",\"kind\":\"gpuSurface\",\"frame\":{\"width\":320,\"height\":240},\"gpuBackend\":\"metal\",\"gpuPixelFormat\":\"bgra8_unorm\",\"gpuPresentMode\":\"timer\",\"gpuAlphaMode\":\"opaque\",\"gpuColorSpace\":\"srgb\",\"gpuVsync\":true}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -357,7 +357,7 @@ test "runtime gates JavaScript view API with view permission" {
     var app_state: TestApp = .{};
     try allowed.start(app_state.app());
     try allowed.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"allowed\",\"command\":\"native-sdk.view.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -370,7 +370,7 @@ test "runtime gates JavaScript view API with view permission" {
     denied.runtime.options.security.permissions = &command_permission;
     try denied.start(app_state.app());
     try denied.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"denied\",\"command\":\"zero-native.view.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"denied\",\"command\":\"native-sdk.view.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -393,18 +393,18 @@ test "runtime returns closed webview info before compacting storage" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"first\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"first\",\"url\":\"https://example.com/first\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"first\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"first\",\"url\":\"https://example.com/first\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"second\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"second\",\"url\":\"https://example.com/second\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"second\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"second\",\"url\":\"https://example.com/second\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"close-first\",\"command\":\"zero-native.webview.close\",\"payload\":{\"label\":\"first\"}}",
+        .bytes = "{\"id\":\"close-first\",\"command\":\"native-sdk.webview.close\",\"payload\":{\"label\":\"first\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -432,7 +432,7 @@ test "runtime defaults webview commands to source window" {
     const secondary = try harness.runtime.createWindow(.{ .label = "secondary" });
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = secondary.id,
     } });
@@ -443,7 +443,7 @@ test "runtime defaults webview commands to source window" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"windowId\":2") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.webview.create\",\"payload\":{\"windowId\":2,\"label\":\"cross-window\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"windowId\":2,\"label\":\"cross-window\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -467,7 +467,7 @@ test "runtime validates webview bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"missing-url\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"missing-url\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -475,7 +475,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"invalid-frame\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":0,\"height\":200}}}",
+        .bytes = "{\"id\":\"invalid-frame\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":0,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -483,7 +483,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"reserved-label\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"main\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"reserved-label\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"main\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -491,13 +491,13 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"native-view\",\"command\":\"zero-native.view.create\",\"payload\":{\"label\":\"native-collision\",\"kind\":\"button\",\"frame\":{\"width\":120,\"height\":32},\"text\":\"Native\"}}",
+        .bytes = "{\"id\":\"native-view\",\"command\":\"native-sdk.view.create\",\"payload\":{\"label\":\"native-collision\",\"kind\":\"button\",\"frame\":{\"width\":120,\"height\":32},\"text\":\"Native\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"native-collision\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"native-collision\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"native-collision\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"native-collision\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -506,7 +506,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.webview_count);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"invalid-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"bad-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":1e1000}}",
+        .bytes = "{\"id\":\"invalid-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"bad-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":1e1000}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -514,7 +514,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"max-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"max-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":2147483647}}",
+        .bytes = "{\"id\":\"max-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"max-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":2147483647}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -522,7 +522,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"layer\":2147483647") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"out-of-range-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"bad-layer-range\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":100000000000000000000}}",
+        .bytes = "{\"id\":\"out-of-range-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"bad-layer-range\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":100000000000000000000}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -530,7 +530,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"i32-overflow-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"i32-overflow-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":2147483648}}",
+        .bytes = "{\"id\":\"i32-overflow-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"i32-overflow-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":2147483648}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -538,7 +538,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"min-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"min-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":-2147483648}}",
+        .bytes = "{\"id\":\"min-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"min-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":-2147483648}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -546,7 +546,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"layer\":-2147483648") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"i32-underflow-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"i32-underflow-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":-2147483649}}",
+        .bytes = "{\"id\":\"i32-underflow-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"i32-underflow-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":-2147483649}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -554,7 +554,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"fractional-layer\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"fractional-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":1.5}}",
+        .bytes = "{\"id\":\"fractional-layer\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"fractional-layer\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200},\"layer\":1.5}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -562,14 +562,14 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"ok\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"ok\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"duplicate\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.org\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"duplicate\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview\",\"url\":\"https://example.org\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -577,7 +577,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"missing-window\",\"command\":\"zero-native.webview.create\",\"payload\":{\"windowId\":99,\"label\":\"other\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"missing-window\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"windowId\":99,\"label\":\"other\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -585,7 +585,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"bad-window-id\",\"command\":\"zero-native.webview.create\",\"payload\":{\"windowId\":\"1\",\"label\":\"bad-window-id\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"bad-window-id\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"windowId\":\"1\",\"label\":\"bad-window-id\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -593,7 +593,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"missing-webview\",\"command\":\"zero-native.webview.setFrame\",\"payload\":{\"label\":\"missing\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"missing-webview\",\"command\":\"native-sdk.webview.setFrame\",\"payload\":{\"label\":\"missing\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -602,7 +602,7 @@ test "runtime validates webview bridge commands" {
 
     var long_label = [_]u8{'a'} ** (platform.max_webview_label_bytes + 1);
     var long_label_request_buffer: [512]u8 = undefined;
-    const long_label_request = try std.fmt.bufPrint(&long_label_request_buffer, "{{\"id\":\"long-label\",\"command\":\"zero-native.webview.create\",\"payload\":{{\"label\":\"{s}\",\"url\":\"https://example.com\",\"frame\":{{\"width\":300,\"height\":200}}}}}}", .{&long_label});
+    const long_label_request = try std.fmt.bufPrint(&long_label_request_buffer, "{{\"id\":\"long-label\",\"command\":\"native-sdk.webview.create\",\"payload\":{{\"label\":\"{s}\",\"url\":\"https://example.com\",\"frame\":{{\"width\":300,\"height\":200}}}}}}", .{&long_label});
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = long_label_request,
         .origin = "zero://inline",
@@ -613,7 +613,7 @@ test "runtime validates webview bridge commands" {
 
     var long_url = [_]u8{'a'} ** (platform.max_webview_url_bytes + 1);
     var long_url_request_buffer: [platform.max_webview_url_bytes + 256]u8 = undefined;
-    const long_url_request = try std.fmt.bufPrint(&long_url_request_buffer, "{{\"id\":\"long-url\",\"command\":\"zero-native.webview.create\",\"payload\":{{\"label\":\"too-long-url\",\"url\":\"{s}\",\"frame\":{{\"width\":300,\"height\":200}}}}}}", .{&long_url});
+    const long_url_request = try std.fmt.bufPrint(&long_url_request_buffer, "{{\"id\":\"long-url\",\"command\":\"native-sdk.webview.create\",\"payload\":{{\"label\":\"too-long-url\",\"url\":\"{s}\",\"frame\":{{\"width\":300,\"height\":200}}}}}}", .{&long_url});
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = long_url_request,
         .origin = "zero://inline",
@@ -623,7 +623,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"denied-url\",\"command\":\"zero-native.webview.navigate\",\"payload\":{\"label\":\"preview\",\"url\":\"https://blocked.example\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"denied-url\",\"command\":\"native-sdk.webview.navigate\",\"payload\":{\"label\":\"preview\",\"url\":\"https://blocked.example\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -632,7 +632,7 @@ test "runtime validates webview bridge commands" {
 
     harness.runtime.options.platform.services.set_webview_zoom_fn = null;
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"unsupported-zoom\",\"command\":\"zero-native.webview.setZoom\",\"payload\":{\"label\":\"preview\",\"zoom\":1.25}}",
+        .bytes = "{\"id\":\"unsupported-zoom\",\"command\":\"native-sdk.webview.setZoom\",\"payload\":{\"label\":\"preview\",\"zoom\":1.25}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -640,7 +640,7 @@ test "runtime validates webview bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"invalid_request\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"escaped\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"preview \\\"quoted\\\"\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"escaped\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"preview \\\"quoted\\\"\",\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });

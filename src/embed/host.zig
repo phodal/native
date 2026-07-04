@@ -41,7 +41,7 @@ fn mobileMeasureText(context: ?*anyopaque, font_id: canvas.FontId, size: f32, te
 /// on the embedded runtime — the mobile counterpart of the desktop
 /// platforms' `measure_text_fn` service, threaded into layout the same
 /// way (`Runtime.tokensWithTextMeasure` stamps it into design tokens on
-/// every rebuild). Register it before `zero_native_app_start` so the
+/// every rebuild). Register it before `native_sdk_app_start` so the
 /// installing layout already uses real metrics; later changes apply on
 /// the next rebuild.
 ///
@@ -303,7 +303,7 @@ pub const MobileHostApp = struct {
         self.last_command_name = [_]u8{0} ** (max_mobile_command_name_bytes + 1);
         self.embedded.initInPlace(.{
             .context = self,
-            .name = "zero-native-mobile",
+            .name = "native-sdk-mobile",
             .source_fn = mobileSource,
             .event_fn = handleEvent,
         }, self.null_platform.platform());
@@ -395,8 +395,8 @@ pub const mobile_html =
     \\<!doctype html>
     \\<html>
     \\<body style="font-family: system-ui; padding: 2rem;">
-    \\  <h1>zero-native mobile</h1>
-    \\  <p>This content is loaded through the zero-native embedded C ABI.</p>
+    \\  <h1>native-sdk mobile</h1>
+    \\  <p>This content is loaded through the native-sdk embedded C ABI.</p>
     \\</body>
     \\</html>
 ;
@@ -411,7 +411,7 @@ pub fn recordError(self: anytype, err: anyerror) void {
 }
 
 /// Point the embedded runtime's automation server at `dir` (the desktop
-/// equivalent is `-Dautomation=true` + `.zig-cache/zero-native-automation`;
+/// equivalent is `-Dautomation=true` + `.zig-cache/native-sdk-automation`;
 /// mobile shims pass an absolute path inside the app's data container).
 /// The host-pumped frame loop then consumes `command.txt` and publishes
 /// `snapshot.txt` / `accessibility.txt` / `windows.txt` exactly like the

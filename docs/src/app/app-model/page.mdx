@@ -1,6 +1,6 @@
 # App Model
 
-A zero-native app provides a name, optional WebView content, and optional lifecycle callbacks. The runtime owns the event loop, windows, native views, and native services; the platform owns the web engine and OS host.
+A Native SDK app provides a name, optional WebView content, and optional lifecycle callbacks. The runtime owns the event loop, windows, native views, and native services; the platform owns the web engine and OS host.
 
 ## The App struct
 
@@ -60,38 +60,38 @@ All callback fields are optional. A minimal app only needs `context` and `name`;
 
 ## Startup shape
 
-Without `scene_fn`, zero-native uses the compatibility path: it loads `source` or `source_fn` into the configured startup window list.
+Without `scene_fn`, the Native SDK uses the compatibility path: it loads `source` or `source_fn` into the configured startup window list.
 
-With `scene_fn`, zero-native materializes the returned `ShellConfig` as native shell windows and views. The first scene window adopts the startup native window; additional scene windows are created through the window service. `App.source` or `source_fn` still provides the main WebView content for those windows.
+With `scene_fn`, the Native SDK materializes the returned `ShellConfig` as native shell windows and views. The first scene window adopts the startup native window; additional scene windows are created through the window service. `App.source` or `source_fn` still provides the main WebView content for those windows.
 
 Scene windows and views are kept as resize layout bindings, so return slices backed by static or app-owned storage that lives as long as the window.
 
 ```zig
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 52 },
     .{ .label = "refresh", .kind = .button, .parent = "toolbar", .text = "Refresh", .command = "app.refresh" },
     .{ .label = "main", .kind = .webview, .url = "zero://inline", .fill = true },
     .{ .label = "status", .kind = .statusbar, .edge = .bottom, .height = 28, .text = "Ready" },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
     .title = "Acme",
     .width = 1100,
     .height = 760,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
-fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
+fn scene(context: *anyopaque) anyerror!native_sdk.ShellConfig {
     _ = context;
     return shell_scene;
 }
 
-fn app(self: *AppState) zero_native.App {
+fn app(self: *AppState) native_sdk.App {
     return .{
         .context = self,
         .name = "acme",
-        .source = zero_native.WebViewSource.html("<main>Content</main>"),
+        .source = native_sdk.WebViewSource.html("<main>Content</main>"),
         .scene_fn = scene,
         .event_fn = event,
     };
@@ -109,7 +109,7 @@ Three constructors for specifying what the WebView loads:
 The assets constructor takes a `WebViewAssetSource`:
 
 ```zig
-.source = zero_native.WebViewSource.assets(.{
+.source = native_sdk.WebViewSource.assets(.{
     .root_path = "dist",
     .entry = "index.html",      // default
     .origin = "zero://app",     // default
@@ -186,7 +186,7 @@ The generated `src/runner.zig` wires the runtime with platform services:
 5. Creates the `Runtime` with all options and calls `runtime.run(app)`
 
 ```zig
-var runtime = zero_native.Runtime.init(.{
+var runtime = native_sdk.Runtime.init(.{
     .platform = my_platform,
     .trace_sink = fanout.sink(),
     .bridge = my_app.bridge(),

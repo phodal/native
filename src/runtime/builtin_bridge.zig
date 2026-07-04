@@ -66,9 +66,9 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchCommandBridgeCommand(self: *Runtime, app: App, request: bridge.Request, source_window_id: platform.WindowId, source_view_label: []const u8, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.command.invoke"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.command.invoke"))
                 Self.invokeCommandFromJson(self, app, request.payload, source_window_id, source_view_label, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.command.list"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.command.list"))
                 Self.writeCommandListJson(self, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown command command");
@@ -76,7 +76,7 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchPlatformBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.platform.supports"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.platform.supports"))
                 SystemServiceMethods.supportsFeatureFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown platform command");
@@ -84,13 +84,13 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchWindowBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.window.list"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.window.list"))
                 Self.writeWindowListJson(self, result_buffer) catch return bridge.writeErrorResponse(response_buffer, request.id, .internal_error, "Failed to list windows")
-            else if (std.mem.eql(u8, request.command, "zero-native.window.create"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.window.create"))
                 Self.createWindowFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.window.focus"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.window.focus"))
                 Self.focusWindowFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.window.close"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.window.close"))
                 Self.closeWindowFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown window command");
@@ -124,23 +124,23 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchViewBridgeCommand(self: *Runtime, request: bridge.Request, source_window_id: platform.WindowId, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.view.create"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.view.create"))
                 Self.createViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.list"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.list"))
                 Self.writeViewListJson(self, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.update"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.update"))
                 Self.updateViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.setFrame"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.setFrame"))
                 Self.setViewFrameFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.setVisible"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.setVisible"))
                 Self.setViewVisibleFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.focus"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.focus"))
                 Self.focusViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.focusNext"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.focusNext"))
                 Self.focusNextViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.focusPrevious"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.focusPrevious"))
                 Self.focusPreviousViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.view.close"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.view.close"))
                 Self.closeViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown view command");
@@ -148,19 +148,19 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchWebViewBridgeCommand(self: *Runtime, request: bridge.Request, source_window_id: platform.WindowId, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.webview.create"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.webview.create"))
                 Self.createWebViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.list"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.list"))
                 WindowViewMethods.writeWebViewListJson(self, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.setFrame"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.setFrame"))
                 Self.setWebViewFrameFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.navigate"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.navigate"))
                 Self.navigateWebViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.setZoom"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.setZoom"))
                 Self.setWebViewZoomFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.setLayer"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.setLayer"))
                 Self.setWebViewLayerFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.webview.close"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.webview.close"))
                 Self.closeWebViewFromJson(self, request.payload, source_window_id, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown WebView command");
@@ -168,11 +168,11 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchDialogBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.dialog.openFile"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.dialog.openFile"))
                 SystemServiceMethods.openFileDialogFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.dialog.saveFile"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.dialog.saveFile"))
                 SystemServiceMethods.saveFileDialogFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.dialog.showMessage"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.dialog.showMessage"))
                 SystemServiceMethods.showMessageDialogFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown dialog command");
@@ -180,15 +180,15 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchOsBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.os.openUrl"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.os.openUrl"))
                 SystemServiceMethods.openExternalUrlFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.os.showNotification"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.os.showNotification"))
                 SystemServiceMethods.showNotificationFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.os.revealPath"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.os.revealPath"))
                 SystemServiceMethods.revealPathFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.os.addRecentDocument"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.os.addRecentDocument"))
                 SystemServiceMethods.addRecentDocumentFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.os.clearRecentDocuments"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.os.clearRecentDocuments"))
                 SystemServiceMethods.clearRecentDocumentsFromJson(self, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown OS command");
@@ -196,11 +196,11 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchCredentialBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.credentials.set"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.credentials.set"))
                 SystemServiceMethods.setCredentialFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.credentials.get"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.credentials.get"))
                 SystemServiceMethods.getCredentialFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.credentials.delete"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.credentials.delete"))
                 SystemServiceMethods.deleteCredentialFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown credentials command");
@@ -208,13 +208,13 @@ pub fn RuntimeBuiltinBridge(comptime Runtime: type) type {
         }
 
         pub fn dispatchClipboardBridgeCommand(self: *Runtime, request: bridge.Request, result_buffer: []u8, response_buffer: []u8) []const u8 {
-            const result = if (std.mem.eql(u8, request.command, "zero-native.clipboard.readText"))
+            const result = if (std.mem.eql(u8, request.command, "native-sdk.clipboard.readText"))
                 SystemServiceMethods.readClipboardTextFromJson(self, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.clipboard.writeText"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.clipboard.writeText"))
                 SystemServiceMethods.writeClipboardTextFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.clipboard.read"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.clipboard.read"))
                 SystemServiceMethods.readClipboardDataFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
-            else if (std.mem.eql(u8, request.command, "zero-native.clipboard.write"))
+            else if (std.mem.eql(u8, request.command, "native-sdk.clipboard.write"))
                 SystemServiceMethods.writeClipboardDataFromJson(self, request.payload, result_buffer) catch |err| return bridge.writeErrorResponse(response_buffer, request.id, builtinBridgeErrorCode(err), builtinBridgeErrorMessage(err))
             else
                 return bridge.writeErrorResponse(response_buffer, request.id, .unknown_command, "Unknown clipboard command");

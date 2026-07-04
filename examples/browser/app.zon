@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.browser",
+    .id = "dev.native_sdk.browser",
     .name = "browser",
     .display_name = "Browser Example",
     .version = "0.1.0",

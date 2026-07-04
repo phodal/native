@@ -34,15 +34,15 @@ jobs:
       # Shared macos-14 runners are far noisier than a dev box (the second
       # CI run measured a 576 ms automation-ready against the 500 ms local
       # ceiling), so widen the smoke budgets here instead of weakening the
-      # local defaults. ZN_SMOKE_BUDGET_MS raises the first-frame latency
+      # local defaults. NATIVE_SDK_SMOKE_BUDGET_MS raises the first-frame latency
       # budget and the automation-ready ceiling together; every correctness
       # assertion in the smokes stays strict.
       - run: zig build test-gpu-dashboard-smoke
         env:
-          ZN_SMOKE_BUDGET_MS: "1500"
+          NATIVE_SDK_SMOKE_BUDGET_MS: "1500"
       - run: zig build test-gpu-components-smoke
         env:
-          ZN_SMOKE_BUDGET_MS: "1500"
+          NATIVE_SDK_SMOKE_BUDGET_MS: "1500"
 
   macos-gpu-perf:
     name: macOS GPU Perf
@@ -53,8 +53,8 @@ jobs:
         with:
           version: 0.16.0
       # Percentile perf check (friction #77): 5 cold launches asserting p90
-      # first-frame latency under ZN_PERF_BUDGET_MS, then 5 steady-state
-      # widget clicks asserting p90 input latency under ZN_PERF_INPUT_BUDGET_MS.
+      # first-frame latency under NATIVE_SDK_PERF_BUDGET_MS, then 5 steady-state
+      # widget clicks asserting p90 input latency under NATIVE_SDK_PERF_INPUT_BUDGET_MS.
       # Its own job so a shared-runner slowdown is visible in isolation and
       # never blocks the correctness smokes.
       # Shared macos-14 runners are far noisier than a dev box (first CI run
@@ -63,8 +63,8 @@ jobs:
       # job exists to catch step-function regressions, not runner noise.
       - run: zig build test-gpu-dashboard-perf
         env:
-          ZN_PERF_BUDGET_MS: "1500"
-          ZN_PERF_INPUT_BUDGET_MS: "500"
+          NATIVE_SDK_PERF_BUDGET_MS: "1500"
+          NATIVE_SDK_PERF_INPUT_BUDGET_MS: "500"
 
   linux-webkitgtk:
     name: Linux WebKitGTK
@@ -106,8 +106,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm --prefix packages/zero-native run version:check
-      - run: npm --prefix packages/zero-native run scripts:check
+      - run: npm --prefix packages/native-sdk run version:check
+      - run: npm --prefix packages/native-sdk run scripts:check
 
   native-examples:
     name: Native Examples
@@ -154,17 +154,17 @@ jobs:
           zig build
           cd examples/ui-inbox
           zig build -Dplatform=linux -Dweb-engine=system -Dautomation=true
-          rm -rf .zig-cache/zero-native-automation
+          rm -rf .zig-cache/native-sdk-automation
           xvfb-run -a ./zig-out/bin/ui-inbox &
           pid=$!
           trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
-          cli=../../zig-out/bin/zero-native
+          cli=../../zig-out/bin/native
           # `automate wait` prints the ready snapshot to stderr, so capture
           # both streams (the macOS smokes do the same); piping stdout into
           # grep can never match and fails the step right after readiness.
           ready="$("$cli" automate wait 2>&1)"
           case "$ready" in *"ready=true"*) ;; *) echo "ui-inbox automation snapshot was not ready" >&2; exit 1 ;; esac
-          snap=.zig-cache/zero-native-automation/snapshot.txt
+          snap=.zig-cache/native-sdk-automation/snapshot.txt
           for i in $(seq 1 50); do
             grep -q 'gpu_nonblank=true' "$snap" && break
             sleep 0.2
@@ -179,7 +179,7 @@ jobs:
           done
           grep -q '4 open' "$snap"
           "$cli" automate screenshot inbox-canvas
-          test -s .zig-cache/zero-native-automation/screenshot-inbox-canvas.png
+          test -s .zig-cache/native-sdk-automation/screenshot-inbox-canvas.png
 
   windows-canvas-smoke:
     name: Windows Canvas Smoke (Wine)
@@ -256,8 +256,8 @@ jobs:
           for frontend in native next vite react svelte vue; do
             app=".zig-cache/scaffold-${frontend}"
             rm -rf "$app"
-            ./zig-out/bin/zero-native init "$app" --frontend "$frontend"
-            (cd "$app" && zig build test -Dplatform=null && ../../zig-out/bin/zero-native validate app.zon)
+            ./zig-out/bin/native init "$app" --frontend "$frontend"
+            (cd "$app" && zig build test -Dplatform=null && ../../zig-out/bin/native validate app.zon)
             # Every scaffold ships a CI workflow; parse it as real YAML.
             test -s "$app/.github/workflows/ci.yml"
             python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$app/.github/workflows/ci.yml"

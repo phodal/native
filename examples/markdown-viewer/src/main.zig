@@ -7,7 +7,7 @@
 //! exactly the document — no debounce, no cache, no drift. Links open in
 //! the system browser through `fx.spawn` (`open`/`xdg-open`), and Open /
 //! Save / Save As are real file I/O through `fx.readFile`/`fx.writeFile`
-//! against an honest, editable path field — zero-native has no native
+//! against an honest, editable path field — native-sdk has no native
 //! file dialogs, so the path field IS the file picker, and the sidebar's
 //! recent-files list (itself persisted through the same file effects)
 //! makes it livable.
@@ -21,13 +21,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
-const app_dirs = zero_native.app_dirs;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
+const app_dirs = native_sdk.app_dirs;
 
 const canvas_label = "viewer-canvas";
 const window_width: f32 = 1200;
@@ -55,19 +55,19 @@ pub const recent_read_key: u64 = 3;
 pub const recent_write_key: u64 = 4;
 pub const link_key: u64 = 5;
 
-const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
-const shell_views = [_]zero_native.ShellView{
+const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Markdown viewer canvas", .accessibility_label = "Markdown viewer", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native Markdown",
+    .title = "Native SDK Markdown",
     .width = window_width,
     .height = window_height,
     .restore_state = false,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 // ---------------------------------------------------------------- samples
 
@@ -345,12 +345,12 @@ pub const Msg = union(enum) {
     system_scheme: canvas.ColorScheme,
     toggle_details: usize,
     open_url: []const u8,
-    file_done: zero_native.EffectFileResult,
-    recent_done: zero_native.EffectFileResult,
-    link_done: zero_native.EffectExit,
+    file_done: native_sdk.EffectFileResult,
+    recent_done: native_sdk.EffectFileResult,
+    link_done: native_sdk.EffectExit,
 };
 
-const ViewerApp = zero_native.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev_markup_reload });
+const ViewerApp = native_sdk.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev_markup_reload });
 pub const Effects = ViewerApp.Effects;
 
 /// TEA init: restore the persisted recent list before the first paint.
@@ -544,7 +544,7 @@ pub fn viewerTokens(model: *const Model) canvas.DesignTokens {
 
 /// System appearance flows into the model; an explicit toolbar override
 /// keeps winning because `effectiveScheme` consults it first.
-pub fn onAppearance(appearance: zero_native.Appearance) ?Msg {
+pub fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return .{ .system_scheme = switch (appearance.color_scheme) {
         .light => .light,
         .dark => .dark,
@@ -582,7 +582,7 @@ pub fn main(init: std.process.Init) !void {
     // just disables persistence — never a startup error.
     var dir_buffer: [max_path_bytes]u8 = undefined;
     var file_buffer: [max_path_bytes]u8 = undefined;
-    const env = zero_native.debug.envFromMap(init.environ_map);
+    const env = native_sdk.debug.envFromMap(init.environ_map);
     const platform_value = app_dirs.currentPlatform();
     if (app_dirs.resolveOne(.{ .name = "markdown-viewer" }, platform_value, env, .data, &dir_buffer)) |data_dir| {
         if (app_dirs.join(platform_value, &file_buffer, &.{ data_dir, "recent.txt" })) |recent_path| {
@@ -607,8 +607,8 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "markdown-viewer",
-        .window_title = "zero-native Markdown",
-        .bundle_id = "dev.zero_native.markdown_viewer",
+        .window_title = "Native SDK Markdown",
+        .bundle_id = "dev.native_sdk.markdown_viewer",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
         .restore_state = false,

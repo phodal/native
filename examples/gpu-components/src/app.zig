@@ -1,10 +1,10 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const model = @import("model.zig");
 const component_scene = @import("scene.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 const window_width = model.window_width;
 const window_height = model.window_height;
@@ -71,19 +71,19 @@ const surfaceOverlayFrameForSidebar = component_scene.surfaceOverlayFrameForSide
 const gpuFrameEvent = component_scene.gpuFrameEvent;
 const componentFrameStatus = component_scene.componentFrameStatus;
 
-pub const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
-pub const shell_views = [_]zero_native.ShellView{
+pub const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
+pub const shell_views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .min_width = 640, .layer = 12, .role = "Native-rendered component canvas", .accessibility_label = "Native-rendered component gallery canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
 };
-pub const shell_windows = [_]zero_native.ShellWindow{.{
+pub const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native GPU Components",
+    .title = "Native SDK GPU Components",
     .width = window_width,
     .height = window_height,
     .restore_state = false,
     .views = &shell_views,
 }};
-pub const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 pub const GpuComponentsApp = struct {
     refresh_count: u32 = 0,
@@ -107,7 +107,7 @@ pub const GpuComponentsApp = struct {
     pixels: ?[]u8 = null,
     scratch: ?[]u8 = null,
     gpu_commands: [max_component_commands]canvas.CanvasGpuCommand = undefined,
-    packet_json: [zero_native.platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
+    packet_json: [native_sdk.platform.max_gpu_surface_packet_json_bytes]u8 = undefined,
     render_commands: [max_component_commands]canvas.RenderCommand = undefined,
     render_batches: [max_component_commands]canvas.RenderBatch = undefined,
     images: [max_component_commands]canvas.RenderImage = undefined,
@@ -133,7 +133,7 @@ pub const GpuComponentsApp = struct {
     text_layout_cache_actions: [max_component_commands * 2]canvas.TextLayoutCacheAction = undefined,
     changes: [max_component_commands * 2 + 1]canvas.DiffChange = undefined,
 
-    pub fn app(self: *@This()) zero_native.App {
+    pub fn app(self: *@This()) native_sdk.App {
         return .{
             .context = self,
             .name = "gpu-components",
@@ -150,12 +150,12 @@ pub const GpuComponentsApp = struct {
         self.scratch = null;
     }
 
-    fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
+    fn scene(context: *anyopaque) anyerror!native_sdk.ShellConfig {
         _ = context;
         return shell_scene;
     }
 
-    fn event(context: *anyopaque, runtime: *zero_native.Runtime, event_value: zero_native.Event) anyerror!void {
+    fn event(context: *anyopaque, runtime: *native_sdk.Runtime, event_value: native_sdk.Event) anyerror!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         switch (event_value) {
             .command => |command| {
@@ -187,13 +187,13 @@ pub const GpuComponentsApp = struct {
         }
     }
 
-    fn stop(context: *anyopaque, runtime: *zero_native.Runtime) anyerror!void {
+    fn stop(context: *anyopaque, runtime: *native_sdk.Runtime) anyerror!void {
         _ = runtime;
         const self: *@This() = @ptrCast(@alignCast(context));
         self.deinit();
     }
 
-    fn handleGpuFrame(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
+    fn handleGpuFrame(self: *@This(), runtime: *native_sdk.Runtime, frame_event: native_sdk.GpuSurfaceFrameEvent) anyerror!void {
         if (!std.mem.eql(u8, frame_event.label, canvas_label)) return;
         const first_install = !self.canvas_installed;
         const scale_changed = self.updatePixelSnapScale(frame_event.scale_factor);
@@ -212,7 +212,7 @@ pub const GpuComponentsApp = struct {
         try self.reportFrameStatus(runtime, gpuFrameEvent(current_frame));
     }
 
-    fn handleWidgetPointer(self: *@This(), runtime: *zero_native.Runtime, pointer_event: zero_native.runtime.CanvasWidgetPointerEvent) anyerror!void {
+    fn handleWidgetPointer(self: *@This(), runtime: *native_sdk.Runtime, pointer_event: native_sdk.runtime.CanvasWidgetPointerEvent) anyerror!void {
         if (!std.mem.eql(u8, pointer_event.view_label, canvas_label)) return;
         const target = pointer_event.target orelse return;
         switch (pointer_event.pointer.phase) {
@@ -254,14 +254,14 @@ pub const GpuComponentsApp = struct {
         }
     }
 
-    fn resizeSidebar(self: *@This(), runtime: *zero_native.Runtime, pointer_event: zero_native.runtime.CanvasWidgetPointerEvent) anyerror!void {
+    fn resizeSidebar(self: *@This(), runtime: *native_sdk.Runtime, pointer_event: native_sdk.runtime.CanvasWidgetPointerEvent) anyerror!void {
         const next_width = componentSidebarWidthForSize(self.sidebar_width + pointer_event.pointer.delta.dx, self.canvas_size);
         if (@abs(next_width - self.sidebar_width) < 0.001) return;
         self.sidebar_width = next_width;
         try installComponentsCanvasModel(runtime, pointer_event.window_id, self.virtual_scroll, self.componentUiState(), self.componentTokens(), self.canvas_size);
     }
 
-    fn handleWidgetKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
+    fn handleWidgetKeyboard(self: *@This(), runtime: *native_sdk.Runtime, keyboard_event: native_sdk.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
         if (!std.mem.eql(u8, keyboard_event.view_label, canvas_label)) return;
         if (keyboard_event.keyboard.phase != .key_down) return;
         if (try self.handleEnvironmentKeyboard(runtime, keyboard_event)) return;
@@ -270,7 +270,7 @@ pub const GpuComponentsApp = struct {
         try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", scrolled_id);
     }
 
-    fn handleEnvironmentKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!bool {
+    fn handleEnvironmentKeyboard(self: *@This(), runtime: *native_sdk.Runtime, keyboard_event: native_sdk.runtime.CanvasWidgetKeyboardEvent) anyerror!bool {
         const key = keyboard_event.keyboard.key;
         if (std.ascii.eqlIgnoreCase(key, "tab")) {
             if (!self.environment_select_open) return false;
@@ -304,7 +304,7 @@ pub const GpuComponentsApp = struct {
         return false;
     }
 
-    fn reportWidgetInteraction(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
+    fn reportWidgetInteraction(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
         const layout = try runtime.canvasWidgetLayout(window_id, canvas_label);
         const node = layout.findById(id) orelse return;
         const widget = node.widget;
@@ -339,7 +339,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, window_id, status);
     }
 
-    fn scrollVirtualWidget(self: *@This(), runtime: *zero_native.Runtime, pointer_event: zero_native.runtime.CanvasWidgetPointerEvent) anyerror!?canvas.ObjectId {
+    fn scrollVirtualWidget(self: *@This(), runtime: *native_sdk.Runtime, pointer_event: native_sdk.runtime.CanvasWidgetPointerEvent) anyerror!?canvas.ObjectId {
         const id = componentVirtualScrollTarget(pointer_event.route) orelse return null;
         const layout = try runtime.canvasWidgetLayout(pointer_event.window_id, canvas_label);
         const node = layout.findById(id) orelse return null;
@@ -358,7 +358,7 @@ pub const GpuComponentsApp = struct {
         return id;
     }
 
-    fn scrollVirtualWidgetFromKeyboard(self: *@This(), runtime: *zero_native.Runtime, keyboard_event: zero_native.runtime.CanvasWidgetKeyboardEvent) anyerror!?canvas.ObjectId {
+    fn scrollVirtualWidgetFromKeyboard(self: *@This(), runtime: *native_sdk.Runtime, keyboard_event: native_sdk.runtime.CanvasWidgetKeyboardEvent) anyerror!?canvas.ObjectId {
         if (keyboard_event.keyboard.modifiers.hasNavigationModifier()) return null;
         const target = keyboard_event.target orelse return null;
         const id = componentVirtualScrollTarget(keyboard_event.route) orelse return null;
@@ -392,7 +392,7 @@ pub const GpuComponentsApp = struct {
         return id;
     }
 
-    fn stepComponentVirtualScrollForFrame(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!bool {
+    fn stepComponentVirtualScrollForFrame(self: *@This(), runtime: *native_sdk.Runtime, frame_event: native_sdk.GpuSurfaceFrameEvent) anyerror!bool {
         const layout = try runtime.canvasWidgetLayout(frame_event.window_id, canvas_label);
         var changed = false;
         const ids = [_]canvas.ObjectId{ 120, 130, 150 };
@@ -423,7 +423,7 @@ pub const GpuComponentsApp = struct {
         return changed;
     }
 
-    fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn refresh(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         self.refresh_count += 1;
         self.virtual_scroll = .{};
         self.environment_select_open = false;
@@ -440,7 +440,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn changeSection(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent, section: ComponentSection) anyerror!void {
+    fn changeSection(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent, section: ComponentSection) anyerror!void {
         self.section = section;
         self.environment_select_open = false;
         self.surface_overlay = .none;
@@ -453,20 +453,20 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn toggleEnvironmentSelect(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn toggleEnvironmentSelect(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         self.environment_select_open = !self.environment_select_open;
         try self.updateComponentsCanvasModel(runtime, command.window_id);
         try self.updateStatus(runtime, command.window_id, if (self.environment_select_open) "Environment menu opened." else "Environment menu closed.");
     }
 
-    fn selectEnvironment(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent, index: usize) anyerror!void {
+    fn selectEnvironment(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent, index: usize) anyerror!void {
         self.environment_index = @min(index, environment_options.len - 1);
         self.environment_select_open = false;
         try self.updateComponentsCanvasModel(runtime, command.window_id);
         try self.updateEnvironmentSelectedStatus(runtime, command.window_id);
     }
 
-    fn moveEnvironmentSelection(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, index: usize) anyerror!void {
+    fn moveEnvironmentSelection(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, index: usize) anyerror!void {
         if (self.environment_select_open) {
             self.environment_select_open = false;
             try self.updateComponentsCanvasModel(runtime, window_id);
@@ -477,13 +477,13 @@ pub const GpuComponentsApp = struct {
         try self.updateEnvironmentSelectedStatus(runtime, window_id);
     }
 
-    fn updateEnvironmentSelectedStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId) anyerror!void {
+    fn updateEnvironmentSelectedStatus(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId) anyerror!void {
         var status_buffer: [96]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "Environment selected: {s}.", .{environmentLabel(self.environment_index)});
         try self.updateStatus(runtime, window_id, status);
     }
 
-    fn openSurfaceOverlay(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent, overlay: ComponentSurfaceOverlay) anyerror!void {
+    fn openSurfaceOverlay(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent, overlay: ComponentSurfaceOverlay) anyerror!void {
         self.environment_select_open = false;
         self.surface_overlay = overlay;
         try self.updateComponentsCanvasModel(runtime, command.window_id);
@@ -494,7 +494,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn closeSurfaceOverlay(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn closeSurfaceOverlay(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         if (self.surface_overlay == .none) return;
         self.surface_overlay = .none;
         _ = runtime.clearCanvasRenderAnimations(command.window_id, canvas_label) catch {};
@@ -502,7 +502,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, "Surface closed.");
     }
 
-    fn scheduleSurfaceOverlayAnimation(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, overlay: ComponentSurfaceOverlay) anyerror!void {
+    fn scheduleSurfaceOverlayAnimation(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, overlay: ComponentSurfaceOverlay) anyerror!void {
         const motion = self.componentTokens().motion;
 
         const start_ns = runtime.canvasRenderAnimationStartNs(window_id, canvas_label) catch |err| switch (err) {
@@ -522,7 +522,7 @@ pub const GpuComponentsApp = struct {
         _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
-    fn changeTheme(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn changeTheme(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         self.theme_count += 1;
         self.theme_overridden = true;
         self.theme_mode = self.theme_mode.next();
@@ -540,7 +540,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn applySystemAppearance(self: *@This(), runtime: *zero_native.Runtime, appearance: zero_native.Appearance) anyerror!void {
+    fn applySystemAppearance(self: *@This(), runtime: *native_sdk.Runtime, appearance: native_sdk.Appearance) anyerror!void {
         const motion_changed = self.reduce_motion != appearance.reduce_motion;
         const contrast_changed = self.high_contrast != appearance.high_contrast;
         self.reduce_motion = appearance.reduce_motion;
@@ -564,7 +564,7 @@ pub const GpuComponentsApp = struct {
         try self.updateStatus(runtime, 1, status);
     }
 
-    fn presentComponentsCanvas(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!void {
+    fn presentComponentsCanvas(self: *@This(), runtime: *native_sdk.Runtime, frame_event: native_sdk.GpuSurfaceFrameEvent, full_repaint: bool) anyerror!void {
         const surface_size = componentSurfaceSize(frame_event.size);
         const scale_factor = if (frame_event.scale_factor > 0) frame_event.scale_factor else 1;
         const present_scale = referencePresentScale(scale_factor);
@@ -596,8 +596,8 @@ pub const GpuComponentsApp = struct {
 
     fn presentComponentsCanvasPixels(
         self: *@This(),
-        runtime: *zero_native.Runtime,
-        window_id: zero_native.WindowId,
+        runtime: *native_sdk.Runtime,
+        window_id: native_sdk.WindowId,
         surface_size: geometry.SizeF,
         scale_factor: f32,
         frame_index: u64,
@@ -643,12 +643,12 @@ pub const GpuComponentsApp = struct {
         return self.status_text_storage[0..self.status_text_len];
     }
 
-    fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
+    fn updateStatus(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, text: []const u8) anyerror!void {
         self.setStatusText(text);
         if (self.canvas_installed) try self.updateComponentsCanvasModel(runtime, window_id);
     }
 
-    fn reportFrameStatus(self: *@This(), runtime: *zero_native.Runtime, frame_event: zero_native.GpuSurfaceFrameEvent) anyerror!void {
+    fn reportFrameStatus(self: *@This(), runtime: *native_sdk.Runtime, frame_event: native_sdk.GpuSurfaceFrameEvent) anyerror!void {
         if (self.reported_planned_frame or frame_event.canvas_command_count == 0) return;
         self.reported_planned_frame = true;
         var status_buffer: [160]u8 = undefined;
@@ -685,7 +685,7 @@ pub const GpuComponentsApp = struct {
         };
     }
 
-    pub fn updateComponentsCanvasModel(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId) anyerror!void {
+    pub fn updateComponentsCanvasModel(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId) anyerror!void {
         var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
         const layout = try buildComponentsWidgetLayoutWithStateAndSize(&nodes, self.virtual_scroll, self.componentUiState(), self.canvas_size);
         _ = try runtime.setCanvasWidgetLayout(window_id, canvas_label, layout);
@@ -802,7 +802,7 @@ pub const GpuComponentsApp = struct {
     }
 
     fn ensurePixelBuffers(self: *@This(), surface_size: geometry.SizeF, scale_factor: f32) anyerror!void {
-        const pixel_size = try zero_native.runtime.canvasSurfacePixelSize(surface_size, scale_factor);
+        const pixel_size = try native_sdk.runtime.canvasSurfacePixelSize(surface_size, scale_factor);
         if (self.pixels == null or self.pixels.?.len < pixel_size.byte_len) {
             if (self.pixels) |pixels| std.heap.page_allocator.free(pixels);
             self.pixels = try std.heap.page_allocator.alloc(u8, pixel_size.byte_len);

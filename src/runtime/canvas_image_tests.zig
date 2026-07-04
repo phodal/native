@@ -244,7 +244,7 @@ fn avatarUpdate(model: *AvatarModel, msg: AvatarMsg, fx: *effects_mod.Effects(Av
 
 fn avatarView(ui: *AvatarApp.Ui, model: *const AvatarModel) AvatarApp.Ui.Node {
     return ui.column(.{ .gap = 8, .padding = 12 }, .{
-        ui.avatar(.{ .image = model.image, .semantics = .{ .label = "Zero Native" } }, "ZN"),
+        ui.avatar(.{ .image = model.image, .semantics = .{ .label = "Native SDK" } }, "NS"),
         ui.button(.{ .on_press = .load }, "Load"),
     });
 }

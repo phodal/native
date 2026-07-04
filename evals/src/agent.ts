@@ -14,7 +14,7 @@ const ALLOWED_TOOLS = [
   "Glob",
   "Grep",
   "Bash(zig *)",
-  "Bash(zero-native *)",
+  "Bash(native *)",
   "Bash(ls *)",
   "Bash(cat *)",
   "Bash(mkdir *)",
@@ -56,7 +56,7 @@ export function assembleAgentEnv(
     ANTHROPIC_AUTH_TOKEN: gatewayKey,
     ANTHROPIC_API_KEY: "",
     CLAUDE_CONFIG_DIR: configDir,
-    // zero-native CLI (markup check, automate, skills) on PATH for the agent.
+    // Native SDK CLI (markup check, automate, skills) on PATH for the agent.
     PATH: `${join(repoRoot, "zig-out", "bin")}${delimiter}${process.env.PATH ?? ""}`,
   };
   const redacted = { ...overrides, ANTHROPIC_AUTH_TOKEN: redact(gatewayKey) };

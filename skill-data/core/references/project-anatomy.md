@@ -1,6 +1,6 @@
 # Project Anatomy
 
-Use this when creating, orienting in, or restructuring a zero-native app.
+Use this when creating, orienting in, or restructuring a Native SDK app.
 
 ## Generated project files
 

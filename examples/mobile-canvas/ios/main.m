@@ -1,12 +1,12 @@
-// Minimal iOS shim for a zero-native mobile canvas static library.
+// Minimal iOS shim for a native-sdk mobile canvas static library.
 //
 // M2 (presentation): mirrors the macOS raster path in
 // src/platform/macos/appkit_host.m — the embed host renders the retained
-// scene through the CPU reference renderer (`zero_native_app_render_pixels`,
+// scene through the CPU reference renderer (`native_sdk_app_render_pixels`,
 // RGBA8); the shim uploads those bytes to a shared MTLTexture and
 // blit-copies them to the CAMetalLayer drawable. A CADisplayLink pumps
-// `zero_native_app_frame` and the canvas revision from
-// `zero_native_app_gpu_frame_state` gates re-renders, so unchanged frames
+// `native_sdk_app_frame` and the canvas revision from
+// `native_sdk_app_gpu_frame_state` gates re-renders, so unchanged frames
 // cost one ABI call and no upload. The RGBA -> BGRA swizzle happens on the
 // CPU while filling the staging buffer (blit copies require matching pixel
 // formats).
@@ -17,22 +17,22 @@
 // A touch-slop state machine mirrors UIScrollView's delayed content
 // touches: an under-slop touch is a tap (pointer_down + pointer_up), an
 // over-slop move over a scrollable widget pans it through the existing
-// scroll reconciliation (`zero_native_app_scroll` wheel deltas), and an
+// scroll reconciliation (`native_sdk_app_scroll` wheel deltas), and an
 // over-slop move elsewhere becomes pointer_down + pointer_drag so sliders
 // and text selection keep desktop semantics. Long-press is not modeled by
 // the embed ABI, so the shim does not synthesize one.
 //
-// The platform keyboard keys off `zero_native_app_text_input_state`: while
+// The platform keyboard keys off `native_sdk_app_text_input_state`: while
 // an editable text widget owns focus the canvas view holds UIKit first
 // responder (system keyboard up); when focus leaves it resigns (keyboard
-// down). Typed characters flow through `zero_native_app_text` and marked
+// down). Typed characters flow through `native_sdk_app_text` and marked
 // text (UITextInput composition, dead keys, CJK) maps onto the same
-// `zero_native_app_ime` set/commit/cancel path the macOS host drives from
+// `native_sdk_app_ime` set/commit/cancel path the macOS host drives from
 // NSTextInputClient — see appkit_host.m setMarkedText:/insertText:.
 //
 // M5 (text metrics): the shim registers a CoreText-backed measure callback
-// (`zero_native_app_set_text_measure`) before start, mirroring the macOS
-// host's `zero_native_appkit_measure_text` — layout then uses real
+// (`native_sdk_app_set_text_measure`) before start, mirroring the macOS
+// host's `native_sdk_appkit_measure_text` — layout then uses real
 // typographic widths instead of the deterministic estimator. Glyph
 // RENDERING stays the reference renderer's shapes; only measurement
 // changes. Launch with --estimator-text-metrics to keep the estimator
@@ -46,7 +46,7 @@
 #include <mach-o/dyld.h>
 #include <stdlib.h>
 
-#include "zero_native_app.h"
+#include "native_sdk_app.h"
 
 // Zig's std.debug stack-trace symbolication (pulled in by the embed lib's
 // panic path) references `_dyld_get_image_header_containing_address`, which
@@ -64,13 +64,13 @@ const struct mach_header *_dyld_get_image_header_containing_address(const void *
 // ------------------------------------------------------------ text metrics
 
 // Italicizes a resolved sans face for the reserved italic span font ids
-// (5 and 6) — the iOS mirror of appkit_host.m's ZeroNativeItalicSansFont.
+// (5 and 6) — the iOS mirror of appkit_host.m's NativeSdkItalicSansFont.
 // Prefers a real italic face from the same family via font descriptor
 // traits (SF has one; Geist does not ship a sans italic) and falls back to
 // a sheared descriptor matrix so a future draw path slants visibly. The
 // shear leaves advance widths unchanged, so measurement matches the
 // upright face either way.
-static UIFont *ZeroNativeItalicSansFont(UIFont *font) {
+static UIFont *NativeSdkItalicSansFont(UIFont *font) {
     if (!font) return nil;
     UIFontDescriptor *italic = [font.fontDescriptor fontDescriptorWithSymbolicTraits:
         (font.fontDescriptor.symbolicTraits | UIFontDescriptorTraitItalic)];
@@ -85,11 +85,11 @@ static UIFont *ZeroNativeItalicSansFont(UIFont *font) {
 
 // Resolves the weighted sans faces behind the reserved span font ids 3
 // (medium) and 4/6 (bold) — the iOS mirror of appkit_host.m's
-// ZeroNativeWeightedSansFont: explicit weighted candidate names first
+// NativeSdkWeightedSansFont: explicit weighted candidate names first
 // (Geist Medium / Geist Bold when bundled), then the matching SF weight.
 // Never answers with the regular face, so weighted span ids always measure
 // (and will draw) heavier than regular.
-static UIFont *ZeroNativeWeightedSansFont(NSArray<NSString *> *names, UIFontWeight systemWeight, CGFloat size) {
+static UIFont *NativeSdkWeightedSansFont(NSArray<NSString *> *names, UIFontWeight systemWeight, CGFloat size) {
     for (NSString *name in names) {
         UIFont *font = [UIFont fontWithName:name size:size];
         if (font) return font;
@@ -98,11 +98,11 @@ static UIFont *ZeroNativeWeightedSansFont(NSArray<NSString *> *names, UIFontWeig
 }
 
 // Resolves a canvas font id to the UIFont measurement uses — the iOS
-// mirror of appkit_host.m's ZeroNativeFontForFontId (Geist when bundled,
+// mirror of appkit_host.m's NativeSdkFontForFontId (Geist when bundled,
 // system fonts otherwise). Ids 3-6 are the reserved sans span variants
 // (medium, bold, italic, bold italic); everything else keeps the regular
 // sans/mono candidates. Resolved fonts are cached per (font id, size).
-static UIFont *ZeroNativeFontForFontId(uint64_t value, CGFloat size) {
+static UIFont *NativeSdkFontForFontId(uint64_t value, CGFloat size) {
     static NSCache<NSString *, UIFont *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -130,16 +130,16 @@ static UIFont *ZeroNativeFontForFontId(uint64_t value, CGFloat size) {
         if (!base) base = [UIFont systemFontOfSize:size];
         switch (value) {
         case 3:
-            font = ZeroNativeWeightedSansFont(@[ @"Geist-Medium", @"Geist Medium" ], UIFontWeightMedium, size);
+            font = NativeSdkWeightedSansFont(@[ @"Geist-Medium", @"Geist Medium" ], UIFontWeightMedium, size);
             break;
         case 4:
-            font = ZeroNativeWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], UIFontWeightBold, size);
+            font = NativeSdkWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], UIFontWeightBold, size);
             break;
         case 5:
-            font = ZeroNativeItalicSansFont(base);
+            font = NativeSdkItalicSansFont(base);
             break;
         case 6:
-            font = ZeroNativeItalicSansFont(ZeroNativeWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], UIFontWeightBold, size));
+            font = NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], UIFontWeightBold, size));
             break;
         default:
             font = base;
@@ -156,7 +156,7 @@ static UIFont *ZeroNativeFontForFontId(uint64_t value, CGFloat size) {
 // the macOS packet renderer draws with. Returns a negative value when the
 // bytes are not valid UTF-8 so layout falls back to its estimator. Shaped
 // widths are memoized shim-side.
-static double ZeroNativeMeasureText(void *context, uint64_t font_id, double size, const char *text, uintptr_t text_len) {
+static double NativeSdkMeasureText(void *context, uint64_t font_id, double size, const char *text, uintptr_t text_len) {
     (void)context;
     if (!text || text_len == 0) return 0;
     CGFloat clamped = MAX(1, size);
@@ -172,7 +172,7 @@ static double ZeroNativeMeasureText(void *context, uint64_t font_id, double size
         NSString *key = [NSString stringWithFormat:@"%llu/%.3f/%@", (unsigned long long)font_id, (double)clamped, value];
         NSNumber *cached = [widthCache objectForKey:key];
         if (cached) return cached.doubleValue;
-        UIFont *font = ZeroNativeFontForFontId(font_id, clamped);
+        UIFont *font = NativeSdkFontForFontId(font_id, clamped);
         if (!font) return -1;
         double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
         [widthCache setObject:@(width) forKey:key];
@@ -185,28 +185,28 @@ static double ZeroNativeMeasureText(void *context, uint64_t font_id, double size
 // "document" the system IME edits is the composition only, matching the
 // macOS host's NSTextInputClient implementation).
 
-@interface ZeroNativeTextPosition : UITextPosition
+@interface NativeSdkTextPosition : UITextPosition
 @property(nonatomic) NSInteger index;
 + (instancetype)positionWithIndex:(NSInteger)index;
 @end
 
-@implementation ZeroNativeTextPosition
+@implementation NativeSdkTextPosition
 + (instancetype)positionWithIndex:(NSInteger)index {
-    ZeroNativeTextPosition *position = [[self alloc] init];
+    NativeSdkTextPosition *position = [[self alloc] init];
     position.index = index;
     return position;
 }
 @end
 
-@interface ZeroNativeTextRange : UITextRange
+@interface NativeSdkTextRange : UITextRange
 @property(nonatomic) NSInteger location;
 @property(nonatomic) NSInteger length;
 + (instancetype)rangeWithLocation:(NSInteger)location length:(NSInteger)length;
 @end
 
-@implementation ZeroNativeTextRange
+@implementation NativeSdkTextRange
 + (instancetype)rangeWithLocation:(NSInteger)location length:(NSInteger)length {
-    ZeroNativeTextRange *range = [[self alloc] init];
+    NativeSdkTextRange *range = [[self alloc] init];
     range.location = location;
     range.length = length;
     return range;
@@ -215,29 +215,29 @@ static double ZeroNativeMeasureText(void *context, uint64_t font_id, double size
     return self.length == 0;
 }
 - (UITextPosition *)start {
-    return [ZeroNativeTextPosition positionWithIndex:self.location];
+    return [NativeSdkTextPosition positionWithIndex:self.location];
 }
 - (UITextPosition *)end {
-    return [ZeroNativeTextPosition positionWithIndex:self.location + self.length];
+    return [NativeSdkTextPosition positionWithIndex:self.location + self.length];
 }
 @end
 
-typedef NS_ENUM(NSInteger, ZeroNativeTouchMode) {
-    ZeroNativeTouchModeIdle = 0,
+typedef NS_ENUM(NSInteger, NativeSdkTouchMode) {
+    NativeSdkTouchModeIdle = 0,
     // Touch down seen, under slop: undecided between tap / drag / scroll.
-    ZeroNativeTouchModePending,
+    NativeSdkTouchModePending,
     // Over slop on a scrollable widget: forwarding wheel scroll deltas.
-    ZeroNativeTouchModeScrolling,
+    NativeSdkTouchModeScrolling,
     // Over slop elsewhere: forwarded pointer_down, forwarding pointer_drag.
-    ZeroNativeTouchModeDragging,
+    NativeSdkTouchModeDragging,
 };
 
-static const CGFloat ZeroNativeTouchSlop = 8.0;
+static const CGFloat NativeSdkTouchSlop = 8.0;
 
-@interface ZeroNativeCanvasView : UIView <UIKeyInput, UITextInput>
+@interface NativeSdkCanvasView : UIView <UIKeyInput, UITextInput>
 @property(nonatomic) void *nativeApp;
 @property(nonatomic, weak) UITouch *trackedTouch;
-@property(nonatomic) ZeroNativeTouchMode touchMode;
+@property(nonatomic) NativeSdkTouchMode touchMode;
 @property(nonatomic) CGPoint touchStartPoint;
 @property(nonatomic) CGPoint touchLastPoint;
 @property(nonatomic) uint64_t touchSequence;
@@ -248,7 +248,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 @property(nonatomic, weak) id<UITextInputDelegate> inputDelegate;
 @end
 
-@implementation ZeroNativeCanvasView
+@implementation NativeSdkCanvasView
 
 + (Class)layerClass {
     return [CAMetalLayer class];
@@ -271,7 +271,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 - (void)forwardTouchPhase:(int)phase point:(CGPoint)point pressure:(float)pressure {
     if (!self.nativeApp) return;
-    zero_native_app_touch(self.nativeApp, self.touchSequence, phase, (float)point.x, (float)point.y, pressure);
+    native_sdk_app_touch(self.nativeApp, self.touchSequence, phase, (float)point.x, (float)point.y, pressure);
 }
 
 // True when an overflowing scrollable widget's bounds contain the point —
@@ -279,10 +279,10 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 // touches, taken from the semantics export instead of a native hierarchy.
 - (BOOL)scrollableWidgetAtPoint:(CGPoint)point {
     if (!self.nativeApp) return NO;
-    uintptr_t count = zero_native_app_widget_semantics_count(self.nativeApp);
+    uintptr_t count = native_sdk_app_widget_semantics_count(self.nativeApp);
     for (uintptr_t index = 0; index < count; index++) {
-        zero_native_widget_semantics_t node = {0};
-        if (zero_native_app_widget_semantics_at(self.nativeApp, index, &node) != 1) continue;
+        native_sdk_widget_semantics_t node = {0};
+        if (native_sdk_app_widget_semantics_at(self.nativeApp, index, &node) != 1) continue;
         if (!node.has_scroll) continue;
         if (node.scroll_content_extent <= node.scroll_viewport_extent) continue;
         if (point.x < node.x || point.x > node.x + node.width) continue;
@@ -297,7 +297,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     UITouch *touch = touches.anyObject;
     self.trackedTouch = touch;
     self.touchSequence += 1;
-    self.touchMode = ZeroNativeTouchModePending;
+    self.touchMode = NativeSdkTouchModePending;
     self.touchStartPoint = [touch locationInView:self];
     self.touchLastPoint = self.touchStartPoint;
 }
@@ -306,28 +306,28 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     if (!self.trackedTouch || ![touches containsObject:self.trackedTouch]) return;
     CGPoint point = [self.trackedTouch locationInView:self];
 
-    if (self.touchMode == ZeroNativeTouchModePending) {
+    if (self.touchMode == NativeSdkTouchModePending) {
         CGFloat dx = point.x - self.touchStartPoint.x;
         CGFloat dy = point.y - self.touchStartPoint.y;
-        if (dx * dx + dy * dy < ZeroNativeTouchSlop * ZeroNativeTouchSlop) return;
+        if (dx * dx + dy * dy < NativeSdkTouchSlop * NativeSdkTouchSlop) return;
         if ([self scrollableWidgetAtPoint:self.touchStartPoint]) {
-            self.touchMode = ZeroNativeTouchModeScrolling;
+            self.touchMode = NativeSdkTouchModeScrolling;
         } else {
-            self.touchMode = ZeroNativeTouchModeDragging;
-            [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_DOWN point:self.touchStartPoint pressure:1];
+            self.touchMode = NativeSdkTouchModeDragging;
+            [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_DOWN point:self.touchStartPoint pressure:1];
         }
     }
 
-    if (self.touchMode == ZeroNativeTouchModeScrolling) {
+    if (self.touchMode == NativeSdkTouchModeScrolling) {
         // Natural scrolling: finger up moves content up = offset grows, so
         // the wheel delta is the negated finger delta.
         float deltaX = (float)(self.touchLastPoint.x - point.x);
         float deltaY = (float)(self.touchLastPoint.y - point.y);
         if (self.nativeApp && (deltaX != 0 || deltaY != 0)) {
-            zero_native_app_scroll(self.nativeApp, self.touchSequence, (float)point.x, (float)point.y, deltaX, deltaY);
+            native_sdk_app_scroll(self.nativeApp, self.touchSequence, (float)point.x, (float)point.y, deltaX, deltaY);
         }
-    } else if (self.touchMode == ZeroNativeTouchModeDragging) {
-        [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_DRAG point:point pressure:1];
+    } else if (self.touchMode == NativeSdkTouchModeDragging) {
+        [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_DRAG point:point pressure:1];
     }
     self.touchLastPoint = point;
 }
@@ -336,13 +336,13 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     if (!self.trackedTouch || ![touches containsObject:self.trackedTouch]) return;
     CGPoint point = [self.trackedTouch locationInView:self];
     switch (self.touchMode) {
-        case ZeroNativeTouchModePending:
+        case NativeSdkTouchModePending:
             // Under-slop touch: a tap at the start point.
-            [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_DOWN point:self.touchStartPoint pressure:1];
-            [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_UP point:self.touchStartPoint pressure:0];
+            [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_DOWN point:self.touchStartPoint pressure:1];
+            [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_UP point:self.touchStartPoint pressure:0];
             break;
-        case ZeroNativeTouchModeDragging:
-            [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_UP point:point pressure:0];
+        case NativeSdkTouchModeDragging:
+            [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_UP point:point pressure:0];
             break;
         default:
             break;
@@ -353,8 +353,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if (!self.trackedTouch || ![touches containsObject:self.trackedTouch]) return;
-    if (self.touchMode == ZeroNativeTouchModeDragging) {
-        [self forwardTouchPhase:ZERO_NATIVE_TOUCH_PHASE_CANCEL point:self.touchLastPoint pressure:0];
+    if (self.touchMode == NativeSdkTouchModeDragging) {
+        [self forwardTouchPhase:NATIVE_SDK_TOUCH_PHASE_CANCEL point:self.touchLastPoint pressure:0];
     }
     [self resetTouchTracking];
     [self syncTextInput];
@@ -362,7 +362,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 - (void)resetTouchTracking {
     self.trackedTouch = nil;
-    self.touchMode = ZeroNativeTouchModeIdle;
+    self.touchMode = NativeSdkTouchModeIdle;
 }
 
 // ------------------------------------------------- keyboard <-> focus sync
@@ -373,8 +373,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 // tick (focus can also move from key handling or model updates).
 - (void)syncTextInput {
     if (!self.nativeApp || !self.window) return;
-    zero_native_text_input_state_t state = {0};
-    if (zero_native_app_text_input_state(self.nativeApp, &state) != 1) return;
+    native_sdk_text_input_state_t state = {0};
+    if (native_sdk_app_text_input_state(self.nativeApp, &state) != 1) return;
     if (state.active) {
         if (state.widget_id != self.focusedTextWidget) {
             self.focusedTextWidget = state.widget_id;
@@ -399,14 +399,14 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     if (!self.nativeApp) return;
     const char *bytes = key.UTF8String ?: "";
     uintptr_t length = [key lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-    zero_native_app_key(self.nativeApp, ZERO_NATIVE_KEY_PHASE_DOWN, bytes, length, "", 0, 0);
-    zero_native_app_key(self.nativeApp, ZERO_NATIVE_KEY_PHASE_UP, bytes, length, "", 0, 0);
+    native_sdk_app_key(self.nativeApp, NATIVE_SDK_KEY_PHASE_DOWN, bytes, length, "", 0, 0);
+    native_sdk_app_key(self.nativeApp, NATIVE_SDK_KEY_PHASE_UP, bytes, length, "", 0, 0);
 }
 
 - (void)emitImeEvent:(int)kind text:(NSString *)text cursor:(intptr_t)cursor {
     if (!self.nativeApp) return;
     NSString *value = text ?: @"";
-    zero_native_app_ime(self.nativeApp,
+    native_sdk_app_ime(self.nativeApp,
                         kind,
                         value.UTF8String ?: "",
                         [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
@@ -417,8 +417,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 - (BOOL)hasText {
     if (!self.nativeApp || self.focusedTextWidget == 0) return self.markedText.length > 0;
-    zero_native_widget_semantics_t node = {0};
-    if (zero_native_app_widget_semantics_by_id(self.nativeApp, self.focusedTextWidget, &node) != 1) return NO;
+    native_sdk_widget_semantics_t node = {0};
+    if (native_sdk_app_widget_semantics_by_id(self.nativeApp, self.focusedTextWidget, &node) != 1) return NO;
     return node.text_len > 0;
 }
 
@@ -431,7 +431,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
         BOOL hadMarkedText = self.markedText.length > 0;
         [self clearMarkedTextState];
         if (hadMarkedText) {
-            [self emitImeEvent:ZERO_NATIVE_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
+            [self emitImeEvent:NATIVE_SDK_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
         }
         [self emitKeyDownUp:@"enter"];
         [self syncTextInput];
@@ -443,14 +443,14 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     [self clearMarkedTextState];
 
     if (hadMarkedText && [previousMarkedText isEqualToString:text]) {
-        [self emitImeEvent:ZERO_NATIVE_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
+        [self emitImeEvent:NATIVE_SDK_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
         return;
     }
     if (hadMarkedText) {
-        [self emitImeEvent:ZERO_NATIVE_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
+        [self emitImeEvent:NATIVE_SDK_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
     }
     if (self.nativeApp) {
-        zero_native_app_text(self.nativeApp,
+        native_sdk_app_text(self.nativeApp,
                              text.UTF8String ?: "",
                              [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
     }
@@ -459,7 +459,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 - (void)deleteBackward {
     if (self.markedText.length > 0) {
         [self clearMarkedTextState];
-        [self emitImeEvent:ZERO_NATIVE_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
+        [self emitImeEvent:NATIVE_SDK_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
         return;
     }
     [self emitKeyDownUp:@"backspace"];
@@ -468,7 +468,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 // ------------------------------------------------------------- UITextInput
 
 - (NSString *)textInRange:(UITextRange *)range {
-    ZeroNativeTextRange *value = (ZeroNativeTextRange *)range;
+    NativeSdkTextRange *value = (NativeSdkTextRange *)range;
     if (!value || value.location < 0) return @"";
     NSInteger max = (NSInteger)self.markedText.length;
     NSInteger location = MIN(value.location, max);
@@ -486,18 +486,18 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     if (self.markedSelectedRange.location != NSNotFound) {
         caret = MIN((NSInteger)(self.markedSelectedRange.location + self.markedSelectedRange.length), caret);
     }
-    return [ZeroNativeTextRange rangeWithLocation:caret length:0];
+    return [NativeSdkTextRange rangeWithLocation:caret length:0];
 }
 
 - (void)setSelectedTextRange:(UITextRange *)range {
-    ZeroNativeTextRange *value = (ZeroNativeTextRange *)range;
+    NativeSdkTextRange *value = (NativeSdkTextRange *)range;
     if (!value) return;
     self.markedSelectedRange = NSMakeRange(MAX(0, value.location), MAX(0, value.length));
 }
 
 - (UITextRange *)markedTextRange {
     if (self.markedText.length == 0) return nil;
-    return [ZeroNativeTextRange rangeWithLocation:0 length:(NSInteger)self.markedText.length];
+    return [NativeSdkTextRange rangeWithLocation:0 length:(NSInteger)self.markedText.length];
 }
 
 // Marked text is the live composition: forward it (with the caret as a
@@ -509,7 +509,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     if (text.length == 0) {
         [self clearMarkedTextState];
         if (hadMarkedText) {
-            [self emitImeEvent:ZERO_NATIVE_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
+            [self emitImeEvent:NATIVE_SDK_IME_CANCEL_COMPOSITION text:@"" cursor:-1];
         }
         return;
     }
@@ -523,35 +523,35 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     }
     self.markedText = text;
     intptr_t cursorBytes = (intptr_t)[[text substringToIndex:cursor] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-    [self emitImeEvent:ZERO_NATIVE_IME_SET_COMPOSITION text:text cursor:cursorBytes];
+    [self emitImeEvent:NATIVE_SDK_IME_SET_COMPOSITION text:text cursor:cursorBytes];
 }
 
 - (void)unmarkText {
     BOOL hadMarkedText = self.markedText.length > 0;
     [self clearMarkedTextState];
     if (hadMarkedText) {
-        [self emitImeEvent:ZERO_NATIVE_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
+        [self emitImeEvent:NATIVE_SDK_IME_COMMIT_COMPOSITION text:@"" cursor:-1];
     }
 }
 
 - (UITextPosition *)beginningOfDocument {
-    return [ZeroNativeTextPosition positionWithIndex:0];
+    return [NativeSdkTextPosition positionWithIndex:0];
 }
 
 - (UITextPosition *)endOfDocument {
-    return [ZeroNativeTextPosition positionWithIndex:(NSInteger)self.markedText.length];
+    return [NativeSdkTextPosition positionWithIndex:(NSInteger)self.markedText.length];
 }
 
 - (UITextRange *)textRangeFromPosition:(UITextPosition *)fromPosition toPosition:(UITextPosition *)toPosition {
-    NSInteger from = ((ZeroNativeTextPosition *)fromPosition).index;
-    NSInteger to = ((ZeroNativeTextPosition *)toPosition).index;
-    return [ZeroNativeTextRange rangeWithLocation:MIN(from, to) length:ABS(to - from)];
+    NSInteger from = ((NativeSdkTextPosition *)fromPosition).index;
+    NSInteger to = ((NativeSdkTextPosition *)toPosition).index;
+    return [NativeSdkTextRange rangeWithLocation:MIN(from, to) length:ABS(to - from)];
 }
 
 - (UITextPosition *)positionFromPosition:(UITextPosition *)position offset:(NSInteger)offset {
-    NSInteger index = ((ZeroNativeTextPosition *)position).index + offset;
+    NSInteger index = ((NativeSdkTextPosition *)position).index + offset;
     if (index < 0 || index > (NSInteger)self.markedText.length) return nil;
-    return [ZeroNativeTextPosition positionWithIndex:index];
+    return [NativeSdkTextPosition positionWithIndex:index];
 }
 
 - (UITextPosition *)positionFromPosition:(UITextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset {
@@ -560,15 +560,15 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 }
 
 - (NSComparisonResult)comparePosition:(UITextPosition *)position toPosition:(UITextPosition *)other {
-    NSInteger a = ((ZeroNativeTextPosition *)position).index;
-    NSInteger b = ((ZeroNativeTextPosition *)other).index;
+    NSInteger a = ((NativeSdkTextPosition *)position).index;
+    NSInteger b = ((NativeSdkTextPosition *)other).index;
     if (a < b) return NSOrderedAscending;
     if (a > b) return NSOrderedDescending;
     return NSOrderedSame;
 }
 
 - (NSInteger)offsetFromPosition:(UITextPosition *)fromPosition toPosition:(UITextPosition *)toPosition {
-    return ((ZeroNativeTextPosition *)toPosition).index - ((ZeroNativeTextPosition *)fromPosition).index;
+    return ((NativeSdkTextPosition *)toPosition).index - ((NativeSdkTextPosition *)fromPosition).index;
 }
 
 - (id<UITextInputTokenizer>)tokenizer {
@@ -581,11 +581,11 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 }
 
 - (UITextRange *)characterRangeByExtendingPosition:(UITextPosition *)position inDirection:(UITextLayoutDirection)direction {
-    NSInteger index = ((ZeroNativeTextPosition *)position).index;
+    NSInteger index = ((NativeSdkTextPosition *)position).index;
     if (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionUp) {
-        return [ZeroNativeTextRange rangeWithLocation:0 length:index];
+        return [NativeSdkTextRange rangeWithLocation:0 length:index];
     }
-    return [ZeroNativeTextRange rangeWithLocation:index length:(NSInteger)self.markedText.length - index];
+    return [NativeSdkTextRange rangeWithLocation:index length:(NSInteger)self.markedText.length - index];
 }
 
 - (NSWritingDirection)baseWritingDirectionForPosition:(UITextPosition *)position inDirection:(UITextStorageDirection)direction {
@@ -601,8 +601,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 - (CGRect)focusedWidgetRect {
     if (!self.nativeApp) return CGRectZero;
-    zero_native_text_input_state_t state = {0};
-    if (zero_native_app_text_input_state(self.nativeApp, &state) != 1 || !state.active) return CGRectZero;
+    native_sdk_text_input_state_t state = {0};
+    if (native_sdk_app_text_input_state(self.nativeApp, &state) != 1 || !state.active) return CGRectZero;
     return CGRectMake(state.x, state.y, state.width, state.height);
 }
 
@@ -669,7 +669,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 @end
 
-@interface ZeroNativeCanvasViewController : UIViewController
+@interface NativeSdkCanvasViewController : UIViewController
 @property(nonatomic) void *nativeApp;
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
@@ -684,18 +684,18 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 @property(nonatomic) CGFloat viewportScale;
 @end
 
-@implementation ZeroNativeCanvasViewController
+@implementation NativeSdkCanvasViewController
 
 - (CAMetalLayer *)metalLayer {
     return (CAMetalLayer *)self.view.layer;
 }
 
-- (ZeroNativeCanvasView *)canvasView {
-    return (ZeroNativeCanvasView *)self.view;
+- (NativeSdkCanvasView *)canvasView {
+    return (NativeSdkCanvasView *)self.view;
 }
 
 - (void)loadView {
-    self.view = [[ZeroNativeCanvasView alloc] init];
+    self.view = [[NativeSdkCanvasView alloc] init];
 }
 
 - (void)viewDidLoad {
@@ -713,9 +713,9 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     layer.opaque = YES;
     self.view.backgroundColor = [UIColor whiteColor];
 
-    self.nativeApp = zero_native_app_create();
+    self.nativeApp = native_sdk_app_create();
     if (!self.nativeApp) {
-        NSLog(@"zero-native: zero_native_app_create failed");
+        NSLog(@"native-sdk: native_sdk_app_create failed");
         return;
     }
     [self canvasView].nativeApp = self.nativeApp;
@@ -728,31 +728,31 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     // previous launch's SIMCTL_CHILD_* environment, so env toggles are not
     // deterministic across relaunches; process arguments are.
     if ([NSProcessInfo.processInfo.arguments containsObject:@"--estimator-text-metrics"]) {
-        NSLog(@"zero-native: text measure disabled (estimator metrics)");
+        NSLog(@"native-sdk: text measure disabled (estimator metrics)");
     } else {
-        zero_native_app_set_text_measure(self.nativeApp, ZeroNativeMeasureText, NULL);
+        native_sdk_app_set_text_measure(self.nativeApp, NativeSdkMeasureText, NULL);
         [self logNativeErrorIfAny:@"text_measure"];
-        NSLog(@"zero-native: CoreText text measure registered");
+        NSLog(@"native-sdk: CoreText text measure registered");
     }
 
-    // Verification harness: with ZERO_NATIVE_AUTOMATION set (simctl launch
+    // Verification harness: with NATIVE_SDK_AUTOMATION set (simctl launch
     // exports SIMCTL_CHILD_* into the app) the embedded runtime publishes
     // snapshot.txt into the app's data container, same protocol as the
     // desktop -Dautomation=true runners.
-    if (getenv("ZERO_NATIVE_AUTOMATION")) {
+    if (getenv("NATIVE_SDK_AUTOMATION")) {
         NSString *dir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
-            stringByAppendingPathComponent:@"zero-native-automation"];
+            stringByAppendingPathComponent:@"native-sdk-automation"];
         if (dir) {
-            zero_native_app_set_automation_dir(self.nativeApp,
+            native_sdk_app_set_automation_dir(self.nativeApp,
                                                dir.UTF8String,
                                                [dir lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
             [self logNativeErrorIfAny:@"automation"];
-            NSLog(@"zero-native: automation dir %@", dir);
+            NSLog(@"native-sdk: automation dir %@", dir);
         }
     }
 
-    zero_native_app_start(self.nativeApp);
-    zero_native_app_activate(self.nativeApp);
+    native_sdk_app_start(self.nativeApp);
+    native_sdk_app_activate(self.nativeApp);
     [self logNativeErrorIfAny:@"start"];
 
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkTick:)];
@@ -762,8 +762,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 - (void)dealloc {
     [self.displayLink invalidate];
     if (self.nativeApp) {
-        zero_native_app_stop(self.nativeApp);
-        zero_native_app_destroy(self.nativeApp);
+        native_sdk_app_stop(self.nativeApp);
+        native_sdk_app_destroy(self.nativeApp);
     }
     free(self.rgbaBytes);
     free(self.bgraBytes);
@@ -790,7 +790,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     self.viewportScale = scale;
     [self metalLayer].contentsScale = scale;
     UIEdgeInsets safe = self.view.safeAreaInsets;
-    zero_native_app_viewport(self.nativeApp,
+    native_sdk_app_viewport(self.nativeApp,
                              (float)size.width, (float)size.height, (float)scale,
                              (__bridge void *)[self metalLayer],
                              (float)safe.top, (float)safe.right, (float)safe.bottom, (float)safe.left,
@@ -804,7 +804,7 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
     // Host-pumped frame: synthesizes the gpu_surface_frame event (first
     // tick installs the widget tree, later ticks re-present).
-    zero_native_app_frame(self.nativeApp);
+    native_sdk_app_frame(self.nativeApp);
 
     // Keyboard show/hide follows the runtime's focus state each tick, not
     // only after shim-forwarded input: focus can also move from keyboard
@@ -812,8 +812,8 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
     [[self canvasView] syncTextInput];
 
     // Only re-render + blit when the retained canvas actually changed.
-    zero_native_gpu_frame_state_t state = {0};
-    BOOL haveState = zero_native_app_gpu_frame_state(self.nativeApp, &state) == 1;
+    native_sdk_gpu_frame_state_t state = {0};
+    BOOL haveState = native_sdk_app_gpu_frame_state(self.nativeApp, &state) == 1;
     if (!self.needsPresent && haveState && self.hasPresentedRevision &&
         state.canvas_revision == self.lastCanvasRevision) {
         return;
@@ -841,13 +841,13 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 - (BOOL)renderAndPresent {
     float scale = (float)self.viewportScale;
 
-    zero_native_canvas_pixels_t info = {0};
-    if (zero_native_app_render_pixel_size(self.nativeApp, scale, &info) != 1) return NO;
+    native_sdk_canvas_pixels_t info = {0};
+    if (native_sdk_app_render_pixel_size(self.nativeApp, scale, &info) != 1) return NO;
     if (info.width == 0 || info.height == 0 || info.byte_len != info.width * info.height * 4) return NO;
     if (![self ensureStagingCapacity:info.byte_len]) return NO;
 
-    zero_native_canvas_pixels_t rendered = {0};
-    if (zero_native_app_render_pixels(self.nativeApp, scale, self.rgbaBytes, info.byte_len, &rendered) != 1) {
+    native_sdk_canvas_pixels_t rendered = {0};
+    if (native_sdk_app_render_pixels(self.nativeApp, scale, self.rgbaBytes, info.byte_len, &rendered) != 1) {
         [self logNativeErrorIfAny:@"render_pixels"];
         return NO;
     }
@@ -907,23 +907,23 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 }
 
 - (void)logNativeErrorIfAny:(NSString *)stage {
-    const char *name = zero_native_app_last_error_name(self.nativeApp);
+    const char *name = native_sdk_app_last_error_name(self.nativeApp);
     if (name && name[0] != '\0') {
-        NSLog(@"zero-native: %@ error %s", stage, name);
+        NSLog(@"native-sdk: %@ error %s", stage, name);
     }
 }
 
 @end
 
-@interface ZeroNativeAppDelegate : UIResponder <UIApplicationDelegate>
+@interface NativeSdkAppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
-@implementation ZeroNativeAppDelegate
+@implementation NativeSdkAppDelegate
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    self.window.rootViewController = [[ZeroNativeCanvasViewController alloc] init];
+    self.window.rootViewController = [[NativeSdkCanvasViewController alloc] init];
     [self.window makeKeyAndVisible];
     return YES;
 }
@@ -932,6 +932,6 @@ static const CGFloat ZeroNativeTouchSlop = 8.0;
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil, NSStringFromClass([ZeroNativeAppDelegate class]));
+        return UIApplicationMain(argc, argv, nil, NSStringFromClass([NativeSdkAppDelegate class]));
     }
 }

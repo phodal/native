@@ -1,28 +1,28 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 const testing = std.testing;
 
 const Model = main.Model;
 const Msg = main.Msg;
 const ViewerUi = main.ViewerUi;
-const ViewerApp = zero_native.UiApp(Model, Msg);
+const ViewerApp = native_sdk.UiApp(Model, Msg);
 const ViewerMarkup = canvas.MarkupView(Model, Msg);
 
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "viewer-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
     .title = "Markdown Viewer",
     .width = 1200,
     .height = 760,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 fn viewerOptions() ViewerApp.Options {
     return .{
@@ -80,7 +80,7 @@ fn collectIds(widget: canvas.Widget, ids: *std.ArrayListUnmanaged(canvas.ObjectI
 
 // --------------------------------------------------------- harness helpers
 
-fn snapshotWidgetNamed(snapshot: zero_native.automation.snapshot.Input, role: []const u8, name: []const u8) ?zero_native.automation.snapshot.Widget {
+fn snapshotWidgetNamed(snapshot: native_sdk.automation.snapshot.Input, role: []const u8, name: []const u8) ?native_sdk.automation.snapshot.Widget {
     for (snapshot.widgets) |widget| {
         if (std.mem.eql(u8, widget.role, role) and std.mem.eql(u8, widget.name, name)) return widget;
     }
@@ -88,12 +88,12 @@ fn snapshotWidgetNamed(snapshot: zero_native.automation.snapshot.Input, role: []
 }
 
 const Harness = struct {
-    harness: *zero_native.TestHarness(),
+    harness: *native_sdk.TestHarness(),
     app_state: *ViewerApp,
-    app: zero_native.App,
+    app: native_sdk.App,
 
     fn create() !Harness {
-        const harness = try zero_native.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(1200, 760) });
+        const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(1200, 760) });
         errdefer harness.destroy(testing.allocator);
         harness.null_platform.gpu_surfaces = true;
 
@@ -128,7 +128,7 @@ const Harness = struct {
         try self.harness.runtime.dispatchPlatformEvent(self.app, .wake);
     }
 
-    fn snapshot(self: *Harness) zero_native.automation.snapshot.Input {
+    fn snapshot(self: *Harness) native_sdk.automation.snapshot.Input {
         return self.harness.runtime.automationSnapshot("Markdown Viewer");
     }
 
@@ -240,7 +240,7 @@ test "open and save round-trip through the fake executor" {
     try testing.expectEqual(@as(usize, 1), fx.pendingFileCount());
     const read_request = fx.pendingFileAt(0).?;
     try testing.expectEqual(main.open_key, read_request.key);
-    try testing.expectEqual(zero_native.EffectFileOp.read, read_request.op);
+    try testing.expectEqual(native_sdk.EffectFileOp.read, read_request.op);
     try testing.expectEqualStrings("/tmp/zn-md-note.md", read_request.path);
 
     // The read lands: the editor adopts the bytes, the path becomes
@@ -253,7 +253,7 @@ test "open and save round-trip through the fake executor" {
     try testing.expectEqualStrings("/tmp/zn-md-note.md", model.recentAt(0));
     const recent_write = fx.pendingFileAt(0).?;
     try testing.expectEqual(main.recent_write_key, recent_write.key);
-    try testing.expectEqual(zero_native.EffectFileOp.write, recent_write.op);
+    try testing.expectEqual(native_sdk.EffectFileOp.write, recent_write.op);
     try testing.expectEqualStrings("/tmp/zn-markdown-viewer-test/recent.txt", recent_write.path);
     try testing.expectEqualStrings("/tmp/zn-md-note.md\n", recent_write.bytes);
     try fx.feedFileResult(main.recent_write_key, .ok, "");
@@ -265,7 +265,7 @@ test "open and save round-trip through the fake executor" {
     try h.dispatch(.save_doc);
     const write_request = fx.pendingFileAt(0).?;
     try testing.expectEqual(main.save_key, write_request.key);
-    try testing.expectEqual(zero_native.EffectFileOp.write, write_request.op);
+    try testing.expectEqual(native_sdk.EffectFileOp.write, write_request.op);
     try testing.expectEqualStrings("/tmp/zn-md-note.md", write_request.path);
     try testing.expectEqualStrings("# Loaded\n\nfrom disk\nappended\n", write_request.bytes);
     try fx.feedFileResult(main.save_key, .ok, "");
@@ -377,7 +377,7 @@ test "preview links open through fx.spawn and details expand through the model" 
 
 /// True when any non-editor widget carries `needle` — the textarea always
 /// holds the whole source, so it is excluded to observe the preview only.
-fn subtreeHasTextInSnapshot(snapshot: zero_native.automation.snapshot.Input, needle: []const u8) bool {
+fn subtreeHasTextInSnapshot(snapshot: native_sdk.automation.snapshot.Input, needle: []const u8) bool {
     for (snapshot.widgets) |widget| {
         if (std.mem.eql(u8, widget.role, "textbox")) continue;
         if (std.mem.indexOf(u8, widget.name, needle) != null) return true;

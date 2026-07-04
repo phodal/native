@@ -337,8 +337,8 @@ test "avatar and image sugar carry registered image ids" {
 
     var ui = InboxUi.init(arena_state.allocator());
     const tree = try ui.finalize(ui.column(.{}, .{
-        ui.avatar(.{ .image = 77, .semantics = .{ .label = "Zero Native" } }, "ZN"),
-        ui.avatar(.{}, "ZN"),
+        ui.avatar(.{ .image = 77, .semantics = .{ .label = "Native SDK" } }, "NS"),
+        ui.avatar(.{}, "NS"),
         ui.image(.{ .image = 42, .semantics = .{ .label = "Chart" } }),
     }));
 
@@ -348,11 +348,11 @@ test "avatar and image sugar carry registered image ids" {
     try testing.expectEqual(canvas.WidgetKind.avatar, with_image.kind);
     try testing.expectEqual(@as(canvas.ImageId, 77), with_image.image_id);
     try testing.expectEqual(canvas.ImageFit.cover, with_image.image_fit);
-    try testing.expectEqualStrings("ZN", with_image.text);
+    try testing.expectEqualStrings("NS", with_image.text);
 
     const fallback = tree.root.children[1];
     try testing.expectEqual(@as(canvas.ImageId, 0), fallback.image_id);
-    try testing.expectEqualStrings("ZN", fallback.text);
+    try testing.expectEqualStrings("NS", fallback.text);
 
     const image_leaf = tree.root.children[2];
     try testing.expectEqual(canvas.WidgetKind.image, image_leaf.kind);

@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.mobile_canvas",
+    .id = "dev.native_sdk.mobile_canvas",
     .name = "mobile-canvas",
     .display_name = "Mobile Canvas",
     .version = "0.1.0",

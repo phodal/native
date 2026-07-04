@@ -1,6 +1,6 @@
 # Built-in Components
 
-zero-native includes a native-rendered component catalog with shadcn-style defaults. These components are owned by zero-native, rendered through the retained canvas/GPU surface, and styled by design tokens instead of platform widget skins.
+The Native SDK includes a native-rendered component catalog with shadcn-style defaults. These components are owned by the Native SDK, rendered through the retained canvas/GPU surface, and styled by design tokens instead of platform widget skins.
 
 The default visual language follows shadcn: neutral surfaces, sharp typography, subtle borders, focused states, compact density, and token-driven color, radius, shadow, blur, and motion. Geist is the default sans family and Geist Mono is the default mono family. Applications can override tokens globally or per widget when they need their own product language.
 
@@ -58,6 +58,6 @@ Three composites build on the catalog rather than adding widget kinds: `Stepper`
 
 ## Runtime Contract
 
-The canonical catalog lives in `zero_native.canvas.builtin_component_kinds` and `zero_native.canvas.builtin_component_names`. Each descriptor reports its shadcn style, root widget kind, semantic role, and whether the component is composite.
+The canonical catalog lives in `native_sdk.canvas.builtin_component_kinds` and `native_sdk.canvas.builtin_component_names`. Each descriptor reports its shadcn style, root widget kind, semantic role, and whether the component is composite.
 
-Use `zero_native.canvas.builtinComponentWidget(...)` to create a default component foundation, then pass explicit children, layout, state, semantics, commands, or token overrides as needed. Composite components are still zero-native components; they assemble retained primitives under the same token and accessibility model.
+Use `native_sdk.canvas.builtinComponentWidget(...)` to create a default component foundation, then pass explicit children, layout, state, semantics, commands, or token overrides as needed. Composite components are still Native SDK components; they assemble retained primitives under the same token and accessibility model.

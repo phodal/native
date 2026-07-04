@@ -1157,7 +1157,7 @@ test "built-in component widgets expose shadcn semantics and render tokens" {
         builtinComponentWidget(.input, .{
             .id = 3,
             .frame = geometry.RectF.init(16, 58, 160, 34),
-            .text = "zero-native",
+            .text = "native-sdk",
             .semantics = .{ .label = "Project name" },
         }),
         builtinComponentWidget(.switch_control, .{
@@ -1198,7 +1198,7 @@ test "built-in component widgets expose shadcn semantics and render tokens" {
     try std.testing.expect(semantics[1].actions.press);
     try std.testing.expectEqual(WidgetRole.textbox, semantics[2].role);
     try std.testing.expectEqualStrings("Project name", semantics[2].label);
-    try std.testing.expectEqualStrings("zero-native", semantics[2].text_value);
+    try std.testing.expectEqualStrings("native-sdk", semantics[2].text_value);
     try std.testing.expectEqual(WidgetRole.switch_control, semantics[3].role);
     try std.testing.expectEqual(@as(?f32, 1), semantics[3].value);
     try std.testing.expect(semantics[3].actions.toggle);
@@ -1298,8 +1298,8 @@ test "built-in component primitive widgets render distinct shadcn chrome" {
         builtinComponentWidget(.avatar, .{
             .id = 20,
             .frame = geometry.RectF.init(0, 0, 40, 40),
-            .text = "ZN",
-            .semantics = .{ .label = "Zero Native" },
+            .text = "NS",
+            .semantics = .{ .label = "Native SDK" },
         }),
         builtinComponentWidget(.badge, .{
             .id = 21,
@@ -1329,7 +1329,7 @@ test "built-in component primitive widgets render distinct shadcn chrome" {
     const semantics = try layout.collectSemantics(&semantics_buffer);
     try std.testing.expectEqual(@as(usize, 3), semantics.len);
     try std.testing.expectEqual(WidgetRole.image, semantics[0].role);
-    try std.testing.expectEqualStrings("Zero Native", semantics[0].label);
+    try std.testing.expectEqualStrings("Native SDK", semantics[0].label);
     try std.testing.expectEqual(WidgetRole.text, semantics[1].role);
     try std.testing.expectEqualStrings("Beta", semantics[1].label);
     try std.testing.expectEqual(WidgetRole.progressbar, semantics[2].role);
@@ -1342,7 +1342,7 @@ test "built-in component primitive widgets render distinct shadcn chrome" {
     try std.testing.expectEqual(@as(usize, 16), display_list.commandCount());
     try std.testing.expect(display_list.commands[0] == .fill_rounded_rect);
     switch (display_list.commands[1]) {
-        .draw_text => |text| try std.testing.expectEqualStrings("ZN", text.text),
+        .draw_text => |text| try std.testing.expectEqualStrings("NS", text.text),
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expect(display_list.commands[2] == .stroke_rect);

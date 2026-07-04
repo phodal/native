@@ -2,7 +2,7 @@
 //
 // Instead of pulling in vscode-languageclient (an npm dependency that would
 // require a build step), this extension speaks just enough LSP itself:
-// spawn `zero-native markup lsp`, frame JSON-RPC with Content-Length
+// spawn `native markup lsp`, frame JSON-RPC with Content-Length
 // headers, wire initialize/didOpen/didChange/didClose, surface
 // publishDiagnostics, and forward completion + hover requests.
 
@@ -44,7 +44,7 @@ function deactivate() {
 // ------------------------------------------------------------------ server
 
 function startServer() {
-  const serverPath = vscode.workspace.getConfiguration("zml").get("serverPath", "zero-native");
+  const serverPath = vscode.workspace.getConfiguration("zml").get("serverPath", "native");
   let proc;
   try {
     proc = spawn(serverPath, ["markup", "lsp"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -95,7 +95,7 @@ function reportStartFailure(serverPath, error) {
   server = null;
   vscode.window.showWarningMessage(
     `ZML: could not start "${serverPath} markup lsp" (${error.message}). ` +
-      "Build the CLI with `zig build` and set zml.serverPath to zig-out/bin/zero-native."
+      "Build the CLI with `zig build` and set zml.serverPath to zig-out/bin/native."
   );
 }
 

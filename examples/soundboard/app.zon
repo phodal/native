@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.soundboard",
+    .id = "dev.native_sdk.soundboard",
     .name = "soundboard",
     .display_name = "Soundboard",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Soundboard",
+                .title = "Native SDK Soundboard",
                 .width = 1080,
                 .height = 720,
                 .restore_state = false,

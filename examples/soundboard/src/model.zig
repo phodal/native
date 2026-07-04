@@ -15,11 +15,11 @@
 //!   - 48-byte search buffer
 
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 
-pub const Effects = zero_native.Effects(Msg);
+pub const Effects = native_sdk.Effects(Msg);
 
 // ------------------------------------------------------------------ library
 
@@ -143,7 +143,7 @@ pub const Msg = union(enum) {
     show_albums,
     show_songs,
     set_theme: ThemePref,
-    set_appearance: zero_native.Appearance,
+    set_appearance: native_sdk.Appearance,
     search_edit: canvas.TextInputEvent,
     clear_search,
     open_album: u8,
@@ -156,20 +156,20 @@ pub const Msg = union(enum) {
     /// Seek slider changed; the reconciled value arrives through the
     /// `sync` hook (`seek_fraction`) before this message is applied.
     seeked,
-    tick: zero_native.EffectTimer,
+    tick: native_sdk.EffectTimer,
     /// Context menu: queue a track to play after the current one.
     queue_track: u8,
     /// Context menu: copy the track title to the clipboard via `pbcopy`
     /// (the effects channel has no clipboard call today).
     copy_title: u8,
-    copied: zero_native.EffectExit,
+    copied: native_sdk.EffectExit,
 };
 
 pub const Model = struct {
     // Source-of-truth state only; everything else is derived per rebuild.
     tab: Tab = .albums,
     theme_pref: ThemePref = .auto,
-    appearance: zero_native.Appearance = .{},
+    appearance: native_sdk.Appearance = .{},
     open_album: ?u8 = null,
     now: ?u8 = null, // playing track id
     playing: bool = false,
@@ -187,9 +187,9 @@ pub const Model = struct {
     /// Copy-to-clipboard bookkeeping: how many pbcopy spawns finished ok.
     copies_done: u32 = 0,
     copy_failed: bool = false,
-    /// Time seam (`zero_native.Clock`) so the track-change animation
+    /// Time seam (`native_sdk.Clock`) so the track-change animation
     /// window stays deterministic in tests.
-    clock: zero_native.Clock = .system,
+    clock: native_sdk.Clock = .system,
     /// Monotonic ms when the playing track last changed; gates the
     /// now-playing slide-in animation window (0 = never).
     motion_started_ms: u64 = 0,
@@ -214,7 +214,7 @@ pub const Model = struct {
 
     pub const theme_prefs = [_]ThemePref{ .auto, .light, .dark };
 
-    pub fn colorScheme(model: *const Model) zero_native.ColorScheme {
+    pub fn colorScheme(model: *const Model) native_sdk.ColorScheme {
         return switch (model.theme_pref) {
             .auto => model.appearance.color_scheme,
             .light => .light,

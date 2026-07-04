@@ -133,11 +133,11 @@ test "identity sign command includes runtime and entitlements" {
     const cmd = try buildSignCommand(&buffer, .{
         .app_path = "/tmp/Test.app",
         .identity = "Developer ID Application: Test",
-        .entitlements = "assets/zero-native.entitlements",
+        .entitlements = "assets/native-sdk.entitlements",
         .hardened_runtime = true,
     });
     try std.testing.expectEqualStrings(
-        "codesign --sign Developer ID Application: Test --force --deep --options runtime --entitlements assets/zero-native.entitlements /tmp/Test.app",
+        "codesign --sign Developer ID Application: Test --force --deep --options runtime --entitlements assets/native-sdk.entitlements /tmp/Test.app",
         cmd,
     );
 }

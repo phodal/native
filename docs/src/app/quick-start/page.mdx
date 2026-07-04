@@ -1,6 +1,6 @@
 # Quick Start
 
-zero-native is a native desktop app framework with selectable web engines, native views, guarded bridge commands, and OS capabilities. Use a WebView for rich product UI, then add native shell surfaces where the operating system should own the interaction.
+The Native SDK is a native desktop app framework with selectable web engines, native views, guarded bridge commands, and OS capabilities. Use a WebView for rich product UI, then add native shell surfaces where the operating system should own the interaction.
 
 ## Beta scope
 
@@ -15,13 +15,13 @@ System WebView builds are available on macOS, Linux, and Windows. Chromium/CEF b
 ## Track 1: Simple WebView App
 
 ```bash
-zero-native init my_app --frontend next
+native init my_app --frontend next
 cd my_app
 ```
 
 Frontend options: `next`, `vite`, `react`, `svelte`, `vue`.
 
-This scaffolds a complete zero-native project:
+This scaffolds a complete Native SDK project:
 
 <table>
   <thead>
@@ -37,7 +37,7 @@ This scaffolds a complete zero-native project:
     </tr>
     <tr>
       <td><code>build.zig.zon</code></td>
-      <td>Zig package manifest, declares zero-native dependency</td>
+      <td>Zig package manifest, declares the Native SDK dependency</td>
     </tr>
     <tr>
       <td><code>app.zon</code></td>
@@ -87,13 +87,13 @@ The example builds a native toolbar, titlebar accessory, sidebar, statusbar, and
 Use this path when validating a signed macOS app:
 
 ```bash
-zero-native init my_app --frontend next
+native init my_app --frontend next
 cd my_app
 zig build run
-zero-native cef install
+native cef install
 zig build run
-zero-native package --target macos --signing identity --identity "Developer ID Application: Your Name"
-zero-native doctor --manifest app.zon --strict
+native package --target macos --signing identity --identity "Developer ID Application: Your Name"
+native doctor --manifest app.zon --strict
 ```
 
 Set `.web_engine = "chromium"` and `.cef = .{ .dir = "third_party/cef/macos", .auto_install = false }` in `app.zon` before the Chromium run. `-Dweb-engine` and `--web-engine` are still available for one-off overrides, but the normal app workflow reads the manifest.
@@ -102,19 +102,19 @@ For frontend frameworks, run the frontend dev server through [Dev Server](/cli/d
 
 ## Hello world
 
-The simplest zero-native app provides a name and inline HTML:
+The simplest Native SDK app provides a name and inline HTML:
 
 ```zig
 const HelloApp = struct {
-    fn app(self: *@This()) zero_native.App {
+    fn app(self: *@This()) native_sdk.App {
         return .{
             .context = self,
             .name = "hello",
-            .source = zero_native.WebViewSource.html(
+            .source = native_sdk.WebViewSource.html(
                 \\<!doctype html>
                 \\<html>
                 \\<body style="font-family: system-ui; padding: 2rem;">
-                \\  <h1>Hello from zero-native</h1>
+                \\  <h1>Hello from Native SDK</h1>
                 \\</body>
                 \\</html>
             ),
@@ -131,6 +131,6 @@ const HelloApp = struct {
 - [Native Controls](/native-controls) -- Build native chrome and utility panels
 - [Capabilities](/capabilities) -- Use native OS services safely
 - [Platform Support](/platform-support) -- Check backend support by host
-- [Frontend Projects](/frontend) -- Use React, Vue, or Svelte with zero-native
+- [Frontend Projects](/frontend) -- Use React, Vue, or Svelte with the Native SDK
 - [Bridge](/bridge) -- Call native Zig code from JavaScript
 - [Security](/security) -- Permissions, policies, and navigation rules

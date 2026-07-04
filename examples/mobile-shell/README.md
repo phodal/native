@@ -1,11 +1,11 @@
-# zero-native mobile-shell example
+# Native SDK mobile-shell example
 
 The mobile shell shape is implemented by the concrete platform hosts in `examples/ios` and `examples/android`.
 
 - `examples/ios` uses a native UIKit header with a WKWebView workspace and native command buttons.
 - `examples/android` uses a native Android header with a WebView workspace, JNI bridge, native command buttons, and system Back dispatch.
 
-Both hosts leave keyboard avoidance in the native layout system while forwarding viewport metrics to zero-native: UIKit adjusts the WebView constraint from keyboard frame notifications, and Android uses `adjustResize` for soft-keyboard relayout.
+Both hosts leave keyboard avoidance in the native layout system while forwarding viewport metrics to the Native SDK: UIKit adjusts the WebView constraint from keyboard frame notifications, and Android uses `adjustResize` for soft-keyboard relayout.
 
 Android orientation and screen-size changes stay in the same activity so the embedded runtime survives rotation while resize/frame events update the content surface.
 

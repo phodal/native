@@ -3,25 +3,25 @@
 //!
 //! `UiAppHost(AppDef)` is the mobile equivalent of the desktop app runner:
 //! the static library is compiled *with* the app. `AppDef` is the app's
-//! root module (wired as the `"app"` import by `zero_native.addMobileLib`)
+//! root module (wired as the `"app"` import by `native_sdk.addMobileLib`)
 //! and must declare:
 //!
 //! - `pub const Model` / `pub const Msg`
 //! - `pub fn initModel() Model`
-//! - `pub fn mobileOptions() zero_native.UiApp(Model, Msg).Options` — the
+//! - `pub fn mobileOptions() native_sdk.UiApp(Model, Msg).Options` — the
 //!   same options a desktop `UiApp` takes. The scene must contain a
 //!   `gpu_surface` view labeled `mobile-surface` in the first window and
 //!   `canvas_label` must be `mobile-surface` (use `mobile_shell_scene` /
 //!   `mobile_gpu_surface_label` for the canonical single-surface scene).
-//! - optional `pub const features: zero_native.UiAppFeatures`
+//! - optional `pub const features: native_sdk.UiAppFeatures`
 //!
 //! The host owns a `NullPlatform` runtime (M1: no real surface — M2 adds
 //! presentation) and pumps the `UiApp` loop from the shim's frame callback:
-//! `zero_native_app_frame` synthesizes the `gpu_surface_frame` event a
+//! `native_sdk_app_frame` synthesizes the `gpu_surface_frame` event a
 //! desktop platform's display link would deliver, which installs the widget
 //! tree on the first tick and re-presents afterwards. Frames render through
 //! the CPU reference renderer; the presented pixels are retrievable over
-//! the ABI via `zero_native_app_render_pixels`.
+//! the ABI via `native_sdk_app_render_pixels`.
 
 const std = @import("std");
 const app_manifest = @import("app_manifest");

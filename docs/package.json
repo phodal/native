@@ -1,5 +1,5 @@
 {
-  "name": "@zero-native/docs",
+  "name": "@native-sdk/docs",
   "version": "0.0.0",
   "private": true,
   "type": "module",

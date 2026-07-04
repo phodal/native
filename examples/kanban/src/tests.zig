@@ -1,8 +1,8 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 const testing = std.testing;
 
 const KanbanUi = main.KanbanUi;
@@ -138,13 +138,13 @@ test "the board lays out through the canvas engine with cards in their columns" 
 
     const tree = try buildTree(arena, &model);
     var nodes: [512]canvas.WidgetLayoutNode = undefined;
-    const layout = try canvas.layoutWidgetTree(tree.root, zero_native.geometry.RectF.init(0, 0, 840, 560), &nodes);
+    const layout = try canvas.layoutWidgetTree(tree.root, native_sdk.geometry.RectF.init(0, 0, 840, 560), &nodes);
     try testing.expect(layout.nodes.len > 0);
 
     const todo_card = findCard(tree.root, "Ship it").?;
     const doing_card = findCard(tree.root, "Fix the bug").?;
-    var todo_frame: ?zero_native.geometry.RectF = null;
-    var doing_frame: ?zero_native.geometry.RectF = null;
+    var todo_frame: ?native_sdk.geometry.RectF = null;
+    var doing_frame: ?native_sdk.geometry.RectF = null;
     for (layout.nodes) |node| {
         if (node.widget.id == todo_card.id) todo_frame = node.frame;
         if (node.widget.id == doing_card.id) doing_frame = node.frame;

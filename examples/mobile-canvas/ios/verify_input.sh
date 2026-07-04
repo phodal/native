@@ -3,7 +3,7 @@
 # injection (system touch/keyboard events, not automation widget actions):
 #
 #   1. Build the example's mobile embed lib + shim .app (run.sh --build-only)
-#      and launch it with ZERO_NATIVE_AUTOMATION=1, so the embedded runtime
+#      and launch it with NATIVE_SDK_AUTOMATION=1, so the embedded runtime
 #      publishes automation snapshots into the app's data container.
 #   2. Compile a minimal XCUITest bundle (InputUITests.m, no .xcodeproj),
 #      wrap it in the stock XCTRunner.app template, generate a .xctestrun,
@@ -47,7 +47,7 @@ LIB="$(ls "$EXAMPLE_DIR"/zig-out/lib/*.a | head -1)"
 APP_NAME="$(basename "$LIB")"
 APP_NAME="${APP_NAME#lib}"
 APP_NAME="${APP_NAME%.a}"
-BUNDLE_ID="dev.zero-native.${APP_NAME}"
+BUNDLE_ID="dev.native-sdk.${APP_NAME}"
 APP_BUNDLE="$SCRIPT_DIR/build/$APP_NAME/$APP_NAME.app"
 WORK_DIR="$SCRIPT_DIR/build/$APP_NAME/input-verify"
 rm -rf "$WORK_DIR"
@@ -69,10 +69,10 @@ for devices in json.load(sys.stdin)["devices"].values():
 echo "== install + launch $BUNDLE_ID with automation enabled"
 xcrun simctl install "$UDID" "$APP_BUNDLE"
 xcrun simctl terminate "$UDID" "$BUNDLE_ID" 2>/dev/null || true
-SIMCTL_CHILD_ZERO_NATIVE_AUTOMATION=1 xcrun simctl launch "$UDID" "$BUNDLE_ID"
+SIMCTL_CHILD_NATIVE_SDK_AUTOMATION=1 xcrun simctl launch "$UDID" "$BUNDLE_ID"
 
 CONTAINER="$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data)"
-SNAPSHOT="$CONTAINER/Documents/zero-native-automation/snapshot.txt"
+SNAPSHOT="$CONTAINER/Documents/native-sdk-automation/snapshot.txt"
 echo "== automation snapshot: $SNAPSHOT"
 
 # Wait for a snapshot that already contains the installed widget tree (the
@@ -159,7 +159,7 @@ XCTEST_BUNDLE="$RUNNER/PlugIns/$TEST_NAME.xctest"
 cp -R "$AGENTS/XCTRunner.app" "$RUNNER"
 mv "$RUNNER/XCTRunner" "$RUNNER/$TEST_NAME-Runner"
 plutil -replace CFBundleExecutable -string "$TEST_NAME-Runner" "$RUNNER/Info.plist"
-plutil -replace CFBundleIdentifier -string "dev.zero-native.$TEST_NAME.xctrunner" "$RUNNER/Info.plist"
+plutil -replace CFBundleIdentifier -string "dev.native-sdk.$TEST_NAME.xctrunner" "$RUNNER/Info.plist"
 plutil -replace CFBundleName -string "$TEST_NAME-Runner" "$RUNNER/Info.plist"
 
 mkdir -p "$RUNNER/Frameworks" "$XCTEST_BUNDLE"
@@ -184,7 +184,7 @@ cat > "$XCTEST_BUNDLE/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>$TEST_NAME</string>
-  <key>CFBundleIdentifier</key><string>dev.zero-native.$TEST_NAME</string>
+  <key>CFBundleIdentifier</key><string>dev.native-sdk.$TEST_NAME</string>
   <key>CFBundleName</key><string>$TEST_NAME</string>
   <key>CFBundlePackageType</key><string>BNDL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -217,21 +217,21 @@ write_xctestrun() {
   <dict>
     <key>TestBundlePath</key><string>__TESTHOST__/PlugIns/$TEST_NAME.xctest</string>
     <key>TestHostPath</key><string>__TESTROOT__/$TEST_NAME-Runner.app</string>
-    <key>TestHostBundleIdentifier</key><string>dev.zero-native.$TEST_NAME.xctrunner</string>
+    <key>TestHostBundleIdentifier</key><string>dev.native-sdk.$TEST_NAME.xctrunner</string>
     <key>UITargetAppPath</key><string>$APP_BUNDLE</string>
     <key>UITargetAppBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>IsUITestBundle</key><true/>
     <key>IsXCTRunnerHostedTestBundle</key><true/>
     <key>TestingEnvironmentVariables</key>
     <dict>
-      <key>ZN_TARGET_BUNDLE_ID</key><string>$BUNDLE_ID</string>
-      <key>ZN_TAP_POINT</key><string>$ADD_POINT</string>
-      <key>ZN_TEXTBOX_POINT</key><string>$TEXTBOX_POINT</string>
-      <key>ZN_BLUR_POINT</key><string>$BLUR_POINT</string>
-      <key>ZN_TYPE_TEXT</key><string>$TYPE_TEXT</string>
-      <key>ZN_PRESCROLL_TAPS</key><string>24</string>
-      <key>ZN_SCROLL_FROM</key><string>$SCROLL_FROM</string>
-      <key>ZN_SCROLL_TO</key><string>$SCROLL_TO</string>
+      <key>NATIVE_SDK_TARGET_BUNDLE_ID</key><string>$BUNDLE_ID</string>
+      <key>NATIVE_SDK_TAP_POINT</key><string>$ADD_POINT</string>
+      <key>NATIVE_SDK_TEXTBOX_POINT</key><string>$TEXTBOX_POINT</string>
+      <key>NATIVE_SDK_BLUR_POINT</key><string>$BLUR_POINT</string>
+      <key>NATIVE_SDK_TYPE_TEXT</key><string>$TYPE_TEXT</string>
+      <key>NATIVE_SDK_PRESCROLL_TAPS</key><string>24</string>
+      <key>NATIVE_SDK_SCROLL_FROM</key><string>$SCROLL_FROM</string>
+      <key>NATIVE_SDK_SCROLL_TO</key><string>$SCROLL_TO</string>
     </dict>
   </dict>
 </dict>
@@ -246,13 +246,13 @@ run_test() {
   xcodebuild test-without-building \
     -xctestrun "$WORK_DIR/input.xctestrun" \
     -destination "platform=iOS Simulator,id=$UDID" \
-    -only-testing:"$TEST_NAME/ZeroNativeInputUITests/$method" \
+    -only-testing:"$TEST_NAME/NativeSdkInputUITests/$method" \
     >"$WORK_DIR/xcodebuild-$method.log" 2>&1 || {
       tail -50 "$WORK_DIR/xcodebuild-$method.log" >&2
       echo "FAIL: $method" >&2
       exit 1
     }
-  grep -E "Test Suite 'ZeroNativeInputUITests' (passed|failed)" "$WORK_DIR/xcodebuild-$method.log" | tail -1 || true
+  grep -E "Test Suite 'NativeSdkInputUITests' (passed|failed)" "$WORK_DIR/xcodebuild-$method.log" | tail -1 || true
 }
 
 # Snapshot assertions retry a few seconds: publish happens on the app's

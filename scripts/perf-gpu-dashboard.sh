@@ -4,16 +4,16 @@
 # The single-launch smoke (test-gpu-dashboard-smoke) proves correctness with one
 # load-tolerant latency sample; this harness measures a distribution:
 #
-#   1. Cold start: launches the automation build N times (ZN_PERF_LAUNCHES,
+#   1. Cold start: launches the automation build N times (NATIVE_SDK_PERF_LAUNCHES,
 #      default 5), recording gpu_first_frame_latency_ns from the automation
 #      snapshot for each launch.
 #   2. Steady state: on the final (warm) launch, drives M "Auto refresh" switch
-#      clicks (ZN_PERF_INTERACTIONS, default 5), recording gpu_input_latency_ns
+#      clicks (NATIVE_SDK_PERF_INTERACTIONS, default 5), recording gpu_input_latency_ns
 #      (input receipt -> first present) per interaction.
 #   3. Prints every sample plus min/median/p90/max per series, and asserts each
 #      series' p90 under its budget:
-#        ZN_PERF_BUDGET_MS        first-frame p90 budget, default 300
-#        ZN_PERF_INPUT_BUDGET_MS  input-latency p90 budget, default 100
+#        NATIVE_SDK_PERF_BUDGET_MS        first-frame p90 budget, default 300
+#        NATIVE_SDK_PERF_INPUT_BUDGET_MS  input-latency p90 budget, default 100
 #      Defaults are deliberately generous (2x+ the smoke's 150 ms first-frame
 #      budget): this check exists to catch step-function regressions on shared
 #      CI/dev machines, not 10% drift on an idle box.
@@ -21,37 +21,37 @@
 # p90 is nearest-rank: sorted[ceil(0.9 * n)]. At the default n=5 that IS the
 # maximum of the five samples — with five samples the nearest-rank 90th
 # percentile estimator selects the max, so "max of 5 under a generous budget"
-# is not a shortcut but the estimator itself; raising ZN_PERF_LAUNCHES past 9
+# is not a shortcut but the estimator itself; raising NATIVE_SDK_PERF_LAUNCHES past 9
 # starts discarding the worst outlier as expected.
 #
-# Usage: scripts/perf-gpu-dashboard.sh <zero-native-cli>
+# Usage: scripts/perf-gpu-dashboard.sh <native-sdk-cli>
 # Expects examples/gpu-dashboard already built with -Dautomation=true
 # (`zig build test-gpu-dashboard-perf` wires the build + this script).
 set -eu
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-cli="${1:?usage: scripts/perf-gpu-dashboard.sh <zero-native-cli>}"
+cli="${1:?usage: scripts/perf-gpu-dashboard.sh <native-sdk-cli>}"
 case "$cli" in /*) ;; *) cli="$repo_root/$cli" ;; esac
 cd "$repo_root/examples/gpu-dashboard"
 app="zig-out/bin/gpu-dashboard"
 [ -x "$app" ] || { echo "perf: $app is missing; build examples/gpu-dashboard with -Dautomation=true first" >&2; exit 1; }
-automation_dir=".zig-cache/zero-native-automation"
+automation_dir=".zig-cache/native-sdk-automation"
 mkdir -p "$automation_dir"
-log=".zig-cache/zero-native-gpu-dashboard-perf.log"
+log=".zig-cache/native-sdk-gpu-dashboard-perf.log"
 
 require_positive_int() { # name value
   case "$2" in ''|*[!0-9]*) echo "perf: $1 must be a positive integer: $2" >&2; exit 1 ;; esac
   [ "$2" -gt 0 ] || { echo "perf: $1 must be a positive integer: $2" >&2; exit 1; }
 }
 
-launches="${ZN_PERF_LAUNCHES:-5}"
-interactions="${ZN_PERF_INTERACTIONS:-5}"
-first_frame_budget_ms="${ZN_PERF_BUDGET_MS:-300}"
-input_budget_ms="${ZN_PERF_INPUT_BUDGET_MS:-100}"
-require_positive_int ZN_PERF_LAUNCHES "$launches"
-require_positive_int ZN_PERF_INTERACTIONS "$interactions"
-require_positive_int ZN_PERF_BUDGET_MS "$first_frame_budget_ms"
-require_positive_int ZN_PERF_INPUT_BUDGET_MS "$input_budget_ms"
+launches="${NATIVE_SDK_PERF_LAUNCHES:-5}"
+interactions="${NATIVE_SDK_PERF_INTERACTIONS:-5}"
+first_frame_budget_ms="${NATIVE_SDK_PERF_BUDGET_MS:-300}"
+input_budget_ms="${NATIVE_SDK_PERF_INPUT_BUDGET_MS:-100}"
+require_positive_int NATIVE_SDK_PERF_LAUNCHES "$launches"
+require_positive_int NATIVE_SDK_PERF_INTERACTIONS "$interactions"
+require_positive_int NATIVE_SDK_PERF_BUDGET_MS "$first_frame_budget_ms"
+require_positive_int NATIVE_SDK_PERF_INPUT_BUDGET_MS "$input_budget_ms"
 first_frame_budget_ns=$((first_frame_budget_ms * 1000000))
 input_budget_ns=$((input_budget_ms * 1000000))
 

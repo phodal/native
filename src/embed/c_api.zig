@@ -1,6 +1,6 @@
 //! The embed C ABI, generic over the host that answers it.
 //!
-//! `MobileCApi(Host)` produces the full `zero_native_app_*` function set
+//! `MobileCApi(Host)` produces the full `native_sdk_app_*` function set
 //! for a host type: the fixed WebView shell (`MobileHostApp`, this module's
 //! re-exported default) or a user-app canvas host
 //! (`ui_host.UiAppHost(AppDef)` in libs built via `addMobileLib`). A host
@@ -49,42 +49,42 @@ pub fn exportMobileCApi(comptime Host: type) void {
 
 pub fn MobileCApi(comptime Host: type) type {
     return struct {
-        pub fn zero_native_app_create() callconv(.c) ?*anyopaque {
+        pub fn native_sdk_app_create() callconv(.c) ?*anyopaque {
             const self = Host.create() catch return null;
             return self;
         }
 
-        pub fn zero_native_app_destroy(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_destroy(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.destroy();
         }
 
-        pub fn zero_native_app_start(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_start(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.start() catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_activate(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_activate(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.activate() catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_deactivate(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_deactivate(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.deactivate() catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_stop(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_stop(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.stop() catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_resize(app: ?*anyopaque, width: f32, height: f32, scale: f32, surface: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_resize(app: ?*anyopaque, width: f32, height: f32, scale: f32, surface: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.resize(mobileSurface(width, height, scale, surface, .{}, .{})) catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_viewport(
+        pub fn native_sdk_app_viewport(
             app: ?*anyopaque,
             width: f32,
             height: f32,
@@ -110,7 +110,7 @@ pub fn MobileCApi(comptime Host: type) type {
             )) catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_viewport_state(app: ?*anyopaque, out: ?*MobileViewportState) callconv(.c) c_int {
+        pub fn native_sdk_app_viewport_state(app: ?*anyopaque, out: ?*MobileViewportState) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -121,7 +121,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
-        pub fn zero_native_app_gpu_frame_state(app: ?*anyopaque, out: ?*MobileGpuFrameState) callconv(.c) c_int {
+        pub fn native_sdk_app_gpu_frame_state(app: ?*anyopaque, out: ?*MobileGpuFrameState) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -140,7 +140,7 @@ pub fn MobileCApi(comptime Host: type) type {
         /// nonzero while an editable text widget owns focus. Platform shims
         /// key the system keyboard's show/hide on it (UIKit first
         /// responder, Android InputMethodManager).
-        pub fn zero_native_app_text_input_state(app: ?*anyopaque, out: ?*MobileTextInputState) callconv(.c) c_int {
+        pub fn native_sdk_app_text_input_state(app: ?*anyopaque, out: ?*MobileTextInputState) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -154,10 +154,10 @@ pub fn MobileCApi(comptime Host: type) type {
         /// Register (or clear, with a null callback) the platform's text
         /// measurement for layout — the embed counterpart of the desktop
         /// `measure_text_fn` platform service (CoreText on macOS). Call it
-        /// before `zero_native_app_start` so the installing layout already
+        /// before `native_sdk_app_start` so the installing layout already
         /// measures with real font metrics; without it layout stays on the
         /// deterministic estimator.
-        pub fn zero_native_app_set_text_measure(app: ?*anyopaque, measure: ?types.MobileTextMeasureFn, context: ?*anyopaque) callconv(.c) c_int {
+        pub fn native_sdk_app_set_text_measure(app: ?*anyopaque, measure: ?types.MobileTextMeasureFn, context: ?*anyopaque) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             host.setTextMeasure(self, measure, context);
             self.last_error = null;
@@ -169,7 +169,7 @@ pub fn MobileCApi(comptime Host: type) type {
         /// `path` — an absolute directory inside the app's data container
         /// on device. The mobile counterpart of the desktop runners'
         /// `-Dautomation=true`.
-        pub fn zero_native_app_set_automation_dir(app: ?*anyopaque, path: ?[*]const u8, len: usize) callconv(.c) c_int {
+        pub fn native_sdk_app_set_automation_dir(app: ?*anyopaque, path: ?[*]const u8, len: usize) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const dir = inputSlice(path, len) catch |err| {
                 recordError(self, err);
@@ -183,7 +183,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
-        pub fn zero_native_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: f32, y: f32, pressure: f32) callconv(.c) void {
+        pub fn native_sdk_app_touch(app: ?*anyopaque, id: u64, phase: c_int, x: f32, y: f32, pressure: f32) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.touch(id, phase, x, y, pressure) catch |err| {
                 recordError(self, err);
@@ -192,7 +192,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_scroll(app: ?*anyopaque, id: u64, x: f32, y: f32, delta_x: f32, delta_y: f32) callconv(.c) void {
+        pub fn native_sdk_app_scroll(app: ?*anyopaque, id: u64, x: f32, y: f32, delta_x: f32, delta_y: f32) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.embedded.scroll(id, x, y, delta_x, delta_y) catch |err| {
                 recordError(self, err);
@@ -201,7 +201,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_key(app: ?*anyopaque, phase: c_int, key: ?[*]const u8, key_len: usize, text: ?[*]const u8, text_len: usize, modifiers_mask: u32) callconv(.c) void {
+        pub fn native_sdk_app_key(app: ?*anyopaque, phase: c_int, key: ?[*]const u8, key_len: usize, text: ?[*]const u8, text_len: usize, modifiers_mask: u32) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             const key_value = inputSlice(key, key_len) catch |err| {
                 recordError(self, err);
@@ -218,7 +218,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_text(app: ?*anyopaque, text: ?[*]const u8, len: usize) callconv(.c) void {
+        pub fn native_sdk_app_text(app: ?*anyopaque, text: ?[*]const u8, len: usize) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             const text_value = inputSlice(text, len) catch |err| {
                 recordError(self, err);
@@ -231,7 +231,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_ime(app: ?*anyopaque, kind: c_int, text: ?[*]const u8, len: usize, cursor: isize) callconv(.c) void {
+        pub fn native_sdk_app_ime(app: ?*anyopaque, kind: c_int, text: ?[*]const u8, len: usize, cursor: isize) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             const text_value = inputSlice(text, len) catch |err| {
                 recordError(self, err);
@@ -244,7 +244,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_command(app: ?*anyopaque, name: ?[*]const u8, len: usize) callconv(.c) void {
+        pub fn native_sdk_app_command(app: ?*anyopaque, name: ?[*]const u8, len: usize) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             const ptr = name orelse {
                 recordError(self, error.InvalidCommand);
@@ -257,12 +257,12 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_frame(app: ?*anyopaque) callconv(.c) void {
+        pub fn native_sdk_app_frame(app: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             self.frame() catch |err| recordError(self, err);
         }
 
-        pub fn zero_native_app_set_asset_root(app: ?*anyopaque, path: [*]const u8, len: usize) callconv(.c) void {
+        pub fn native_sdk_app_set_asset_root(app: ?*anyopaque, path: [*]const u8, len: usize) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             if (len > self.asset_root.len) {
                 recordError(self, error.WindowSourceTooLarge);
@@ -278,7 +278,7 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_set_asset_entry(app: ?*anyopaque, path: [*]const u8, len: usize) callconv(.c) void {
+        pub fn native_sdk_app_set_asset_entry(app: ?*anyopaque, path: [*]const u8, len: usize) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
             if (len > self.asset_entry.len) {
                 recordError(self, error.WindowSourceTooLarge);
@@ -294,29 +294,29 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
-        pub fn zero_native_app_last_command_count(app: ?*anyopaque) callconv(.c) usize {
+        pub fn native_sdk_app_last_command_count(app: ?*anyopaque) callconv(.c) usize {
             const self = hostApp(Host, app) orelse return 0;
             return self.command_count;
         }
 
-        pub fn zero_native_app_last_command_name(app: ?*anyopaque) callconv(.c) [*:0]const u8 {
+        pub fn native_sdk_app_last_command_name(app: ?*anyopaque) callconv(.c) [*:0]const u8 {
             const self = hostApp(Host, app) orelse return "";
             return @ptrCast(&self.last_command_name);
         }
 
-        pub fn zero_native_app_last_error_name(app: ?*anyopaque) callconv(.c) [*:0]const u8 {
+        pub fn native_sdk_app_last_error_name(app: ?*anyopaque) callconv(.c) [*:0]const u8 {
             const self = hostApp(Host, app) orelse return "";
             const err = self.last_error orelse return "";
             return @errorName(err);
         }
 
-        pub fn zero_native_app_widget_semantics_count(app: ?*anyopaque) callconv(.c) usize {
+        pub fn native_sdk_app_widget_semantics_count(app: ?*anyopaque) callconv(.c) usize {
             const self = hostApp(Host, app) orelse return 0;
             const semantics = self.embedded.widgetSemantics() catch return 0;
             return semantics.len;
         }
 
-        pub fn zero_native_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: ?*MobileWidgetSemantics) callconv(.c) c_int {
+        pub fn native_sdk_app_widget_semantics_at(app: ?*anyopaque, index: usize, out: ?*MobileWidgetSemantics) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -335,7 +335,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
-        pub fn zero_native_app_widget_semantics_by_id(app: ?*anyopaque, id: u64, out: ?*MobileWidgetSemantics) callconv(.c) c_int {
+        pub fn native_sdk_app_widget_semantics_by_id(app: ?*anyopaque, id: u64, out: ?*MobileWidgetSemantics) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -359,7 +359,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 0;
         }
 
-        pub fn zero_native_app_widget_text_geometry(app: ?*anyopaque, id: u64, out: ?*MobileWidgetTextGeometry) callconv(.c) c_int {
+        pub fn native_sdk_app_widget_text_geometry(app: ?*anyopaque, id: u64, out: ?*MobileWidgetTextGeometry) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -378,7 +378,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
-        pub fn zero_native_app_widget_action(app: ?*anyopaque, request: ?*const MobileWidgetActionRequest) callconv(.c) c_int {
+        pub fn native_sdk_app_widget_action(app: ?*anyopaque, request: ?*const MobileWidgetActionRequest) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const value = request orelse {
                 recordError(self, error.InvalidCommand);
@@ -412,7 +412,7 @@ pub fn MobileCApi(comptime Host: type) type {
             return 1;
         }
 
-        pub fn zero_native_app_render_pixel_size(app: ?*anyopaque, scale: f32, out: ?*MobileCanvasPixels) callconv(.c) c_int {
+        pub fn native_sdk_app_render_pixel_size(app: ?*anyopaque, scale: f32, out: ?*MobileCanvasPixels) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -429,9 +429,9 @@ pub fn MobileCApi(comptime Host: type) type {
 
         /// Render the mobile surface's retained canvas scene through the
         /// deterministic CPU reference renderer into the caller's RGBA8
-        /// buffer (`zero_native_app_render_pixel_size` gives the byte
+        /// buffer (`native_sdk_app_render_pixel_size` gives the byte
         /// length). `scale <= 0` renders at scale 1.
-        pub fn zero_native_app_render_pixels(app: ?*anyopaque, scale: f32, pixels: ?[*]u8, pixels_len: usize, out: ?*MobileCanvasPixels) callconv(.c) c_int {
+        pub fn native_sdk_app_render_pixels(app: ?*anyopaque, scale: f32, pixels: ?[*]u8, pixels_len: usize, out: ?*MobileCanvasPixels) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const output = out orelse {
                 recordError(self, error.InvalidCommand);
@@ -476,35 +476,35 @@ fn renderScale(scale: f32) ?f32 {
 /// The default fixed WebView shell ABI (the host `zig build lib` produces).
 const FixedShellApi = MobileCApi(MobileHostApp);
 
-pub const zero_native_app_create = FixedShellApi.zero_native_app_create;
-pub const zero_native_app_destroy = FixedShellApi.zero_native_app_destroy;
-pub const zero_native_app_start = FixedShellApi.zero_native_app_start;
-pub const zero_native_app_activate = FixedShellApi.zero_native_app_activate;
-pub const zero_native_app_deactivate = FixedShellApi.zero_native_app_deactivate;
-pub const zero_native_app_stop = FixedShellApi.zero_native_app_stop;
-pub const zero_native_app_resize = FixedShellApi.zero_native_app_resize;
-pub const zero_native_app_viewport = FixedShellApi.zero_native_app_viewport;
-pub const zero_native_app_viewport_state = FixedShellApi.zero_native_app_viewport_state;
-pub const zero_native_app_gpu_frame_state = FixedShellApi.zero_native_app_gpu_frame_state;
-pub const zero_native_app_text_input_state = FixedShellApi.zero_native_app_text_input_state;
-pub const zero_native_app_set_text_measure = FixedShellApi.zero_native_app_set_text_measure;
-pub const zero_native_app_set_automation_dir = FixedShellApi.zero_native_app_set_automation_dir;
-pub const zero_native_app_touch = FixedShellApi.zero_native_app_touch;
-pub const zero_native_app_scroll = FixedShellApi.zero_native_app_scroll;
-pub const zero_native_app_key = FixedShellApi.zero_native_app_key;
-pub const zero_native_app_text = FixedShellApi.zero_native_app_text;
-pub const zero_native_app_ime = FixedShellApi.zero_native_app_ime;
-pub const zero_native_app_command = FixedShellApi.zero_native_app_command;
-pub const zero_native_app_frame = FixedShellApi.zero_native_app_frame;
-pub const zero_native_app_set_asset_root = FixedShellApi.zero_native_app_set_asset_root;
-pub const zero_native_app_set_asset_entry = FixedShellApi.zero_native_app_set_asset_entry;
-pub const zero_native_app_last_command_count = FixedShellApi.zero_native_app_last_command_count;
-pub const zero_native_app_last_command_name = FixedShellApi.zero_native_app_last_command_name;
-pub const zero_native_app_last_error_name = FixedShellApi.zero_native_app_last_error_name;
-pub const zero_native_app_widget_semantics_count = FixedShellApi.zero_native_app_widget_semantics_count;
-pub const zero_native_app_widget_semantics_at = FixedShellApi.zero_native_app_widget_semantics_at;
-pub const zero_native_app_widget_semantics_by_id = FixedShellApi.zero_native_app_widget_semantics_by_id;
-pub const zero_native_app_widget_text_geometry = FixedShellApi.zero_native_app_widget_text_geometry;
-pub const zero_native_app_widget_action = FixedShellApi.zero_native_app_widget_action;
-pub const zero_native_app_render_pixel_size = FixedShellApi.zero_native_app_render_pixel_size;
-pub const zero_native_app_render_pixels = FixedShellApi.zero_native_app_render_pixels;
+pub const native_sdk_app_create = FixedShellApi.native_sdk_app_create;
+pub const native_sdk_app_destroy = FixedShellApi.native_sdk_app_destroy;
+pub const native_sdk_app_start = FixedShellApi.native_sdk_app_start;
+pub const native_sdk_app_activate = FixedShellApi.native_sdk_app_activate;
+pub const native_sdk_app_deactivate = FixedShellApi.native_sdk_app_deactivate;
+pub const native_sdk_app_stop = FixedShellApi.native_sdk_app_stop;
+pub const native_sdk_app_resize = FixedShellApi.native_sdk_app_resize;
+pub const native_sdk_app_viewport = FixedShellApi.native_sdk_app_viewport;
+pub const native_sdk_app_viewport_state = FixedShellApi.native_sdk_app_viewport_state;
+pub const native_sdk_app_gpu_frame_state = FixedShellApi.native_sdk_app_gpu_frame_state;
+pub const native_sdk_app_text_input_state = FixedShellApi.native_sdk_app_text_input_state;
+pub const native_sdk_app_set_text_measure = FixedShellApi.native_sdk_app_set_text_measure;
+pub const native_sdk_app_set_automation_dir = FixedShellApi.native_sdk_app_set_automation_dir;
+pub const native_sdk_app_touch = FixedShellApi.native_sdk_app_touch;
+pub const native_sdk_app_scroll = FixedShellApi.native_sdk_app_scroll;
+pub const native_sdk_app_key = FixedShellApi.native_sdk_app_key;
+pub const native_sdk_app_text = FixedShellApi.native_sdk_app_text;
+pub const native_sdk_app_ime = FixedShellApi.native_sdk_app_ime;
+pub const native_sdk_app_command = FixedShellApi.native_sdk_app_command;
+pub const native_sdk_app_frame = FixedShellApi.native_sdk_app_frame;
+pub const native_sdk_app_set_asset_root = FixedShellApi.native_sdk_app_set_asset_root;
+pub const native_sdk_app_set_asset_entry = FixedShellApi.native_sdk_app_set_asset_entry;
+pub const native_sdk_app_last_command_count = FixedShellApi.native_sdk_app_last_command_count;
+pub const native_sdk_app_last_command_name = FixedShellApi.native_sdk_app_last_command_name;
+pub const native_sdk_app_last_error_name = FixedShellApi.native_sdk_app_last_error_name;
+pub const native_sdk_app_widget_semantics_count = FixedShellApi.native_sdk_app_widget_semantics_count;
+pub const native_sdk_app_widget_semantics_at = FixedShellApi.native_sdk_app_widget_semantics_at;
+pub const native_sdk_app_widget_semantics_by_id = FixedShellApi.native_sdk_app_widget_semantics_by_id;
+pub const native_sdk_app_widget_text_geometry = FixedShellApi.native_sdk_app_widget_text_geometry;
+pub const native_sdk_app_widget_action = FixedShellApi.native_sdk_app_widget_action;
+pub const native_sdk_app_render_pixel_size = FixedShellApi.native_sdk_app_render_pixel_size;
+pub const native_sdk_app_render_pixels = FixedShellApi.native_sdk_app_render_pixels;

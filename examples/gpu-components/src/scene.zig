@@ -1,9 +1,9 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const model = @import("model.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 const window_width = model.window_width;
 const window_height = model.window_height;
@@ -117,7 +117,7 @@ const catalog_alert_children = [_]canvas.Widget{canvas.builtinComponentWidget(.a
 const catalog_avatar_children = [_]canvas.Widget{canvas.builtinComponentWidget(.avatar, .{
     .id = 18301,
     .frame = rect(0, catalog_preview_y, 36, 36),
-    .text = "ZN",
+    .text = "NS",
 })};
 const catalog_badge_children = [_]canvas.Widget{canvas.builtinComponentWidget(.badge, .{
     .id = 18401,
@@ -197,7 +197,7 @@ const catalog_dropdown_children = [_]canvas.Widget{canvas.builtinComponentWidget
 const catalog_input_children = [_]canvas.Widget{canvas.builtinComponentWidget(.input, .{
     .id = 19501,
     .frame = rect(0, catalog_preview_y, 172, 34),
-    .text = "zero-native",
+    .text = "native-sdk",
 })};
 const catalog_pagination_items = [_]canvas.Widget{
     .{ .id = 19601, .kind = .button, .text = "1", .size = .sm, .state = .{ .selected = true } },
@@ -312,7 +312,7 @@ const catalog_tooltip_children = [_]canvas.Widget{canvas.builtinComponentWidget(
     .text = "Tooltip",
 })};
 
-pub fn installComponentsCanvasModel(runtime: *zero_native.Runtime, window_id: zero_native.WindowId, virtual_scroll: ComponentVirtualScroll, ui_state: ComponentUiState, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) anyerror!void {
+pub fn installComponentsCanvasModel(runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, virtual_scroll: ComponentVirtualScroll, ui_state: ComponentUiState, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) anyerror!void {
     var commands: [max_component_commands]canvas.CanvasCommand = undefined;
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     var builder = canvas.Builder.init(&commands);
@@ -511,7 +511,7 @@ pub fn componentTokensForScaleMotionAndContrast(mode: ComponentThemeMode, pixel_
     return tokens;
 }
 
-pub fn componentThemeModeForAppearance(appearance: zero_native.Appearance) ComponentThemeMode {
+pub fn componentThemeModeForAppearance(appearance: native_sdk.Appearance) ComponentThemeMode {
     return switch (appearance.color_scheme) {
         .light => .light,
         .dark => .dark,
@@ -698,7 +698,7 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         .{ .id = 170, .kind = .radio, .text = "List", .semantics = .{ .label = "List layout" } },
     };
     const form_controls = [_]canvas.Widget{
-        .{ .id = 111, .kind = .input, .frame = rect(0, 0, 148, 34), .text = "zero-native", .semantics = .{ .label = "Project name" } },
+        .{ .id = 111, .kind = .input, .frame = rect(0, 0, 148, 34), .text = "native-sdk", .semantics = .{ .label = "Project name" } },
         .{ .id = 112, .kind = .combobox, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component combobox" } },
         .{ .id = 113, .kind = .checkbox, .frame = rect(0, 52, 132, 30), .text = "Selected", .state = .{ .selected = true }, .semantics = .{ .label = "Selected checkbox" } },
         .{ .id = 114, .kind = .switch_control, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live switch" } },
@@ -993,7 +993,7 @@ pub fn componentFrameStorage(
     };
 }
 
-pub fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfaceFrameEvent {
+pub fn gpuFrameEvent(frame: native_sdk.platform.GpuFrame) native_sdk.GpuSurfaceFrameEvent {
     return .{
         .window_id = frame.window_id,
         .label = frame.label,
@@ -1089,7 +1089,7 @@ pub fn gpuFrameEvent(frame: zero_native.platform.GpuFrame) zero_native.GpuSurfac
     };
 }
 
-pub fn componentFrameStatus(buffer: []u8, frame_event: zero_native.GpuSurfaceFrameEvent) std.fmt.BufPrintError![]u8 {
+pub fn componentFrameStatus(buffer: []u8, frame_event: native_sdk.GpuSurfaceFrameEvent) std.fmt.BufPrintError![]u8 {
     return std.fmt.bufPrint(
         buffer,
         "Component frame: {s} risk, {d} commands, {d} batches, packet {s}, {d} semantics nodes.",

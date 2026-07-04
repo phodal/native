@@ -1,26 +1,26 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 const testing = std.testing;
 
 const Model = main.Model;
 const Msg = main.Msg;
-const ProbeApp = zero_native.UiApp(Model, Msg);
+const ProbeApp = native_sdk.UiApp(Model, Msg);
 
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "probe-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
     .title = "Effects Probe",
     .width = 560,
     .height = 480,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 fn probeOptions() ProbeApp.Options {
     return .{
@@ -33,7 +33,7 @@ fn probeOptions() ProbeApp.Options {
 }
 
 test "start captures the spawn request and streamed lines land in the list" {
-    const harness = try zero_native.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(560, 480) });
+    const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(560, 480) });
     defer harness.destroy(testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -77,11 +77,11 @@ test "start captures the spawn request and streamed lines land in the list" {
     try app_state.effects.feedExit(main.stream_key, 0);
     try harness.runtime.dispatchPlatformEvent(app, .wake);
     try testing.expect(!app_state.model.streaming);
-    try testing.expectEqual(zero_native.EffectExitReason.exited, app_state.model.last_exit.?.reason);
+    try testing.expectEqual(native_sdk.EffectExitReason.exited, app_state.model.last_exit.?.reason);
 }
 
 test "cancel stops the stream: queued lines are discarded, exit reports cancelled" {
-    const harness = try zero_native.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(560, 480) });
+    const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(560, 480) });
     defer harness.destroy(testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -108,7 +108,7 @@ test "cancel stops the stream: queued lines are discarded, exit reports cancelle
 
     try testing.expectEqual(@as(u64, 0), app_state.model.total_lines);
     try testing.expect(!app_state.model.streaming);
-    try testing.expectEqual(zero_native.EffectExitReason.cancelled, app_state.model.last_exit.?.reason);
+    try testing.expectEqual(native_sdk.EffectExitReason.cancelled, app_state.model.last_exit.?.reason);
     try testing.expectEqual(@as(usize, 0), app_state.effects.pendingSpawnCount());
 }
 

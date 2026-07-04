@@ -5,14 +5,14 @@
 //! parity for the markup sections.
 
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 const model_mod = @import("model.zig");
 const theme = @import("theme.zig");
 const view_mod = @import("view.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 const testing = std.testing;
 
 const Model = main.Model;
@@ -72,11 +72,11 @@ fn apply(model: *Model, msg: Msg) void {
 const surface_size = geometry.SizeF.init(main.window_width, main.window_height);
 
 const LiveApp = struct {
-    harness: *zero_native.TestHarness(),
+    harness: *native_sdk.TestHarness(),
     app_state: *App,
 
     fn start(image_decode: bool) !LiveApp {
-        const harness = try zero_native.TestHarness().create(testing.allocator, .{ .size = surface_size });
+        const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = surface_size });
         errdefer harness.destroy(testing.allocator);
         harness.null_platform.gpu_surfaces = true;
         harness.null_platform.image_decode = image_decode;
@@ -379,7 +379,7 @@ test "the track-change animation window opens on play and closes after" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var test_clock = zero_native.TestClock{};
+    var test_clock = native_sdk.TestClock{};
     test_clock.advanceMs(10_000);
     var model = Model{ .clock = test_clock.clock() };
     var animations: [8]canvas.CanvasRenderAnimation = undefined;

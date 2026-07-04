@@ -468,7 +468,7 @@ pub fn Effects(comptime Msg: type) type {
         /// Comptime Msg constructor for `on_line`, following
         /// `canvas.Ui(Msg).inputMsg`: `lineMsg(.agent_line)` builds
         /// `Msg{ .agent_line = line }` — the variant's payload type must
-        /// be `zero_native.EffectLine`.
+        /// be `native_sdk.EffectLine`.
         pub fn lineMsg(comptime tag: std.meta.Tag(Msg)) LineMsgFn {
             return struct {
                 fn make(line: EffectLine) Msg {
@@ -479,7 +479,7 @@ pub fn Effects(comptime Msg: type) type {
 
         /// Comptime Msg constructor for `on_exit`: `exitMsg(.agent_done)`
         /// builds `Msg{ .agent_done = exit }` — the variant's payload
-        /// type must be `zero_native.EffectExit`.
+        /// type must be `native_sdk.EffectExit`.
         pub fn exitMsg(comptime tag: std.meta.Tag(Msg)) ExitMsgFn {
             return struct {
                 fn make(exit: EffectExit) Msg {
@@ -491,7 +491,7 @@ pub fn Effects(comptime Msg: type) type {
         /// Comptime Msg constructor for `on_response`:
         /// `responseMsg(.issues_fetched)` builds
         /// `Msg{ .issues_fetched = response }` — the variant's payload
-        /// type must be `zero_native.EffectResponse`.
+        /// type must be `native_sdk.EffectResponse`.
         pub fn responseMsg(comptime tag: std.meta.Tag(Msg)) ResponseMsgFn {
             return struct {
                 fn make(response: EffectResponse) Msg {
@@ -503,7 +503,7 @@ pub fn Effects(comptime Msg: type) type {
         /// Comptime Msg constructor for `on_result` of file effects:
         /// `fileMsg(.snapshot_saved)` builds
         /// `Msg{ .snapshot_saved = result }` — the variant's payload
-        /// type must be `zero_native.EffectFileResult`.
+        /// type must be `native_sdk.EffectFileResult`.
         pub fn fileMsg(comptime tag: std.meta.Tag(Msg)) FileMsgFn {
             return struct {
                 fn make(result: EffectFileResult) Msg {
@@ -515,7 +515,7 @@ pub fn Effects(comptime Msg: type) type {
         /// Comptime Msg constructor for `on_fire` of fx timers:
         /// `timerMsg(.refresh_tick)` builds
         /// `Msg{ .refresh_tick = timer }` — the variant's payload type
-        /// must be `zero_native.EffectTimer`.
+        /// must be `native_sdk.EffectTimer`.
         pub fn timerMsg(comptime tag: std.meta.Tag(Msg)) TimerMsgFn {
             return struct {
                 fn make(timer: EffectTimer) Msg {

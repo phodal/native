@@ -1,6 +1,6 @@
 # Platform Support
 
-zero-native exposes one runtime model across desktop hosts, but native affordances land per platform and per web engine. Unsupported operations return explicit runtime errors instead of pretending that every host can do the same thing.
+The Native SDK exposes one runtime model across desktop hosts, but native affordances land per platform and per web engine. Unsupported operations return explicit runtime errors instead of pretending that every host can do the same thing.
 
 ## Desktop Hosts
 
@@ -160,13 +160,13 @@ if (runtime.supports(.native_views)) {
 }
 ```
 
-JavaScript can query the same support model through the built-in bridge when `js_window_api` or an explicit `builtin_bridge` policy allows `zero-native.platform.supports`:
+JavaScript can query the same support model through the built-in bridge when `js_window_api` or an explicit `builtin_bridge` policy allows `native-sdk.platform.supports`:
 
 ```javascript
 const hasTray = await window.zero.platform.supports("tray");
 ```
 
-Feature names match the Zig `PlatformFeature` enum and the TypeScript `ZeroNativePlatformFeature` union. JavaScript callers may use either snake_case names such as `native_views` or camelCase aliases such as `nativeViews`. Unsupported operations still reject explicitly if called; support checks are intended for choosing UI affordances before making those calls.
+Feature names match the Zig `PlatformFeature` enum and the TypeScript `NativeSdkPlatformFeature` union. JavaScript callers may use either snake_case names such as `native_views` or camelCase aliases such as `nativeViews`. Unsupported operations still reject explicitly if called; support checks are intended for choosing UI affordances before making those calls.
 
 ## Native Surfaces
 
@@ -178,7 +178,7 @@ Chromium builds are currently enabled on macOS only. Linux and Windows Chromium 
 
 ## Mobile And GPU
 
-iOS and Android are supported today through embedded host examples rather than the desktop platform host matrix. The mobile examples own native header/navigation layout in UIKit or Android views, embed a `WKWebView` or Android `WebView` as the workspace, and drive zero-native through the C/JNI lifecycle, activation, resize, and command calls documented in [Embedded App](/embed).
+iOS and Android are supported today through embedded host examples rather than the desktop platform host matrix. The mobile examples own native header/navigation layout in UIKit or Android views, embed a `WKWebView` or Android `WebView` as the workspace, and drive the Native SDK through the C/JNI lifecycle, activation, resize, and command calls documented in [Embedded App](/embed).
 
 <table>
   <thead>
@@ -201,7 +201,7 @@ iOS and Android are supported today through embedded host examples rather than t
     </tr>
     <tr>
       <td>Runtime lifecycle</td>
-      <td><code>zero_native_app_create</code>, <code>start</code>, <code>activate</code>, <code>deactivate</code>, <code>stop</code>, and <code>destroy</code> from Swift</td>
+      <td><code>native_sdk_app_create</code>, <code>start</code>, <code>activate</code>, <code>deactivate</code>, <code>stop</code>, and <code>destroy</code> from Swift</td>
       <td>JNI bridge for <code>create</code>, <code>start</code>, <code>activate</code>, <code>deactivate</code>, <code>stop</code>, and <code>destroy</code></td>
     </tr>
     <tr>
@@ -222,7 +222,7 @@ iOS and Android are supported today through embedded host examples rather than t
     <tr>
       <td>Touch forwarding</td>
       <td>UIKit/WebKit own touch handling for the WebView workspace</td>
-      <td><code>MotionEvent</code> pointer data is forwarded through <code>zero_native_app_touch</code></td>
+      <td><code>MotionEvent</code> pointer data is forwarded through <code>native_sdk_app_touch</code></td>
     </tr>
     <tr>
       <td>Generic <code>ShellView</code> mapping</td>

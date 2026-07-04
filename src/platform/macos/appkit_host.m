@@ -14,196 +14,196 @@
 #include <stdint.h>
 #include <string.h>
 
-@class ZeroNativeAppKitHost;
+@class NativeSdkAppKitHost;
 
-static const NSUInteger ZeroNativeMaxChildWebViews = 16;
-static const NSUInteger ZeroNativeMaxNativeViews = 32;
-static const NSInteger ZeroNativeBridgeFrameKeepaliveFrames = 600;
-static const NSTimeInterval ZeroNativeAutomationFramePollInterval = 0.05;
-static const uint64_t ZeroNativeNanosecondsPerSecond = 1000000000ull;
-static const uint32_t ZeroNativeShortcutModifierPrimary = 1u << 0;
-static const uint32_t ZeroNativeShortcutModifierCommand = 1u << 1;
-static const uint32_t ZeroNativeShortcutModifierControl = 1u << 2;
-static const uint32_t ZeroNativeShortcutModifierOption = 1u << 3;
-static const uint32_t ZeroNativeShortcutModifierShift = 1u << 4;
-static void *ZeroNativeAppKitAppearanceObservationContext = &ZeroNativeAppKitAppearanceObservationContext;
+static const NSUInteger NativeSdkMaxChildWebViews = 16;
+static const NSUInteger NativeSdkMaxNativeViews = 32;
+static const NSInteger NativeSdkBridgeFrameKeepaliveFrames = 600;
+static const NSTimeInterval NativeSdkAutomationFramePollInterval = 0.05;
+static const uint64_t NativeSdkNanosecondsPerSecond = 1000000000ull;
+static const uint32_t NativeSdkShortcutModifierPrimary = 1u << 0;
+static const uint32_t NativeSdkShortcutModifierCommand = 1u << 1;
+static const uint32_t NativeSdkShortcutModifierControl = 1u << 2;
+static const uint32_t NativeSdkShortcutModifierOption = 1u << 3;
+static const uint32_t NativeSdkShortcutModifierShift = 1u << 4;
+static void *NativeSdkAppKitAppearanceObservationContext = &NativeSdkAppKitAppearanceObservationContext;
 static NSRect constrainFrame(NSRect frame);
-static NSString *ZeroNativeAppKitBridgeScript(void);
-static NSString *ZeroNativeMimeTypeForPath(NSString *path);
-static NSString *ZeroNativeResolvedAssetRoot(NSString *rootPath);
-static void ZeroNativeRegisterBundledFonts(void);
-static NSString *ZeroNativeSafeAssetPath(NSURL *url, NSString *entryPath);
-static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath);
-static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback);
-static NSString *ZeroNativeOriginForURL(NSURL *url);
-static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url);
-static NSString *ZeroNativeShortcutKeyForEvent(NSEvent *event);
-static BOOL ZeroNativeShortcutUsesImplicitShift(NSString *key, NSEvent *event);
-static BOOL ZeroNativeShortcutModifiersMatch(uint32_t shortcutModifiers, NSEventModifierFlags eventModifiers, BOOL allowImplicitShift);
-static NSEventModifierFlags ZeroNativeMenuModifierFlags(uint32_t modifiers);
-static uint32_t ZeroNativeModifierFlagsForEvent(NSEvent *event);
-static uint64_t ZeroNativeTimestampNanoseconds(void);
-static uint64_t ZeroNativeRetainedFrameIntervalNanoseconds(NSScreen *screen);
-static NSAccessibilityRole ZeroNativeAccessibilityRoleForNativeViewKind(NSInteger kind);
-static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger role);
-static NSCursor *ZeroNativeCursorForKind(NSInteger kind);
-static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteger length);
-static NSString *ZeroNativeSubstringForRange(NSString *value, NSRange range);
-static NSString *ZeroNativeStringFromTextInput(id value);
-static int ZeroNativeAppKitColorSchemeForAppearance(NSAppearance *appearance);
-static BOOL ZeroNativeAppKitReduceMotionEnabled(void);
-static BOOL ZeroNativeAppKitHighContrastEnabled(void);
+static NSString *NativeSdkAppKitBridgeScript(void);
+static NSString *NativeSdkMimeTypeForPath(NSString *path);
+static NSString *NativeSdkResolvedAssetRoot(NSString *rootPath);
+static void NativeSdkRegisterBundledFonts(void);
+static NSString *NativeSdkSafeAssetPath(NSURL *url, NSString *entryPath);
+static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath);
+static NSArray<NSString *> *NativeSdkPolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback);
+static NSString *NativeSdkOriginForURL(NSURL *url);
+static BOOL NativeSdkPolicyListMatches(NSArray<NSString *> *values, NSURL *url);
+static NSString *NativeSdkShortcutKeyForEvent(NSEvent *event);
+static BOOL NativeSdkShortcutUsesImplicitShift(NSString *key, NSEvent *event);
+static BOOL NativeSdkShortcutModifiersMatch(uint32_t shortcutModifiers, NSEventModifierFlags eventModifiers, BOOL allowImplicitShift);
+static NSEventModifierFlags NativeSdkMenuModifierFlags(uint32_t modifiers);
+static uint32_t NativeSdkModifierFlagsForEvent(NSEvent *event);
+static uint64_t NativeSdkTimestampNanoseconds(void);
+static uint64_t NativeSdkRetainedFrameIntervalNanoseconds(NSScreen *screen);
+static NSAccessibilityRole NativeSdkAccessibilityRoleForNativeViewKind(NSInteger kind);
+static NSAccessibilityRole NativeSdkAccessibilityRoleForWidgetRole(NSInteger role);
+static NSCursor *NativeSdkCursorForKind(NSInteger kind);
+static NSRange NativeSdkClampedRange(NSUInteger start, NSUInteger end, NSUInteger length);
+static NSString *NativeSdkSubstringForRange(NSString *value, NSRange range);
+static NSString *NativeSdkStringFromTextInput(id value);
+static int NativeSdkAppKitColorSchemeForAppearance(NSAppearance *appearance);
+static BOOL NativeSdkAppKitReduceMotionEnabled(void);
+static BOOL NativeSdkAppKitHighContrastEnabled(void);
 
-static size_t ZeroNativeOverflowSize(size_t buffer_len) {
+static size_t NativeSdkOverflowSize(size_t buffer_len) {
     return buffer_len == SIZE_MAX ? SIZE_MAX : buffer_len + 1;
 }
 
-static NSString *ZeroNativeStringFromBytes(const char *bytes, size_t len) {
+static NSString *NativeSdkStringFromBytes(const char *bytes, size_t len) {
     if (!bytes || len == 0) return nil;
     return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
 }
 
-static NSString *ZeroNativeStringFromTextInput(id value) {
+static NSString *NativeSdkStringFromTextInput(id value) {
     if (!value) return @"";
     if ([value isKindOfClass:[NSAttributedString class]]) return ((NSAttributedString *)value).string ?: @"";
     if ([value isKindOfClass:[NSString class]]) return (NSString *)value;
     return [value description] ?: @"";
 }
 
-static int ZeroNativeAppKitColorSchemeForAppearance(NSAppearance *appearance) {
+static int NativeSdkAppKitColorSchemeForAppearance(NSAppearance *appearance) {
     NSAppearance *effective = appearance ?: NSApp.effectiveAppearance;
     NSString *bestMatch = [effective bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
-    return [bestMatch isEqualToString:NSAppearanceNameDarkAqua] ? ZERO_NATIVE_APPKIT_COLOR_SCHEME_DARK : ZERO_NATIVE_APPKIT_COLOR_SCHEME_LIGHT;
+    return [bestMatch isEqualToString:NSAppearanceNameDarkAqua] ? NATIVE_SDK_APPKIT_COLOR_SCHEME_DARK : NATIVE_SDK_APPKIT_COLOR_SCHEME_LIGHT;
 }
 
-static BOOL ZeroNativeAppKitReduceMotionEnabled(void) {
+static BOOL NativeSdkAppKitReduceMotionEnabled(void) {
     return [NSWorkspace sharedWorkspace].accessibilityDisplayShouldReduceMotion;
 }
 
-static BOOL ZeroNativeAppKitHighContrastEnabled(void) {
+static BOOL NativeSdkAppKitHighContrastEnabled(void) {
     return [NSWorkspace sharedWorkspace].accessibilityDisplayShouldIncreaseContrast;
 }
 
-static uint64_t ZeroNativeTimestampNanoseconds(void) {
+static uint64_t NativeSdkTimestampNanoseconds(void) {
     return (uint64_t)([[NSDate date] timeIntervalSince1970] * 1000000000.0);
 }
 
-static uint64_t ZeroNativeRetainedFrameIntervalNanoseconds(NSScreen *screen) {
+static uint64_t NativeSdkRetainedFrameIntervalNanoseconds(NSScreen *screen) {
     NSInteger framesPerSecond = screen ? screen.maximumFramesPerSecond : 0;
     if (framesPerSecond <= 0) framesPerSecond = 60;
     framesPerSecond = MAX(30, MIN(120, framesPerSecond));
-    return ZeroNativeNanosecondsPerSecond / (uint64_t)framesPerSecond;
+    return NativeSdkNanosecondsPerSecond / (uint64_t)framesPerSecond;
 }
 
-static uint32_t ZeroNativeModifierFlagsForEvent(NSEvent *event) {
+static uint32_t NativeSdkModifierFlagsForEvent(NSEvent *event) {
     NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
     uint32_t modifiers = 0;
     if ((flags & NSEventModifierFlagCommand) != 0) {
-        modifiers |= ZeroNativeShortcutModifierPrimary;
-        modifiers |= ZeroNativeShortcutModifierCommand;
+        modifiers |= NativeSdkShortcutModifierPrimary;
+        modifiers |= NativeSdkShortcutModifierCommand;
     }
-    if ((flags & NSEventModifierFlagControl) != 0) modifiers |= ZeroNativeShortcutModifierControl;
-    if ((flags & NSEventModifierFlagOption) != 0) modifiers |= ZeroNativeShortcutModifierOption;
-    if ((flags & NSEventModifierFlagShift) != 0) modifiers |= ZeroNativeShortcutModifierShift;
+    if ((flags & NSEventModifierFlagControl) != 0) modifiers |= NativeSdkShortcutModifierControl;
+    if ((flags & NSEventModifierFlagOption) != 0) modifiers |= NativeSdkShortcutModifierOption;
+    if ((flags & NSEventModifierFlagShift) != 0) modifiers |= NativeSdkShortcutModifierShift;
     return modifiers;
 }
 
-static NSString *ZeroNativePasteboardTypeForMime(const char *mime_type, size_t mime_type_len) {
-    NSString *mime = ZeroNativeStringFromBytes(mime_type, mime_type_len).lowercaseString;
+static NSString *NativeSdkPasteboardTypeForMime(const char *mime_type, size_t mime_type_len) {
+    NSString *mime = NativeSdkStringFromBytes(mime_type, mime_type_len).lowercaseString;
     if ([mime isEqualToString:@"text"] || [mime isEqualToString:@"text/plain"]) return NSPasteboardTypeString;
     if ([mime isEqualToString:@"text/html"]) return NSPasteboardTypeHTML;
     if ([mime isEqualToString:@"text/rtf"] || [mime isEqualToString:@"application/rtf"]) return NSPasteboardTypeRTF;
     return nil;
 }
 
-static NSAccessibilityRole ZeroNativeAccessibilityRoleForNativeViewKind(NSInteger kind) {
+static NSAccessibilityRole NativeSdkAccessibilityRoleForNativeViewKind(NSInteger kind) {
     switch (kind) {
-        case ZERO_NATIVE_APPKIT_VIEW_TOOLBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_TITLEBAR_ACCESSORY:
+        case NATIVE_SDK_APPKIT_VIEW_TOOLBAR:
+        case NATIVE_SDK_APPKIT_VIEW_TITLEBAR_ACCESSORY:
             return NSAccessibilityToolbarRole;
-        case ZERO_NATIVE_APPKIT_VIEW_SPLIT:
+        case NATIVE_SDK_APPKIT_VIEW_SPLIT:
             return NSAccessibilitySplitterRole;
-        case ZERO_NATIVE_APPKIT_VIEW_BUTTON:
-        case ZERO_NATIVE_APPKIT_VIEW_ICON_BUTTON:
-        case ZERO_NATIVE_APPKIT_VIEW_LIST_ITEM:
-        case ZERO_NATIVE_APPKIT_VIEW_TOGGLE:
+        case NATIVE_SDK_APPKIT_VIEW_BUTTON:
+        case NATIVE_SDK_APPKIT_VIEW_ICON_BUTTON:
+        case NATIVE_SDK_APPKIT_VIEW_LIST_ITEM:
+        case NATIVE_SDK_APPKIT_VIEW_TOGGLE:
             return NSAccessibilityButtonRole;
-        case ZERO_NATIVE_APPKIT_VIEW_CHECKBOX:
+        case NATIVE_SDK_APPKIT_VIEW_CHECKBOX:
             return NSAccessibilityCheckBoxRole;
-        case ZERO_NATIVE_APPKIT_VIEW_SEGMENTED_CONTROL:
+        case NATIVE_SDK_APPKIT_VIEW_SEGMENTED_CONTROL:
             return NSAccessibilityRadioGroupRole;
-        case ZERO_NATIVE_APPKIT_VIEW_TEXT_FIELD:
-        case ZERO_NATIVE_APPKIT_VIEW_SEARCH_FIELD:
+        case NATIVE_SDK_APPKIT_VIEW_TEXT_FIELD:
+        case NATIVE_SDK_APPKIT_VIEW_SEARCH_FIELD:
             return NSAccessibilityTextFieldRole;
-        case ZERO_NATIVE_APPKIT_VIEW_LABEL:
+        case NATIVE_SDK_APPKIT_VIEW_LABEL:
             return NSAccessibilityStaticTextRole;
-        case ZERO_NATIVE_APPKIT_VIEW_PROGRESS_INDICATOR:
+        case NATIVE_SDK_APPKIT_VIEW_PROGRESS_INDICATOR:
             return NSAccessibilityProgressIndicatorRole;
-        case ZERO_NATIVE_APPKIT_VIEW_GPU_SURFACE:
-        case ZERO_NATIVE_APPKIT_VIEW_STATUSBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_SIDEBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_STACK:
-        case ZERO_NATIVE_APPKIT_VIEW_SPACER:
+        case NATIVE_SDK_APPKIT_VIEW_GPU_SURFACE:
+        case NATIVE_SDK_APPKIT_VIEW_STATUSBAR:
+        case NATIVE_SDK_APPKIT_VIEW_SIDEBAR:
+        case NATIVE_SDK_APPKIT_VIEW_STACK:
+        case NATIVE_SDK_APPKIT_VIEW_SPACER:
             return NSAccessibilityGroupRole;
         default:
             return NSAccessibilityUnknownRole;
     }
 }
 
-static NSAccessibilityRole ZeroNativeAccessibilityRoleForWidgetRole(NSInteger role) {
+static NSAccessibilityRole NativeSdkAccessibilityRoleForWidgetRole(NSInteger role) {
     switch (role) {
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_TEXT:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_TEXT:
             return NSAccessibilityStaticTextRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_IMAGE:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_IMAGE:
             return NSAccessibilityImageRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_BUTTON:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_TAB:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_BUTTON:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_TAB:
             return NSAccessibilityButtonRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_TEXTBOX:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_TEXTBOX:
             return NSAccessibilityTextFieldRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_CHECKBOX:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_SWITCH:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_CHECKBOX:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_SWITCH:
             return NSAccessibilityCheckBoxRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_RADIO:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_RADIO:
             return NSAccessibilityRadioButtonRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_MENU:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_MENU:
             return NSAccessibilityMenuRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_MENUITEM:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_MENUITEM:
             return NSAccessibilityMenuItemRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_LIST:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_LIST:
             return NSAccessibilityListRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_ROW:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_ROW:
             return NSAccessibilityRowRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_GRID:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_GRID:
             return NSAccessibilityTableRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_GRIDCELL:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_GRIDCELL:
             return NSAccessibilityCellRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_SLIDER:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_SLIDER:
             return NSAccessibilitySliderRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_PROGRESSBAR:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_PROGRESSBAR:
             return NSAccessibilityProgressIndicatorRole;
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_TOOLTIP:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_DIALOG:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_GROUP:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_LISTITEM:
-        case ZERO_NATIVE_APPKIT_WIDGET_ROLE_NONE:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_TOOLTIP:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_DIALOG:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_GROUP:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_LISTITEM:
+        case NATIVE_SDK_APPKIT_WIDGET_ROLE_NONE:
         default:
             return NSAccessibilityGroupRole;
     }
 }
 
-static NSCursor *ZeroNativeCursorForKind(NSInteger kind) {
+static NSCursor *NativeSdkCursorForKind(NSInteger kind) {
     switch (kind) {
-        case ZERO_NATIVE_APPKIT_CURSOR_POINTING_HAND: return [NSCursor pointingHandCursor];
-        case ZERO_NATIVE_APPKIT_CURSOR_TEXT: return [NSCursor IBeamCursor];
-        case ZERO_NATIVE_APPKIT_CURSOR_RESIZE_HORIZONTAL: return [NSCursor resizeLeftRightCursor];
-        case ZERO_NATIVE_APPKIT_CURSOR_ARROW:
+        case NATIVE_SDK_APPKIT_CURSOR_POINTING_HAND: return [NSCursor pointingHandCursor];
+        case NATIVE_SDK_APPKIT_CURSOR_TEXT: return [NSCursor IBeamCursor];
+        case NATIVE_SDK_APPKIT_CURSOR_RESIZE_HORIZONTAL: return [NSCursor resizeLeftRightCursor];
+        case NATIVE_SDK_APPKIT_CURSOR_ARROW:
         default:
             return [NSCursor arrowCursor];
     }
 }
 
-static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteger length) {
+static NSRange NativeSdkClampedRange(NSUInteger start, NSUInteger end, NSUInteger length) {
     NSUInteger clampedStart = MIN(start, length);
     NSUInteger clampedEnd = MIN(end, length);
     if (clampedEnd < clampedStart) {
@@ -214,18 +214,18 @@ static NSRange ZeroNativeClampedRange(NSUInteger start, NSUInteger end, NSUInteg
     return NSMakeRange(clampedStart, clampedEnd - clampedStart);
 }
 
-static NSUInteger ZeroNativeRangeEnd(NSRange range) {
+static NSUInteger NativeSdkRangeEnd(NSRange range) {
     if (range.location == NSNotFound) return 0;
     if (range.length > NSUIntegerMax - range.location) return NSUIntegerMax;
     return range.location + range.length;
 }
 
-static NSString *ZeroNativeSubstringForRange(NSString *value, NSRange range) {
+static NSString *NativeSdkSubstringForRange(NSString *value, NSRange range) {
     if (range.location > value.length || NSMaxRange(range) > value.length) return @"";
     return [value substringWithRange:range];
 }
 
-static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSString *account) {
+static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString *account) {
     return [@{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
         (__bridge id)kSecAttrService: service,
@@ -233,30 +233,30 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     } mutableCopy];
 }
 
-@interface ZeroNativeWindowDelegate : NSObject <NSWindowDelegate>
-@property(nonatomic, assign) ZeroNativeAppKitHost *host;
+@interface NativeSdkWindowDelegate : NSObject <NSWindowDelegate>
+@property(nonatomic, assign) NativeSdkAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
 @end
 
-@interface ZeroNativeWebView : WKWebView <NSDraggingDestination>
+@interface NativeSdkWebView : WKWebView <NSDraggingDestination>
 @property(nonatomic, strong) NSArray<NSValue *> *coveredMouseRects;
-@property(nonatomic, assign) ZeroNativeAppKitHost *host;
+@property(nonatomic, assign) NativeSdkAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
 @end
 
-@interface ZeroNativeBridgeScriptHandler : NSObject <WKScriptMessageHandler>
-@property(nonatomic, assign) ZeroNativeAppKitHost *host;
+@interface NativeSdkBridgeScriptHandler : NSObject <WKScriptMessageHandler>
+@property(nonatomic, assign) NativeSdkAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
 @property(nonatomic, strong) NSString *webViewLabel;
 @end
 
-@class ZeroNativeMetalSurfaceView;
+@class NativeSdkMetalSurfaceView;
 
 /* Flipped, hit-test-transparent document view for a native scroll driver:
  * flipped so the clip view's bounds origin y IS the canvas scroll offset
  * (0 = top, +y = scrolled down), transparent so canvas content beneath
  * stays clickable. */
-@interface ZeroNativeScrollDriverDocumentView : NSView
+@interface NativeSdkScrollDriverDocumentView : NSView
 @end
 
 /* An invisible NSScrollView owning input + physics for one scrollable
@@ -264,26 +264,26 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
  * the overlay scroller; the engine renders the content. Hit testing
  * passes everything through except the scrollers themselves (so the
  * overlay knob stays grabbable). */
-@interface ZeroNativeScrollDriverView : NSScrollView
+@interface NativeSdkScrollDriverView : NSScrollView
 @property(nonatomic, assign) uint64_t driverId;
 @end
 
 /* Captures the selected item id of a context-menu popUp; NSMenuItem
  * targets are weak, so the presenter keeps this alive during tracking. */
-@interface ZeroNativeContextMenuTarget : NSObject
+@interface NativeSdkContextMenuTarget : NSObject
 @property(nonatomic, assign) uint32_t selectedItemId;
 - (void)contextMenuItemClicked:(NSMenuItem *)item;
 @end
 
-@interface ZeroNativeWidgetAccessibilityElement : NSAccessibilityElement
-@property(nonatomic, assign) ZeroNativeMetalSurfaceView *surfaceView;
+@interface NativeSdkWidgetAccessibilityElement : NSAccessibilityElement
+@property(nonatomic, assign) NativeSdkMetalSurfaceView *surfaceView;
 @property(nonatomic, assign) uint64_t widgetId;
 @property(nonatomic, assign) uint32_t actionFlags;
 - (BOOL)emitSetTextAccessibilityValue:(id)value;
 - (BOOL)emitSetSelectionAccessibilityValue:(id)value;
 @end
 
-@interface ZeroNativeMetalSurfaceView : NSView <NSTextInputClient>
+@interface NativeSdkMetalSurfaceView : NSView <NSTextInputClient>
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property(nonatomic, strong) CAMetalLayer *metalLayer;
@@ -293,7 +293,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, strong) id<MTLSamplerState> canvasSampler;
 @property(nonatomic, assign) CGColorSpaceRef canvasColorSpace;
 @property(nonatomic, strong) NSTimer *displayTimer;
-@property(nonatomic, assign) ZeroNativeAppKitHost *host;
+@property(nonatomic, assign) NativeSdkAppKitHost *host;
 @property(nonatomic, assign) uint64_t windowId;
 @property(nonatomic, strong) NSString *surfaceLabel;
 @property(nonatomic, assign) NSUInteger frameIndex;
@@ -333,21 +333,21 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) NSRange selectedTextRange;
 @property(nonatomic, assign) BOOL interpretedKeyEventEmittedInput;
 @property(nonatomic, strong) NSArray<NSAccessibilityElement *> *widgetAccessibilityElements;
-@property(nonatomic, strong) NSMutableArray<ZeroNativeScrollDriverView *> *scrollDrivers;
-@property(nonatomic, weak) ZeroNativeScrollDriverView *activeWheelDriver;
+@property(nonatomic, strong) NSMutableArray<NativeSdkScrollDriverView *> *scrollDrivers;
+@property(nonatomic, weak) NativeSdkScrollDriverView *activeWheelDriver;
 @property(nonatomic, assign) BOOL applyingScrollDriverOffset;
 @property(nonatomic, assign) BOOL scrollDriverEventPending;
 @property(nonatomic, assign) uint64_t pendingScrollDriverId;
 @property(nonatomic, assign) double pendingScrollDriverOffsetY;
 @property(nonatomic, assign) uint64_t scrollDriverEventLastEmitNs;
 @property(nonatomic, assign) BOOL controlClickActive;
-- (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
+- (void)configureWithHost:(NativeSdkAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label;
 - (BOOL)isAvailable;
 - (void)updateDrawableSize;
 - (BOOL)presentPixelsWithWidth:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (NSInteger)presentGpuPacketWithSurfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength;
 - (BOOL)ensureCanvasPresenter;
-- (void)updateWidgetAccessibilityWithNodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
+- (void)updateWidgetAccessibilityWithNodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (void)stopDisplayTimer;
 - (void)requestRetainedCanvasFrame;
 - (void)emitRetainedCanvasFrameRequest;
@@ -368,33 +368,33 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action;
 - (BOOL)emitWidgetAccessibilityActionWithId:(uint64_t)widgetId action:(NSInteger)action text:(NSString *)text selectedRange:(NSRange)selectedRange hasSelectedRange:(BOOL)hasSelectedRange;
 - (void)setSurfaceCursor:(NSCursor *)cursor;
-- (void)setScrollDrivers:(const zero_native_appkit_scroll_driver_t *)drivers count:(NSUInteger)count;
+- (void)setScrollDrivers:(const native_sdk_appkit_scroll_driver_t *)drivers count:(NSUInteger)count;
 @end
 
-@interface ZeroNativeAssetSchemeHandler : NSObject <WKURLSchemeHandler>
+@interface NativeSdkAssetSchemeHandler : NSObject <WKURLSchemeHandler>
 @property(nonatomic, strong) NSString *rootPath;
 @property(nonatomic, strong) NSString *entryPath;
 @property(nonatomic, assign) BOOL spaFallback;
 - (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath spaFallback:(BOOL)spaFallback;
 @end
 
-@interface ZeroNativeShortcut : NSObject
+@interface NativeSdkShortcut : NSObject
 @property(nonatomic, strong) NSString *identifier;
 @property(nonatomic, strong) NSString *key;
 @property(nonatomic, assign) uint32_t modifiers;
 @end
 
-@interface ZeroNativeAppKitHost : NSObject <WKNavigationDelegate>
+@interface NativeSdkAppKitHost : NSObject <WKNavigationDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
-@property(nonatomic, strong) ZeroNativeWindowDelegate *delegate;
-@property(nonatomic, strong) ZeroNativeBridgeScriptHandler *bridgeScriptHandler;
-@property(nonatomic, strong) ZeroNativeAssetSchemeHandler *assetSchemeHandler;
+@property(nonatomic, strong) NativeSdkWindowDelegate *delegate;
+@property(nonatomic, strong) NativeSdkBridgeScriptHandler *bridgeScriptHandler;
+@property(nonatomic, strong) NativeSdkAssetSchemeHandler *assetSchemeHandler;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSWindow *> *windows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, WKWebView *> *webViews;
-@property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZeroNativeWindowDelegate *> *delegates;
-@property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZeroNativeBridgeScriptHandler *> *bridgeScriptHandlers;
-@property(nonatomic, strong) NSMutableDictionary<NSNumber *, ZeroNativeAssetSchemeHandler *> *assetSchemeHandlers;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NativeSdkWindowDelegate *> *delegates;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NativeSdkBridgeScriptHandler *> *bridgeScriptHandlers;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NativeSdkAssetSchemeHandler *> *assetSchemeHandlers;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *windowLabels;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, WKWebView *> *childWebViews;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSView *> *nativeViews;
@@ -413,8 +413,8 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, strong) NSString *bundleIdentifier;
 @property(nonatomic, strong) NSString *iconPath;
 @property(nonatomic, strong) NSString *windowLabel;
-@property(nonatomic, assign) zero_native_appkit_event_callback_t callback;
-@property(nonatomic, assign) zero_native_appkit_bridge_callback_t bridgeCallback;
+@property(nonatomic, assign) native_sdk_appkit_event_callback_t callback;
+@property(nonatomic, assign) native_sdk_appkit_bridge_callback_t bridgeCallback;
 @property(nonatomic, assign) void *context;
 @property(nonatomic, assign) void *bridgeContext;
 @property(nonatomic, assign) BOOL didShutdown;
@@ -422,9 +422,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) BOOL observesAppearanceChanges;
 @property(nonatomic, assign) NSInteger bridgeFrameKeepalive;
 @property(nonatomic, strong) id shortcutEventMonitor;
-@property(nonatomic, strong) NSArray<ZeroNativeShortcut *> *shortcuts;
+@property(nonatomic, strong) NSArray<NativeSdkShortcut *> *shortcuts;
 @property(nonatomic, strong) NSStatusItem *statusItem;
-@property(nonatomic, assign) zero_native_appkit_tray_callback_t trayCallback;
+@property(nonatomic, assign) native_sdk_appkit_tray_callback_t trayCallback;
 @property(nonatomic, assign) void *trayContext;
 @property(nonatomic, strong) NSArray<NSString *> *allowedNavigationOrigins;
 @property(nonatomic, strong) NSArray<NSString *> *allowedExternalURLs;
@@ -435,7 +435,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)closeWindowWithId:(uint64_t)windowId;
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId;
 - (WKWebView *)mainWebViewForWindow:(NSWindow *)window;
-- (ZeroNativeAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
+- (NativeSdkAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
 - (NSString *)nativeViewKeyForWindow:(uint64_t)windowId label:(NSString *)label;
 - (NSRect)viewFrameForContainer:(NSView *)container x:(double)x y:(double)y width:(double)width height:(double)height;
 - (NSView *)nativeParentViewForWindow:(uint64_t)windowId parent:(NSString *)parent;
@@ -452,11 +452,11 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (NSInteger)presentGpuSurfacePacketInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength;
 - (BOOL)requestGpuSurfaceFrameInWindow:(uint64_t)windowId label:(NSString *)label;
-- (BOOL)setGpuSurfaceScrollDriversInWindow:(uint64_t)windowId label:(NSString *)label drivers:(const zero_native_appkit_scroll_driver_t *)drivers count:(NSUInteger)count;
-- (BOOL)showContextMenuInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y token:(uint64_t)token items:(const zero_native_appkit_context_menu_item_t *)items count:(NSUInteger)count;
+- (BOOL)setGpuSurfaceScrollDriversInWindow:(uint64_t)windowId label:(NSString *)label drivers:(const native_sdk_appkit_scroll_driver_t *)drivers count:(NSUInteger)count;
+- (BOOL)showContextMenuInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y token:(uint64_t)token items:(const native_sdk_appkit_context_menu_item_t *)items count:(NSUInteger)count;
 - (BOOL)uploadGpuSurfaceImageWithId:(uint64_t)imageId width:(NSUInteger)width height:(NSUInteger)height rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength;
 - (BOOL)removeGpuSurfaceImageWithId:(uint64_t)imageId;
-- (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
+- (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (BOOL)nativeView:(NSView *)candidate isInSubtreeRootedAt:(NSView *)root;
 - (NSArray<NSString *> *)nativeViewKeysInSubtreeForWindow:(uint64_t)windowId rootKey:(NSString *)rootKey;
 - (BOOL)closeNativeViewInWindow:(uint64_t)windowId label:(NSString *)label;
@@ -482,9 +482,9 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)menuCommandItemClicked:(NSMenuItem *)menuItem;
 - (uint64_t)activeCommandWindowId;
 - (void)setMenusWithTitles:(const char *const *)menuTitles titleLengths:(const size_t *)menuTitleLengths count:(size_t)menuCount itemMenuIndices:(const uint32_t *)itemMenuIndices itemLabels:(const char *const *)itemLabels itemLabelLengths:(const size_t *)itemLabelLengths itemCommands:(const char *const *)itemCommands itemCommandLengths:(const size_t *)itemCommandLengths itemKeys:(const char *const *)itemKeys itemKeyLengths:(const size_t *)itemKeyLengths itemModifiers:(const uint32_t *)itemModifiers itemSeparators:(const int *)itemSeparators itemEnabled:(const int *)itemEnabled itemChecked:(const int *)itemChecked itemCount:(size_t)itemCount;
-- (void)runWithCallback:(zero_native_appkit_event_callback_t)callback context:(void *)context;
+- (void)runWithCallback:(native_sdk_appkit_event_callback_t)callback context:(void *)context;
 - (void)stop;
-- (void)emitEvent:(zero_native_appkit_event_t)event;
+- (void)emitEvent:(native_sdk_appkit_event_t)event;
 - (BOOL)emitDroppedFileURLs:(NSArray<NSURL *> *)urls windowId:(uint64_t)windowId;
 - (void)startApplicationActivationObservers;
 - (void)stopApplicationActivationObservers;
@@ -525,7 +525,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 - (void)emitShortcutWithId:(NSString *)identifier key:(NSString *)key modifiers:(uint32_t)modifiers event:(NSEvent *)event;
 @end
 
-@implementation ZeroNativeWindowDelegate
+@implementation NativeSdkWindowDelegate
 
 - (void)windowDidResize:(NSNotification *)notification {
     (void)notification;
@@ -569,7 +569,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 @end
 
-@implementation ZeroNativeWebView
+@implementation NativeSdkWebView
 
 - (BOOL)pointIsCovered:(NSPoint)point {
     for (NSValue *value in self.coveredMouseRects) {
@@ -612,7 +612,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 @end
 
-@implementation ZeroNativeBridgeScriptHandler
+@implementation NativeSdkBridgeScriptHandler
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)userContentController;
@@ -621,24 +621,24 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 @end
 
-@implementation ZeroNativeWidgetAccessibilityElement
+@implementation NativeSdkWidgetAccessibilityElement
 
 - (NSArray *)accessibilityActionNames {
     if (!self.accessibilityEnabled) return @[];
     NSMutableArray *actions = [NSMutableArray arrayWithCapacity:3];
-    if ((self.actionFlags & (ZERO_NATIVE_APPKIT_WIDGET_ACTION_PRESS |
-                             ZERO_NATIVE_APPKIT_WIDGET_ACTION_TOGGLE |
-                             ZERO_NATIVE_APPKIT_WIDGET_ACTION_SELECT |
-                             ZERO_NATIVE_APPKIT_WIDGET_ACTION_FOCUS)) != 0) {
+    if ((self.actionFlags & (NATIVE_SDK_APPKIT_WIDGET_ACTION_PRESS |
+                             NATIVE_SDK_APPKIT_WIDGET_ACTION_TOGGLE |
+                             NATIVE_SDK_APPKIT_WIDGET_ACTION_SELECT |
+                             NATIVE_SDK_APPKIT_WIDGET_ACTION_FOCUS)) != 0) {
         [actions addObject:NSAccessibilityPressAction];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_INCREMENT) != 0) {
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_INCREMENT) != 0) {
         [actions addObject:NSAccessibilityIncrementAction];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_DECREMENT) != 0) {
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_DECREMENT) != 0) {
         [actions addObject:NSAccessibilityDecrementAction];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_DISMISS) != 0) {
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_DISMISS) != 0) {
         [actions addObject:NSAccessibilityCancelAction];
     }
     return actions;
@@ -646,44 +646,44 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 - (BOOL)accessibilityPerformPress {
     if (!self.accessibilityEnabled) return NO;
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_TOGGLE) != 0) {
-        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_TOGGLE];
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_TOGGLE) != 0) {
+        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_TOGGLE];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_PRESS) != 0) {
-        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_PRESS];
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_PRESS) != 0) {
+        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_PRESS];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SELECT) != 0) {
-        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SELECT];
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_SELECT) != 0) {
+        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SELECT];
     }
-    if ((self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_FOCUS) != 0) {
-        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_FOCUS];
+    if ((self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_FOCUS) != 0) {
+        return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_FOCUS];
     }
     return NO;
 }
 
 - (BOOL)accessibilityPerformIncrement {
-    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_INCREMENT) == 0) return NO;
-    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_INCREMENT];
+    if (!self.accessibilityEnabled || (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_INCREMENT) == 0) return NO;
+    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_INCREMENT];
 }
 
 - (BOOL)accessibilityPerformDecrement {
-    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_DECREMENT) == 0) return NO;
-    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_DECREMENT];
+    if (!self.accessibilityEnabled || (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_DECREMENT) == 0) return NO;
+    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_DECREMENT];
 }
 
 - (BOOL)accessibilityPerformCancel {
-    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_DISMISS) == 0) return NO;
-    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_DISMISS];
+    if (!self.accessibilityEnabled || (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_DISMISS) == 0) return NO;
+    return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_DISMISS];
 }
 
 - (BOOL)accessibilityIsAttributeSettable:(NSAccessibilityAttributeName)attribute {
     if (self.accessibilityEnabled && [attribute isEqualToString:NSAccessibilityValueAttribute]) {
-        return (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_TEXT) != 0;
+        return (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_SET_TEXT) != 0;
     }
     if (self.accessibilityEnabled &&
         ([attribute isEqualToString:NSAccessibilitySelectedTextRangeAttribute] ||
          [attribute isEqualToString:NSAccessibilitySelectedTextRangesAttribute])) {
-        return (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_SELECTION) != 0;
+        return (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_SET_SELECTION) != 0;
     }
     return [super accessibilityIsAttributeSettable:attribute];
 }
@@ -702,7 +702,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 }
 
 - (BOOL)emitSetTextAccessibilityValue:(id)value {
-    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_TEXT) == 0) return NO;
+    if (!self.accessibilityEnabled || (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_SET_TEXT) == 0) return NO;
     NSString *text = @"";
     if ([value isKindOfClass:[NSString class]]) {
         text = (NSString *)value;
@@ -710,14 +710,14 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
         text = [value description] ?: @"";
     }
     return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId
-                                                          action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_TEXT
+                                                          action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_TEXT
                                                             text:text
                                                    selectedRange:NSMakeRange(0, 0)
                                                 hasSelectedRange:NO];
 }
 
 - (BOOL)emitSetSelectionAccessibilityValue:(id)value {
-    if (!self.accessibilityEnabled || (self.actionFlags & ZERO_NATIVE_APPKIT_WIDGET_ACTION_SET_SELECTION) == 0) return NO;
+    if (!self.accessibilityEnabled || (self.actionFlags & NATIVE_SDK_APPKIT_WIDGET_ACTION_SET_SELECTION) == 0) return NO;
     NSRange selectedRange = NSMakeRange(NSNotFound, 0);
     if ([value isKindOfClass:[NSValue class]]) {
         selectedRange = [(NSValue *)value rangeValue];
@@ -729,7 +729,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
     }
     if (selectedRange.location == NSNotFound) return NO;
     return [self.surfaceView emitWidgetAccessibilityActionWithId:self.widgetId
-                                                          action:ZERO_NATIVE_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_SELECTION
+                                                          action:NATIVE_SDK_APPKIT_WIDGET_ACCESSIBILITY_ACTION_SET_SELECTION
                                                             text:@""
                                                    selectedRange:selectedRange
                                                 hasSelectedRange:YES];
@@ -737,75 +737,75 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 
 @end
 
-static CGFloat ZeroNativePacketNumber(id value, CGFloat fallback) {
+static CGFloat NativeSdkPacketNumber(id value, CGFloat fallback) {
     return [value respondsToSelector:@selector(doubleValue)] ? (CGFloat)[value doubleValue] : fallback;
 }
 
-static NSArray *ZeroNativePacketArray(id value, NSUInteger minCount) {
+static NSArray *NativeSdkPacketArray(id value, NSUInteger minCount) {
     if (![value isKindOfClass:[NSArray class]]) return nil;
     NSArray *array = (NSArray *)value;
     return array.count >= minCount ? array : nil;
 }
 
-static NSDictionary *ZeroNativePacketDictionary(id value) {
+static NSDictionary *NativeSdkPacketDictionary(id value) {
     return [value isKindOfClass:[NSDictionary class]] ? (NSDictionary *)value : nil;
 }
 
-static NSRect ZeroNativePacketRect(id value) {
-    NSArray *array = ZeroNativePacketArray(value, 4);
+static NSRect NativeSdkPacketRect(id value) {
+    NSArray *array = NativeSdkPacketArray(value, 4);
     if (!array) return NSZeroRect;
     return NSMakeRect(
-        ZeroNativePacketNumber(array[0], 0),
-        ZeroNativePacketNumber(array[1], 0),
-        ZeroNativePacketNumber(array[2], 0),
-        ZeroNativePacketNumber(array[3], 0)
+        NativeSdkPacketNumber(array[0], 0),
+        NativeSdkPacketNumber(array[1], 0),
+        NativeSdkPacketNumber(array[2], 0),
+        NativeSdkPacketNumber(array[3], 0)
     );
 }
 
-static BOOL ZeroNativePacketRectIntersects(NSRect a, NSRect b) {
+static BOOL NativeSdkPacketRectIntersects(NSRect a, NSRect b) {
     a = CGRectStandardize(a);
     b = CGRectStandardize(b);
     if (NSIsEmptyRect(a) || NSIsEmptyRect(b)) return NO;
     return !NSIsEmptyRect(NSIntersectionRect(a, b));
 }
 
-static NSPoint ZeroNativePacketPoint(id value) {
-    NSArray *array = ZeroNativePacketArray(value, 2);
+static NSPoint NativeSdkPacketPoint(id value) {
+    NSArray *array = NativeSdkPacketArray(value, 2);
     if (!array) return NSZeroPoint;
-    return NSMakePoint(ZeroNativePacketNumber(array[0], 0), ZeroNativePacketNumber(array[1], 0));
+    return NSMakePoint(NativeSdkPacketNumber(array[0], 0), NativeSdkPacketNumber(array[1], 0));
 }
 
-static BOOL ZeroNativePacketReadPoint(id value, NSPoint *point) {
-    NSArray *array = ZeroNativePacketArray(value, 2);
+static BOOL NativeSdkPacketReadPoint(id value, NSPoint *point) {
+    NSArray *array = NativeSdkPacketArray(value, 2);
     if (!array || !point) return NO;
-    *point = NSMakePoint(ZeroNativePacketNumber(array[0], 0), ZeroNativePacketNumber(array[1], 0));
+    *point = NSMakePoint(NativeSdkPacketNumber(array[0], 0), NativeSdkPacketNumber(array[1], 0));
     return YES;
 }
 
-static CGFloat ZeroNativePacketRadiusAt(id value, NSUInteger index, CGFloat maximum) {
-    NSArray *array = ZeroNativePacketArray(value, 1);
+static CGFloat NativeSdkPacketRadiusAt(id value, NSUInteger index, CGFloat maximum) {
+    NSArray *array = NativeSdkPacketArray(value, 1);
     if (!array) return 0;
     id radiusValue = index < array.count ? array[index] : array[0];
-    return fmax(0.0, fmin(maximum, ZeroNativePacketNumber(radiusValue, 0)));
+    return fmax(0.0, fmin(maximum, NativeSdkPacketNumber(radiusValue, 0)));
 }
 
-static NSColor *ZeroNativePacketColor(id value, CGFloat opacity) {
-    NSArray *array = ZeroNativePacketArray(value, 4);
+static NSColor *NativeSdkPacketColor(id value, CGFloat opacity) {
+    NSArray *array = NativeSdkPacketArray(value, 4);
     if (!array) return nil;
-    CGFloat red = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(array[0], 0)));
-    CGFloat green = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(array[1], 0)));
-    CGFloat blue = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(array[2], 0)));
-    CGFloat alpha = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(array[3], 1) * opacity));
+    CGFloat red = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(array[0], 0)));
+    CGFloat green = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(array[1], 0)));
+    CGFloat blue = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(array[2], 0)));
+    CGFloat alpha = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(array[3], 1) * opacity));
     return [NSColor colorWithDeviceRed:red green:green blue:blue alpha:alpha];
 }
 
-static NSBezierPath *ZeroNativePacketRoundedRectPath(NSRect rect, id radiusValue) {
+static NSBezierPath *NativeSdkPacketRoundedRectPath(NSRect rect, id radiusValue) {
     rect = CGRectStandardize(rect);
     CGFloat maxRadius = fmax(0.0, fmin(rect.size.width, rect.size.height) * 0.5);
-    CGFloat topLeft = ZeroNativePacketRadiusAt(radiusValue, 0, maxRadius);
-    CGFloat topRight = ZeroNativePacketRadiusAt(radiusValue, 1, maxRadius);
-    CGFloat bottomRight = ZeroNativePacketRadiusAt(radiusValue, 2, maxRadius);
-    CGFloat bottomLeft = ZeroNativePacketRadiusAt(radiusValue, 3, maxRadius);
+    CGFloat topLeft = NativeSdkPacketRadiusAt(radiusValue, 0, maxRadius);
+    CGFloat topRight = NativeSdkPacketRadiusAt(radiusValue, 1, maxRadius);
+    CGFloat bottomRight = NativeSdkPacketRadiusAt(radiusValue, 2, maxRadius);
+    CGFloat bottomLeft = NativeSdkPacketRadiusAt(radiusValue, 3, maxRadius);
     CGFloat minX = NSMinX(rect);
     CGFloat minY = NSMinY(rect);
     CGFloat maxX = NSMaxX(rect);
@@ -853,38 +853,38 @@ static NSBezierPath *ZeroNativePacketRoundedRectPath(NSRect rect, id radiusValue
     return path;
 }
 
-static NSBezierPath *ZeroNativePacketShapePath(NSDictionary *shape) {
+static NSBezierPath *NativeSdkPacketShapePath(NSDictionary *shape) {
     if (!shape) return nil;
     NSString *kind = [shape[@"kind"] isKindOfClass:[NSString class]] ? shape[@"kind"] : @"";
     if ([kind isEqualToString:@"path"]) {
-        NSArray *elements = ZeroNativePacketArray(shape[@"path"], 0);
+        NSArray *elements = NativeSdkPacketArray(shape[@"path"], 0);
         if (!elements) return nil;
         NSBezierPath *path = [NSBezierPath bezierPath];
         BOOL hasCurrentPoint = NO;
         NSPoint currentPoint = NSZeroPoint;
         NSPoint subpathStart = NSZeroPoint;
         for (id elementObject in elements) {
-            NSDictionary *element = ZeroNativePacketDictionary(elementObject);
+            NSDictionary *element = NativeSdkPacketDictionary(elementObject);
             if (!element) return nil;
             NSString *verb = [element[@"verb"] isKindOfClass:[NSString class]] ? element[@"verb"] : @"";
-            NSArray *points = ZeroNativePacketArray(element[@"points"], 0);
+            NSArray *points = NativeSdkPacketArray(element[@"points"], 0);
             if (!points) return nil;
             if ([verb isEqualToString:@"move_to"]) {
                 NSPoint point = NSZeroPoint;
-                if (points.count < 1 || !ZeroNativePacketReadPoint(points[0], &point)) return nil;
+                if (points.count < 1 || !NativeSdkPacketReadPoint(points[0], &point)) return nil;
                 [path moveToPoint:point];
                 currentPoint = point;
                 subpathStart = point;
                 hasCurrentPoint = YES;
             } else if ([verb isEqualToString:@"line_to"]) {
                 NSPoint point = NSZeroPoint;
-                if (!hasCurrentPoint || points.count < 1 || !ZeroNativePacketReadPoint(points[0], &point)) return nil;
+                if (!hasCurrentPoint || points.count < 1 || !NativeSdkPacketReadPoint(points[0], &point)) return nil;
                 [path lineToPoint:point];
                 currentPoint = point;
             } else if ([verb isEqualToString:@"quad_to"]) {
                 NSPoint control = NSZeroPoint;
                 NSPoint end = NSZeroPoint;
-                if (!hasCurrentPoint || points.count < 2 || !ZeroNativePacketReadPoint(points[0], &control) || !ZeroNativePacketReadPoint(points[1], &end)) return nil;
+                if (!hasCurrentPoint || points.count < 2 || !NativeSdkPacketReadPoint(points[0], &control) || !NativeSdkPacketReadPoint(points[1], &end)) return nil;
                 NSPoint control1 = NSMakePoint(currentPoint.x + (control.x - currentPoint.x) * 2.0 / 3.0, currentPoint.y + (control.y - currentPoint.y) * 2.0 / 3.0);
                 NSPoint control2 = NSMakePoint(end.x + (control.x - end.x) * 2.0 / 3.0, end.y + (control.y - end.y) * 2.0 / 3.0);
                 [path curveToPoint:end controlPoint1:control1 controlPoint2:control2];
@@ -893,7 +893,7 @@ static NSBezierPath *ZeroNativePacketShapePath(NSDictionary *shape) {
                 NSPoint control1 = NSZeroPoint;
                 NSPoint control2 = NSZeroPoint;
                 NSPoint end = NSZeroPoint;
-                if (!hasCurrentPoint || points.count < 3 || !ZeroNativePacketReadPoint(points[0], &control1) || !ZeroNativePacketReadPoint(points[1], &control2) || !ZeroNativePacketReadPoint(points[2], &end)) return nil;
+                if (!hasCurrentPoint || points.count < 3 || !NativeSdkPacketReadPoint(points[0], &control1) || !NativeSdkPacketReadPoint(points[1], &control2) || !NativeSdkPacketReadPoint(points[2], &end)) return nil;
                 [path curveToPoint:end controlPoint1:control1 controlPoint2:control2];
                 currentPoint = end;
             } else if ([verb isEqualToString:@"close"]) {
@@ -907,27 +907,27 @@ static NSBezierPath *ZeroNativePacketShapePath(NSDictionary *shape) {
         return path;
     }
     if ([kind isEqualToString:@"rect"]) {
-        return [NSBezierPath bezierPathWithRect:ZeroNativePacketRect(shape[@"rect"])];
+        return [NSBezierPath bezierPathWithRect:NativeSdkPacketRect(shape[@"rect"])];
     }
     if ([kind isEqualToString:@"rounded_rect"] || [kind isEqualToString:@"stroke_rect"]) {
-        NSRect rect = ZeroNativePacketRect(shape[@"rect"]);
-        return ZeroNativePacketRoundedRectPath(rect, shape[@"radius"]);
+        NSRect rect = NativeSdkPacketRect(shape[@"rect"]);
+        return NativeSdkPacketRoundedRectPath(rect, shape[@"radius"]);
     }
     if ([kind isEqualToString:@"line"]) {
         NSBezierPath *path = [NSBezierPath bezierPath];
-        [path moveToPoint:ZeroNativePacketPoint(shape[@"from"])];
-        [path lineToPoint:ZeroNativePacketPoint(shape[@"to"])];
-        path.lineWidth = MAX(1, ZeroNativePacketNumber(shape[@"width"], 1));
+        [path moveToPoint:NativeSdkPacketPoint(shape[@"from"])];
+        [path lineToPoint:NativeSdkPacketPoint(shape[@"to"])];
+        path.lineWidth = MAX(1, NativeSdkPacketNumber(shape[@"width"], 1));
         return path;
     }
     return nil;
 }
 
-static BOOL ZeroNativePacketDrawPaintedPath(NSBezierPath *path, NSDictionary *paint, CGFloat opacity, BOOL stroke) {
+static BOOL NativeSdkPacketDrawPaintedPath(NSBezierPath *path, NSDictionary *paint, CGFloat opacity, BOOL stroke) {
     if (!path || !paint) return NO;
     NSString *kind = [paint[@"kind"] isKindOfClass:[NSString class]] ? paint[@"kind"] : @"";
     if ([kind isEqualToString:@"color"]) {
-        NSColor *color = ZeroNativePacketColor(paint[@"color"], opacity);
+        NSColor *color = NativeSdkPacketColor(paint[@"color"], opacity);
         if (!color) return NO;
         if (stroke) {
             [color setStroke];
@@ -939,18 +939,18 @@ static BOOL ZeroNativePacketDrawPaintedPath(NSBezierPath *path, NSDictionary *pa
         return YES;
     }
     if ([kind isEqualToString:@"linear_gradient"]) {
-        NSArray *stops = ZeroNativePacketArray(paint[@"stops"], 1);
+        NSArray *stops = NativeSdkPacketArray(paint[@"stops"], 1);
         if (!stops) return NO;
         NSUInteger count = MIN(stops.count, 16);
         NSMutableArray<NSColor *> *colors = [NSMutableArray arrayWithCapacity:count];
         CGFloat locations[16] = {0};
         for (NSUInteger index = 0; index < count; index++) {
-            NSDictionary *stop = ZeroNativePacketDictionary(stops[index]);
+            NSDictionary *stop = NativeSdkPacketDictionary(stops[index]);
             if (!stop) return NO;
-            NSColor *color = ZeroNativePacketColor(stop[@"color"], opacity);
+            NSColor *color = NativeSdkPacketColor(stop[@"color"], opacity);
             if (!color) return NO;
             [colors addObject:color];
-            locations[index] = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(stop[@"offset"], (CGFloat)index / (CGFloat)MAX(1, count - 1))));
+            locations[index] = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(stop[@"offset"], (CGFloat)index / (CGFloat)MAX(1, count - 1))));
         }
         if (stroke) {
             [colors.firstObject setStroke];
@@ -961,34 +961,34 @@ static BOOL ZeroNativePacketDrawPaintedPath(NSBezierPath *path, NSDictionary *pa
         if (!gradient) return NO;
         [NSGraphicsContext saveGraphicsState];
         [path addClip];
-        [gradient drawFromPoint:ZeroNativePacketPoint(paint[@"start"]) toPoint:ZeroNativePacketPoint(paint[@"end"]) options:0];
+        [gradient drawFromPoint:NativeSdkPacketPoint(paint[@"start"]) toPoint:NativeSdkPacketPoint(paint[@"end"]) options:0];
         [NSGraphicsContext restoreGraphicsState];
         return YES;
     }
     return NO;
 }
 
-static NSPoint ZeroNativePacketTransformPoint(id value, NSPoint point) {
-    NSArray *array = ZeroNativePacketArray(value, 6);
+static NSPoint NativeSdkPacketTransformPoint(id value, NSPoint point) {
+    NSArray *array = NativeSdkPacketArray(value, 6);
     if (!array) return point;
-    CGFloat a = ZeroNativePacketNumber(array[0], 1);
-    CGFloat b = ZeroNativePacketNumber(array[1], 0);
-    CGFloat c = ZeroNativePacketNumber(array[2], 0);
-    CGFloat d = ZeroNativePacketNumber(array[3], 1);
-    CGFloat tx = ZeroNativePacketNumber(array[4], 0);
-    CGFloat ty = ZeroNativePacketNumber(array[5], 0);
+    CGFloat a = NativeSdkPacketNumber(array[0], 1);
+    CGFloat b = NativeSdkPacketNumber(array[1], 0);
+    CGFloat c = NativeSdkPacketNumber(array[2], 0);
+    CGFloat d = NativeSdkPacketNumber(array[3], 1);
+    CGFloat tx = NativeSdkPacketNumber(array[4], 0);
+    CGFloat ty = NativeSdkPacketNumber(array[5], 0);
     return NSMakePoint(a * point.x + c * point.y + tx, b * point.x + d * point.y + ty);
 }
 
-static NSRect ZeroNativePacketTransformRect(id value, NSRect rect) {
-    NSArray *array = ZeroNativePacketArray(value, 6);
+static NSRect NativeSdkPacketTransformRect(id value, NSRect rect) {
+    NSArray *array = NativeSdkPacketArray(value, 6);
     if (!array) return rect;
     rect = CGRectStandardize(rect);
     NSPoint points[4] = {
-        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMinY(rect))),
-        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMinY(rect))),
-        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMaxY(rect))),
-        ZeroNativePacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMaxY(rect))),
+        NativeSdkPacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMinY(rect))),
+        NativeSdkPacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMinY(rect))),
+        NativeSdkPacketTransformPoint(array, NSMakePoint(NSMaxX(rect), NSMaxY(rect))),
+        NativeSdkPacketTransformPoint(array, NSMakePoint(NSMinX(rect), NSMaxY(rect))),
     };
     CGFloat minX = points[0].x;
     CGFloat maxX = points[0].x;
@@ -1003,19 +1003,19 @@ static NSRect ZeroNativePacketTransformRect(id value, NSRect rect) {
     return NSMakeRect(minX, minY, maxX - minX, maxY - minY);
 }
 
-static CGFloat ZeroNativePacketTransformScale(id value) {
-    NSArray *array = ZeroNativePacketArray(value, 6);
+static CGFloat NativeSdkPacketTransformScale(id value) {
+    NSArray *array = NativeSdkPacketArray(value, 6);
     if (!array) return 1;
-    CGFloat a = ZeroNativePacketNumber(array[0], 1);
-    CGFloat b = ZeroNativePacketNumber(array[1], 0);
-    CGFloat c = ZeroNativePacketNumber(array[2], 0);
-    CGFloat d = ZeroNativePacketNumber(array[3], 1);
+    CGFloat a = NativeSdkPacketNumber(array[0], 1);
+    CGFloat b = NativeSdkPacketNumber(array[1], 0);
+    CGFloat c = NativeSdkPacketNumber(array[2], 0);
+    CGFloat d = NativeSdkPacketNumber(array[3], 1);
     CGFloat xScale = sqrt(a * a + b * b);
     CGFloat yScale = sqrt(c * c + d * d);
     return fmax(0.0001, fmax(xScale, yScale));
 }
 
-static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
+static BOOL NativeSdkPacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
     if (!effect || !context) return NO;
     void *contextData = CGBitmapContextGetData(context);
     if (!contextData) return NO;
@@ -1024,7 +1024,7 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
     const size_t bytesPerRow = CGBitmapContextGetBytesPerRow(context);
     if (width == 0 || height == 0 || bytesPerRow < width * 4) return NO;
 
-    NSRect rect = CGRectStandardize(ZeroNativePacketTransformRect(transformValue, ZeroNativePacketRect(effect[@"rect"])));
+    NSRect rect = CGRectStandardize(NativeSdkPacketTransformRect(transformValue, NativeSdkPacketRect(effect[@"rect"])));
     if (hasClip) {
         rect = NSIntersectionRect(rect, clipRect);
     }
@@ -1046,7 +1046,7 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
     NSUInteger maxY = (NSUInteger)maxYFloat;
     if (maxX <= minX || maxY <= minY) return YES;
 
-    NSUInteger radius = (NSUInteger)llround(fmax(0.0, ZeroNativePacketNumber(effect[@"radius"], 0) * normalizedScale * ZeroNativePacketTransformScale(transformValue)));
+    NSUInteger radius = (NSUInteger)llround(fmax(0.0, NativeSdkPacketNumber(effect[@"radius"], 0) * normalizedScale * NativeSdkPacketTransformScale(transformValue)));
     radius = MIN(radius, (NSUInteger)64);
     if (radius == 0) return YES;
     CGFloat mix = fmax(0.0, fmin(1.0, opacity));
@@ -1121,13 +1121,13 @@ static BOOL ZeroNativePacketApplyBlur(NSDictionary *effect, CGFloat opacity, CGC
     return YES;
 }
 
-static NSLineBreakMode ZeroNativePacketTextLineBreakMode(NSString *wrap) {
+static NSLineBreakMode NativeSdkPacketTextLineBreakMode(NSString *wrap) {
     if ([wrap isEqualToString:@"none"]) return NSLineBreakByClipping;
     if ([wrap isEqualToString:@"character"]) return NSLineBreakByCharWrapping;
     return NSLineBreakByWordWrapping;
 }
 
-static NSTextAlignment ZeroNativePacketTextAlignment(NSString *align) {
+static NSTextAlignment NativeSdkPacketTextAlignment(NSString *align) {
     if ([align isEqualToString:@"center"]) return NSTextAlignmentCenter;
     if ([align isEqualToString:@"end"]) return NSTextAlignmentRight;
     return NSTextAlignmentNatural;
@@ -1139,7 +1139,7 @@ static NSTextAlignment ZeroNativePacketTextAlignment(NSString *align) {
 // back to a sheared font matrix so the slant is always visible. The shear
 // leaves advance widths unchanged, keeping measured layout in step with the
 // upright face the estimator models.
-static NSFont *ZeroNativeItalicSansFont(NSFont *font) {
+static NSFont *NativeSdkItalicSansFont(NSFont *font) {
     if (!font) return nil;
     NSFontManager *manager = [NSFontManager sharedFontManager];
     NSFont *converted = [manager convertFont:font toHaveTrait:NSItalicFontMask];
@@ -1158,7 +1158,7 @@ static NSFont *ZeroNativeItalicSansFont(NSFont *font) {
 // conversion from the resolved regular face, then the matching SF weight.
 // Never answers with the regular face — a weighted span id that draws at
 // regular weight is invisible, which defeats the id.
-static NSFont *ZeroNativeWeightedSansFont(NSArray<NSString *> *names, NSFont *base, NSFontWeight systemWeight, BOOL bold, CGFloat size) {
+static NSFont *NativeSdkWeightedSansFont(NSArray<NSString *> *names, NSFont *base, NSFontWeight systemWeight, BOOL bold, CGFloat size) {
     for (NSString *name in names) {
         NSFont *font = [NSFont fontWithName:name size:size];
         if (font) return font;
@@ -1177,12 +1177,12 @@ static NSFont *ZeroNativeWeightedSansFont(NSArray<NSString *> *names, NSFont *ba
 }
 
 // Resolves a canvas font id to the NSFont presentation draws with. Both
-// packet text drawing and zero_native_appkit_measure_text go through this
+// packet text drawing and native_sdk_appkit_measure_text go through this
 // single function so measured layout and drawn glyphs share font
 // resolution. Ids 3-6 are the reserved sans span variants (medium, bold,
 // italic, bold italic); everything else keeps the regular sans/mono
 // candidates. Resolved fonts are cached per (font id, size).
-static NSFont *ZeroNativeFontForFontId(unsigned long long value, CGFloat size) {
+static NSFont *NativeSdkFontForFontId(unsigned long long value, CGFloat size) {
     static NSCache<NSString *, NSFont *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -1210,16 +1210,16 @@ static NSFont *ZeroNativeFontForFontId(unsigned long long value, CGFloat size) {
         if (!base) base = [NSFont systemFontOfSize:size];
         switch (value) {
         case 3:
-            font = ZeroNativeWeightedSansFont(@[ @"Geist-Medium", @"Geist Medium" ], base, NSFontWeightMedium, NO, size);
+            font = NativeSdkWeightedSansFont(@[ @"Geist-Medium", @"Geist Medium" ], base, NSFontWeightMedium, NO, size);
             break;
         case 4:
-            font = ZeroNativeWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], base, NSFontWeightBold, YES, size);
+            font = NativeSdkWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], base, NSFontWeightBold, YES, size);
             break;
         case 5:
-            font = ZeroNativeItalicSansFont(base);
+            font = NativeSdkItalicSansFont(base);
             break;
         case 6:
-            font = ZeroNativeItalicSansFont(ZeroNativeWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], base, NSFontWeightBold, YES, size));
+            font = NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @"Geist-Bold", @"Geist Bold" ], base, NSFontWeightBold, YES, size));
             break;
         default:
             font = base;
@@ -1230,10 +1230,10 @@ static NSFont *ZeroNativeFontForFontId(unsigned long long value, CGFloat size) {
     return font;
 }
 
-static NSFont *ZeroNativePacketPreferredFont(NSDictionary *text, CGFloat size) {
+static NSFont *NativeSdkPacketPreferredFont(NSDictionary *text, CGFloat size) {
     NSNumber *fontId = [text[@"font"] isKindOfClass:[NSNumber class]] ? text[@"font"] : nil;
     unsigned long long value = fontId ? fontId.unsignedLongLongValue : 1;
-    return ZeroNativeFontForFontId(value, size);
+    return NativeSdkFontForFontId(value, size);
 }
 
 // Typographic width of a single-line run, measured with the same font
@@ -1241,7 +1241,7 @@ static NSFont *ZeroNativePacketPreferredFont(NSDictionary *text, CGFloat size) {
 // the packet renderer draws with. Returns a negative value when the bytes
 // are not valid UTF-8 so the caller can fall back to its estimator.
 // Shaped widths are memoized host-side.
-double zero_native_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len) {
+double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len) {
     if (!text || text_len == 0) return 0;
     CGFloat clamped = MAX(1, size);
     @autoreleasepool {
@@ -1256,7 +1256,7 @@ double zero_native_appkit_measure_text(uint64_t font_id, double size, const char
         NSString *key = [NSString stringWithFormat:@"%llu/%.3f/%@", (unsigned long long)font_id, (double)clamped, value];
         NSNumber *cached = [widthCache objectForKey:key];
         if (cached) return cached.doubleValue;
-        NSFont *font = ZeroNativeFontForFontId(font_id, clamped);
+        NSFont *font = NativeSdkFontForFontId(font_id, clamped);
         if (!font) return -1;
         double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
         [widthCache setObject:@(width) forKey:key];
@@ -1270,7 +1270,7 @@ double zero_native_appkit_measure_text(uint64_t font_id, double size, const char
 // CGBitmapContext can render into) and is un-premultiplied in place,
 // because the canvas image pipeline — the reference renderer and the
 // packet host's kCGImageAlphaLast upload — expects straight alpha.
-int zero_native_appkit_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
+int native_sdk_appkit_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
     if (out_width) *out_width = 0;
     if (out_height) *out_height = 0;
     if (!bytes || bytes_len == 0 || !pixels) return 0;
@@ -1330,19 +1330,19 @@ int zero_native_appkit_decode_image(const uint8_t *bytes, size_t bytes_len, uint
     }
 }
 
-static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
+static BOOL NativeSdkPacketDrawText(NSDictionary *text, CGFloat opacity) {
     if (!text) return NO;
     NSString *value = [text[@"text"] isKindOfClass:[NSString class]] ? text[@"text"] : @"";
-    NSColor *color = ZeroNativePacketColor(text[@"color"], opacity);
+    NSColor *color = NativeSdkPacketColor(text[@"color"], opacity);
     if (!color) return NO;
-    CGFloat size = MAX(1, ZeroNativePacketNumber(text[@"size"], 12));
-    NSFont *font = ZeroNativePacketPreferredFont(text, size);
-    NSPoint origin = ZeroNativePacketPoint(text[@"origin"]);
+    CGFloat size = MAX(1, NativeSdkPacketNumber(text[@"size"], 12));
+    NSFont *font = NativeSdkPacketPreferredFont(text, size);
+    NSPoint origin = NativeSdkPacketPoint(text[@"origin"]);
     NSDictionary *baseAttributes = @{
         NSFontAttributeName: font,
         NSForegroundColorAttributeName: color,
     };
-    NSDictionary *layout = ZeroNativePacketDictionary(text[@"layout"]);
+    NSDictionary *layout = NativeSdkPacketDictionary(text[@"layout"]);
     if (!layout) {
         [value drawAtPoint:NSMakePoint(origin.x, origin.y - size) withAttributes:baseAttributes];
         return YES;
@@ -1351,9 +1351,9 @@ static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     NSMutableParagraphStyle *paragraph = [[NSMutableParagraphStyle alloc] init];
     NSString *wrap = [layout[@"wrap"] isKindOfClass:[NSString class]] ? layout[@"wrap"] : @"word";
     NSString *align = [layout[@"align"] isKindOfClass:[NSString class]] ? layout[@"align"] : @"start";
-    paragraph.lineBreakMode = ZeroNativePacketTextLineBreakMode(wrap);
-    paragraph.alignment = ZeroNativePacketTextAlignment(align);
-    CGFloat lineHeight = ZeroNativePacketNumber(layout[@"lineHeight"], 0);
+    paragraph.lineBreakMode = NativeSdkPacketTextLineBreakMode(wrap);
+    paragraph.alignment = NativeSdkPacketTextAlignment(align);
+    CGFloat lineHeight = NativeSdkPacketNumber(layout[@"lineHeight"], 0);
     if (lineHeight > 0) {
         paragraph.minimumLineHeight = lineHeight;
         paragraph.maximumLineHeight = lineHeight;
@@ -1361,7 +1361,7 @@ static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
 
     NSMutableDictionary *attributes = [baseAttributes mutableCopy];
     attributes[NSParagraphStyleAttributeName] = paragraph;
-    CGFloat maxWidth = ZeroNativePacketNumber(layout[@"maxWidth"], 0);
+    CGFloat maxWidth = NativeSdkPacketNumber(layout[@"maxWidth"], 0);
     CGFloat measuredWidth = ceil([value sizeWithAttributes:attributes].width + size);
     CGFloat textWidth = maxWidth > 0 ? maxWidth : MAX(size, measuredWidth);
     CGFloat textHeight = MAX(lineHeight > 0 ? lineHeight : size * 1.25, size * 1.25);
@@ -1375,23 +1375,23 @@ static BOOL ZeroNativePacketDrawText(NSDictionary *text, CGFloat opacity) {
     return YES;
 }
 
-static BOOL ZeroNativePacketDrawEffect(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
+static BOOL NativeSdkPacketDrawEffect(NSDictionary *effect, CGFloat opacity, CGContextRef context, CGFloat scale, id transformValue, BOOL hasClip, NSRect clipRect) {
     if (!effect) return NO;
     NSString *kind = [effect[@"kind"] isKindOfClass:[NSString class]] ? effect[@"kind"] : @"";
     if ([kind isEqualToString:@"blur"]) {
-        return ZeroNativePacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect);
+        return NativeSdkPacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect);
     }
     if ([kind isEqualToString:@"shadow"]) {
-        NSColor *color = ZeroNativePacketColor(effect[@"color"], opacity);
+        NSColor *color = NativeSdkPacketColor(effect[@"color"], opacity);
         if (!color) return NO;
-        NSRect rect = ZeroNativePacketRect(effect[@"rect"]);
-        NSArray *offset = ZeroNativePacketArray(effect[@"offset"], 2);
-        NSSize shadowOffset = offset ? NSMakeSize(ZeroNativePacketNumber(offset[0], 0), ZeroNativePacketNumber(offset[1], 0)) : NSZeroSize;
+        NSRect rect = NativeSdkPacketRect(effect[@"rect"]);
+        NSArray *offset = NativeSdkPacketArray(effect[@"offset"], 2);
+        NSSize shadowOffset = offset ? NSMakeSize(NativeSdkPacketNumber(offset[0], 0), NativeSdkPacketNumber(offset[1], 0)) : NSZeroSize;
         NSShadow *shadow = [[NSShadow alloc] init];
         shadow.shadowColor = color;
         shadow.shadowOffset = shadowOffset;
-        shadow.shadowBlurRadius = MAX(0, ZeroNativePacketNumber(effect[@"blur"], 0));
-        NSBezierPath *path = ZeroNativePacketRoundedRectPath(rect, effect[@"radius"]);
+        shadow.shadowBlurRadius = MAX(0, NativeSdkPacketNumber(effect[@"blur"], 0));
+        NSBezierPath *path = NativeSdkPacketRoundedRectPath(rect, effect[@"radius"]);
         [NSGraphicsContext saveGraphicsState];
         [shadow set];
         [[color colorWithAlphaComponent:0.01] setFill];
@@ -1402,16 +1402,16 @@ static BOOL ZeroNativePacketDrawEffect(NSDictionary *effect, CGFloat opacity, CG
     return NO;
 }
 
-static BOOL ZeroNativePacketApplyTransform(id value) {
-    NSArray *array = ZeroNativePacketArray(value, 6);
+static BOOL NativeSdkPacketApplyTransform(id value) {
+    NSArray *array = NativeSdkPacketArray(value, 6);
     if (!array) return YES;
     NSAffineTransformStruct transform = {
-        .m11 = ZeroNativePacketNumber(array[0], 1),
-        .m12 = ZeroNativePacketNumber(array[1], 0),
-        .m21 = ZeroNativePacketNumber(array[2], 0),
-        .m22 = ZeroNativePacketNumber(array[3], 1),
-        .tX = ZeroNativePacketNumber(array[4], 0),
-        .tY = ZeroNativePacketNumber(array[5], 0),
+        .m11 = NativeSdkPacketNumber(array[0], 1),
+        .m12 = NativeSdkPacketNumber(array[1], 0),
+        .m21 = NativeSdkPacketNumber(array[2], 0),
+        .m22 = NativeSdkPacketNumber(array[3], 1),
+        .tX = NativeSdkPacketNumber(array[4], 0),
+        .tY = NativeSdkPacketNumber(array[5], 0),
     };
     NSAffineTransform *affine = [NSAffineTransform transform];
     [affine setTransformStruct:transform];
@@ -1419,12 +1419,12 @@ static BOOL ZeroNativePacketApplyTransform(id value) {
     return YES;
 }
 
-static NSString *ZeroNativePacketImageCacheKey(id value) {
+static NSString *NativeSdkPacketImageCacheKey(id value) {
     if (![value respondsToSelector:@selector(unsignedLongLongValue)]) return nil;
     return [NSString stringWithFormat:@"%llu", [value unsignedLongLongValue]];
 }
 
-static NSRect ZeroNativePacketNormalizedRect(NSRect rect) {
+static NSRect NativeSdkPacketNormalizedRect(NSRect rect) {
     if (rect.size.width < 0) {
         rect.origin.x += rect.size.width;
         rect.size.width = -rect.size.width;
@@ -1436,13 +1436,13 @@ static NSRect ZeroNativePacketNormalizedRect(NSRect rect) {
     return rect;
 }
 
-static NSData *ZeroNativePacketImagePixelData(NSArray *pixels, NSUInteger byteLength) {
+static NSData *NativeSdkPacketImagePixelData(NSArray *pixels, NSUInteger byteLength) {
     if (!pixels || pixels.count < byteLength) return nil;
     NSMutableData *data = [NSMutableData dataWithLength:byteLength];
     if (!data) return nil;
     uint8_t *bytes = data.mutableBytes;
     for (NSUInteger index = 0; index < byteLength; index++) {
-        bytes[index] = (uint8_t)llround(fmax(0.0, fmin(255.0, ZeroNativePacketNumber(pixels[index], 0))));
+        bytes[index] = (uint8_t)llround(fmax(0.0, fmin(255.0, NativeSdkPacketNumber(pixels[index], 0))));
     }
     return data;
 }
@@ -1451,7 +1451,7 @@ static NSData *ZeroNativePacketImagePixelData(NSArray *pixels, NSUInteger byteLe
 // (kCGImageAlphaLast — the same convention the decode seam produces and
 // the reference renderer consumes). `pixelData` is retained by the
 // CGDataProvider, so callers may pass transient copies.
-static NSImage *ZeroNativeCreateRGBA8Image(NSUInteger width, NSUInteger height, NSData *pixelData) {
+static NSImage *NativeSdkCreateRGBA8Image(NSUInteger width, NSUInteger height, NSData *pixelData) {
     if (width == 0 || height == 0 || width > 8192 || height > 8192) return nil;
     if (width > NSUIntegerMax / height || width * height > NSUIntegerMax / 4) return nil;
     NSUInteger byteLength = width * height * 4;
@@ -1476,20 +1476,20 @@ static NSImage *ZeroNativeCreateRGBA8Image(NSUInteger width, NSUInteger height, 
 // Legacy packet-embedded pixels: packets from this tree never carry pixel
 // payloads anymore (the binary upload side-channel owns them), but a
 // packet that does include them still decodes.
-static NSImage *ZeroNativePacketCreateImage(NSDictionary *image) {
+static NSImage *NativeSdkPacketCreateImage(NSDictionary *image) {
     if (!image) return nil;
-    NSUInteger width = (NSUInteger)llround(ZeroNativePacketNumber(image[@"width"], 0));
-    NSUInteger height = (NSUInteger)llround(ZeroNativePacketNumber(image[@"height"], 0));
+    NSUInteger width = (NSUInteger)llround(NativeSdkPacketNumber(image[@"width"], 0));
+    NSUInteger height = (NSUInteger)llround(NativeSdkPacketNumber(image[@"height"], 0));
     if (width == 0 || height == 0) return nil;
     if (width > NSUIntegerMax / height || width * height > NSUIntegerMax / 4) return nil;
     NSUInteger byteLength = width * height * 4;
-    NSData *pixelData = ZeroNativePacketImagePixelData(ZeroNativePacketArray(image[@"pixels"], byteLength), byteLength);
-    return ZeroNativeCreateRGBA8Image(width, height, pixelData);
+    NSData *pixelData = NativeSdkPacketImagePixelData(NativeSdkPacketArray(image[@"pixels"], byteLength), byteLength);
+    return NativeSdkCreateRGBA8Image(width, height, pixelData);
 }
 
 // Apply the packet's image cache actions onto the view's cache, resolving
 // upload pixels from the host-wide side-channel store (uploaded through
-// `zero_native_appkit_upload_gpu_surface_image` before the packet was
+// `native_sdk_appkit_upload_gpu_surface_image` before the packet was
 // presented). Evictions run FIRST so an id re-registered under a new
 // content fingerprint (upload of the new key + evict of the old key in
 // one packet) keeps its freshly uploaded image — the per-view cache is
@@ -1497,31 +1497,31 @@ static NSImage *ZeroNativePacketCreateImage(NSDictionary *image) {
 // embedded pixels) is an ABSENT resource — "not registered (yet/anymore)"
 // is a legitimate transient state — so the cache entry is dropped and
 // draws referencing the id skip, exactly like the CPU reference renderer.
-static BOOL ZeroNativePacketApplyImageActions(NSArray *actions, NSArray *images, NSMutableDictionary<NSString *, NSImage *> *imageCache, NSDictionary<NSString *, NSImage *> *imageStore) {
+static BOOL NativeSdkPacketApplyImageActions(NSArray *actions, NSArray *images, NSMutableDictionary<NSString *, NSImage *> *imageCache, NSDictionary<NSString *, NSImage *> *imageStore) {
     if (!imageCache) return NO;
     for (id actionObject in actions ?: @[]) {
-        NSDictionary *action = ZeroNativePacketDictionary(actionObject);
+        NSDictionary *action = NativeSdkPacketDictionary(actionObject);
         if (!action) return NO;
         NSString *kind = [action[@"kind"] isKindOfClass:[NSString class]] ? action[@"kind"] : @"";
         if ([kind isEqualToString:@"evict"]) {
-            NSDictionary *key = ZeroNativePacketDictionary(action[@"key"]);
-            NSString *cacheKey = ZeroNativePacketImageCacheKey(key[@"imageId"]);
+            NSDictionary *key = NativeSdkPacketDictionary(action[@"key"]);
+            NSString *cacheKey = NativeSdkPacketImageCacheKey(key[@"imageId"]);
             if (cacheKey) [imageCache removeObjectForKey:cacheKey];
         } else if (![kind isEqualToString:@"upload"] && ![kind isEqualToString:@"retain"]) {
             return NO;
         }
     }
     for (id actionObject in actions ?: @[]) {
-        NSDictionary *action = ZeroNativePacketDictionary(actionObject);
+        NSDictionary *action = NativeSdkPacketDictionary(actionObject);
         NSString *kind = [action[@"kind"] isKindOfClass:[NSString class]] ? action[@"kind"] : @"";
         if (![kind isEqualToString:@"upload"]) continue;
         NSInteger imageIndex = [action[@"imageIndex"] respondsToSelector:@selector(integerValue)] ? [action[@"imageIndex"] integerValue] : -1;
         if (imageIndex < 0 || (NSUInteger)imageIndex >= images.count) return NO;
-        NSDictionary *image = ZeroNativePacketDictionary(images[(NSUInteger)imageIndex]);
-        NSString *cacheKey = ZeroNativePacketImageCacheKey(image[@"imageId"]);
+        NSDictionary *image = NativeSdkPacketDictionary(images[(NSUInteger)imageIndex]);
+        NSString *cacheKey = NativeSdkPacketImageCacheKey(image[@"imageId"]);
         if (!cacheKey) return NO;
         NSImage *resolved = imageStore ? imageStore[cacheKey] : nil;
-        if (!resolved) resolved = ZeroNativePacketCreateImage(image);
+        if (!resolved) resolved = NativeSdkPacketCreateImage(image);
         if (resolved) {
             imageCache[cacheKey] = resolved;
         } else {
@@ -1531,17 +1531,17 @@ static BOOL ZeroNativePacketApplyImageActions(NSArray *actions, NSArray *images,
     return YES;
 }
 
-static NSRect ZeroNativePacketImageSourceRect(NSDictionary *packetImage, NSImage *image) {
+static NSRect NativeSdkPacketImageSourceRect(NSDictionary *packetImage, NSImage *image) {
     NSRect full = NSMakeRect(0, 0, image.size.width, image.size.height);
-    NSArray *src = ZeroNativePacketArray(packetImage[@"src"], 4);
+    NSArray *src = NativeSdkPacketArray(packetImage[@"src"], 4);
     if (!src) return full;
-    NSRect requested = ZeroNativePacketNormalizedRect(ZeroNativePacketRect(src));
+    NSRect requested = NativeSdkPacketNormalizedRect(NativeSdkPacketRect(src));
     NSRect clipped = NSIntersectionRect(requested, full);
     return clipped;
 }
 
-static NSRect ZeroNativePacketImageDestinationRect(NSRect dst, NSRect src, NSString *fit) {
-    NSRect normalized = ZeroNativePacketNormalizedRect(dst);
+static NSRect NativeSdkPacketImageDestinationRect(NSRect dst, NSRect src, NSString *fit) {
+    NSRect normalized = NativeSdkPacketNormalizedRect(dst);
     if (normalized.size.width <= 0 || normalized.size.height <= 0 || src.size.width <= 0 || src.size.height <= 0) return NSZeroRect;
     if (![fit isEqualToString:@"contain"] && ![fit isEqualToString:@"cover"]) return normalized;
 
@@ -1570,9 +1570,9 @@ static NSRect ZeroNativePacketImageDestinationRect(NSRect dst, NSRect src, NSStr
     return NSMakeRect(normalized.origin.x + (normalized.size.width - width) * 0.5, normalized.origin.y + (normalized.size.height - height) * 0.5, width, height);
 }
 
-static BOOL ZeroNativePacketDrawImage(NSDictionary *packetImage, NSDictionary<NSString *, NSImage *> *imageCache, CGFloat opacity) {
+static BOOL NativeSdkPacketDrawImage(NSDictionary *packetImage, NSDictionary<NSString *, NSImage *> *imageCache, CGFloat opacity) {
     if (!packetImage || !imageCache) return NO;
-    NSString *cacheKey = ZeroNativePacketImageCacheKey(packetImage[@"image"]);
+    NSString *cacheKey = NativeSdkPacketImageCacheKey(packetImage[@"image"]);
     if (!cacheKey) return NO;
     NSImage *image = imageCache[cacheKey];
     // Absent image: the id is not registered (yet/anymore) — a legitimate
@@ -1580,26 +1580,26 @@ static BOOL ZeroNativePacketDrawImage(NSDictionary *packetImage, NSDictionary<NS
     // Skip the draw exactly like the CPU reference renderer instead of
     // failing the whole packet back to the software pixel path.
     if (!image) return YES;
-    NSRect src = ZeroNativePacketImageSourceRect(packetImage, image);
+    NSRect src = NativeSdkPacketImageSourceRect(packetImage, image);
     if (src.size.width <= 0 || src.size.height <= 0) return NO;
     NSString *fit = [packetImage[@"fit"] isKindOfClass:[NSString class]] ? packetImage[@"fit"] : @"stretch";
-    NSRect dst = ZeroNativePacketImageDestinationRect(ZeroNativePacketRect(packetImage[@"dst"]), src, fit);
+    NSRect dst = NativeSdkPacketImageDestinationRect(NativeSdkPacketRect(packetImage[@"dst"]), src, fit);
     if (dst.size.width <= 0 || dst.size.height <= 0) return NO;
 
-    CGFloat imageOpacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(packetImage[@"opacity"], 1)));
+    CGFloat imageOpacity = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(packetImage[@"opacity"], 1)));
     NSString *sampling = [packetImage[@"sampling"] isKindOfClass:[NSString class]] ? packetImage[@"sampling"] : @"linear";
     [NSGraphicsContext saveGraphicsState];
     /* Rounded-corner mask over the REQUESTED destination (the widget
      * frame) — the avatar circle clip; a `cover` fit expands `dst`, so
      * the mask uses the packet's original dst rect. */
-    NSArray *radius = ZeroNativePacketArray(packetImage[@"radius"], 4);
+    NSArray *radius = NativeSdkPacketArray(packetImage[@"radius"], 4);
     if (radius) {
         CGFloat maxCorner = 0;
         for (NSUInteger index = 0; index < 4; index += 1) {
-            maxCorner = fmax(maxCorner, ZeroNativePacketNumber(radius[index], 0));
+            maxCorner = fmax(maxCorner, NativeSdkPacketNumber(radius[index], 0));
         }
         if (maxCorner > 0) {
-            [ZeroNativePacketRoundedRectPath(ZeroNativePacketRect(ZeroNativePacketArray(packetImage[@"dst"], 4)), packetImage[@"radius"]) addClip];
+            [NativeSdkPacketRoundedRectPath(NativeSdkPacketRect(NativeSdkPacketArray(packetImage[@"dst"], 4)), packetImage[@"radius"]) addClip];
         }
     }
     [NSGraphicsContext.currentContext setImageInterpolation:[sampling isEqualToString:@"nearest"] ? NSImageInterpolationNone : NSImageInterpolationHigh];
@@ -1608,15 +1608,15 @@ static BOOL ZeroNativePacketDrawImage(NSDictionary *packetImage, NSDictionary<NS
     return YES;
 }
 
-static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef context, CGFloat scale, BOOL hasClip, NSRect clipRect, NSDictionary<NSString *, NSImage *> *imageCache) {
+static BOOL NativeSdkPacketDrawCommand(NSDictionary *command, CGContextRef context, CGFloat scale, BOOL hasClip, NSRect clipRect, NSDictionary<NSString *, NSImage *> *imageCache) {
     if (!command) return NO;
     if (hasClip) {
-        NSArray *bounds = ZeroNativePacketArray(command[@"bounds"], 4);
-        if (bounds && !ZeroNativePacketRectIntersects(ZeroNativePacketRect(bounds), clipRect)) return YES;
+        NSArray *bounds = NativeSdkPacketArray(command[@"bounds"], 4);
+        if (bounds && !NativeSdkPacketRectIntersects(NativeSdkPacketRect(bounds), clipRect)) return YES;
     }
 
     NSString *kind = [command[@"kind"] isKindOfClass:[NSString class]] ? command[@"kind"] : @"";
-    CGFloat opacity = fmax(0.0, fmin(1.0, ZeroNativePacketNumber(command[@"opacity"], 1)));
+    CGFloat opacity = fmax(0.0, fmin(1.0, NativeSdkPacketNumber(command[@"opacity"], 1)));
     id clip = command[@"clip"];
     BOOL hasEffectiveClip = hasClip;
     NSRect effectiveClip = clipRect;
@@ -1626,37 +1626,37 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         [NSBezierPath clipRect:clipRect];
     }
     if ([clip isKindOfClass:[NSArray class]]) {
-        NSRect commandClip = ZeroNativePacketRect(clip);
+        NSRect commandClip = NativeSdkPacketRect(clip);
         [NSBezierPath clipRect:commandClip];
         effectiveClip = hasEffectiveClip ? NSIntersectionRect(effectiveClip, commandClip) : commandClip;
         hasEffectiveClip = YES;
     }
-    if (!ZeroNativePacketApplyTransform(command[@"transform"])) {
+    if (!NativeSdkPacketApplyTransform(command[@"transform"])) {
         [NSGraphicsContext restoreGraphicsState];
         return NO;
     }
 
     BOOL ok = YES;
     if ([kind hasPrefix:@"fill_rect"] || [kind hasPrefix:@"fill_rounded_rect"]) {
-        ok = ZeroNativePacketDrawPaintedPath(ZeroNativePacketShapePath(ZeroNativePacketDictionary(command[@"shape"])), ZeroNativePacketDictionary(command[@"paint"]), opacity, NO);
+        ok = NativeSdkPacketDrawPaintedPath(NativeSdkPacketShapePath(NativeSdkPacketDictionary(command[@"shape"])), NativeSdkPacketDictionary(command[@"paint"]), opacity, NO);
     } else if ([kind hasPrefix:@"stroke_rect"]) {
-        NSBezierPath *path = ZeroNativePacketShapePath(ZeroNativePacketDictionary(command[@"shape"]));
-        path.lineWidth = MAX(1, ZeroNativePacketNumber(command[@"strokeWidth"], path.lineWidth));
-        ok = ZeroNativePacketDrawPaintedPath(path, ZeroNativePacketDictionary(command[@"paint"]), opacity, YES);
+        NSBezierPath *path = NativeSdkPacketShapePath(NativeSdkPacketDictionary(command[@"shape"]));
+        path.lineWidth = MAX(1, NativeSdkPacketNumber(command[@"strokeWidth"], path.lineWidth));
+        ok = NativeSdkPacketDrawPaintedPath(path, NativeSdkPacketDictionary(command[@"paint"]), opacity, YES);
     } else if ([kind hasPrefix:@"draw_line"]) {
-        ok = ZeroNativePacketDrawPaintedPath(ZeroNativePacketShapePath(ZeroNativePacketDictionary(command[@"shape"])), ZeroNativePacketDictionary(command[@"paint"]), opacity, YES);
+        ok = NativeSdkPacketDrawPaintedPath(NativeSdkPacketShapePath(NativeSdkPacketDictionary(command[@"shape"])), NativeSdkPacketDictionary(command[@"paint"]), opacity, YES);
     } else if ([kind isEqualToString:@"fill_path"]) {
-        ok = ZeroNativePacketDrawPaintedPath(ZeroNativePacketShapePath(ZeroNativePacketDictionary(command[@"shape"])), ZeroNativePacketDictionary(command[@"paint"]), opacity, NO);
+        ok = NativeSdkPacketDrawPaintedPath(NativeSdkPacketShapePath(NativeSdkPacketDictionary(command[@"shape"])), NativeSdkPacketDictionary(command[@"paint"]), opacity, NO);
     } else if ([kind isEqualToString:@"stroke_path"]) {
-        NSBezierPath *path = ZeroNativePacketShapePath(ZeroNativePacketDictionary(command[@"shape"]));
-        path.lineWidth = MAX(1, ZeroNativePacketNumber(command[@"strokeWidth"], path.lineWidth));
-        ok = ZeroNativePacketDrawPaintedPath(path, ZeroNativePacketDictionary(command[@"paint"]), opacity, YES);
+        NSBezierPath *path = NativeSdkPacketShapePath(NativeSdkPacketDictionary(command[@"shape"]));
+        path.lineWidth = MAX(1, NativeSdkPacketNumber(command[@"strokeWidth"], path.lineWidth));
+        ok = NativeSdkPacketDrawPaintedPath(path, NativeSdkPacketDictionary(command[@"paint"]), opacity, YES);
     } else if ([kind isEqualToString:@"draw_text"]) {
-        ok = ZeroNativePacketDrawText(ZeroNativePacketDictionary(command[@"text"]), opacity);
+        ok = NativeSdkPacketDrawText(NativeSdkPacketDictionary(command[@"text"]), opacity);
     } else if ([kind isEqualToString:@"shadow"] || [kind isEqualToString:@"blur"]) {
-        ok = ZeroNativePacketDrawEffect(ZeroNativePacketDictionary(command[@"effect"]), opacity, context, scale, command[@"transform"], hasEffectiveClip, effectiveClip);
+        ok = NativeSdkPacketDrawEffect(NativeSdkPacketDictionary(command[@"effect"]), opacity, context, scale, command[@"transform"], hasEffectiveClip, effectiveClip);
     } else if ([kind isEqualToString:@"draw_image"]) {
-        ok = ZeroNativePacketDrawImage(ZeroNativePacketDictionary(command[@"image"]), imageCache, opacity);
+        ok = NativeSdkPacketDrawImage(NativeSdkPacketDictionary(command[@"image"]), imageCache, opacity);
     } else {
         ok = NO;
     }
@@ -1665,7 +1665,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     return ok;
 }
 
-@implementation ZeroNativeScrollDriverDocumentView
+@implementation NativeSdkScrollDriverDocumentView
 
 - (BOOL)isFlipped {
     return YES;
@@ -1673,7 +1673,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 @end
 
-@implementation ZeroNativeScrollDriverView
+@implementation NativeSdkScrollDriverView
 
 - (NSView *)hitTest:(NSPoint)point {
     // Scroll-wheel events route to the driver through the ordinary hit
@@ -1695,7 +1695,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 @end
 
-@implementation ZeroNativeContextMenuTarget
+@implementation NativeSdkContextMenuTarget
 
 - (void)contextMenuItemClicked:(NSMenuItem *)item {
     NSNumber *value = item.representedObject;
@@ -1704,7 +1704,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 @end
 
-@implementation ZeroNativeMetalSurfaceView
+@implementation NativeSdkMetalSurfaceView
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
@@ -1744,13 +1744,13 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     return self;
 }
 
-- (void)configureWithHost:(ZeroNativeAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label {
+- (void)configureWithHost:(NativeSdkAppKitHost *)host windowId:(uint64_t)windowId label:(NSString *)label {
     self.host = host;
     self.windowId = windowId;
     self.surfaceLabel = label ?: @"";
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf updateDrawableSize];
         [strongSelf emitResizeEvent];
@@ -1944,22 +1944,22 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSData *packetData = [NSData dataWithBytes:json length:byteLength];
     NSError *jsonError = nil;
     id packetObject = [NSJSONSerialization JSONObjectWithData:packetData options:0 error:&jsonError];
-    NSDictionary *packet = ZeroNativePacketDictionary(packetObject);
+    NSDictionary *packet = NativeSdkPacketDictionary(packetObject);
     if (!packet || jsonError) return 0;
     NSString *loadAction = [packet[@"loadAction"] isKindOfClass:[NSString class]] ? packet[@"loadAction"] : @"";
     BOOL clearLoadAction = [loadAction isEqualToString:@"clear"];
     BOOL retainedLoadAction = [loadAction isEqualToString:@"load"];
     if (!clearLoadAction && !retainedLoadAction) return 0;
-    NSArray *commands = ZeroNativePacketArray(packet[@"commands"], 0);
+    NSArray *commands = NativeSdkPacketArray(packet[@"commands"], 0);
     if (!commands) return 0;
     if (commandCount != 0 && commands.count != commandCount) return 0;
-    NSArray *images = ZeroNativePacketArray(packet[@"images"], 0) ?: @[];
-    NSArray *imageActions = ZeroNativePacketArray(packet[@"imageActions"], 0) ?: @[];
+    NSArray *images = NativeSdkPacketArray(packet[@"images"], 0) ?: @[];
+    NSArray *imageActions = NativeSdkPacketArray(packet[@"imageActions"], 0) ?: @[];
     if (!self.canvasImageCache) self.canvasImageCache = [NSMutableDictionary dictionary];
-    if (!ZeroNativePacketApplyImageActions(imageActions, images, self.canvasImageCache, self.host.canvasImageStore)) return 0;
-    NSArray *scissor = ZeroNativePacketArray(packet[@"scissorBounds"], 4);
+    if (!NativeSdkPacketApplyImageActions(imageActions, images, self.canvasImageCache, self.host.canvasImageStore)) return 0;
+    NSArray *scissor = NativeSdkPacketArray(packet[@"scissorBounds"], 4);
     BOOL hasScissor = scissor != nil;
-    NSRect scissorRect = hasScissor ? ZeroNativePacketRect(scissor) : NSZeroRect;
+    NSRect scissorRect = hasScissor ? NativeSdkPacketRect(scissor) : NSZeroRect;
 
     NSUInteger byteLengthRequired = pixelWidth * pixelHeight * 4;
     NSMutableData *pixels = nil;
@@ -1997,8 +1997,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     BOOL supported = YES;
     for (id commandObject in commands) {
-        NSDictionary *command = ZeroNativePacketDictionary(commandObject);
-        if (!ZeroNativePacketDrawCommand(command, context, normalizedScale, hasScissor, scissorRect, self.canvasImageCache)) {
+        NSDictionary *command = NativeSdkPacketDictionary(commandObject);
+        if (!NativeSdkPacketDrawCommand(command, context, normalizedScale, hasScissor, scissorRect, self.canvasImageCache)) {
             supported = NO;
             break;
         }
@@ -2018,28 +2018,28 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     static NSString *shaderSource =
         @"#include <metal_stdlib>\n"
         @"using namespace metal;\n"
-        @"struct ZeroNativeCanvasVertexOut { float4 position [[position]]; float2 uv; };\n"
-        @"vertex ZeroNativeCanvasVertexOut zero_native_canvas_vertex(uint vertex_id [[vertex_id]]) {\n"
+        @"struct NativeSdkCanvasVertexOut { float4 position [[position]]; float2 uv; };\n"
+        @"vertex NativeSdkCanvasVertexOut native_sdk_canvas_vertex(uint vertex_id [[vertex_id]]) {\n"
         @"  constexpr float2 positions[4] = { float2(-1.0, -1.0), float2(1.0, -1.0), float2(-1.0, 1.0), float2(1.0, 1.0) };\n"
         @"  constexpr float2 uvs[4] = { float2(0.0, 1.0), float2(1.0, 1.0), float2(0.0, 0.0), float2(1.0, 0.0) };\n"
-        @"  ZeroNativeCanvasVertexOut out;\n"
+        @"  NativeSdkCanvasVertexOut out;\n"
         @"  out.position = float4(positions[vertex_id], 0.0, 1.0);\n"
         @"  out.uv = uvs[vertex_id];\n"
         @"  return out;\n"
         @"}\n"
-        @"fragment float4 zero_native_canvas_fragment(ZeroNativeCanvasVertexOut in [[stage_in]], texture2d<float> canvas_texture [[texture(0)]], sampler texture_sampler [[sampler(0)]]) {\n"
+        @"fragment float4 native_sdk_canvas_fragment(NativeSdkCanvasVertexOut in [[stage_in]], texture2d<float> canvas_texture [[texture(0)]], sampler texture_sampler [[sampler(0)]]) {\n"
         @"  return canvas_texture.sample(texture_sampler, in.uv);\n"
         @"}\n";
 
     NSError *libraryError = nil;
     id<MTLLibrary> library = [self.device newLibraryWithSource:shaderSource options:nil error:&libraryError];
     if (!library) return NO;
-    id<MTLFunction> vertexFunction = [library newFunctionWithName:@"zero_native_canvas_vertex"];
-    id<MTLFunction> fragmentFunction = [library newFunctionWithName:@"zero_native_canvas_fragment"];
+    id<MTLFunction> vertexFunction = [library newFunctionWithName:@"native_sdk_canvas_vertex"];
+    id<MTLFunction> fragmentFunction = [library newFunctionWithName:@"native_sdk_canvas_fragment"];
     if (!vertexFunction || !fragmentFunction) return NO;
 
     MTLRenderPipelineDescriptor *pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
-    pipelineDescriptor.label = @"zero-native canvas presenter";
+    pipelineDescriptor.label = @"native-sdk canvas presenter";
     pipelineDescriptor.vertexFunction = vertexFunction;
     pipelineDescriptor.fragmentFunction = fragmentFunction;
     pipelineDescriptor.colorAttachments[0].pixelFormat = self.metalLayer.pixelFormat;
@@ -2063,7 +2063,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     return YES;
 }
 
-- (void)updateWidgetAccessibilityWithNodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count {
+- (void)updateWidgetAccessibilityWithNodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count {
     if (!nodes || count == 0) {
         self.widgetAccessibilityElements = @[];
         NSAccessibilityPostNotification(self, NSAccessibilityLayoutChangedNotification);
@@ -2072,18 +2072,18 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     NSMutableArray<NSAccessibilityElement *> *elements = [NSMutableArray arrayWithCapacity:count];
     for (NSUInteger index = 0; index < count; index++) {
-        const zero_native_appkit_widget_accessibility_node_t node = nodes[index];
-        NSString *label = ZeroNativeStringFromBytes(node.label, node.label_len) ?: @"";
-        NSString *textValue = ZeroNativeStringFromBytes(node.text_value, node.text_value_len) ?: @"";
-        NSString *placeholder = ZeroNativeStringFromBytes(node.placeholder, node.placeholder_len) ?: @"";
+        const native_sdk_appkit_widget_accessibility_node_t node = nodes[index];
+        NSString *label = NativeSdkStringFromBytes(node.label, node.label_len) ?: @"";
+        NSString *textValue = NativeSdkStringFromBytes(node.text_value, node.text_value_len) ?: @"";
+        NSString *placeholder = NativeSdkStringFromBytes(node.placeholder, node.placeholder_len) ?: @"";
         NSString *name = label.length > 0 ? label : textValue;
-        ZeroNativeWidgetAccessibilityElement *element = [[ZeroNativeWidgetAccessibilityElement alloc] init];
+        NativeSdkWidgetAccessibilityElement *element = [[NativeSdkWidgetAccessibilityElement alloc] init];
         element.surfaceView = self;
         element.widgetId = node.id;
         element.actionFlags = node.action_flags;
         element.accessibilityParent = self;
-        element.accessibilityRole = ZeroNativeAccessibilityRoleForWidgetRole(node.role);
-        element.accessibilityIdentifier = [NSString stringWithFormat:@"zero-native-widget-%llu", node.id];
+        element.accessibilityRole = NativeSdkAccessibilityRoleForWidgetRole(node.role);
+        element.accessibilityIdentifier = [NSString stringWithFormat:@"native-sdk-widget-%llu", node.id];
         element.accessibilityLabel = name;
         if (node.has_value) {
             element.accessibilityValue = [NSString stringWithFormat:@"%.3f", node.value];
@@ -2101,7 +2101,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         }
         if (node.has_grid_row_index) {
             element.accessibilityRowIndexRange = NSMakeRange(node.grid_row_index, 1);
-            if (node.role == ZERO_NATIVE_APPKIT_WIDGET_ROLE_ROW) {
+            if (node.role == NATIVE_SDK_APPKIT_WIDGET_ROLE_ROW) {
                 element.accessibilityIndex = (NSInteger)node.grid_row_index;
             }
         }
@@ -2127,29 +2127,29 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             element.accessibilityNumberOfCharacters = (NSInteger)textValue.length;
             element.accessibilityVisibleCharacterRange = visibleRange;
             if (node.has_text_selection) {
-                NSRange selectedRange = ZeroNativeClampedRange(node.text_selection_start, node.text_selection_end, textValue.length);
+                NSRange selectedRange = NativeSdkClampedRange(node.text_selection_start, node.text_selection_end, textValue.length);
                 element.accessibilitySelectedTextRange = selectedRange;
                 element.accessibilitySelectedTextRanges = @[[NSValue valueWithRange:selectedRange]];
-                element.accessibilitySelectedText = ZeroNativeSubstringForRange(textValue, selectedRange);
+                element.accessibilitySelectedText = NativeSdkSubstringForRange(textValue, selectedRange);
                 element.accessibilityInsertionPointLineNumber = 0;
             }
         }
-        element.accessibilityEnabled = (node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_ENABLED) != 0;
-        element.accessibilityFocused = (node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_FOCUSED) != 0;
-        element.accessibilitySelected = (node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_SELECTED) != 0;
-        if ((node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_EXPANDED) != 0) {
+        element.accessibilityEnabled = (node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_ENABLED) != 0;
+        element.accessibilityFocused = (node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_FOCUSED) != 0;
+        element.accessibilitySelected = (node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_SELECTED) != 0;
+        if ((node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_EXPANDED) != 0) {
             element.accessibilityExpanded = YES;
-        } else if ((node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_COLLAPSED) != 0) {
+        } else if ((node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_COLLAPSED) != 0) {
             element.accessibilityExpanded = NO;
         }
         if ([element respondsToSelector:@selector(setAccessibilityRequired:)]) {
-            element.accessibilityRequired = (node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_REQUIRED) != 0;
+            element.accessibilityRequired = (node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_REQUIRED) != 0;
         }
         NSMutableArray<NSString *> *stateDescriptions = [NSMutableArray array];
-        if ((node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_READ_ONLY) != 0) {
+        if ((node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_READ_ONLY) != 0) {
             [stateDescriptions addObject:@"Read only"];
         }
-        if ((node.state_flags & ZERO_NATIVE_APPKIT_WIDGET_STATE_INVALID) != 0) {
+        if ((node.state_flags & NATIVE_SDK_APPKIT_WIDGET_STATE_INVALID) != 0) {
             [stateDescriptions addObject:@"Invalid"];
         }
         if (stateDescriptions.count > 0 && element.accessibilityValueDescription.length == 0) {
@@ -2171,15 +2171,15 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (void)requestRetainedCanvasFrame {
     if (!self.hasCanvasTexture || self.retainedFrameRequestPending) return;
     self.retainedFrameRequestPending = YES;
-    const uint64_t now = ZeroNativeTimestampNanoseconds();
-    const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    const uint64_t now = NativeSdkTimestampNanoseconds();
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
     uint64_t delayNs = 0;
     if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
         delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
     }
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf emitRetainedCanvasFrameRequest];
     });
@@ -2189,7 +2189,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.retainedFrameRequestPending = NO;
     if (![self isAvailable] || self.hidden || !self.hasCanvasTexture || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
     [self updateDrawableSize];
-    self.retainedFrameLastEmitNs = ZeroNativeTimestampNanoseconds();
+    self.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
     const NSUInteger requestedFrameIndex = self.frameIndex;
     self.frameIndex += 1;
     const BOOL nonblank = self.verifiedNonblankFrame || self.hasCanvasTexture;
@@ -2223,17 +2223,17 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         self.glassFlushPending = YES;
         const NSUInteger completedFrameIndex = self.frameIndex;
         self.frameIndex += 1;
-        const uint64_t now = ZeroNativeTimestampNanoseconds();
-        const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+        const uint64_t now = NativeSdkTimestampNanoseconds();
+        const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
         uint64_t delayNs = 0;
         if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
             delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
         }
-        __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+        __weak NativeSdkMetalSurfaceView *weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-            ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+            NativeSdkMetalSurfaceView *strongSelf = weakSelf;
             if (!strongSelf) return;
-            strongSelf.retainedFrameLastEmitNs = ZeroNativeTimestampNanoseconds();
+            strongSelf.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
             const BOOL nonblank = strongSelf.verifiedNonblankFrame || strongSelf.hasCanvasTexture;
             const uint32_t sampleColor = strongSelf.verifiedNonblankFrame ? strongSelf.lastSampleColor : 0;
             [strongSelf emitFrameEventWithFrameIndex:completedFrameIndex sampleColor:sampleColor nonblank:nonblank];
@@ -2286,7 +2286,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
 
     const NSUInteger completedFrameIndex = self.frameIndex;
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
         (void)completedBuffer;
         uint32_t sampleColor = 0;
@@ -2297,7 +2297,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             nonblank = bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 0;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+            NativeSdkMetalSurfaceView *strongSelf = weakSelf;
             if (!strongSelf) return;
             BOOL eventNonblank = nonblank;
             uint32_t eventSampleColor = sampleColor;
@@ -2342,67 +2342,67 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         // macOS convention: ctrl-click is a context click. Report it as
         // the secondary button so the runtime presents the context menu.
         self.controlClickActive = YES;
-        [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:1 deltaX:0 deltaY:0];
+        [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:1 deltaX:0 deltaY:0];
         return;
     }
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:0 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:0 deltaX:0 deltaY:0];
 }
 
 - (void)mouseUp:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
     if (self.controlClickActive) {
         self.controlClickActive = NO;
-        [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_UP event:event button:1 deltaX:0 deltaY:0];
+        [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_UP event:event button:1 deltaX:0 deltaY:0];
         return;
     }
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_UP event:event button:0 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_UP event:event button:0 deltaX:0 deltaY:0];
 }
 
 - (void)mouseMoved:(NSEvent *)event {
-    [self queuePointerMotionInputEvent:event kind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_MOVE button:0];
+    [self queuePointerMotionInputEvent:event kind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_MOVE button:0];
 }
 
 - (void)mouseExited:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_CANCEL event:event button:0 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_CANCEL event:event button:0 deltaX:0 deltaY:0];
 }
 
 - (void)mouseDragged:(NSEvent *)event {
-    [self queuePointerMotionInputEvent:event kind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DRAG button:0];
+    [self queuePointerMotionInputEvent:event kind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DRAG button:0];
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
     [self.window makeFirstResponder:self];
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:1 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:1 deltaX:0 deltaY:0];
 }
 
 - (void)rightMouseUp:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_UP event:event button:1 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_UP event:event button:1 deltaX:0 deltaY:0];
 }
 
 - (void)rightMouseDragged:(NSEvent *)event {
-    [self queuePointerMotionInputEvent:event kind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DRAG button:1];
+    [self queuePointerMotionInputEvent:event kind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DRAG button:1];
 }
 
 - (void)otherMouseDown:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
     [self.window makeFirstResponder:self];
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:(NSInteger)event.buttonNumber deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DOWN event:event button:(NSInteger)event.buttonNumber deltaX:0 deltaY:0];
 }
 
 - (void)otherMouseUp:(NSEvent *)event {
     [self emitQueuedPointerMotionInputEvent];
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_UP event:event button:(NSInteger)event.buttonNumber deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_UP event:event button:(NSInteger)event.buttonNumber deltaX:0 deltaY:0];
 }
 
 - (void)otherMouseDragged:(NSEvent *)event {
-    [self queuePointerMotionInputEvent:event kind:ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_DRAG button:(NSInteger)event.buttonNumber];
+    [self queuePointerMotionInputEvent:event kind:NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_DRAG button:(NSInteger)event.buttonNumber];
 }
 
 - (void)scrollWheel:(NSEvent *)event {
-    ZeroNativeScrollDriverView *driver = [self scrollDriverForWheelEvent:event];
+    NativeSdkScrollDriverView *driver = [self scrollDriverForWheelEvent:event];
     if (driver) {
         // The OS scroller owns input + physics for this region (momentum,
         // rubber-band, overlay scroller); the resulting contentOffset
@@ -2418,24 +2418,24 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         self.interpretedKeyEventEmittedInput = NO;
         [self interpretKeyEvents:@[event]];
         if (!self.interpretedKeyEventEmittedInput) {
-            [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
+            [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
         }
         self.interpretedKeyEventEmittedInput = NO;
         return;
     }
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_KEY_DOWN event:event button:0 deltaX:0 deltaY:0];
     [self interpretKeyEvents:@[event]];
 }
 
 - (void)keyUp:(NSEvent *)event {
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP event:event button:0 deltaX:0 deltaY:0];
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_KEY_UP event:event button:0 deltaX:0 deltaY:0];
 }
 
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank {
     if (!self.host || self.surfaceLabel.length == 0) return;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_FRAME,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_FRAME,
         .window_id = self.windowId,
         .width = self.bounds.size.width,
         .height = self.bounds.size.height,
@@ -2443,8 +2443,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .frame_index = frameIndex,
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
-        .frame_interval_ns = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
+        .frame_interval_ns = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen),
         .nonblank = nonblank ? 1 : 0,
         .sample_color = sampleColor,
     }];
@@ -2455,8 +2455,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     if (!self.host || self.surfaceLabel.length == 0) return;
     CGFloat y = self.superview ? (self.superview.bounds.size.height - NSMaxY(self.frame)) : self.frame.origin.y;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_RESIZE,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_RESIZE,
         .window_id = self.windowId,
         .x = self.frame.origin.x,
         .y = y,
@@ -2471,12 +2471,12 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY {
     if (!self.host || self.surfaceLabel.length == 0) return;
     NSPoint point = event ? [self convertPoint:event.locationInWindow fromView:nil] : NSMakePoint(0, 0);
-    BOOL keyEvent = kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN || kind == ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_UP;
-    NSString *keyText = keyEvent && event ? ZeroNativeShortcutKeyForEvent(event) : @"";
+    BOOL keyEvent = kind == NATIVE_SDK_APPKIT_GPU_INPUT_KEY_DOWN || kind == NATIVE_SDK_APPKIT_GPU_INPUT_KEY_UP;
+    NSString *keyText = keyEvent && event ? NativeSdkShortcutKeyForEvent(event) : @"";
     [self emitInputEventWithKind:kind
                            point:point
-                     timestampNs:ZeroNativeTimestampNanoseconds()
-                       modifiers:event ? ZeroNativeModifierFlagsForEvent(event) : 0
+                     timestampNs:NativeSdkTimestampNanoseconds()
+                       modifiers:event ? NativeSdkModifierFlagsForEvent(event) : 0
                          keyText:keyText
                        inputText:@""
                           button:button
@@ -2489,20 +2489,20 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.pendingPointerMotionKind = kind;
     self.pendingPointerMotionPoint = [self convertPoint:event.locationInWindow fromView:nil];
     self.pendingPointerMotionButton = button;
-    self.pendingPointerMotionModifiers = ZeroNativeModifierFlagsForEvent(event);
-    self.pendingPointerMotionTimestampNs = ZeroNativeTimestampNanoseconds();
+    self.pendingPointerMotionModifiers = NativeSdkModifierFlagsForEvent(event);
+    self.pendingPointerMotionTimestampNs = NativeSdkTimestampNanoseconds();
     if (self.pointerMotionInputPending) return;
     self.pointerMotionInputPending = YES;
 
     const uint64_t now = self.pendingPointerMotionTimestampNs;
-    const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
     uint64_t delayNs = 0;
     if (self.pointerMotionInputLastEmitNs > 0 && now < self.pointerMotionInputLastEmitNs + frameIntervalNs) {
         delayNs = self.pointerMotionInputLastEmitNs + frameIntervalNs - now;
     }
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf emitQueuedPointerMotionInputEvent];
     });
@@ -2514,13 +2514,13 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     const NSPoint point = self.pendingPointerMotionPoint;
     const NSInteger button = self.pendingPointerMotionButton;
     const uint32_t modifiers = self.pendingPointerMotionModifiers;
-    const uint64_t timestampNs = self.pendingPointerMotionTimestampNs > 0 ? self.pendingPointerMotionTimestampNs : ZeroNativeTimestampNanoseconds();
+    const uint64_t timestampNs = self.pendingPointerMotionTimestampNs > 0 ? self.pendingPointerMotionTimestampNs : NativeSdkTimestampNanoseconds();
     self.pointerMotionInputPending = NO;
     self.pendingPointerMotionKind = 0;
     self.pendingPointerMotionButton = 0;
     self.pendingPointerMotionModifiers = 0;
     self.pendingPointerMotionTimestampNs = 0;
-    self.pointerMotionInputLastEmitNs = ZeroNativeTimestampNanoseconds();
+    self.pointerMotionInputLastEmitNs = NativeSdkTimestampNanoseconds();
     [self emitInputEventWithKind:kind
                            point:point
                      timestampNs:timestampNs
@@ -2538,20 +2538,20 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.pendingScrollPoint = [self convertPoint:event.locationInWindow fromView:nil];
     self.pendingScrollDeltaX += deltaX;
     self.pendingScrollDeltaY += deltaY;
-    self.pendingScrollModifiers = ZeroNativeModifierFlagsForEvent(event);
-    self.pendingScrollTimestampNs = ZeroNativeTimestampNanoseconds();
+    self.pendingScrollModifiers = NativeSdkModifierFlagsForEvent(event);
+    self.pendingScrollTimestampNs = NativeSdkTimestampNanoseconds();
     if (self.scrollInputPending) return;
     self.scrollInputPending = YES;
 
     const uint64_t now = self.pendingScrollTimestampNs;
-    const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
     uint64_t delayNs = 0;
     if (self.scrollInputLastEmitNs > 0 && now < self.scrollInputLastEmitNs + frameIntervalNs) {
         delayNs = self.scrollInputLastEmitNs + frameIntervalNs - now;
     }
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf emitQueuedScrollInputEvent];
     });
@@ -2563,15 +2563,15 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     const double deltaX = self.pendingScrollDeltaX;
     const double deltaY = self.pendingScrollDeltaY;
     const uint32_t modifiers = self.pendingScrollModifiers;
-    const uint64_t timestampNs = self.pendingScrollTimestampNs > 0 ? self.pendingScrollTimestampNs : ZeroNativeTimestampNanoseconds();
+    const uint64_t timestampNs = self.pendingScrollTimestampNs > 0 ? self.pendingScrollTimestampNs : NativeSdkTimestampNanoseconds();
     self.scrollInputPending = NO;
     self.pendingScrollDeltaX = 0;
     self.pendingScrollDeltaY = 0;
     self.pendingScrollModifiers = 0;
     self.pendingScrollTimestampNs = 0;
     if (deltaX == 0 && deltaY == 0) return;
-    self.scrollInputLastEmitNs = ZeroNativeTimestampNanoseconds();
-    [self emitInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_SCROLL
+    self.scrollInputLastEmitNs = NativeSdkTimestampNanoseconds();
+    [self emitInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_SCROLL
                            point:point
                      timestampNs:timestampNs
                        modifiers:modifiers
@@ -2590,10 +2590,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 // the clip view's bounds origin y IS the canvas scroll offset, reported
 // back per frame interval through GPU_SURFACE_SCROLL_DRIVER events.
 
-- (void)setScrollDrivers:(const zero_native_appkit_scroll_driver_t *)drivers count:(NSUInteger)count {
+- (void)setScrollDrivers:(const native_sdk_appkit_scroll_driver_t *)drivers count:(NSUInteger)count {
     if (!self.scrollDrivers) self.scrollDrivers = [[NSMutableArray alloc] init];
     for (NSInteger index = (NSInteger)self.scrollDrivers.count - 1; index >= 0; index -= 1) {
-        ZeroNativeScrollDriverView *driver = self.scrollDrivers[(NSUInteger)index];
+        NativeSdkScrollDriverView *driver = self.scrollDrivers[(NSUInteger)index];
         BOOL present = NO;
         for (NSUInteger spec = 0; spec < count; spec += 1) {
             if (drivers[spec].driver_id == driver.driverId) {
@@ -2607,9 +2607,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         [self.scrollDrivers removeObjectAtIndex:(NSUInteger)index];
     }
     for (NSUInteger spec = 0; spec < count; spec += 1) {
-        const zero_native_appkit_scroll_driver_t desired = drivers[spec];
-        ZeroNativeScrollDriverView *driver = nil;
-        for (ZeroNativeScrollDriverView *candidate in self.scrollDrivers) {
+        const native_sdk_appkit_scroll_driver_t desired = drivers[spec];
+        NativeSdkScrollDriverView *driver = nil;
+        for (NativeSdkScrollDriverView *candidate in self.scrollDrivers) {
             if (candidate.driverId == desired.driver_id) {
                 driver = candidate;
                 break;
@@ -2618,7 +2618,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         BOOL created = NO;
         if (!driver) {
             created = YES;
-            driver = [[ZeroNativeScrollDriverView alloc] initWithFrame:NSMakeRect(0, 0, MAX(desired.width, 1), MAX(desired.height, 1))];
+            driver = [[NativeSdkScrollDriverView alloc] initWithFrame:NSMakeRect(0, 0, MAX(desired.width, 1), MAX(desired.height, 1))];
             driver.driverId = desired.driver_id;
             driver.drawsBackground = NO;
             driver.hasVerticalScroller = YES;
@@ -2628,7 +2628,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             driver.verticalScrollElasticity = NSScrollElasticityAllowed;
             driver.horizontalScrollElasticity = NSScrollElasticityNone;
             driver.automaticallyAdjustsContentInsets = NO;
-            ZeroNativeScrollDriverDocumentView *document = [[ZeroNativeScrollDriverDocumentView alloc] initWithFrame:NSMakeRect(0, 0, MAX(desired.content_width, 1), MAX(desired.content_height, 1))];
+            NativeSdkScrollDriverDocumentView *document = [[NativeSdkScrollDriverDocumentView alloc] initWithFrame:NSMakeRect(0, 0, MAX(desired.content_width, 1), MAX(desired.content_height, 1))];
             driver.documentView = document;
             driver.contentView.postsBoundsChangedNotifications = YES;
             [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(scrollDriverBoundsDidChange:) name:NSViewBoundsDidChangeNotification object:driver.contentView];
@@ -2647,24 +2647,24 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
 }
 
-- (void)applyScrollDriverOffset:(ZeroNativeScrollDriverView *)driver offsetY:(double)offsetY {
+- (void)applyScrollDriverOffset:(NativeSdkScrollDriverView *)driver offsetY:(double)offsetY {
     self.applyingScrollDriverOffset = YES;
     [driver.contentView setBoundsOrigin:NSMakePoint(0, offsetY)];
     [driver reflectScrolledClipView:driver.contentView];
     self.applyingScrollDriverOffset = NO;
 }
 
-- (ZeroNativeScrollDriverView *)scrollDriverForPoint:(NSPoint)viewPoint {
+- (NativeSdkScrollDriverView *)scrollDriverForPoint:(NSPoint)viewPoint {
     // Driver specs arrive in layout pre-order, so the LAST hit is the
     // deepest scroll region under the pointer.
-    ZeroNativeScrollDriverView *result = nil;
-    for (ZeroNativeScrollDriverView *driver in self.scrollDrivers) {
+    NativeSdkScrollDriverView *result = nil;
+    for (NativeSdkScrollDriverView *driver in self.scrollDrivers) {
         if (NSPointInRect(viewPoint, driver.frame)) result = driver;
     }
     return result;
 }
 
-- (ZeroNativeScrollDriverView *)scrollDriverForWheelEvent:(NSEvent *)event {
+- (NativeSdkScrollDriverView *)scrollDriverForWheelEvent:(NSEvent *)event {
     if (self.scrollDrivers.count == 0) return nil;
     const BOOL legacy = event.phase == NSEventPhaseNone && event.momentumPhase == NSEventPhaseNone;
     if (legacy) {
@@ -2675,7 +2675,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         // keeps scrolling it after the pointer wanders.
         self.activeWheelDriver = [self scrollDriverForPoint:[self convertPoint:event.locationInWindow fromView:nil]];
     }
-    ZeroNativeScrollDriverView *driver = self.activeWheelDriver;
+    NativeSdkScrollDriverView *driver = self.activeWheelDriver;
     if (event.momentumPhase == NSEventPhaseEnded || event.momentumPhase == NSEventPhaseCancelled) {
         self.activeWheelDriver = nil;
     }
@@ -2685,7 +2685,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (void)scrollDriverBoundsDidChange:(NSNotification *)note {
     if (self.applyingScrollDriverOffset) return;
     NSClipView *clipView = note.object;
-    for (ZeroNativeScrollDriverView *driver in self.scrollDrivers) {
+    for (NativeSdkScrollDriverView *driver in self.scrollDrivers) {
         if (driver.contentView != clipView) continue;
         [self queueScrollDriverEventWithId:driver.driverId offsetY:clipView.bounds.origin.y];
         return;
@@ -2702,15 +2702,15 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     if (self.scrollDriverEventPending) return;
     self.scrollDriverEventPending = YES;
 
-    const uint64_t now = ZeroNativeTimestampNanoseconds();
-    const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    const uint64_t now = NativeSdkTimestampNanoseconds();
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
     uint64_t delayNs = 0;
     if (self.scrollDriverEventLastEmitNs > 0 && now < self.scrollDriverEventLastEmitNs + frameIntervalNs) {
         delayNs = self.scrollDriverEventLastEmitNs + frameIntervalNs - now;
     }
-    __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf emitQueuedScrollDriverEvent];
     });
@@ -2722,14 +2722,14 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     const double offsetY = self.pendingScrollDriverOffsetY;
     self.scrollDriverEventPending = NO;
     if (!self.host || self.surfaceLabel.length == 0) return;
-    self.scrollDriverEventLastEmitNs = ZeroNativeTimestampNanoseconds();
+    self.scrollDriverEventLastEmitNs = NativeSdkTimestampNanoseconds();
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_SCROLL_DRIVER,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_SCROLL_DRIVER,
         .window_id = self.windowId,
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
         .widget_id = driverId,
         .scroll_driver_offset_y = offsetY,
     }];
@@ -2743,8 +2743,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSString *safeInputText = inputText ?: @"";
     const char *keyBytes = safeKeyText.UTF8String ?: "";
     const char *inputBytes = safeInputText.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_INPUT,
         .window_id = self.windowId,
         .timestamp_ns = timestampNs,
         .x = point.x,
@@ -2769,22 +2769,22 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.interpretedKeyEventEmittedInput = YES;
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     const char *keyBytes = key.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_INPUT,
         .window_id = self.windowId,
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .key_text = keyBytes,
         .key_text_len = [key lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .shortcut_modifiers = modifiers,
-        .input_kind = ZERO_NATIVE_APPKIT_GPU_INPUT_KEY_DOWN,
+        .input_kind = NATIVE_SDK_APPKIT_GPU_INPUT_KEY_DOWN,
     }];
     [self requestRetainedCanvasFrame];
 }
 
 - (void)emitSelectAllTextInputCommand {
-    [self emitSyntheticKeyDownWithKey:@"a" modifiers:(ZeroNativeShortcutModifierPrimary | ZeroNativeShortcutModifierCommand)];
+    [self emitSyntheticKeyDownWithKey:@"a" modifiers:(NativeSdkShortcutModifierPrimary | NativeSdkShortcutModifierCommand)];
 }
 
 - (void)emitTextInputEventWithKind:(NSInteger)kind text:(NSString *)text compositionCursor:(NSInteger)compositionCursor {
@@ -2794,10 +2794,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     const char *inputBytes = inputText.UTF8String ?: "";
     BOOL hasCompositionCursor = compositionCursor >= 0;
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_GPU_SURFACE_INPUT,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_GPU_SURFACE_INPUT,
         .window_id = self.windowId,
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .input_text = inputBytes,
@@ -2823,14 +2823,14 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 - (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
     (void)replacementRange;
-    NSString *text = ZeroNativeStringFromTextInput(string);
+    NSString *text = NativeSdkStringFromTextInput(string);
     BOOL hadMarkedText = [self hasMarkedText];
     if (text.length == 0) {
         self.markedText = @"";
         self.markedTextRange = NSMakeRange(NSNotFound, 0);
         self.selectedTextRange = NSMakeRange(0, 0);
         if (hadMarkedText) {
-            [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
+            [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
         }
         return;
     }
@@ -2844,7 +2844,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
     self.markedText = text;
     self.markedTextRange = NSMakeRange(0, text.length);
-    [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION text:text compositionCursor:(NSInteger)cursor];
+    [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_IME_SET_COMPOSITION text:text compositionCursor:(NSInteger)cursor];
 }
 
 - (void)unmarkText {
@@ -2853,7 +2853,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.markedTextRange = NSMakeRange(NSNotFound, 0);
     self.selectedTextRange = NSMakeRange(0, 0);
     if (hadMarkedText) {
-        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
+        [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
     }
 }
 
@@ -2922,7 +2922,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 - (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
     (void)replacementRange;
-    NSString *text = ZeroNativeStringFromTextInput(string);
+    NSString *text = NativeSdkStringFromTextInput(string);
     if (text.length == 0) return;
 
     BOOL hadMarkedText = [self hasMarkedText];
@@ -2932,13 +2932,13 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.selectedTextRange = NSMakeRange(text.length, 0);
 
     if (hadMarkedText && [markedText isEqualToString:text]) {
-        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
+        [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION text:@"" compositionCursor:-1];
         return;
     }
     if (hadMarkedText) {
-        [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
+        [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION text:@"" compositionCursor:-1];
     }
-    [self emitTextInputEventWithKind:ZERO_NATIVE_APPKIT_GPU_INPUT_TEXT_INPUT text:text compositionCursor:-1];
+    [self emitTextInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_TEXT_INPUT text:text compositionCursor:-1];
 }
 
 - (void)selectAll:(id)sender {
@@ -2962,21 +2962,21 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     } else if (selector == @selector(moveDown:)) {
         [self emitSyntheticKeyDownWithKey:@"arrowdown" modifiers:0];
     } else if (selector == @selector(moveLeftAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"arrowleft" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"arrowleft" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(moveRightAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"arrowright" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"arrowright" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(moveUpAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"arrowup" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"arrowup" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(moveDownAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"arrowdown" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"arrowdown" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(moveToBeginningOfLine:)) {
         [self emitSyntheticKeyDownWithKey:@"home" modifiers:0];
     } else if (selector == @selector(moveToEndOfLine:)) {
         [self emitSyntheticKeyDownWithKey:@"end" modifiers:0];
     } else if (selector == @selector(moveToBeginningOfLineAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"home" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"home" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(moveToEndOfLineAndModifySelection:)) {
-        [self emitSyntheticKeyDownWithKey:@"end" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"end" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(selectAll:)) {
         [self emitSelectAllTextInputCommand];
     } else if (selector == @selector(insertNewline:)) {
@@ -2984,7 +2984,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     } else if (selector == @selector(insertTab:)) {
         [self emitSyntheticKeyDownWithKey:@"tab" modifiers:0];
     } else if (selector == @selector(insertBacktab:)) {
-        [self emitSyntheticKeyDownWithKey:@"tab" modifiers:ZeroNativeShortcutModifierShift];
+        [self emitSyntheticKeyDownWithKey:@"tab" modifiers:NativeSdkShortcutModifierShift];
     } else if (selector == @selector(cancelOperation:)) {
         [self emitSyntheticKeyDownWithKey:@"escape" modifiers:0];
     }
@@ -3003,10 +3003,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     const char *labelBytes = self.surfaceLabel.UTF8String ?: "";
     NSString *payloadText = text ?: @"";
     const char *textBytes = payloadText.UTF8String ?: "";
-    [self.host emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_WIDGET_ACCESSIBILITY_ACTION,
+    [self.host emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_WIDGET_ACCESSIBILITY_ACTION,
         .window_id = self.windowId,
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
         .view_label = labelBytes,
         .view_label_len = [self.surfaceLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .widget_id = widgetId,
@@ -3015,7 +3015,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         .widget_text_len = [payloadText lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
         .has_widget_text_selection = hasSelectedRange ? 1 : 0,
         .widget_text_selection_start = hasSelectedRange ? selectedRange.location : 0,
-        .widget_text_selection_end = hasSelectedRange ? ZeroNativeRangeEnd(selectedRange) : 0,
+        .widget_text_selection_end = hasSelectedRange ? NativeSdkRangeEnd(selectedRange) : 0,
     }];
     [self requestRetainedCanvasFrame];
     return YES;
@@ -3023,7 +3023,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 @end
 
-@implementation ZeroNativeAssetSchemeHandler
+@implementation NativeSdkAssetSchemeHandler
 
 - (instancetype)init {
     self = [super init];
@@ -3035,14 +3035,14 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 }
 
 - (void)configureWithRootPath:(NSString *)rootPath entryPath:(NSString *)entryPath spaFallback:(BOOL)spaFallback {
-    self.rootPath = ZeroNativeResolvedAssetRoot(rootPath ?: @"");
+    self.rootPath = NativeSdkResolvedAssetRoot(rootPath ?: @"");
     self.entryPath = entryPath.length > 0 ? entryPath : @"index.html";
     self.spaFallback = spaFallback;
 }
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
     (void)webView;
-    NSString *relativePath = ZeroNativeSafeAssetPath(urlSchemeTask.request.URL, self.entryPath);
+    NSString *relativePath = NativeSdkSafeAssetPath(urlSchemeTask.request.URL, self.entryPath);
     if (!relativePath) {
         NSError *error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadURL userInfo:nil];
         [urlSchemeTask didFailWithError:error];
@@ -3065,7 +3065,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
 
     NSURLResponse *response = [[NSURLResponse alloc] initWithURL:urlSchemeTask.request.URL
-                                                        MIMEType:ZeroNativeMimeTypeForPath(filePath)
+                                                        MIMEType:NativeSdkMimeTypeForPath(filePath)
                                            expectedContentLength:(NSInteger)data.length
                                                 textEncodingName:nil];
     [urlSchemeTask didReceiveResponse:response];
@@ -3080,10 +3080,10 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 @end
 
-@implementation ZeroNativeShortcut
+@implementation NativeSdkShortcut
 @end
 
-@implementation ZeroNativeAppKitHost
+@implementation NativeSdkAppKitHost
 
 - (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame {
     self = [super init];
@@ -3093,9 +3093,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-    ZeroNativeRegisterBundledFonts();
-    self.appName = appName.length > 0 ? appName : @"zero-native";
-    self.bundleIdentifier = bundleIdentifier.length > 0 ? bundleIdentifier : @"dev.zero_native.app";
+    NativeSdkRegisterBundledFonts();
+    self.appName = appName.length > 0 ? appName : @"native-sdk";
+    self.bundleIdentifier = bundleIdentifier.length > 0 ? bundleIdentifier : @"dev.native_sdk.app";
     self.iconPath = iconPath ?: @"";
     self.windowLabel = windowLabel.length > 0 ? windowLabel : @"main";
     self.windows = [[NSMutableDictionary alloc] init];
@@ -3147,15 +3147,15 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    ZeroNativeAssetSchemeHandler *assetSchemeHandler = [[ZeroNativeAssetSchemeHandler alloc] init];
+    NativeSdkAssetSchemeHandler *assetSchemeHandler = [[NativeSdkAssetSchemeHandler alloc] init];
     [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"zero"];
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
-    ZeroNativeBridgeScriptHandler *bridgeScriptHandler = [[ZeroNativeBridgeScriptHandler alloc] init];
+    NativeSdkBridgeScriptHandler *bridgeScriptHandler = [[NativeSdkBridgeScriptHandler alloc] init];
     bridgeScriptHandler.host = self;
     bridgeScriptHandler.windowId = windowId;
     bridgeScriptHandler.webViewLabel = @"main";
-    [userContentController addScriptMessageHandler:bridgeScriptHandler name:@"zeroNativeBridge"];
-    WKUserScript *bridgeScript = [[WKUserScript alloc] initWithSource:ZeroNativeAppKitBridgeScript()
+    [userContentController addScriptMessageHandler:bridgeScriptHandler name:@"nativeSdkBridge"];
+    WKUserScript *bridgeScript = [[WKUserScript alloc] initWithSource:NativeSdkAppKitBridgeScript()
                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                      forMainFrameOnly:YES];
     [userContentController addUserScript:bridgeScript];
@@ -3165,9 +3165,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
     NSView *container = [[NSView alloc] initWithFrame:rect];
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    WKWebView *webView = [[ZeroNativeWebView alloc] initWithFrame:container.bounds configuration:configuration];
-    ((ZeroNativeWebView *)webView).host = self;
-    ((ZeroNativeWebView *)webView).windowId = windowId;
+    WKWebView *webView = [[NativeSdkWebView alloc] initWithFrame:container.bounds configuration:configuration];
+    ((NativeSdkWebView *)webView).host = self;
+    ((NativeSdkWebView *)webView).windowId = windowId;
     [webView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     webView.wantsLayer = YES;
     webView.layer.zPosition = 0;
@@ -3181,7 +3181,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     [container addSubview:webView positioned:NSWindowAbove relativeTo:nil];
     window.contentView = container;
 
-    ZeroNativeWindowDelegate *delegate = [[ZeroNativeWindowDelegate alloc] init];
+    NativeSdkWindowDelegate *delegate = [[NativeSdkWindowDelegate alloc] init];
     delegate.host = self;
     delegate.windowId = windowId;
     window.delegate = delegate;
@@ -3217,7 +3217,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
     [self removeAllChildBridgeHandlers];
     for (WKWebView *webView in self.webViews.allValues) {
-        [webView.configuration.userContentController removeScriptMessageHandlerForName:@"zeroNativeBridge"];
+        [webView.configuration.userContentController removeScriptMessageHandlerForName:@"nativeSdkBridge"];
     }
 }
 
@@ -3248,7 +3248,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     return self.webView;
 }
 
-- (ZeroNativeAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId {
+- (NativeSdkAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId {
     return self.assetSchemeHandlers[@(windowId)] ?: self.assetSchemeHandler;
 }
 
@@ -3284,37 +3284,37 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSString *displayText = text.length > 0 ? text : (role.length > 0 ? role : (label ?: @""));
     NSView *view = nil;
     switch (kind) {
-        case ZERO_NATIVE_APPKIT_VIEW_TOOLBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_TITLEBAR_ACCESSORY:
-        case ZERO_NATIVE_APPKIT_VIEW_STATUSBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_SIDEBAR:
-        case ZERO_NATIVE_APPKIT_VIEW_SPLIT:
-        case ZERO_NATIVE_APPKIT_VIEW_STACK:
-        case ZERO_NATIVE_APPKIT_VIEW_SPACER: {
+        case NATIVE_SDK_APPKIT_VIEW_TOOLBAR:
+        case NATIVE_SDK_APPKIT_VIEW_TITLEBAR_ACCESSORY:
+        case NATIVE_SDK_APPKIT_VIEW_STATUSBAR:
+        case NATIVE_SDK_APPKIT_VIEW_SIDEBAR:
+        case NATIVE_SDK_APPKIT_VIEW_SPLIT:
+        case NATIVE_SDK_APPKIT_VIEW_STACK:
+        case NATIVE_SDK_APPKIT_VIEW_SPACER: {
             view = [[NSView alloc] initWithFrame:NSZeroRect];
             view.wantsLayer = YES;
             NSColor *color = NSColor.clearColor;
-            if (kind == ZERO_NATIVE_APPKIT_VIEW_TOOLBAR || kind == ZERO_NATIVE_APPKIT_VIEW_STATUSBAR || kind == ZERO_NATIVE_APPKIT_VIEW_TITLEBAR_ACCESSORY) {
+            if (kind == NATIVE_SDK_APPKIT_VIEW_TOOLBAR || kind == NATIVE_SDK_APPKIT_VIEW_STATUSBAR || kind == NATIVE_SDK_APPKIT_VIEW_TITLEBAR_ACCESSORY) {
                 color = NSColor.controlBackgroundColor;
-            } else if (kind == ZERO_NATIVE_APPKIT_VIEW_SIDEBAR) {
+            } else if (kind == NATIVE_SDK_APPKIT_VIEW_SIDEBAR) {
                 color = NSColor.windowBackgroundColor;
             }
             view.layer.backgroundColor = color.CGColor;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_BUTTON: {
+        case NATIVE_SDK_APPKIT_VIEW_BUTTON: {
             NSButton *button = [NSButton buttonWithTitle:(displayText.length > 0 ? displayText : @"Button") target:nil action:nil];
             button.bezelStyle = NSBezelStyleRounded;
             view = button;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_ICON_BUTTON: {
+        case NATIVE_SDK_APPKIT_VIEW_ICON_BUTTON: {
             NSButton *button = [NSButton buttonWithTitle:(displayText.length > 0 ? displayText : @"...") target:nil action:nil];
             button.bezelStyle = NSBezelStyleTexturedRounded;
             view = button;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_LIST_ITEM: {
+        case NATIVE_SDK_APPKIT_VIEW_LIST_ITEM: {
             NSButton *button = [NSButton buttonWithTitle:(displayText.length > 0 ? displayText : @"Item") target:nil action:nil];
             button.bezelStyle = NSBezelStyleRegularSquare;
             button.bordered = NO;
@@ -3323,19 +3323,19 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             view = button;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_CHECKBOX: {
+        case NATIVE_SDK_APPKIT_VIEW_CHECKBOX: {
             NSButton *checkbox = [NSButton checkboxWithTitle:(displayText.length > 0 ? displayText : @"Checkbox") target:nil action:nil];
             view = checkbox;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_TOGGLE: {
+        case NATIVE_SDK_APPKIT_VIEW_TOGGLE: {
             NSButton *toggle = [NSButton buttonWithTitle:(displayText.length > 0 ? displayText : @"Toggle") target:nil action:nil];
             [toggle setButtonType:NSButtonTypePushOnPushOff];
             toggle.bezelStyle = NSBezelStyleRounded;
             view = toggle;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_SEGMENTED_CONTROL: {
+        case NATIVE_SDK_APPKIT_VIEW_SEGMENTED_CONTROL: {
             NSSegmentedControl *segmented = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
             segmented.segmentStyle = NSSegmentStyleTexturedRounded;
             segmented.trackingMode = NSSegmentSwitchTrackingSelectOne;
@@ -3343,7 +3343,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             view = segmented;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_PROGRESS_INDICATOR: {
+        case NATIVE_SDK_APPKIT_VIEW_PROGRESS_INDICATOR: {
             NSProgressIndicator *indicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
             indicator.style = NSProgressIndicatorSpinningStyle;
             indicator.indeterminate = YES;
@@ -3351,13 +3351,13 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             view = indicator;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_GPU_SURFACE: {
-            ZeroNativeMetalSurfaceView *surface = [[ZeroNativeMetalSurfaceView alloc] initWithFrame:NSZeroRect];
+        case NATIVE_SDK_APPKIT_VIEW_GPU_SURFACE: {
+            NativeSdkMetalSurfaceView *surface = [[NativeSdkMetalSurfaceView alloc] initWithFrame:NSZeroRect];
             if (![surface isAvailable]) return nil;
             view = surface;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_TEXT_FIELD: {
+        case NATIVE_SDK_APPKIT_VIEW_TEXT_FIELD: {
             NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
             field.stringValue = @"";
             field.placeholderString = displayText.length > 0 ? displayText : label ?: @"";
@@ -3368,14 +3368,14 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
             view = field;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_SEARCH_FIELD: {
+        case NATIVE_SDK_APPKIT_VIEW_SEARCH_FIELD: {
             NSSearchField *field = [[NSSearchField alloc] initWithFrame:NSZeroRect];
             field.stringValue = @"";
             field.placeholderString = displayText.length > 0 ? displayText : @"Search";
             view = field;
             break;
         }
-        case ZERO_NATIVE_APPKIT_VIEW_LABEL: {
+        case NATIVE_SDK_APPKIT_VIEW_LABEL: {
             NSTextField *text = [NSTextField labelWithString:(displayText.length > 0 ? displayText : label ?: @"")];
             text.lineBreakMode = NSLineBreakByTruncatingTail;
             view = text;
@@ -3386,7 +3386,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }
     view.identifier = label;
     view.wantsLayer = YES;
-    view.accessibilityRole = ZeroNativeAccessibilityRoleForNativeViewKind(kind);
+    view.accessibilityRole = NativeSdkAccessibilityRoleForNativeViewKind(kind);
     return view;
 }
 
@@ -3464,8 +3464,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSString *label = [matchedKey substringFromIndex:separator.location + 1];
     const char *commandBytes = [command UTF8String];
     const char *labelBytes = [label UTF8String];
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_NATIVE_COMMAND,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_NATIVE_COMMAND,
         .window_id = windowId,
         .command_name = commandBytes,
         .command_name_len = [command lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
@@ -3476,7 +3476,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 - (BOOL)createNativeViewInWindow:(uint64_t)windowId label:(NSString *)label kind:(NSInteger)kind parent:(NSString *)parent x:(double)x y:(double)y width:(double)width height:(double)height layer:(NSInteger)layer visible:(BOOL)visible enabled:(BOOL)enabled role:(NSString *)role accessibilityLabel:(NSString *)accessibilityLabel text:(NSString *)text command:(NSString *)command {
     if (label.length == 0 || x < 0 || y < 0 || width < 0 || height < 0) return NO;
-    if (self.nativeViews.count >= ZeroNativeMaxNativeViews) return NO;
+    if (self.nativeViews.count >= NativeSdkMaxNativeViews) return NO;
     NSWindow *window = self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
     if (!window || !window.contentView) return NO;
 
@@ -3497,8 +3497,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     [self configureNativeView:view command:command key:key];
 
     [parentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
-    if ([view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) {
-        [(ZeroNativeMetalSurfaceView *)view configureWithHost:self windowId:windowId label:label];
+    if ([view isKindOfClass:[NativeSdkMetalSurfaceView class]]) {
+        [(NativeSdkMetalSurfaceView *)view configureWithHost:self windowId:windowId label:label];
     }
     self.nativeViews[key] = view;
     if (text.length > 0) {
@@ -3583,34 +3583,34 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (BOOL)presentGpuSurfacePixelsInWindow:(uint64_t)windowId label:(NSString *)label width:(NSUInteger)width height:(NSUInteger)height scale:(CGFloat)scale hasDirtyRect:(BOOL)hasDirtyRect dirtyX:(CGFloat)dirtyX dirtyY:(CGFloat)dirtyY dirtyWidth:(CGFloat)dirtyWidth dirtyHeight:(CGFloat)dirtyHeight rgba8:(const uint8_t *)rgba8 byteLength:(NSUInteger)byteLength {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    return [(ZeroNativeMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
+    return [(NativeSdkMetalSurfaceView *)view presentPixelsWithWidth:width height:height scale:scale hasDirtyRect:hasDirtyRect dirtyX:dirtyX dirtyY:dirtyY dirtyWidth:dirtyWidth dirtyHeight:dirtyHeight rgba8:rgba8 byteLength:byteLength];
 }
 
 - (NSInteger)presentGpuSurfacePacketInWindow:(uint64_t)windowId label:(NSString *)label surfaceWidth:(CGFloat)surfaceWidth height:(CGFloat)surfaceHeight scale:(CGFloat)scale clearR:(uint8_t)clearR clearG:(uint8_t)clearG clearB:(uint8_t)clearB clearA:(uint8_t)clearA requiresRender:(BOOL)requiresRender commandCount:(NSUInteger)commandCount unsupportedCommandCount:(NSUInteger)unsupportedCommandCount representable:(BOOL)representable json:(const uint8_t *)json byteLength:(NSUInteger)byteLength {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return -1;
-    return [(ZeroNativeMetalSurfaceView *)view presentGpuPacketWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable json:json byteLength:byteLength];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
+    return [(NativeSdkMetalSurfaceView *)view presentGpuPacketWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable json:json byteLength:byteLength];
 }
 
 - (BOOL)requestGpuSurfaceFrameInWindow:(uint64_t)windowId label:(NSString *)label {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    [(ZeroNativeMetalSurfaceView *)view requestRetainedCanvasFrame];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
+    [(NativeSdkMetalSurfaceView *)view requestRetainedCanvasFrame];
     return YES;
 }
 
-- (BOOL)setGpuSurfaceScrollDriversInWindow:(uint64_t)windowId label:(NSString *)label drivers:(const zero_native_appkit_scroll_driver_t *)drivers count:(NSUInteger)count {
+- (BOOL)setGpuSurfaceScrollDriversInWindow:(uint64_t)windowId label:(NSString *)label drivers:(const native_sdk_appkit_scroll_driver_t *)drivers count:(NSUInteger)count {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    [(ZeroNativeMetalSurfaceView *)view setScrollDrivers:drivers count:count];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
+    [(NativeSdkMetalSurfaceView *)view setScrollDrivers:drivers count:count];
     return YES;
 }
 
-- (BOOL)showContextMenuInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y token:(uint64_t)token items:(const zero_native_appkit_context_menu_item_t *)items count:(NSUInteger)count {
+- (BOOL)showContextMenuInWindow:(uint64_t)windowId label:(NSString *)label x:(double)x y:(double)y token:(uint64_t)token items:(const native_sdk_appkit_context_menu_item_t *)items count:(NSUInteger)count {
     NSView *view = nil;
     if (label.length > 0) view = self.nativeViews[[self nativeViewKeyForWindow:windowId label:label]];
     if (!view) view = ((NSWindow *)self.windows[@(windowId)]).contentView;
@@ -3618,9 +3618,9 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
     menu.autoenablesItems = NO;
-    ZeroNativeContextMenuTarget *target = [[ZeroNativeContextMenuTarget alloc] init];
+    NativeSdkContextMenuTarget *target = [[NativeSdkContextMenuTarget alloc] init];
     for (NSUInteger index = 0; index < count; index += 1) {
-        const zero_native_appkit_context_menu_item_t item = items[index];
+        const native_sdk_appkit_context_menu_item_t item = items[index];
         if (item.separator) {
             [menu addItem:[NSMenuItem separatorItem]];
             continue;
@@ -3637,25 +3637,25 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     // AppKit-unflipped unless it says otherwise.
     NSPoint location = NSMakePoint(x, view.isFlipped ? y : view.bounds.size.height - y);
     NSString *eventLabel = [label copy] ?: @"";
-    __weak ZeroNativeAppKitHost *weakSelf = self;
+    __weak NativeSdkAppKitHost *weakSelf = self;
     // Present on the next loop turn: the request arrives mid input
     // dispatch and popUp runs its own nested tracking loop. The selection
     // event is emitted one further turn later so a pending item action
     // (delivered during menu teardown) always lands first.
     dispatch_async(dispatch_get_main_queue(), ^{
-        ZeroNativeAppKitHost *presentSelf = weakSelf;
+        NativeSdkAppKitHost *presentSelf = weakSelf;
         if (!presentSelf) return;
         [menu popUpMenuPositioningItem:nil atLocation:location inView:view];
         dispatch_async(dispatch_get_main_queue(), ^{
-            ZeroNativeAppKitHost *emitSelf = weakSelf;
+            NativeSdkAppKitHost *emitSelf = weakSelf;
             if (!emitSelf) return;
             const char *labelBytes = eventLabel.UTF8String ?: "";
-            [emitSelf emitEvent:(zero_native_appkit_event_t){
-                .kind = ZERO_NATIVE_APPKIT_EVENT_CONTEXT_MENU_ACTION,
+            [emitSelf emitEvent:(native_sdk_appkit_event_t){
+                .kind = NATIVE_SDK_APPKIT_EVENT_CONTEXT_MENU_ACTION,
                 .window_id = windowId,
                 .view_label = labelBytes,
                 .view_label_len = [eventLabel lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
-                .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+                .timestamp_ns = NativeSdkTimestampNanoseconds(),
                 .widget_id = token,
                 .menu_item_id = target.selectedItemId,
             }];
@@ -3672,7 +3672,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     // register/unregister, while the store's NSImage lives until the id
     // is removed or replaced.
     NSData *pixelData = [NSData dataWithBytes:rgba8 length:byteLength];
-    NSImage *image = ZeroNativeCreateRGBA8Image(width, height, pixelData);
+    NSImage *image = NativeSdkCreateRGBA8Image(width, height, pixelData);
     if (!image) return NO;
     if (!self.canvasImageStore) self.canvasImageStore = [[NSMutableDictionary alloc] init];
     NSString *key = [NSString stringWithFormat:@"%llu", (unsigned long long)imageId];
@@ -3690,16 +3690,16 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 - (BOOL)setNativeViewCursorInWindow:(uint64_t)windowId label:(NSString *)label cursor:(NSInteger)cursor {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    [(ZeroNativeMetalSurfaceView *)view setSurfaceCursor:ZeroNativeCursorForKind(cursor)];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
+    [(NativeSdkMetalSurfaceView *)view setSurfaceCursor:NativeSdkCursorForKind(cursor)];
     return YES;
 }
 
-- (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const zero_native_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count {
+- (BOOL)updateWidgetAccessibilityInWindow:(uint64_t)windowId label:(NSString *)label nodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count {
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
-    if (![view isKindOfClass:[ZeroNativeMetalSurfaceView class]]) return NO;
-    [(ZeroNativeMetalSurfaceView *)view updateWidgetAccessibilityWithNodes:nodes count:count];
+    if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return NO;
+    [(NativeSdkMetalSurfaceView *)view updateWidgetAccessibilityWithNodes:nodes count:count];
     return YES;
 }
 
@@ -3762,34 +3762,34 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     NSURL *targetURL = [NSURL URLWithString:url];
     if (!targetURL) return NO;
     if (![self allowsNavigationURL:targetURL]) return NO;
-    if (self.childWebViews.count >= ZeroNativeMaxChildWebViews) return NO;
+    if (self.childWebViews.count >= NativeSdkMaxChildWebViews) return NO;
 
     NSString *key = [self webViewKeyForWindow:windowId label:label];
     WKWebView *existing = self.childWebViews[key];
     if (existing) return NO;
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    ZeroNativeAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
+    NativeSdkAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
     if (assetSchemeHandler) {
         [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"zero"];
     }
     if (bridgeEnabled) {
         WKUserContentController *controller = [[WKUserContentController alloc] init];
-        ZeroNativeBridgeScriptHandler *handler = [[ZeroNativeBridgeScriptHandler alloc] init];
+        NativeSdkBridgeScriptHandler *handler = [[NativeSdkBridgeScriptHandler alloc] init];
         handler.host = self;
         handler.windowId = windowId;
         handler.webViewLabel = label;
-        [controller addScriptMessageHandler:handler name:@"zeroNativeBridge"];
-        [controller addUserScript:[[WKUserScript alloc] initWithSource:ZeroNativeAppKitBridgeScript() injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+        [controller addScriptMessageHandler:handler name:@"nativeSdkBridge"];
+        [controller addUserScript:[[WKUserScript alloc] initWithSource:NativeSdkAppKitBridgeScript() injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
         configuration.userContentController = controller;
     }
     if ([configuration.preferences respondsToSelector:NSSelectorFromString(@"setDeveloperExtrasEnabled:")]) {
         [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
     }
 
-    WKWebView *webview = [[ZeroNativeWebView alloc] initWithFrame:[self webViewFrameForWindow:window x:x y:y width:width height:height] configuration:configuration];
-    ((ZeroNativeWebView *)webview).host = self;
-    ((ZeroNativeWebView *)webview).windowId = windowId;
+    WKWebView *webview = [[NativeSdkWebView alloc] initWithFrame:[self webViewFrameForWindow:window x:x y:y width:width height:height] configuration:configuration];
+    ((NativeSdkWebView *)webview).host = self;
+    ((NativeSdkWebView *)webview).windowId = windowId;
     [webview registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     webview.wantsLayer = YES;
     webview.layer.zPosition = layer;
@@ -3961,7 +3961,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
     NSMutableArray<NSView *> *views = [[NSMutableArray alloc] init];
     WKWebView *mainWebView = self.webViews[@(windowId)];
-    if ([mainWebView isKindOfClass:[ZeroNativeWebView class]] && mainWebView.superview == contentView) {
+    if ([mainWebView isKindOfClass:[NativeSdkWebView class]] && mainWebView.superview == contentView) {
         [views addObject:mainWebView];
     }
 
@@ -3969,7 +3969,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     for (NSString *key in self.childWebViews) {
         if (![key hasPrefix:prefix]) continue;
         WKWebView *webView = self.childWebViews[key];
-        if ([webView isKindOfClass:[ZeroNativeWebView class]] && webView.superview == contentView) {
+        if ([webView isKindOfClass:[NativeSdkWebView class]] && webView.superview == contentView) {
             [views addObject:webView];
         }
     }
@@ -3994,8 +3994,8 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     }];
 
     for (NSUInteger index = 0; index < views.count; index++) {
-        if (![views[index] isKindOfClass:[ZeroNativeWebView class]]) continue;
-        ZeroNativeWebView *webView = (ZeroNativeWebView *)views[index];
+        if (![views[index] isKindOfClass:[NativeSdkWebView class]]) continue;
+        NativeSdkWebView *webView = (NativeSdkWebView *)views[index];
         NSMutableArray<NSValue *> *coveredRects = [[NSMutableArray alloc] init];
         for (NSUInteger coverIndex = index + 1; coverIndex < views.count; coverIndex++) {
             NSView *coveringView = views[coverIndex];
@@ -4025,7 +4025,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     // document as transparent fixed-position event covers.
     NSString *script = [NSString stringWithFormat:
         @"(function(rects){"
-         "var id='__zero_native_covered_mouse_rects__';"
+         "var id='__native_sdk_covered_mouse_rects__';"
          "var root=document.getElementById(id);"
          "if(!rects.length){if(root)root.remove();return;}"
          "var parent=document.documentElement||document.body;"
@@ -4051,7 +4051,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
 
 - (void)removeBridgeHandlerForChildWebView:(WKWebView *)webView key:(NSString *)key {
     if (!webView || key.length == 0 || ![self.bridgeEnabledChildWebViewKeys containsObject:key]) return;
-    [webView.configuration.userContentController removeScriptMessageHandlerForName:@"zeroNativeBridge"];
+    [webView.configuration.userContentController removeScriptMessageHandlerForName:@"nativeSdkBridge"];
     [self.bridgeEnabledChildWebViewKeys removeObject:key];
 }
 
@@ -4075,16 +4075,16 @@ static NSRect constrainFrame(NSRect frame) {
     return frame;
 }
 
-static NSString *ZeroNativeAppKitBridgeScript(void) {
+static NSString *NativeSdkAppKitBridgeScript(void) {
     return @"(function(){"
         "if(window.zero&&window.zero.invoke){return;}"
         "var pending=new Map();"
         "var listeners=new Map();"
         "var nextId=1;"
         "function post(message){"
-        "if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.zeroNativeBridge){window.webkit.messageHandlers.zeroNativeBridge.postMessage(message);return;}"
-        "if(window.zeroNativeCefBridge&&window.zeroNativeCefBridge.postMessage){window.zeroNativeCefBridge.postMessage(message);return;}"
-        "throw new Error('zero-native bridge transport is unavailable');"
+        "if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.nativeSdkBridge){window.webkit.messageHandlers.nativeSdkBridge.postMessage(message);return;}"
+        "if(window.nativeSdkCefBridge&&window.nativeSdkCefBridge.postMessage){window.nativeSdkCefBridge.postMessage(message);return;}"
+        "throw new Error('native-sdk bridge transport is unavailable');"
         "}"
         "function complete(response){"
         "var id=response&&response.id!=null?String(response.id):'';"
@@ -4127,75 +4127,75 @@ static NSString *ZeroNativeAppKitBridgeScript(void) {
         "function viewHandle(info){return Object.freeze(Object.assign({},info,{update:function(patch){return views.update(Object.assign({},patch||{},{label:info.label,windowId:info.windowId}));},setFrame:function(frame){return views.setFrame({label:info.label,windowId:info.windowId,frame:frame});},setVisible:function(visible){return views.setVisible({label:info.label,windowId:info.windowId,visible:visible});},focus:function(){return views.focus({label:info.label,windowId:info.windowId});},close:function(){return views.close({label:info.label,windowId:info.windowId});}}));}"
         "function on(name,callback){if(typeof callback!=='function'){throw new TypeError('callback must be a function');}var set=listeners.get(name);if(!set){set=new Set();listeners.set(name,set);}set.add(callback);return function(){off(name,callback);};}"
         "function off(name,callback){var set=listeners.get(name);if(set){set.delete(callback);if(set.size===0){listeners.delete(name);}}}"
-        "function emit(name,detail){var set=listeners.get(name);if(set){Array.from(set).forEach(function(callback){callback(detail);});}window.dispatchEvent(new CustomEvent('zero-native:'+name,{detail:detail}));}"
+        "function emit(name,detail){var set=listeners.get(name);if(set){Array.from(set).forEach(function(callback){callback(detail);});}window.dispatchEvent(new CustomEvent('native-sdk:'+name,{detail:detail}));}"
         "var commands=Object.freeze({"
-        "invoke:function(value){return invoke('zero-native.command.invoke',commandPayload(value));},"
-        "list:function(){return invoke('zero-native.command.list',{});}"
+        "invoke:function(value){return invoke('native-sdk.command.invoke',commandPayload(value));},"
+        "list:function(){return invoke('native-sdk.command.list',{});}"
         "});"
         "var windows=Object.freeze({"
-        "create:function(options){return invoke('zero-native.window.create',options||{});},"
-        "list:function(){return invoke('zero-native.window.list',{});},"
-        "focus:function(value){return invoke('zero-native.window.focus',selector(value));},"
-        "close:function(value){return invoke('zero-native.window.close',selector(value));}"
+        "create:function(options){return invoke('native-sdk.window.create',options||{});},"
+        "list:function(){return invoke('native-sdk.window.list',{});},"
+        "focus:function(value){return invoke('native-sdk.window.focus',selector(value));},"
+        "close:function(value){return invoke('native-sdk.window.close',selector(value));}"
         "});"
         "var dialogs=Object.freeze({"
-        "openFile:function(options){return invoke('zero-native.dialog.openFile',options||{});},"
-        "saveFile:function(options){return invoke('zero-native.dialog.saveFile',options||{});},"
-        "showMessage:function(options){return invoke('zero-native.dialog.showMessage',options||{});}"
+        "openFile:function(options){return invoke('native-sdk.dialog.openFile',options||{});},"
+        "saveFile:function(options){return invoke('native-sdk.dialog.saveFile',options||{});},"
+        "showMessage:function(options){return invoke('native-sdk.dialog.showMessage',options||{});}"
         "});"
         "function clipboardReadPayload(value){value=value||{};return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType')};}"
         "function clipboardWritePayload(value){if(typeof value==='string'){return {mimeType:'text/plain',data:value};}value=value||{};var data=value.data!=null?value.data:(value.text!=null?value.text:value.value);return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType'),data:ensureText(data,'data')};}"
         "var clipboard=Object.freeze({"
-        "readText:function(){return invoke('zero-native.clipboard.readText',{});},"
-        "writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('zero-native.clipboard.writeText',{text:ensureText(text,'text')});},"
-        "read:function(value){return invoke('zero-native.clipboard.read',clipboardReadPayload(value));},"
-        "write:function(value){return invoke('zero-native.clipboard.write',clipboardWritePayload(value));}"
+        "readText:function(){return invoke('native-sdk.clipboard.readText',{});},"
+        "writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('native-sdk.clipboard.writeText',{text:ensureText(text,'text')});},"
+        "read:function(value){return invoke('native-sdk.clipboard.read',clipboardReadPayload(value));},"
+        "write:function(value){return invoke('native-sdk.clipboard.write',clipboardWritePayload(value));}"
         "});"
         "var os=Object.freeze({"
-        "openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('zero-native.os.openUrl',{url:ensureString(options.url,'url')});},"
-        "showNotification:function(value){var options=typeof value==='string'?{title:value}:(value||{});var payload={title:ensureString(options.title,'title')};if(options.subtitle!=null){payload.subtitle=ensureString(options.subtitle,'subtitle');}if(options.body!=null){payload.body=ensureString(options.body,'body');}return invoke('zero-native.os.showNotification',payload);},"
-        "revealPath:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('zero-native.os.revealPath',{path:ensureString(options.path,'path')});},"
-        "addRecentDocument:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('zero-native.os.addRecentDocument',{path:ensureString(options.path,'path')});},"
-        "clearRecentDocuments:function(){return invoke('zero-native.os.clearRecentDocuments',{});}"
+        "openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('native-sdk.os.openUrl',{url:ensureString(options.url,'url')});},"
+        "showNotification:function(value){var options=typeof value==='string'?{title:value}:(value||{});var payload={title:ensureString(options.title,'title')};if(options.subtitle!=null){payload.subtitle=ensureString(options.subtitle,'subtitle');}if(options.body!=null){payload.body=ensureString(options.body,'body');}return invoke('native-sdk.os.showNotification',payload);},"
+        "revealPath:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('native-sdk.os.revealPath',{path:ensureString(options.path,'path')});},"
+        "addRecentDocument:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('native-sdk.os.addRecentDocument',{path:ensureString(options.path,'path')});},"
+        "clearRecentDocuments:function(){return invoke('native-sdk.os.clearRecentDocuments',{});}"
         "});"
         "function credentialPayload(value){value=value||{};return {service:ensureString(value.service,'service'),account:ensureString(value.account,'account')};}"
         "function credentialSetPayload(value){var payload=credentialPayload(value);payload.secret=ensureString(value.secret!=null?value.secret:value.value,'secret');return payload;}"
         "var credentials=Object.freeze({"
-        "set:function(value){return invoke('zero-native.credentials.set',credentialSetPayload(value));},"
-        "get:function(value){return invoke('zero-native.credentials.get',credentialPayload(value));},"
-        "delete:function(value){return invoke('zero-native.credentials.delete',credentialPayload(value));}"
+        "set:function(value){return invoke('native-sdk.credentials.set',credentialSetPayload(value));},"
+        "get:function(value){return invoke('native-sdk.credentials.get',credentialPayload(value));},"
+        "delete:function(value){return invoke('native-sdk.credentials.delete',credentialPayload(value));}"
         "});"
         "function platformFeaturePayload(value){if(typeof value==='string'){return {feature:ensureString(value,'feature')};}value=value||{};return {feature:ensureString(value.feature!=null?value.feature:value.name,'feature')};}"
         "var platform=Object.freeze({"
-        "supports:function(value){return invoke('zero-native.platform.supports',platformFeaturePayload(value));}"
+        "supports:function(value){return invoke('native-sdk.platform.supports',platformFeaturePayload(value));}"
         "});"
         "function zoomPayload(options){options=options||{};validateWebViewSelector(options);return {label:options.label,windowId:options.windowId,zoom:ensureNumber(options.zoom,'zoom')};}"
         "function layerPayload(options){options=options||{};validateWebViewSelector(options);return {label:options.label,windowId:options.windowId,layer:ensureNumber(options.layer,'layer')};}"
         "var webviews=Object.freeze({"
-        "create:function(options){return invoke('zero-native.webview.create',createPayload(options)).then(webviewHandle);},"
-        "list:function(){return invoke('zero-native.webview.list',{});},"
-        "setFrame:function(options){return invoke('zero-native.webview.setFrame',framePayload(options));},"
-        "navigate:function(options){return invoke('zero-native.webview.navigate',navigatePayload(options));},"
-        "setZoom:function(options){return invoke('zero-native.webview.setZoom',zoomPayload(options));},"
-        "setLayer:function(options){return invoke('zero-native.webview.setLayer',layerPayload(options));},"
-        "close:function(options){return invoke('zero-native.webview.close',closePayload(options));}"
+        "create:function(options){return invoke('native-sdk.webview.create',createPayload(options)).then(webviewHandle);},"
+        "list:function(){return invoke('native-sdk.webview.list',{});},"
+        "setFrame:function(options){return invoke('native-sdk.webview.setFrame',framePayload(options));},"
+        "navigate:function(options){return invoke('native-sdk.webview.navigate',navigatePayload(options));},"
+        "setZoom:function(options){return invoke('native-sdk.webview.setZoom',zoomPayload(options));},"
+        "setLayer:function(options){return invoke('native-sdk.webview.setLayer',layerPayload(options));},"
+        "close:function(options){return invoke('native-sdk.webview.close',closePayload(options));}"
         "});"
         "var views=Object.freeze({"
-        "create:function(options){return invoke('zero-native.view.create',viewCreatePayload(options)).then(viewHandle);},"
-        "list:function(){return invoke('zero-native.view.list',{});},"
-        "update:function(options,patch){if(typeof options==='string'){return invoke('zero-native.view.update',viewPatchPayload(Object.assign({},patch||{},{label:options}))).then(viewHandle);}return invoke('zero-native.view.update',viewPatchPayload(options)).then(viewHandle);},"
-        "setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},"
-        "setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},"
-        "focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options)).then(viewHandle);},"
-        "focusNext:function(options){options=options||{};return invoke('zero-native.view.focusNext',{windowId:options.windowId}).then(viewHandle);},"
-        "focusPrevious:function(options){options=options||{};return invoke('zero-native.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},"
-        "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options));}"
+        "create:function(options){return invoke('native-sdk.view.create',viewCreatePayload(options)).then(viewHandle);},"
+        "list:function(){return invoke('native-sdk.view.list',{});},"
+        "update:function(options,patch){if(typeof options==='string'){return invoke('native-sdk.view.update',viewPatchPayload(Object.assign({},patch||{},{label:options}))).then(viewHandle);}return invoke('native-sdk.view.update',viewPatchPayload(options)).then(viewHandle);},"
+        "setFrame:function(options){return invoke('native-sdk.view.setFrame',viewFramePayload(options)).then(viewHandle);},"
+        "setVisible:function(options){return invoke('native-sdk.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},"
+        "focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options)).then(viewHandle);},"
+        "focusNext:function(options){options=options||{};return invoke('native-sdk.view.focusNext',{windowId:options.windowId}).then(viewHandle);},"
+        "focusPrevious:function(options){options=options||{};return invoke('native-sdk.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},"
+        "close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options));}"
         "});"
         "Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,platform:platform,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});"
         "})();";
 }
 
-static NSString *ZeroNativeMimeTypeForPath(NSString *path) {
+static NSString *NativeSdkMimeTypeForPath(NSString *path) {
     NSString *ext = path.pathExtension.lowercaseString;
     if ([ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"]) return @"text/html";
     if ([ext isEqualToString:@"js"] || [ext isEqualToString:@"mjs"]) return @"text/javascript";
@@ -4214,12 +4214,12 @@ static NSString *ZeroNativeMimeTypeForPath(NSString *path) {
     return @"application/octet-stream";
 }
 
-static BOOL ZeroNativeDirectoryExists(NSString *path) {
+static BOOL NativeSdkDirectoryExists(NSString *path) {
     BOOL isDirectory = NO;
     return path.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory;
 }
 
-static NSString *ZeroNativeResolvedAssetRoot(NSString *rootPath) {
+static NSString *NativeSdkResolvedAssetRoot(NSString *rootPath) {
     NSString *resourcePath = [NSBundle mainBundle].resourcePath;
     BOOL isAppBundle = [[NSBundle mainBundle].bundlePath.pathExtension.lowercaseString isEqualToString:@"app"];
     if (rootPath.length == 0 || [rootPath isEqualToString:@"."]) {
@@ -4227,15 +4227,15 @@ static NSString *ZeroNativeResolvedAssetRoot(NSString *rootPath) {
     }
     if (rootPath.isAbsolutePath) return rootPath;
     NSString *cwdPath = [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:rootPath];
-    if (!isAppBundle && ZeroNativeDirectoryExists(cwdPath)) return cwdPath;
+    if (!isAppBundle && NativeSdkDirectoryExists(cwdPath)) return cwdPath;
     if (resourcePath.length > 0) {
         NSString *resourceRoot = [resourcePath stringByAppendingPathComponent:rootPath];
-        if (isAppBundle || ZeroNativeDirectoryExists(resourceRoot)) return resourceRoot;
+        if (isAppBundle || NativeSdkDirectoryExists(resourceRoot)) return resourceRoot;
     }
     return cwdPath;
 }
 
-static BOOL ZeroNativeFontAssetExtension(NSString *path) {
+static BOOL NativeSdkFontAssetExtension(NSString *path) {
     NSString *extension = path.pathExtension.lowercaseString;
     return [extension isEqualToString:@"ttf"] ||
         [extension isEqualToString:@"otf"] ||
@@ -4245,8 +4245,8 @@ static BOOL ZeroNativeFontAssetExtension(NSString *path) {
         [extension isEqualToString:@"woff2"];
 }
 
-static void ZeroNativeRegisterFontsInDirectory(NSString *directoryPath) {
-    if (directoryPath.length == 0 || !ZeroNativeDirectoryExists(directoryPath)) return;
+static void NativeSdkRegisterFontsInDirectory(NSString *directoryPath) {
+    if (directoryPath.length == 0 || !NativeSdkDirectoryExists(directoryPath)) return;
     NSURL *directoryURL = [NSURL fileURLWithPath:directoryPath isDirectory:YES];
     NSDirectoryEnumerator<NSURL *> *enumerator = [[NSFileManager defaultManager]
         enumeratorAtURL:directoryURL
@@ -4256,14 +4256,14 @@ static void ZeroNativeRegisterFontsInDirectory(NSString *directoryPath) {
     for (NSURL *url in enumerator) {
         NSNumber *isRegularFile = nil;
         if (![url getResourceValue:&isRegularFile forKey:NSURLIsRegularFileKey error:nil] || !isRegularFile.boolValue) continue;
-        if (!ZeroNativeFontAssetExtension(url.path)) continue;
+        if (!NativeSdkFontAssetExtension(url.path)) continue;
         CFErrorRef error = NULL;
         CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
         if (error) CFRelease(error);
     }
 }
 
-static void ZeroNativeRegisterBundledFonts(void) {
+static void NativeSdkRegisterBundledFonts(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSBundle *bundle = [NSBundle mainBundle];
@@ -4272,12 +4272,12 @@ static void ZeroNativeRegisterBundledFonts(void) {
         if (root.length == 0) return;
         NSArray<NSString *> *relativeFontRoots = @[ @"fonts", @"Fonts", @"assets/fonts" ];
         for (NSString *relativePath in relativeFontRoots) {
-            ZeroNativeRegisterFontsInDirectory([root stringByAppendingPathComponent:relativePath]);
+            NativeSdkRegisterFontsInDirectory([root stringByAppendingPathComponent:relativePath]);
         }
     });
 }
 
-static BOOL ZeroNativePathHasUnsafeSegment(NSString *path) {
+static BOOL NativeSdkPathHasUnsafeSegment(NSString *path) {
     for (NSString *segment in [path componentsSeparatedByString:@"/"]) {
         if (segment.length == 0) continue;
         if ([segment isEqualToString:@"."] || [segment isEqualToString:@".."]) return YES;
@@ -4286,7 +4286,7 @@ static BOOL ZeroNativePathHasUnsafeSegment(NSString *path) {
     return NO;
 }
 
-static NSString *ZeroNativeSafeAssetPath(NSURL *url, NSString *entryPath) {
+static NSString *NativeSdkSafeAssetPath(NSURL *url, NSString *entryPath) {
     if (!url) return nil;
     NSString *path = url.path.stringByRemovingPercentEncoding ?: url.path;
     if (path.length == 0 || [path isEqualToString:@"/"]) return entryPath.length > 0 ? entryPath : @"index.html";
@@ -4294,11 +4294,11 @@ static NSString *ZeroNativeSafeAssetPath(NSURL *url, NSString *entryPath) {
         path = [path substringFromIndex:1];
     }
     if (path.length == 0) return entryPath.length > 0 ? entryPath : @"index.html";
-    if (ZeroNativePathHasUnsafeSegment(path)) return nil;
+    if (NativeSdkPathHasUnsafeSegment(path)) return nil;
     return path;
 }
 
-static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
+static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     NSString *base = origin.length > 0 ? origin : @"zero://app";
     while ([base hasSuffix:@"/"]) {
         base = [base substringToIndex:base.length - 1];
@@ -4382,7 +4382,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     item.target = self;
     item.enabled = enabled;
     item.representedObject = command ?: @"";
-    item.keyEquivalentModifierMask = ZeroNativeMenuModifierFlags(modifiers);
+    item.keyEquivalentModifierMask = NativeSdkMenuModifierFlags(modifiers);
     item.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
     return item;
 }
@@ -4399,8 +4399,8 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     NSString *command = [menuItem.representedObject isKindOfClass:[NSString class]] ? (NSString *)menuItem.representedObject : @"";
     if (command.length == 0) return;
     const char *commandBytes = [command UTF8String];
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_MENU_COMMAND,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_MENU_COMMAND,
         .window_id = [self activeCommandWindowId],
         .command_name = commandBytes,
         .command_name_len = [command lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
@@ -4438,16 +4438,16 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     }
 }
 
-- (void)runWithCallback:(zero_native_appkit_event_callback_t)callback context:(void *)context {
+- (void)runWithCallback:(native_sdk_appkit_event_callback_t)callback context:(void *)context {
     self.callback = callback;
     self.context = context;
 
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activate];
     if (!self.shortcutEventMonitor) {
-        __weak ZeroNativeAppKitHost *weakSelf = self;
+        __weak NativeSdkAppKitHost *weakSelf = self;
         self.shortcutEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
-            ZeroNativeAppKitHost *strongSelf = weakSelf;
+            NativeSdkAppKitHost *strongSelf = weakSelf;
             if (strongSelf && [strongSelf handleShortcutEvent:event]) return nil;
             return event;
         }];
@@ -4456,7 +4456,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     [self startApplicationActivationObservers];
     [self startAppearanceObservers];
 
-    [self emitEvent:(zero_native_appkit_event_t){ .kind = ZERO_NATIVE_APPKIT_EVENT_START }];
+    [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_START }];
     [self emitAppearanceChanged];
     [self emitResize];
     [self emitWindowFrame:YES];
@@ -4490,7 +4490,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     [NSApp postEvent:event atStart:NO];
 }
 
-- (void)emitEvent:(zero_native_appkit_event_t)event {
+- (void)emitEvent:(native_sdk_appkit_event_t)event {
     if (self.callback) {
         self.callback(self.context, &event);
     }
@@ -4518,19 +4518,19 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     (void)notification;
-    [self emitEvent:(zero_native_appkit_event_t){ .kind = ZERO_NATIVE_APPKIT_EVENT_APP_ACTIVATED }];
+    [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_APP_ACTIVATED }];
 }
 
 - (void)applicationDidResignActive:(NSNotification *)notification {
     (void)notification;
-    [self emitEvent:(zero_native_appkit_event_t){ .kind = ZERO_NATIVE_APPKIT_EVENT_APP_DEACTIVATED }];
+    [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_APP_DEACTIVATED }];
 }
 
 - (void)startAppearanceObservers {
     if (self.observesAppearanceChanges) {
         return;
     }
-    [NSApp addObserver:self forKeyPath:@"effectiveAppearance" options:NSKeyValueObservingOptionNew context:ZeroNativeAppKitAppearanceObservationContext];
+    [NSApp addObserver:self forKeyPath:@"effectiveAppearance" options:NSKeyValueObservingOptionNew context:NativeSdkAppKitAppearanceObservationContext];
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self
                                                            selector:@selector(accessibilityDisplayOptionsDidChange:)
                                                                name:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
@@ -4542,7 +4542,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     if (!self.observesAppearanceChanges) {
         return;
     }
-    [NSApp removeObserver:self forKeyPath:@"effectiveAppearance" context:ZeroNativeAppKitAppearanceObservationContext];
+    [NSApp removeObserver:self forKeyPath:@"effectiveAppearance" context:NativeSdkAppKitAppearanceObservationContext];
     [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self
                                                                   name:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
                                                                 object:nil];
@@ -4558,7 +4558,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     (void)keyPath;
     (void)object;
     (void)change;
-    if (context == ZeroNativeAppKitAppearanceObservationContext) {
+    if (context == NativeSdkAppKitAppearanceObservationContext) {
         [self emitAppearanceChanged];
         return;
     }
@@ -4566,11 +4566,11 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (void)emitAppearanceChanged {
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_APPEARANCE_CHANGED,
-        .color_scheme = ZeroNativeAppKitColorSchemeForAppearance(NSApp.effectiveAppearance),
-        .reduce_motion = ZeroNativeAppKitReduceMotionEnabled() ? 1 : 0,
-        .high_contrast = ZeroNativeAppKitHighContrastEnabled() ? 1 : 0,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_APPEARANCE_CHANGED,
+        .color_scheme = NativeSdkAppKitColorSchemeForAppearance(NSApp.effectiveAppearance),
+        .reduce_motion = NativeSdkAppKitReduceMotionEnabled() ? 1 : 0,
+        .high_contrast = NativeSdkAppKitHighContrastEnabled() ? 1 : 0,
     }];
 }
 
@@ -4581,8 +4581,8 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 - (void)emitResizeForWindowId:(uint64_t)windowId {
     NSWindow *window = self.windows[@(windowId)] ?: self.window;
     NSRect bounds = window.contentView.bounds;
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_RESIZE,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_RESIZE,
         .window_id = windowId,
         .width = bounds.size.width,
         .height = bounds.size.height,
@@ -4591,9 +4591,9 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (void)emitDeferredResizeForWindowId:(uint64_t)windowId {
-    __weak ZeroNativeAppKitHost *weakSelf = self;
+    __weak NativeSdkAppKitHost *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        ZeroNativeAppKitHost *strongSelf = weakSelf;
+        NativeSdkAppKitHost *strongSelf = weakSelf;
         if (!strongSelf || !strongSelf.windows[@(windowId)]) return;
         [strongSelf emitWindowFrameForWindowId:windowId open:YES];
         [strongSelf emitResizeForWindowId:windowId];
@@ -4609,8 +4609,8 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     NSWindow *window = self.windows[@(windowId)] ?: self.window;
     NSString *label = self.windowLabels[@(windowId)] ?: (windowId == 1 ? self.windowLabel : @"");
     NSRect frame = window.frame;
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_WINDOW_FRAME,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_WINDOW_FRAME,
         .window_id = windowId,
         .x = frame.origin.x,
         .y = frame.origin.y,
@@ -4640,7 +4640,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
         return;
     }
     if (self.automationFrameTimer) return;
-    self.automationFrameTimer = [NSTimer scheduledTimerWithTimeInterval:ZeroNativeAutomationFramePollInterval
+    self.automationFrameTimer = [NSTimer scheduledTimerWithTimeInterval:NativeSdkAutomationFramePollInterval
                                                                  target:self
                                                                selector:@selector(emitAutomationFramePoll)
                                                                userInfo:nil
@@ -4655,13 +4655,13 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
  * event there, so the runtime's effect-queue drain always runs on the
  * loop thread. */
 - (void)wakeFromAnyThread {
-    __weak ZeroNativeAppKitHost *weakSelf = self;
+    __weak NativeSdkAppKitHost *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        ZeroNativeAppKitHost *strongSelf = weakSelf;
+        NativeSdkAppKitHost *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.didShutdown) return;
-        [strongSelf emitEvent:(zero_native_appkit_event_t){
-            .kind = ZERO_NATIVE_APPKIT_EVENT_WAKE,
-            .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        [strongSelf emitEvent:(native_sdk_appkit_event_t){
+            .kind = NATIVE_SDK_APPKIT_EVENT_WAKE,
+            .timestamp_ns = NativeSdkTimestampNanoseconds(),
         }];
     });
 }
@@ -4669,7 +4669,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 - (void)startAppTimerWithId:(uint64_t)timerId intervalNs:(uint64_t)intervalNs repeats:(BOOL)repeats {
     NSNumber *key = @(timerId);
     [self.appTimers[key] invalidate];
-    NSTimeInterval interval = (NSTimeInterval)intervalNs / (NSTimeInterval)ZeroNativeNanosecondsPerSecond;
+    NSTimeInterval interval = (NSTimeInterval)intervalNs / (NSTimeInterval)NativeSdkNanosecondsPerSecond;
     self.appTimers[key] = [NSTimer scheduledTimerWithTimeInterval:interval
                                                            target:self
                                                          selector:@selector(appTimerFired:)
@@ -4693,10 +4693,10 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     if (![info[@"repeats"] boolValue] && self.appTimers[key] == timer) {
         [self.appTimers removeObjectForKey:key];
     }
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_TIMER,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_TIMER,
         .timer_id = key.unsignedLongLongValue,
-        .timestamp_ns = ZeroNativeTimestampNanoseconds(),
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
     }];
 }
 
@@ -4708,13 +4708,13 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (void)scheduleBridgeFrames {
-    self.bridgeFrameKeepalive = ZeroNativeBridgeFrameKeepaliveFrames;
+    self.bridgeFrameKeepalive = NativeSdkBridgeFrameKeepaliveFrames;
     [self scheduleFrame];
 }
 
 - (void)emitFrame {
     self.timer = nil;
-    [self emitEvent:(zero_native_appkit_event_t){ .kind = ZERO_NATIVE_APPKIT_EVENT_FRAME }];
+    [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_FRAME }];
     if (self.bridgeFrameKeepalive > 0) {
         self.bridgeFrameKeepalive -= 1;
         [self scheduleFrame];
@@ -4726,7 +4726,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
         return;
     }
     self.didShutdown = YES;
-    [self emitEvent:(zero_native_appkit_event_t){ .kind = ZERO_NATIVE_APPKIT_EVENT_SHUTDOWN }];
+    [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_SHUTDOWN }];
 }
 
 - (void)loadSource:(NSString *)source kind:(NSInteger)kind assetRoot:(NSString *)assetRoot entry:(NSString *)entry origin:(NSString *)origin spaFallback:(BOOL)spaFallback {
@@ -4735,7 +4735,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 - (void)loadSource:(NSString *)source kind:(NSInteger)kind assetRoot:(NSString *)assetRoot entry:(NSString *)entry origin:(NSString *)origin spaFallback:(BOOL)spaFallback windowId:(uint64_t)windowId {
     WKWebView *webView = [self webViewForWindowId:windowId];
-    ZeroNativeAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
+    NativeSdkAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
     if (kind == 1) {
         NSURL *url = [NSURL URLWithString:source];
         if (url) {
@@ -4743,7 +4743,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
         }
     } else if (kind == 2) {
         [assetSchemeHandler configureWithRootPath:assetRoot entryPath:entry spaFallback:spaFallback];
-        NSURL *url = ZeroNativeAssetEntryURL(origin.length > 0 ? origin : @"zero://app", entry.length > 0 ? entry : @"index.html");
+        NSURL *url = NativeSdkAssetEntryURL(origin.length > 0 ? origin : @"zero://app", entry.length > 0 ? entry : @"index.html");
         if (url) {
             [webView loadRequest:[NSURLRequest requestWithURL:url]];
         }
@@ -4762,12 +4762,12 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     if (!url) return YES;
     NSString *scheme = url.scheme.lowercaseString ?: @"";
     if (scheme.length == 0 || [scheme isEqualToString:@"about"]) return YES;
-    return ZeroNativePolicyListMatches(self.allowedNavigationOrigins, url);
+    return NativeSdkPolicyListMatches(self.allowedNavigationOrigins, url);
 }
 
 - (BOOL)openExternalURLIfAllowed:(NSURL *)url {
     if (self.externalLinkAction != 1) return NO;
-    if (!ZeroNativePolicyListMatches(self.allowedExternalURLs, url)) return NO;
+    if (!NativeSdkPolicyListMatches(self.allowedExternalURLs, url)) return NO;
     [[NSWorkspace sharedWorkspace] openURL:url];
     return YES;
 }
@@ -4911,15 +4911,15 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 - (BOOL)handleShortcutEvent:(NSEvent *)event {
     if (event.type != NSEventTypeKeyDown) return NO;
-    NSString *key = ZeroNativeShortcutKeyForEvent(event);
+    NSString *key = NativeSdkShortcutKeyForEvent(event);
     if (key.length == 0) return NO;
-    BOOL usesImplicitShift = ZeroNativeShortcutUsesImplicitShift(key, event);
+    BOOL usesImplicitShift = NativeSdkShortcutUsesImplicitShift(key, event);
 
     for (NSUInteger pass = 0; pass < (usesImplicitShift ? 2 : 1); pass++) {
         BOOL allowImplicitShift = pass == 1;
-        for (ZeroNativeShortcut *shortcut in self.shortcuts) {
+        for (NativeSdkShortcut *shortcut in self.shortcuts) {
             if (![shortcut.key isEqualToString:key]) continue;
-            if (!ZeroNativeShortcutModifiersMatch(shortcut.modifiers, event.modifierFlags, allowImplicitShift)) continue;
+            if (!NativeSdkShortcutModifiersMatch(shortcut.modifiers, event.modifierFlags, allowImplicitShift)) continue;
             [self emitShortcutWithId:shortcut.identifier key:shortcut.key modifiers:shortcut.modifiers event:event];
             return YES;
         }
@@ -4939,8 +4939,8 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
     }
     const char *identifierBytes = identifier.UTF8String ? identifier.UTF8String : "";
     const char *keyBytes = key.UTF8String ? key.UTF8String : "";
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_SHORTCUT,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_SHORTCUT,
         .window_id = windowId,
         .shortcut_id = identifierBytes,
         .shortcut_id_len = [identifier lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
@@ -4967,8 +4967,8 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
         [data appendData:pathData];
     }
     if (data.length == 0) return NO;
-    [self emitEvent:(zero_native_appkit_event_t){
-        .kind = ZERO_NATIVE_APPKIT_EVENT_FILES_DROPPED,
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_FILES_DROPPED,
         .window_id = windowId,
         .drop_paths = data.bytes,
         .drop_paths_len = data.length,
@@ -4977,12 +4977,12 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (void)setShortcutsWithIds:(const char *const *)ids idLengths:(const size_t *)idLengths keys:(const char *const *)keys keyLengths:(const size_t *)keyLengths modifiers:(const uint32_t *)modifiers count:(size_t)count {
-    NSMutableArray<ZeroNativeShortcut *> *items = [[NSMutableArray alloc] initWithCapacity:count];
+    NSMutableArray<NativeSdkShortcut *> *items = [[NSMutableArray alloc] initWithCapacity:count];
     for (size_t index = 0; index < count; index++) {
         NSString *identifier = ids[index] ? [[NSString alloc] initWithBytes:ids[index] length:idLengths[index] encoding:NSUTF8StringEncoding] : @"";
         NSString *key = keys[index] ? [[NSString alloc] initWithBytes:keys[index] length:keyLengths[index] encoding:NSUTF8StringEncoding] : @"";
         if (identifier.length == 0 || key.length == 0) continue;
-        ZeroNativeShortcut *shortcut = [[ZeroNativeShortcut alloc] init];
+        NativeSdkShortcut *shortcut = [[NativeSdkShortcut alloc] init];
         shortcut.identifier = identifier;
         shortcut.key = key.lowercaseString;
         shortcut.modifiers = modifiers[index];
@@ -5021,7 +5021,7 @@ static NSURL *ZeroNativeAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 @end
 
-static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback) {
+static NSArray<NSString *> *NativeSdkPolicyListFromBytes(const char *bytes, size_t len, NSArray<NSString *> *fallback) {
     if (!bytes || len == 0) return fallback ?: @[];
     NSString *joined = [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
     if (joined.length == 0) return fallback ?: @[];
@@ -5033,7 +5033,7 @@ static NSArray<NSString *> *ZeroNativePolicyListFromBytes(const char *bytes, siz
     return values.count > 0 ? values : (fallback ?: @[]);
 }
 
-static NSString *ZeroNativeOriginForURL(NSURL *url) {
+static NSString *NativeSdkOriginForURL(NSURL *url) {
     if (!url) return @"";
     NSString *scheme = url.scheme.lowercaseString ?: @"";
     if (scheme.length == 0 || [scheme isEqualToString:@"about"]) return @"zero://inline";
@@ -5045,7 +5045,7 @@ static NSString *ZeroNativeOriginForURL(NSURL *url) {
     return [NSString stringWithFormat:@"%@://%@", scheme, host];
 }
 
-static NSString *ZeroNativeShortcutKeyForEvent(NSEvent *event) {
+static NSString *NativeSdkShortcutKeyForEvent(NSEvent *event) {
     NSString *characters = event.charactersIgnoringModifiers ?: @"";
     if (characters.length == 0) return @"";
     unichar ch = [characters characterAtIndex:0];
@@ -5088,7 +5088,7 @@ static NSString *ZeroNativeShortcutKeyForEvent(NSEvent *event) {
     }
 }
 
-static BOOL ZeroNativeShortcutUsesImplicitShift(NSString *key, NSEvent *event) {
+static BOOL NativeSdkShortcutUsesImplicitShift(NSString *key, NSEvent *event) {
     if ((event.modifierFlags & NSEventModifierFlagShift) == 0) return NO;
     if (key.length != 1) return NO;
     unichar ch = [key characterAtIndex:0];
@@ -5098,12 +5098,12 @@ static BOOL ZeroNativeShortcutUsesImplicitShift(NSString *key, NSEvent *event) {
         ch == '[' || ch == ']' || ch == '\\' || ch == '`';
 }
 
-static BOOL ZeroNativeShortcutModifiersMatch(uint32_t shortcutModifiers, NSEventModifierFlags eventModifiers, BOOL allowImplicitShift) {
+static BOOL NativeSdkShortcutModifiersMatch(uint32_t shortcutModifiers, NSEventModifierFlags eventModifiers, BOOL allowImplicitShift) {
     NSEventModifierFlags flags = eventModifiers & NSEventModifierFlagDeviceIndependentFlagsMask;
-    BOOL needsCommand = (shortcutModifiers & ZeroNativeShortcutModifierCommand) != 0 || (shortcutModifiers & ZeroNativeShortcutModifierPrimary) != 0;
-    BOOL needsControl = (shortcutModifiers & ZeroNativeShortcutModifierControl) != 0;
-    BOOL needsOption = (shortcutModifiers & ZeroNativeShortcutModifierOption) != 0;
-    BOOL needsShift = (shortcutModifiers & ZeroNativeShortcutModifierShift) != 0;
+    BOOL needsCommand = (shortcutModifiers & NativeSdkShortcutModifierCommand) != 0 || (shortcutModifiers & NativeSdkShortcutModifierPrimary) != 0;
+    BOOL needsControl = (shortcutModifiers & NativeSdkShortcutModifierControl) != 0;
+    BOOL needsOption = (shortcutModifiers & NativeSdkShortcutModifierOption) != 0;
+    BOOL needsShift = (shortcutModifiers & NativeSdkShortcutModifierShift) != 0;
     BOOL hasCommand = (flags & NSEventModifierFlagCommand) != 0;
     BOOL hasControl = (flags & NSEventModifierFlagControl) != 0;
     BOOL hasOption = (flags & NSEventModifierFlagOption) != 0;
@@ -5112,90 +5112,90 @@ static BOOL ZeroNativeShortcutModifiersMatch(uint32_t shortcutModifiers, NSEvent
     return hasCommand == needsCommand && hasControl == needsControl && hasOption == needsOption && shiftMatches;
 }
 
-static NSEventModifierFlags ZeroNativeMenuModifierFlags(uint32_t modifiers) {
+static NSEventModifierFlags NativeSdkMenuModifierFlags(uint32_t modifiers) {
     NSEventModifierFlags flags = 0;
-    if ((modifiers & ZeroNativeShortcutModifierPrimary) != 0 || (modifiers & ZeroNativeShortcutModifierCommand) != 0) flags |= NSEventModifierFlagCommand;
-    if ((modifiers & ZeroNativeShortcutModifierControl) != 0) flags |= NSEventModifierFlagControl;
-    if ((modifiers & ZeroNativeShortcutModifierOption) != 0) flags |= NSEventModifierFlagOption;
-    if ((modifiers & ZeroNativeShortcutModifierShift) != 0) flags |= NSEventModifierFlagShift;
+    if ((modifiers & NativeSdkShortcutModifierPrimary) != 0 || (modifiers & NativeSdkShortcutModifierCommand) != 0) flags |= NSEventModifierFlagCommand;
+    if ((modifiers & NativeSdkShortcutModifierControl) != 0) flags |= NSEventModifierFlagControl;
+    if ((modifiers & NativeSdkShortcutModifierOption) != 0) flags |= NSEventModifierFlagOption;
+    if ((modifiers & NativeSdkShortcutModifierShift) != 0) flags |= NSEventModifierFlagShift;
     return flags;
 }
 
-static BOOL ZeroNativeWildcardPrefixHasPath(NSString *prefix) {
+static BOOL NativeSdkWildcardPrefixHasPath(NSString *prefix) {
     NSURLComponents *components = [NSURLComponents componentsWithString:prefix ?: @""];
     return components.scheme.length > 0 && components.host.length > 0 && components.percentEncodedPath.length > 0;
 }
 
-static BOOL ZeroNativePolicyListMatches(NSArray<NSString *> *values, NSURL *url) {
-    NSString *origin = ZeroNativeOriginForURL(url);
+static BOOL NativeSdkPolicyListMatches(NSArray<NSString *> *values, NSURL *url) {
+    NSString *origin = NativeSdkOriginForURL(url);
     NSString *absolute = url.absoluteString ?: @"";
     for (NSString *value in values) {
         if ([value isEqualToString:@"*"]) return YES;
         if ([value isEqualToString:origin] || [value isEqualToString:absolute]) return YES;
         if ([value hasSuffix:@"*"]) {
             NSString *prefix = [value substringToIndex:value.length - 1];
-            if (ZeroNativeWildcardPrefixHasPath(prefix) && [absolute hasPrefix:prefix]) return YES;
+            if (NativeSdkWildcardPrefixHasPath(prefix) && [absolute hasPrefix:prefix]) return YES;
         }
     }
     return NO;
 }
 
-zero_native_appkit_host_t *zero_native_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
     @autoreleasepool {
-        NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"zero-native";
+        NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"native-sdk";
         NSString *windowTitleString = [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] ?: appNameString;
-        NSString *bundleIdString = [[NSString alloc] initWithBytes:bundle_id length:bundle_id_len encoding:NSUTF8StringEncoding] ?: @"dev.zero_native.app";
+        NSString *bundleIdString = [[NSString alloc] initWithBytes:bundle_id length:bundle_id_len encoding:NSUTF8StringEncoding] ?: @"dev.native_sdk.app";
         NSString *iconPathString = [[NSString alloc] initWithBytes:icon_path length:icon_path_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *windowLabelString = [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] ?: @"main";
-        ZeroNativeAppKitHost *host = [[ZeroNativeAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0)];
-        return (__bridge_retained zero_native_appkit_host_t *)host;
+        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0)];
+        return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }
 
-void zero_native_appkit_destroy(zero_native_appkit_host_t *host) {
+void native_sdk_appkit_destroy(native_sdk_appkit_host_t *host) {
     if (!host) {
         return;
     }
     CFBridgingRelease(host);
 }
 
-void zero_native_appkit_run(zero_native_appkit_host_t *host, zero_native_appkit_event_callback_t callback, void *context) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_event_callback_t callback, void *context) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object runWithCallback:callback context:context];
 }
 
-void zero_native_appkit_set_automation_frame_polling(zero_native_appkit_host_t *host, int enabled) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_set_automation_frame_polling(native_sdk_appkit_host_t *host, int enabled) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object setAutomationFramePolling:(enabled != 0)];
 }
 
-void zero_native_appkit_start_timer(zero_native_appkit_host_t *host, uint64_t timer_id, uint64_t interval_ns, int repeats) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_start_timer(native_sdk_appkit_host_t *host, uint64_t timer_id, uint64_t interval_ns, int repeats) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object startAppTimerWithId:timer_id intervalNs:interval_ns repeats:(repeats != 0)];
 }
 
-void zero_native_appkit_cancel_timer(zero_native_appkit_host_t *host, uint64_t timer_id) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_cancel_timer(native_sdk_appkit_host_t *host, uint64_t timer_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object cancelAppTimerWithId:timer_id];
 }
 
-void zero_native_appkit_wake(zero_native_appkit_host_t *host) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_wake(native_sdk_appkit_host_t *host) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object wakeFromAnyThread];
 }
 
-void zero_native_appkit_stop(zero_native_appkit_host_t *host) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_stop(native_sdk_appkit_host_t *host) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object emitShutdown];
     [object stop];
 }
 
-void zero_native_appkit_load_webview(zero_native_appkit_host_t *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
-    zero_native_appkit_load_window_webview(host, 1, source, source_len, source_kind, asset_root, asset_root_len, asset_entry, asset_entry_len, asset_origin, asset_origin_len, spa_fallback);
+void native_sdk_appkit_load_webview(native_sdk_appkit_host_t *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
+    native_sdk_appkit_load_window_webview(host, 1, source, source_len, source_kind, asset_root, asset_root_len, asset_entry, asset_entry_len, asset_origin, asset_origin_len, spa_fallback);
 }
 
-void zero_native_appkit_load_window_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_load_window_webview(native_sdk_appkit_host_t *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *sourceString = source ? [[NSString alloc] initWithBytes:source length:source_len encoding:NSUTF8StringEncoding] : @"";
     NSString *assetRoot = asset_root ? [[NSString alloc] initWithBytes:asset_root length:asset_root_len encoding:NSUTF8StringEncoding] : @"";
     NSString *assetEntry = asset_entry ? [[NSString alloc] initWithBytes:asset_entry length:asset_entry_len encoding:NSUTF8StringEncoding] : @"";
@@ -5209,76 +5209,76 @@ void zero_native_appkit_load_window_webview(zero_native_appkit_host_t *host, uin
               windowId:window_id];
 }
 
-void zero_native_appkit_set_bridge_callback(zero_native_appkit_host_t *host, zero_native_appkit_bridge_callback_t callback, void *context) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_set_bridge_callback(native_sdk_appkit_host_t *host, native_sdk_appkit_bridge_callback_t callback, void *context) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     object.bridgeCallback = callback;
     object.bridgeContext = context;
 }
 
-void zero_native_appkit_bridge_respond(zero_native_appkit_host_t *host, const char *response, size_t response_len) {
-    zero_native_appkit_bridge_respond_window(host, 1, response, response_len);
+void native_sdk_appkit_bridge_respond(native_sdk_appkit_host_t *host, const char *response, size_t response_len) {
+    native_sdk_appkit_bridge_respond_window(host, 1, response, response_len);
 }
 
-void zero_native_appkit_bridge_respond_window(zero_native_appkit_host_t *host, uint64_t window_id, const char *response, size_t response_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_bridge_respond_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *response, size_t response_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *responseString = response ? [[NSString alloc] initWithBytes:response length:response_len encoding:NSUTF8StringEncoding] : @"{}";
     [object completeBridgeWithResponse:responseString ?: @"{}" windowId:window_id];
 }
 
-void zero_native_appkit_bridge_respond_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_bridge_respond_webview(native_sdk_appkit_host_t *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = webview_label ? [[NSString alloc] initWithBytes:webview_label length:webview_label_len encoding:NSUTF8StringEncoding] : @"main";
     NSString *responseString = response ? [[NSString alloc] initWithBytes:response length:response_len encoding:NSUTF8StringEncoding] : @"{}";
     [object completeBridgeWithResponse:responseString ?: @"{}" windowId:window_id webViewLabel:labelString ?: @"main"];
 }
 
-void zero_native_appkit_emit_window_event(zero_native_appkit_host_t *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_emit_window_event(native_sdk_appkit_host_t *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *nameString = name ? [[NSString alloc] initWithBytes:name length:name_len encoding:NSUTF8StringEncoding] : @"";
     NSString *detailString = detail_json ? [[NSString alloc] initWithBytes:detail_json length:detail_json_len encoding:NSUTF8StringEncoding] : @"null";
     [object emitEventNamed:nameString ?: @"" detailJSON:detailString ?: @"null" windowId:window_id];
 }
 
-void zero_native_appkit_set_security_policy(zero_native_appkit_host_t *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
-    NSArray<NSString *> *origins = ZeroNativePolicyListFromBytes(allowed_origins, allowed_origins_len, @[ @"zero://app", @"zero://inline" ]);
-    NSArray<NSString *> *externalURLs = ZeroNativePolicyListFromBytes(external_urls, external_urls_len, @[]);
+void native_sdk_appkit_set_security_policy(native_sdk_appkit_host_t *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    NSArray<NSString *> *origins = NativeSdkPolicyListFromBytes(allowed_origins, allowed_origins_len, @[ @"zero://app", @"zero://inline" ]);
+    NSArray<NSString *> *externalURLs = NativeSdkPolicyListFromBytes(external_urls, external_urls_len, @[]);
     [object setAllowedNavigationOrigins:origins externalURLs:externalURLs externalAction:external_action];
 }
 
-void zero_native_appkit_set_menus(zero_native_appkit_host_t *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_set_menus(native_sdk_appkit_host_t *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object setMenusWithTitles:menu_titles titleLengths:menu_title_lens count:menu_count itemMenuIndices:item_menu_indices itemLabels:item_labels itemLabelLengths:item_label_lens itemCommands:item_commands itemCommandLengths:item_command_lens itemKeys:item_keys itemKeyLengths:item_key_lens itemModifiers:item_modifiers itemSeparators:item_separators itemEnabled:item_enabled itemChecked:item_checked itemCount:item_count];
 }
 
-void zero_native_appkit_set_shortcuts(zero_native_appkit_host_t *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     [object setShortcutsWithIds:ids idLengths:id_lens keys:keys keyLengths:key_lens modifiers:modifiers count:count];
 }
 
-int zero_native_appkit_create_window(zero_native_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *titleString = window_title ? [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] : @"";
     NSString *labelString = window_label ? [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] : @"";
     return [object createWindowWithId:window_id title:titleString ?: @"" label:labelString ?: @"" x:x y:y width:width height:height restoreFrame:(restore_frame != 0) makeMain:NO] ? 1 : 0;
 }
 
-int zero_native_appkit_focus_window(zero_native_appkit_host_t *host, uint64_t window_id) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_focus_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     if (!object.windows[@(window_id)]) return 0;
     [object focusWindowWithId:window_id];
     return 1;
 }
 
-int zero_native_appkit_close_window(zero_native_appkit_host_t *host, uint64_t window_id) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     if (!object.windows[@(window_id)]) return 0;
     [object closeWindowWithId:window_id];
     return 1;
 }
 
-int zero_native_appkit_create_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_create_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     NSString *parentString = parent ? [[NSString alloc] initWithBytes:parent length:parent_len encoding:NSUTF8StringEncoding] : @"";
     NSString *roleString = role ? [[NSString alloc] initWithBytes:role length:role_len encoding:NSUTF8StringEncoding] : @"";
@@ -5288,8 +5288,8 @@ int zero_native_appkit_create_view(zero_native_appkit_host_t *host, uint64_t win
     return [object createNativeViewInWindow:window_id label:labelString ?: @"" kind:kind parent:parentString ?: @"" x:x y:y width:width height:height layer:layer visible:(visible != 0) enabled:(enabled != 0) role:roleString ?: @"" accessibilityLabel:accessibilityLabelString ?: @"" text:textString ?: @"" command:commandString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_update_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_update_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     NSString *roleString = role ? [[NSString alloc] initWithBytes:role length:role_len encoding:NSUTF8StringEncoding] : @"";
     NSString *accessibilityLabelString = accessibility_label ? [[NSString alloc] initWithBytes:accessibility_label length:accessibility_label_len encoding:NSUTF8StringEncoding] : @"";
@@ -5298,131 +5298,131 @@ int zero_native_appkit_update_view(zero_native_appkit_host_t *host, uint64_t win
     return [object updateNativeViewInWindow:window_id label:labelString ?: @"" hasFrame:(has_frame != 0) x:x y:y width:width height:height hasLayer:(has_layer != 0) layer:layer hasVisible:(has_visible != 0) visible:(visible != 0) hasEnabled:(has_enabled != 0) enabled:(enabled != 0) hasRole:(has_role != 0) role:roleString ?: @"" hasAccessibilityLabel:(has_accessibility_label != 0) accessibilityLabel:accessibilityLabelString ?: @"" hasText:(has_text != 0) text:textString ?: @"" hasCommand:(has_command != 0) command:commandString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_set_view_frame(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_view_frame(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setNativeViewFrameInWindow:window_id label:labelString ?: @"" x:x y:y width:width height:height] ? 1 : 0;
 }
 
-int zero_native_appkit_set_view_visible(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int visible) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_view_visible(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int visible) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setNativeViewVisibleInWindow:window_id label:labelString ?: @"" visible:(visible != 0)] ? 1 : 0;
 }
 
-int zero_native_appkit_set_view_cursor(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int cursor) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_view_cursor(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int cursor) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setNativeViewCursorInWindow:window_id label:labelString ?: @"" cursor:cursor] ? 1 : 0;
 }
 
-int zero_native_appkit_focus_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_focus_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object focusNativeViewInWindow:window_id label:labelString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_close_view(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_close_view(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object closeNativeViewInWindow:window_id label:labelString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_present_gpu_surface_pixels(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_present_gpu_surface_pixels(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object presentGpuSurfacePixelsInWindow:window_id label:labelString ?: @"" width:width height:height scale:scale hasDirtyRect:(has_dirty_rect != 0) dirtyX:dirty_x dirtyY:dirty_y dirtyWidth:dirty_width dirtyHeight:dirty_height rgba8:rgba8 byteLength:rgba8_len] ? 1 : 0;
 }
 
-int zero_native_appkit_present_gpu_surface_packet(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double surface_width, double surface_height, double scale, uint8_t clear_r, uint8_t clear_g, uint8_t clear_b, uint8_t clear_a, int requires_render, size_t command_count, size_t unsupported_command_count, int representable, const uint8_t *json, size_t json_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_present_gpu_surface_packet(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double surface_width, double surface_height, double scale, uint8_t clear_r, uint8_t clear_g, uint8_t clear_b, uint8_t clear_a, int requires_render, size_t command_count, size_t unsupported_command_count, int representable, const uint8_t *json, size_t json_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return (int)[object presentGpuSurfacePacketInWindow:window_id label:labelString ?: @"" surfaceWidth:surface_width height:surface_height scale:scale clearR:clear_r clearG:clear_g clearB:clear_b clearA:clear_a requiresRender:(requires_render != 0) commandCount:command_count unsupportedCommandCount:unsupported_command_count representable:(representable != 0) json:json byteLength:json_len];
 }
 
-int zero_native_appkit_request_gpu_surface_frame(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_request_gpu_surface_frame(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object requestGpuSurfaceFrameInWindow:window_id label:labelString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_set_gpu_surface_scroll_drivers(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const zero_native_appkit_scroll_driver_t *drivers, size_t count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_gpu_surface_scroll_drivers(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const native_sdk_appkit_scroll_driver_t *drivers, size_t count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setGpuSurfaceScrollDriversInWindow:window_id label:labelString ?: @"" drivers:drivers count:count] ? 1 : 0;
 }
 
-int zero_native_appkit_show_context_menu(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, uint64_t token, const zero_native_appkit_context_menu_item_t *items, size_t count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_show_context_menu(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, uint64_t token, const native_sdk_appkit_context_menu_item_t *items, size_t count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object showContextMenuInWindow:window_id label:labelString ?: @"" x:x y:y token:token items:items count:count] ? 1 : 0;
 }
 
-int zero_native_appkit_upload_gpu_surface_image(zero_native_appkit_host_t *host, uint64_t image_id, size_t width, size_t height, const uint8_t *rgba8, size_t rgba8_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_upload_gpu_surface_image(native_sdk_appkit_host_t *host, uint64_t image_id, size_t width, size_t height, const uint8_t *rgba8, size_t rgba8_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     return [object uploadGpuSurfaceImageWithId:image_id width:width height:height rgba8:rgba8 byteLength:rgba8_len] ? 1 : 0;
 }
 
-int zero_native_appkit_remove_gpu_surface_image(zero_native_appkit_host_t *host, uint64_t image_id) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_remove_gpu_surface_image(native_sdk_appkit_host_t *host, uint64_t image_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     return [object removeGpuSurfaceImageWithId:image_id] ? 1 : 0;
 }
 
-int zero_native_appkit_update_widget_accessibility(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const zero_native_appkit_widget_accessibility_node_t *nodes, size_t node_count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const native_sdk_appkit_widget_accessibility_node_t *nodes, size_t node_count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object updateWidgetAccessibilityInWindow:window_id label:labelString ?: @"" nodes:nodes count:node_count] ? 1 : 0;
 }
 
-int zero_native_appkit_create_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_create_webview(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     NSString *urlString = url ? [[NSString alloc] initWithBytes:url length:url_len encoding:NSUTF8StringEncoding] : @"";
     return [object createWebViewInWindow:window_id label:labelString ?: @"" url:urlString ?: @"" x:x y:y width:width height:height layer:layer transparent:transparent != 0 bridgeEnabled:bridge_enabled != 0] ? 1 : 0;
 }
 
-int zero_native_appkit_set_webview_frame(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_webview_frame(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setWebViewFrameInWindow:window_id label:labelString ?: @"" x:x y:y width:width height:height] ? 1 : 0;
 }
 
-int zero_native_appkit_navigate_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_navigate_webview(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     NSString *urlString = url ? [[NSString alloc] initWithBytes:url length:url_len encoding:NSUTF8StringEncoding] : @"";
     return [object navigateWebViewInWindow:window_id label:labelString ?: @"" url:urlString ?: @""] ? 1 : 0;
 }
 
-int zero_native_appkit_set_webview_zoom(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double zoom) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_webview_zoom(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, double zoom) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setWebViewZoomInWindow:window_id label:labelString ?: @"" zoom:zoom] ? 1 : 0;
 }
 
-int zero_native_appkit_set_webview_layer(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int layer) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_set_webview_layer(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, int layer) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object setWebViewLayerInWindow:window_id label:labelString ?: @"" layer:layer] ? 1 : 0;
 }
 
-int zero_native_appkit_close_webview(zero_native_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+int native_sdk_appkit_close_webview(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     NSString *labelString = label ? [[NSString alloc] initWithBytes:label length:label_len encoding:NSUTF8StringEncoding] : @"";
     return [object closeWebViewInWindow:window_id label:labelString ?: @""] ? 1 : 0;
 }
 
-size_t zero_native_appkit_clipboard_read(zero_native_appkit_host_t *host, char *buffer, size_t buffer_len) {
-    return zero_native_appkit_clipboard_read_data(host, "text/plain", strlen("text/plain"), buffer, buffer_len);
+size_t native_sdk_appkit_clipboard_read(native_sdk_appkit_host_t *host, char *buffer, size_t buffer_len) {
+    return native_sdk_appkit_clipboard_read_data(host, "text/plain", strlen("text/plain"), buffer, buffer_len);
 }
 
-void zero_native_appkit_clipboard_write(zero_native_appkit_host_t *host, const char *text, size_t text_len) {
-    (void)zero_native_appkit_clipboard_write_data(host, "text/plain", strlen("text/plain"), text, text_len);
+void native_sdk_appkit_clipboard_write(native_sdk_appkit_host_t *host, const char *text, size_t text_len) {
+    (void)native_sdk_appkit_clipboard_write_data(host, "text/plain", strlen("text/plain"), text, text_len);
 }
 
-size_t zero_native_appkit_clipboard_read_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len) {
+size_t native_sdk_appkit_clipboard_read_data(native_sdk_appkit_host_t *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len) {
     (void)host;
-    NSString *type = ZeroNativePasteboardTypeForMime(mime_type, mime_type_len);
+    NSString *type = NativeSdkPasteboardTypeForMime(mime_type, mime_type_len);
     if (!type || !buffer) return 0;
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     NSData *data = nil;
@@ -5438,9 +5438,9 @@ size_t zero_native_appkit_clipboard_read_data(zero_native_appkit_host_t *host, c
     return count;
 }
 
-int zero_native_appkit_clipboard_write_data(zero_native_appkit_host_t *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len) {
+int native_sdk_appkit_clipboard_write_data(native_sdk_appkit_host_t *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len) {
     (void)host;
-    NSString *type = ZeroNativePasteboardTypeForMime(mime_type, mime_type_len);
+    NSString *type = NativeSdkPasteboardTypeForMime(mime_type, mime_type_len);
     if (!type || (!bytes && bytes_len > 0)) return 0;
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     [pasteboard clearContents];
@@ -5452,7 +5452,7 @@ int zero_native_appkit_clipboard_write_data(zero_native_appkit_host_t *host, con
     return [pasteboard setData:data forType:type] ? 1 : 0;
 }
 
-int zero_native_appkit_show_notification(zero_native_appkit_host_t *host, const char *title, size_t title_len, const char *subtitle, size_t subtitle_len, const char *body, size_t body_len) {
+int native_sdk_appkit_show_notification(native_sdk_appkit_host_t *host, const char *title, size_t title_len, const char *subtitle, size_t subtitle_len, const char *body, size_t body_len) {
     (void)host;
     NSString *titleString = title ? [[NSString alloc] initWithBytes:title length:title_len encoding:NSUTF8StringEncoding] : @"";
     if (titleString.length == 0) return 0;
@@ -5466,7 +5466,7 @@ int zero_native_appkit_show_notification(zero_native_appkit_host_t *host, const 
     return 1;
 }
 
-int zero_native_appkit_open_external_url(zero_native_appkit_host_t *host, const char *url, size_t url_len) {
+int native_sdk_appkit_open_external_url(native_sdk_appkit_host_t *host, const char *url, size_t url_len) {
     (void)host;
     NSString *urlString = url ? [[NSString alloc] initWithBytes:url length:url_len encoding:NSUTF8StringEncoding] : @"";
     if (urlString.length == 0) return 0;
@@ -5475,7 +5475,7 @@ int zero_native_appkit_open_external_url(zero_native_appkit_host_t *host, const 
     return [[NSWorkspace sharedWorkspace] openURL:target] ? 1 : 0;
 }
 
-int zero_native_appkit_reveal_path(zero_native_appkit_host_t *host, const char *path, size_t path_len) {
+int native_sdk_appkit_reveal_path(native_sdk_appkit_host_t *host, const char *path, size_t path_len) {
     (void)host;
     NSString *pathString = path ? [[NSString alloc] initWithBytes:path length:path_len encoding:NSUTF8StringEncoding] : @"";
     if (pathString.length == 0) return 0;
@@ -5485,7 +5485,7 @@ int zero_native_appkit_reveal_path(zero_native_appkit_host_t *host, const char *
     return 1;
 }
 
-int zero_native_appkit_add_recent_document(zero_native_appkit_host_t *host, const char *path, size_t path_len) {
+int native_sdk_appkit_add_recent_document(native_sdk_appkit_host_t *host, const char *path, size_t path_len) {
     (void)host;
     NSString *pathString = path ? [[NSString alloc] initWithBytes:path length:path_len encoding:NSUTF8StringEncoding] : @"";
     if (pathString.length == 0) return 0;
@@ -5495,20 +5495,20 @@ int zero_native_appkit_add_recent_document(zero_native_appkit_host_t *host, cons
     return 1;
 }
 
-int zero_native_appkit_clear_recent_documents(zero_native_appkit_host_t *host) {
+int native_sdk_appkit_clear_recent_documents(native_sdk_appkit_host_t *host) {
     (void)host;
     [[NSDocumentController sharedDocumentController] clearRecentDocuments:nil];
     return 1;
 }
 
-int zero_native_appkit_set_credential(zero_native_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, const char *secret, size_t secret_len) {
+int native_sdk_appkit_set_credential(native_sdk_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, const char *secret, size_t secret_len) {
     (void)host;
     @autoreleasepool {
-        NSString *serviceString = ZeroNativeStringFromBytes(service, service_len);
-        NSString *accountString = ZeroNativeStringFromBytes(account, account_len);
+        NSString *serviceString = NativeSdkStringFromBytes(service, service_len);
+        NSString *accountString = NativeSdkStringFromBytes(account, account_len);
         if (serviceString.length == 0 || accountString.length == 0 || !secret || secret_len == 0) return 0;
         NSData *secretData = [NSData dataWithBytes:secret length:secret_len];
-        NSMutableDictionary *query = ZeroNativeCredentialQuery(serviceString, accountString);
+        NSMutableDictionary *query = NativeSdkCredentialQuery(serviceString, accountString);
         NSDictionary *update = @{ (__bridge id)kSecValueData: secretData };
         OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)update);
         if (status == errSecItemNotFound) {
@@ -5519,13 +5519,13 @@ int zero_native_appkit_set_credential(zero_native_appkit_host_t *host, const cha
     }
 }
 
-size_t zero_native_appkit_get_credential(zero_native_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, char *buffer, size_t buffer_len) {
+size_t native_sdk_appkit_get_credential(native_sdk_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, char *buffer, size_t buffer_len) {
     (void)host;
     @autoreleasepool {
-        NSString *serviceString = ZeroNativeStringFromBytes(service, service_len);
-        NSString *accountString = ZeroNativeStringFromBytes(account, account_len);
+        NSString *serviceString = NativeSdkStringFromBytes(service, service_len);
+        NSString *accountString = NativeSdkStringFromBytes(account, account_len);
         if (serviceString.length == 0 || accountString.length == 0 || !buffer) return 0;
-        NSMutableDictionary *query = ZeroNativeCredentialQuery(serviceString, accountString);
+        NSMutableDictionary *query = NativeSdkCredentialQuery(serviceString, accountString);
         query[(__bridge id)kSecReturnData] = @YES;
         query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
         CFTypeRef result = NULL;
@@ -5538,19 +5538,19 @@ size_t zero_native_appkit_get_credential(zero_native_appkit_host_t *host, const 
     }
 }
 
-int zero_native_appkit_delete_credential(zero_native_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len) {
+int native_sdk_appkit_delete_credential(native_sdk_appkit_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len) {
     (void)host;
     @autoreleasepool {
-        NSString *serviceString = ZeroNativeStringFromBytes(service, service_len);
-        NSString *accountString = ZeroNativeStringFromBytes(account, account_len);
+        NSString *serviceString = NativeSdkStringFromBytes(service, service_len);
+        NSString *accountString = NativeSdkStringFromBytes(account, account_len);
         if (serviceString.length == 0 || accountString.length == 0) return 0;
-        NSMutableDictionary *query = ZeroNativeCredentialQuery(serviceString, accountString);
+        NSMutableDictionary *query = NativeSdkCredentialQuery(serviceString, accountString);
         OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
         return status == errSecSuccess ? 1 : 0;
     }
 }
 
-static NSArray<NSString *> *ZeroNativeParseExtensions(const char *extensions, size_t len) {
+static NSArray<NSString *> *NativeSdkParseExtensions(const char *extensions, size_t len) {
     if (!extensions || len == 0) return nil;
     NSString *str = [[NSString alloc] initWithBytes:extensions length:len encoding:NSUTF8StringEncoding];
     if (!str || str.length == 0) return nil;
@@ -5562,7 +5562,7 @@ static NSArray<NSString *> *ZeroNativeParseExtensions(const char *extensions, si
     return result.count > 0 ? result : nil;
 }
 
-static void ZeroNativeConfigurePanelExtensions(NSSavePanel *panel, NSArray<NSString *> *extensions) {
+static void NativeSdkConfigurePanelExtensions(NSSavePanel *panel, NSArray<NSString *> *extensions) {
     if (!extensions || extensions.count == 0) return;
     if (@available(macOS 11.0, *)) {
         NSMutableArray *types = [NSMutableArray array];
@@ -5574,9 +5574,9 @@ static void ZeroNativeConfigurePanelExtensions(NSSavePanel *panel, NSArray<NSStr
     }
 }
 
-zero_native_appkit_open_dialog_result_t zero_native_appkit_show_open_dialog(zero_native_appkit_host_t *host, const zero_native_appkit_open_dialog_opts_t *opts, char *buffer, size_t buffer_len) {
+native_sdk_appkit_open_dialog_result_t native_sdk_appkit_show_open_dialog(native_sdk_appkit_host_t *host, const native_sdk_appkit_open_dialog_opts_t *opts, char *buffer, size_t buffer_len) {
     (void)host;
-    zero_native_appkit_open_dialog_result_t result = { .count = 0, .bytes_written = 0 };
+    native_sdk_appkit_open_dialog_result_t result = { .count = 0, .bytes_written = 0 };
     @autoreleasepool {
         NSOpenPanel *panel = [NSOpenPanel openPanel];
         if (opts->title && opts->title_len > 0) {
@@ -5589,7 +5589,7 @@ zero_native_appkit_open_dialog_result_t zero_native_appkit_show_open_dialog(zero
         panel.canChooseFiles = YES;
         panel.canChooseDirectories = opts->allow_directories != 0;
         panel.allowsMultipleSelection = opts->allow_multiple != 0;
-        ZeroNativeConfigurePanelExtensions(panel, ZeroNativeParseExtensions(opts->extensions, opts->extensions_len));
+        NativeSdkConfigurePanelExtensions(panel, NativeSdkParseExtensions(opts->extensions, opts->extensions_len));
 
         if ([panel runModal] != NSModalResponseOK) return result;
 
@@ -5609,12 +5609,12 @@ zero_native_appkit_open_dialog_result_t zero_native_appkit_show_open_dialog(zero
             offset += data.length;
             result.count++;
         }
-        result.bytes_written = overflow ? ZeroNativeOverflowSize(buffer_len) : offset;
+        result.bytes_written = overflow ? NativeSdkOverflowSize(buffer_len) : offset;
     }
     return result;
 }
 
-size_t zero_native_appkit_show_save_dialog(zero_native_appkit_host_t *host, const zero_native_appkit_save_dialog_opts_t *opts, char *buffer, size_t buffer_len) {
+size_t native_sdk_appkit_show_save_dialog(native_sdk_appkit_host_t *host, const native_sdk_appkit_save_dialog_opts_t *opts, char *buffer, size_t buffer_len) {
     (void)host;
     @autoreleasepool {
         NSSavePanel *panel = [NSSavePanel savePanel];
@@ -5628,7 +5628,7 @@ size_t zero_native_appkit_show_save_dialog(zero_native_appkit_host_t *host, cons
         if (opts->default_name && opts->default_name_len > 0) {
             panel.nameFieldStringValue = [[NSString alloc] initWithBytes:opts->default_name length:opts->default_name_len encoding:NSUTF8StringEncoding];
         }
-        ZeroNativeConfigurePanelExtensions(panel, ZeroNativeParseExtensions(opts->extensions, opts->extensions_len));
+        NativeSdkConfigurePanelExtensions(panel, NativeSdkParseExtensions(opts->extensions, opts->extensions_len));
 
         if ([panel runModal] != NSModalResponseOK) return 0;
 
@@ -5636,13 +5636,13 @@ size_t zero_native_appkit_show_save_dialog(zero_native_appkit_host_t *host, cons
         NSData *data = [path dataUsingEncoding:NSUTF8StringEncoding];
         if (!data) return 0;
         size_t count = data.length;
-        if (count > buffer_len) return ZeroNativeOverflowSize(buffer_len);
+        if (count > buffer_len) return NativeSdkOverflowSize(buffer_len);
         memcpy(buffer, data.bytes, count);
         return count;
     }
 }
 
-int zero_native_appkit_show_message_dialog(zero_native_appkit_host_t *host, const zero_native_appkit_message_dialog_opts_t *opts) {
+int native_sdk_appkit_show_message_dialog(native_sdk_appkit_host_t *host, const native_sdk_appkit_message_dialog_opts_t *opts) {
     (void)host;
     @autoreleasepool {
         NSAlert *alert = [[NSAlert alloc] init];
@@ -5684,8 +5684,8 @@ int zero_native_appkit_show_message_dialog(zero_native_appkit_host_t *host, cons
     }
 }
 
-void zero_native_appkit_create_tray(zero_native_appkit_host_t *host, const char *icon_path, size_t icon_path_len, const char *title, size_t title_len, const char *tooltip, size_t tooltip_len) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_create_tray(native_sdk_appkit_host_t *host, const char *icon_path, size_t icon_path_len, const char *title, size_t title_len, const char *tooltip, size_t tooltip_len) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     @autoreleasepool {
         if (object.statusItem) {
             [[NSStatusBar systemStatusBar] removeStatusItem:object.statusItem];
@@ -5716,8 +5716,8 @@ void zero_native_appkit_create_tray(zero_native_appkit_host_t *host, const char 
     }
 }
 
-void zero_native_appkit_update_tray_menu(zero_native_appkit_host_t *host, const uint32_t *item_ids, const char *const *labels, const size_t *label_lens, const int *separators, const int *enabled_flags, size_t count) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_update_tray_menu(native_sdk_appkit_host_t *host, const uint32_t *item_ids, const char *const *labels, const size_t *label_lens, const int *separators, const int *enabled_flags, size_t count) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     @autoreleasepool {
         if (!object.statusItem) return;
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
@@ -5739,16 +5739,16 @@ void zero_native_appkit_update_tray_menu(zero_native_appkit_host_t *host, const 
     }
 }
 
-void zero_native_appkit_remove_tray(zero_native_appkit_host_t *host) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_remove_tray(native_sdk_appkit_host_t *host) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     if (object.statusItem) {
         [[NSStatusBar systemStatusBar] removeStatusItem:object.statusItem];
         object.statusItem = nil;
     }
 }
 
-void zero_native_appkit_set_tray_callback(zero_native_appkit_host_t *host, zero_native_appkit_tray_callback_t callback, void *context) {
-    ZeroNativeAppKitHost *object = (__bridge ZeroNativeAppKitHost *)host;
+void native_sdk_appkit_set_tray_callback(native_sdk_appkit_host_t *host, native_sdk_appkit_tray_callback_t callback, void *context) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     object.trayCallback = callback;
     object.trayContext = context;
 }

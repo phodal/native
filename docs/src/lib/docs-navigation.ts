@@ -55,7 +55,7 @@ export const navSections: NavSection[] = [
     title: "Operations",
     items: [
       { name: "Debugging", href: "/debugging" },
-      { name: "zero-native doctor", href: "/debugging/doctor" },
+      { name: "native doctor", href: "/debugging/doctor" },
       { name: "Automation", href: "/automation" },
       { name: "Testing", href: "/testing" },
       { name: "Testing in CI", href: "/testing/ci" },

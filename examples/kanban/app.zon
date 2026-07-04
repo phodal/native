@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.kanban",
+    .id = "dev.native_sdk.kanban",
     .name = "kanban",
     .display_name = "Kanban",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Kanban",
+                .title = "Native SDK Kanban",
                 .width = 840,
                 .height = 560,
                 

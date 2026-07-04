@@ -1,10 +1,10 @@
 const std = @import("std");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-const geometry = zero_native.geometry;
+const geometry = native_sdk.geometry;
 const model = @import("model.zig");
 const component_app = @import("app.zig");
 
@@ -14,8 +14,8 @@ pub fn main(init: std.process.Init) !void {
     var app = GpuComponentsApp{};
     try runner.runWithOptions(app.app(), .{
         .app_name = "gpu-components",
-        .window_title = "zero-native GPU Components",
-        .bundle_id = "dev.zero_native.gpu_components",
+        .window_title = "Native SDK GPU Components",
+        .bundle_id = "dev.native_sdk.gpu_components",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, model.window_width, model.window_height),
         .restore_state = false,

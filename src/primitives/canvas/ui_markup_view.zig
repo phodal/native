@@ -347,7 +347,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// `<markdown source="{body}" on-link="open_url"
         /// on-details="toggle_details" details-expanded="{flags}" />`:
         /// a leaf that renders its source binding through
-        /// `zero_native.markdown.Markdown(Msg).view`. Only `source` is
+        /// `native_sdk.markdown.Markdown(Msg).view`. Only `source` is
         /// required; without `on-details`/`details-expanded` the details
         /// blocks render collapsed and inert (Md.view's null defaults).
         fn buildMarkdown(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {

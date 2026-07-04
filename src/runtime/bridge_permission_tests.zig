@@ -75,7 +75,7 @@ test "runtime gates JavaScript window API by origin and configured permission" {
     denied_origin.init(.{});
     denied_origin.runtime.options.js_window_api = true;
     try denied_origin.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"origin\",\"command\":\"zero-native.window.list\",\"payload\":null}",
+        .bytes = "{\"id\":\"origin\",\"command\":\"native-sdk.window.list\",\"payload\":null}",
         .origin = "https://example.invalid",
         .window_id = 1,
     } });
@@ -88,7 +88,7 @@ test "runtime gates JavaScript window API by origin and configured permission" {
     denied_permission.runtime.options.js_window_api = true;
     denied_permission.runtime.options.security.permissions = &filesystem_only;
     try denied_permission.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"permission\",\"command\":\"zero-native.window.list\",\"payload\":null}",
+        .bytes = "{\"id\":\"permission\",\"command\":\"native-sdk.window.list\",\"payload\":null}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -101,7 +101,7 @@ test "runtime gates JavaScript window API by origin and configured permission" {
     allowed.runtime.options.js_window_api = true;
     allowed.runtime.options.security.permissions = &window_permission;
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.window.list\",\"payload\":null}",
+        .bytes = "{\"id\":\"allowed\",\"command\":\"native-sdk.window.list\",\"payload\":null}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -118,7 +118,7 @@ test "runtime gates JavaScript webview API by origin and configured permission" 
     denied_origin.init(.{});
     denied_origin.runtime.options.js_window_api = true;
     try denied_origin.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"origin\",\"command\":\"zero-native.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"origin\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "https://example.invalid",
         .window_id = 1,
     } });
@@ -131,7 +131,7 @@ test "runtime gates JavaScript webview API by origin and configured permission" 
     denied_permission.runtime.options.js_window_api = true;
     denied_permission.runtime.options.security.permissions = &filesystem_only;
     try denied_permission.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"permission\",\"command\":\"zero-native.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"permission\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -147,7 +147,7 @@ test "runtime gates JavaScript webview API by origin and configured permission" 
     allowed.runtime.options.security.navigation.allowed_origins = &webview_origins;
     try allowed.runtime.dispatchPlatformEvent(app, .app_start);
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
+        .bytes = "{\"id\":\"allowed\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"url\":\"https://example.com\",\"frame\":{\"width\":300,\"height\":200}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -163,8 +163,8 @@ test "runtime gates built-in bridge commands through explicit policy" {
 
     const window_permissions = [_][]const u8{security.permission_window};
     const policies = [_]bridge.CommandPolicy{
-        .{ .name = "zero-native.window.create", .permissions = &window_permissions, .origins = &.{"zero://inline"} },
-        .{ .name = "zero-native.webview.create", .permissions = &window_permissions, .origins = &.{"zero://inline"} },
+        .{ .name = "native-sdk.window.create", .permissions = &window_permissions, .origins = &.{"zero://inline"} },
+        .{ .name = "native-sdk.webview.create", .permissions = &window_permissions, .origins = &.{"zero://inline"} },
     };
 
     const harness = try TestHarness().create(std.testing.allocator, .{});
@@ -177,14 +177,14 @@ test "runtime gates built-in bridge commands through explicit policy" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.window.create\",\"payload\":{\"label\":\"policy-window\",\"title\":\"Policy\",\"width\":320,\"height\":240}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.window.create\",\"payload\":{\"label\":\"policy-window\",\"title\":\"Policy\",\"width\":320,\"height\":240}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"webview\",\"command\":\"zero-native.webview.create\",\"payload\":{\"label\":\"policy-webview\",\"url\":\"https://example.com\",\"frame\":{\"width\":320,\"height\":240}}}",
+        .bytes = "{\"id\":\"webview\",\"command\":\"native-sdk.webview.create\",\"payload\":{\"label\":\"policy-webview\",\"url\":\"https://example.com\",\"frame\":{\"width\":320,\"height\":240}}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -192,7 +192,7 @@ test "runtime gates built-in bridge commands through explicit policy" {
 
     harness.runtime.options.security.permissions = &.{};
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.window.create\",\"payload\":{\"label\":\"denied-window\"}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.window.create\",\"payload\":{\"label\":\"denied-window\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -204,7 +204,7 @@ test "runtime denies built-in dialog bridge commands by default" {
     defer harness.destroy(std.testing.allocator);
     const app = App{ .context = harness, .name = "dialog-denied", .source = platform.WebViewSource.html("<p>Dialogs</p>") };
     try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.dialog.showMessage\",\"payload\":{\"message\":\"Hello\"}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.dialog.showMessage\",\"payload\":{\"message\":\"Hello\"}}",
         .origin = "zero://inline",
     } });
 
@@ -217,7 +217,7 @@ test "runtime reports dialog bridge validation errors as invalid requests" {
     const app = App{ .context = harness, .name = "dialog-invalid", .source = platform.WebViewSource.html("<p>Dialogs</p>") };
     const dialog_permission = [_][]const u8{security.permission_dialog};
     const dialog_policy = [_]bridge.CommandPolicy{.{
-        .name = "zero-native.dialog.showMessage",
+        .name = "native-sdk.dialog.showMessage",
         .permissions = &dialog_permission,
         .origins = &.{"zero://inline"},
     }};
@@ -225,7 +225,7 @@ test "runtime reports dialog bridge validation errors as invalid requests" {
     harness.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &dialog_policy };
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"invalid-dialog\",\"command\":\"zero-native.dialog.showMessage\",\"payload\":{\"primaryButton\":\"\"}}",
+        .bytes = "{\"id\":\"invalid-dialog\",\"command\":\"native-sdk.dialog.showMessage\",\"payload\":{\"primaryButton\":\"\"}}",
         .origin = "zero://inline",
     } });
 
@@ -246,7 +246,7 @@ test "runtime validates native OS actions before platform dispatch" {
     try std.testing.expectError(error.DialogFieldTooLarge, harness.runtime.showOpenDialog(.{ .title = &long_dialog_title }, &dialog_paths));
     const open_result = try harness.runtime.showOpenDialog(.{ .title = "Open" }, &dialog_paths);
     try std.testing.expectEqual(@as(usize, 1), open_result.count);
-    try std.testing.expectEqualStrings("/tmp/zero-native-open.txt", open_result.paths);
+    try std.testing.expectEqualStrings("/tmp/native-sdk-open.txt", open_result.paths);
 
     var save_path: [platform.max_dialog_path_bytes]u8 = undefined;
     var small_save_path: [4]u8 = undefined;
@@ -264,12 +264,12 @@ test "runtime validates native OS actions before platform dispatch" {
     try std.testing.expectError(error.InvalidNotificationOptions, harness.runtime.showNotification(.{ .title = "" }));
     try harness.runtime.showNotification(.{
         .title = "Build finished",
-        .subtitle = "zero-native",
+        .subtitle = "native-sdk",
         .body = "All checks passed.",
     });
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.notificationCount());
     try std.testing.expectEqualStrings("Build finished", harness.null_platform.lastNotificationTitle());
-    try std.testing.expectEqualStrings("zero-native", harness.null_platform.lastNotificationSubtitle());
+    try std.testing.expectEqualStrings("native-sdk", harness.null_platform.lastNotificationSubtitle());
     try std.testing.expectEqualStrings("All checks passed.", harness.null_platform.lastNotificationBody());
 
     try std.testing.expectError(error.NavigationDenied, harness.runtime.openExternalUrl("https://example.com/docs"));
@@ -284,12 +284,12 @@ test "runtime validates native OS actions before platform dispatch" {
     try std.testing.expectEqualStrings("https://example.com/docs", harness.null_platform.lastExternalUrl());
 
     try std.testing.expectError(error.InvalidRevealPath, harness.runtime.revealPath(""));
-    try harness.runtime.revealPath("/tmp/zero-native-example.txt");
-    try std.testing.expectEqualStrings("/tmp/zero-native-example.txt", harness.null_platform.lastRevealedPath());
+    try harness.runtime.revealPath("/tmp/native-sdk-example.txt");
+    try std.testing.expectEqualStrings("/tmp/native-sdk-example.txt", harness.null_platform.lastRevealedPath());
 
     try std.testing.expectError(error.InvalidRecentDocumentPath, harness.runtime.addRecentDocument(""));
-    try harness.runtime.addRecentDocument("/tmp/recent-zero-native-example.txt");
-    try std.testing.expectEqualStrings("/tmp/recent-zero-native-example.txt", harness.null_platform.lastRecentDocumentPath());
+    try harness.runtime.addRecentDocument("/tmp/recent-native-sdk-example.txt");
+    try std.testing.expectEqualStrings("/tmp/recent-native-sdk-example.txt", harness.null_platform.lastRecentDocumentPath());
     try harness.runtime.clearRecentDocuments();
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.recentDocumentsClearedCount());
 
@@ -304,25 +304,25 @@ test "runtime validates native OS actions before platform dispatch" {
     try std.testing.expectEqualStrings("<strong>bold</strong>", try harness.runtime.readClipboardData("text/html", &clipboard_buffer));
 
     try std.testing.expectError(error.InvalidCredentialOptions, harness.runtime.setCredential(.{ .service = "", .account = "alice", .secret = "secret-token" }));
-    try std.testing.expectError(error.InvalidCredentialOptions, harness.runtime.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "" }));
-    try harness.runtime.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "secret-token" });
+    try std.testing.expectError(error.InvalidCredentialOptions, harness.runtime.setCredential(.{ .service = "dev.native-sdk.test", .account = "alice", .secret = "" }));
+    try harness.runtime.setCredential(.{ .service = "dev.native-sdk.test", .account = "alice", .secret = "secret-token" });
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.credentialSetCount());
-    try std.testing.expectEqualStrings("dev.zero-native.test", harness.null_platform.lastCredentialService());
+    try std.testing.expectEqualStrings("dev.native-sdk.test", harness.null_platform.lastCredentialService());
     try std.testing.expectEqualStrings("alice", harness.null_platform.lastCredentialAccount());
     try std.testing.expectEqualStrings("secret-token", harness.null_platform.lastCredentialSecret());
 
     var credential_buffer: [64]u8 = undefined;
-    const secret = (try harness.runtime.getCredential(.{ .service = "dev.zero-native.test", .account = "alice" }, &credential_buffer)).?;
+    const secret = (try harness.runtime.getCredential(.{ .service = "dev.native-sdk.test", .account = "alice" }, &credential_buffer)).?;
     try std.testing.expectEqualStrings("secret-token", secret);
-    try std.testing.expectEqual(@as(?[]const u8, null), try harness.runtime.getCredential(.{ .service = "dev.zero-native.test", .account = "bob" }, &credential_buffer));
-    try std.testing.expect(try harness.runtime.deleteCredential(.{ .service = "dev.zero-native.test", .account = "alice" }));
-    try std.testing.expect(!try harness.runtime.deleteCredential(.{ .service = "dev.zero-native.test", .account = "alice" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try harness.runtime.getCredential(.{ .service = "dev.native-sdk.test", .account = "bob" }, &credential_buffer));
+    try std.testing.expect(try harness.runtime.deleteCredential(.{ .service = "dev.native-sdk.test", .account = "alice" }));
+    try std.testing.expect(!try harness.runtime.deleteCredential(.{ .service = "dev.native-sdk.test", .account = "alice" }));
 
     try std.testing.expectError(error.InvalidTrayOptions, harness.runtime.createTray(.{ .items = &.{.{ .label = "" }} }));
     try std.testing.expectError(error.InvalidTrayOptions, harness.runtime.updateTrayMenu(&.{.{ .label = "" }}));
     try harness.runtime.createTray(.{
         .icon_path = "/tmp/tray.png",
-        .tooltip = "zero-native",
+        .tooltip = "native-sdk",
         .items = &.{
             .{ .id = 1, .label = "Open" },
             .{ .separator = true },
@@ -331,7 +331,7 @@ test "runtime validates native OS actions before platform dispatch" {
     });
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
     try std.testing.expectEqualStrings("/tmp/tray.png", harness.null_platform.lastTrayIconPath());
-    try std.testing.expectEqualStrings("zero-native", harness.null_platform.lastTrayTooltip());
+    try std.testing.expectEqualStrings("native-sdk", harness.null_platform.lastTrayTooltip());
     try std.testing.expectEqual(@as(usize, 3), harness.null_platform.trayItems().len);
     try std.testing.expectEqualStrings("Open", harness.null_platform.trayItems()[0].label);
     try std.testing.expect(harness.null_platform.trayItems()[1].separator);
@@ -350,7 +350,7 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     const denied = try TestHarness().create(std.testing.allocator, .{});
     defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"open\",\"command\":\"zero-native.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs\"}}",
+        .bytes = "{\"id\":\"open\",\"command\":\"native-sdk.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "OS API is not permitted") != null);
@@ -362,11 +362,11 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     const notifications_permission = [_][]const u8{security.permission_notifications};
     const origins = [_][]const u8{"zero://inline"};
     const policies = [_]bridge.CommandPolicy{
-        .{ .name = "zero-native.os.openUrl", .permissions = &network_permission, .origins = &origins },
-        .{ .name = "zero-native.os.showNotification", .permissions = &notifications_permission, .origins = &origins },
-        .{ .name = "zero-native.os.revealPath", .permissions = &filesystem_permission, .origins = &origins },
-        .{ .name = "zero-native.os.addRecentDocument", .permissions = &filesystem_permission, .origins = &origins },
-        .{ .name = "zero-native.os.clearRecentDocuments", .permissions = &filesystem_permission, .origins = &origins },
+        .{ .name = "native-sdk.os.openUrl", .permissions = &network_permission, .origins = &origins },
+        .{ .name = "native-sdk.os.showNotification", .permissions = &notifications_permission, .origins = &origins },
+        .{ .name = "native-sdk.os.revealPath", .permissions = &filesystem_permission, .origins = &origins },
+        .{ .name = "native-sdk.os.addRecentDocument", .permissions = &filesystem_permission, .origins = &origins },
+        .{ .name = "native-sdk.os.clearRecentDocuments", .permissions = &filesystem_permission, .origins = &origins },
     };
     const allowed_urls = [_][]const u8{"https://example.com/*"};
 
@@ -380,7 +380,7 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"notify\",\"command\":\"zero-native.os.showNotification\",\"payload\":{\"title\":\"Build finished\",\"subtitle\":\"zero-native\",\"body\":\"All checks passed.\"}}",
+        .bytes = "{\"id\":\"notify\",\"command\":\"native-sdk.os.showNotification\",\"payload\":{\"title\":\"Build finished\",\"subtitle\":\"native-sdk\",\"body\":\"All checks passed.\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
@@ -388,28 +388,28 @@ test "runtime gates built-in OS bridge commands through explicit policy" {
     try std.testing.expectEqualStrings("Build finished", allowed.null_platform.lastNotificationTitle());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"open\",\"command\":\"zero-native.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs\"}}",
+        .bytes = "{\"id\":\"open\",\"command\":\"native-sdk.os.openUrl\",\"payload\":{\"url\":\"https://example.com/docs\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("https://example.com/docs", allowed.null_platform.lastExternalUrl());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"reveal\",\"command\":\"zero-native.os.revealPath\",\"payload\":{\"path\":\"/tmp/zero-native-example.txt\"}}",
+        .bytes = "{\"id\":\"reveal\",\"command\":\"native-sdk.os.revealPath\",\"payload\":{\"path\":\"/tmp/native-sdk-example.txt\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
-    try std.testing.expectEqualStrings("/tmp/zero-native-example.txt", allowed.null_platform.lastRevealedPath());
+    try std.testing.expectEqualStrings("/tmp/native-sdk-example.txt", allowed.null_platform.lastRevealedPath());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"recent\",\"command\":\"zero-native.os.addRecentDocument\",\"payload\":{\"path\":\"/tmp/recent-zero-native-example.txt\"}}",
+        .bytes = "{\"id\":\"recent\",\"command\":\"native-sdk.os.addRecentDocument\",\"payload\":{\"path\":\"/tmp/recent-native-sdk-example.txt\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
-    try std.testing.expectEqualStrings("/tmp/recent-zero-native-example.txt", allowed.null_platform.lastRecentDocumentPath());
+    try std.testing.expectEqualStrings("/tmp/recent-native-sdk-example.txt", allowed.null_platform.lastRecentDocumentPath());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"clear-recent\",\"command\":\"zero-native.os.clearRecentDocuments\",\"payload\":{}}",
+        .bytes = "{\"id\":\"clear-recent\",\"command\":\"native-sdk.os.clearRecentDocuments\",\"payload\":{}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
@@ -423,7 +423,7 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
     const denied = try TestHarness().create(std.testing.allocator, .{});
     defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"write\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
+        .bytes = "{\"id\":\"write\",\"command\":\"native-sdk.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "Clipboard API is not permitted") != null);
@@ -433,10 +433,10 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
     const clipboard_permission = [_][]const u8{security.permission_clipboard};
     const origins = [_][]const u8{"zero://inline"};
     const policies = [_]bridge.CommandPolicy{
-        .{ .name = "zero-native.clipboard.readText", .permissions = &clipboard_permission, .origins = &origins },
-        .{ .name = "zero-native.clipboard.writeText", .permissions = &clipboard_permission, .origins = &origins },
-        .{ .name = "zero-native.clipboard.read", .permissions = &clipboard_permission, .origins = &origins },
-        .{ .name = "zero-native.clipboard.write", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "native-sdk.clipboard.readText", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "native-sdk.clipboard.writeText", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "native-sdk.clipboard.read", .permissions = &clipboard_permission, .origins = &origins },
+        .{ .name = "native-sdk.clipboard.write", .permissions = &clipboard_permission, .origins = &origins },
     };
 
     const allowed = try TestHarness().create(std.testing.allocator, .{});
@@ -445,7 +445,7 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
     allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"write-text\",\"command\":\"zero-native.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
+        .bytes = "{\"id\":\"write-text\",\"command\":\"native-sdk.clipboard.writeText\",\"payload\":{\"text\":\"plain text\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
@@ -453,20 +453,20 @@ test "runtime gates built-in clipboard bridge commands through explicit policy" 
     try std.testing.expectEqualStrings("plain text", allowed.null_platform.lastClipboardData());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"read-text\",\"command\":\"zero-native.clipboard.readText\",\"payload\":{}}",
+        .bytes = "{\"id\":\"read-text\",\"command\":\"native-sdk.clipboard.readText\",\"payload\":{}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"result\":\"plain text\"") != null);
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"write-html\",\"command\":\"zero-native.clipboard.write\",\"payload\":{\"mimeType\":\"text/html\",\"data\":\"<strong>bold</strong>\"}}",
+        .bytes = "{\"id\":\"write-html\",\"command\":\"native-sdk.clipboard.write\",\"payload\":{\"mimeType\":\"text/html\",\"data\":\"<strong>bold</strong>\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqualStrings("text/html", allowed.null_platform.lastClipboardMimeType());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"read-html\",\"command\":\"zero-native.clipboard.read\",\"payload\":{\"mimeType\":\"text/html\"}}",
+        .bytes = "{\"id\":\"read-html\",\"command\":\"native-sdk.clipboard.read\",\"payload\":{\"mimeType\":\"text/html\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"mimeType\":\"text/html\"") != null);
@@ -480,7 +480,7 @@ test "runtime gates built-in credential bridge commands through explicit policy"
     const denied = try TestHarness().create(std.testing.allocator, .{});
     defer denied.destroy(std.testing.allocator);
     try denied.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"set\",\"command\":\"zero-native.credentials.set\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\",\"secret\":\"secret-token\"}}",
+        .bytes = "{\"id\":\"set\",\"command\":\"native-sdk.credentials.set\",\"payload\":{\"service\":\"dev.native-sdk.test\",\"account\":\"alice\",\"secret\":\"secret-token\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "Credentials API is not permitted") != null);
@@ -490,9 +490,9 @@ test "runtime gates built-in credential bridge commands through explicit policy"
     const credential_permission = [_][]const u8{security.permission_credentials};
     const origins = [_][]const u8{"zero://inline"};
     const policies = [_]bridge.CommandPolicy{
-        .{ .name = "zero-native.credentials.set", .permissions = &credential_permission, .origins = &origins },
-        .{ .name = "zero-native.credentials.get", .permissions = &credential_permission, .origins = &origins },
-        .{ .name = "zero-native.credentials.delete", .permissions = &credential_permission, .origins = &origins },
+        .{ .name = "native-sdk.credentials.set", .permissions = &credential_permission, .origins = &origins },
+        .{ .name = "native-sdk.credentials.get", .permissions = &credential_permission, .origins = &origins },
+        .{ .name = "native-sdk.credentials.delete", .permissions = &credential_permission, .origins = &origins },
     };
 
     const allowed = try TestHarness().create(std.testing.allocator, .{});
@@ -501,27 +501,27 @@ test "runtime gates built-in credential bridge commands through explicit policy"
     allowed.runtime.options.builtin_bridge = .{ .enabled = true, .commands = &policies };
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"set\",\"command\":\"zero-native.credentials.set\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\",\"secret\":\"secret-token\"}}",
+        .bytes = "{\"id\":\"set\",\"command\":\"native-sdk.credentials.set\",\"payload\":{\"service\":\"dev.native-sdk.test\",\"account\":\"alice\",\"secret\":\"secret-token\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"ok\":true") != null);
     try std.testing.expectEqual(@as(usize, 1), allowed.null_platform.credentialSetCount());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"get\",\"command\":\"zero-native.credentials.get\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\"}}",
+        .bytes = "{\"id\":\"get\",\"command\":\"native-sdk.credentials.get\",\"payload\":{\"service\":\"dev.native-sdk.test\",\"account\":\"alice\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"result\":\"secret-token\"") != null);
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"delete\",\"command\":\"zero-native.credentials.delete\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\"}}",
+        .bytes = "{\"id\":\"delete\",\"command\":\"native-sdk.credentials.delete\",\"payload\":{\"service\":\"dev.native-sdk.test\",\"account\":\"alice\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"result\":true") != null);
     try std.testing.expectEqual(@as(usize, 1), allowed.null_platform.credentialDeleteCount());
 
     try allowed.runtime.dispatchPlatformEvent(app, .{ .bridge_message = .{
-        .bytes = "{\"id\":\"get-missing\",\"command\":\"zero-native.credentials.get\",\"payload\":{\"service\":\"dev.zero-native.test\",\"account\":\"alice\"}}",
+        .bytes = "{\"id\":\"get-missing\",\"command\":\"native-sdk.credentials.get\",\"payload\":{\"service\":\"dev.native-sdk.test\",\"account\":\"alice\"}}",
         .origin = "zero://inline",
     } });
     try std.testing.expect(std.mem.indexOf(u8, allowed.null_platform.lastBridgeResponse(), "\"result\":null") != null);

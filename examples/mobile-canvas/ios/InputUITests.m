@@ -1,4 +1,4 @@
-// Hardware-true input injection for the zero-native canvas shim, driven by
+// Hardware-true input injection for the native-sdk canvas shim, driven by
 // verify_input.sh: a minimal XCUITest bundle (no .xcodeproj — compiled with
 // clang, hosted by the stock XCTRunner.app, run via `xcodebuild
 // test-without-building` and a generated .xctestrun). XCUITest synthesizes
@@ -9,34 +9,34 @@
 //
 // Target coordinates arrive in points via TestingEnvironmentVariables
 // ("x,y" pairs parsed from the automation snapshot's widget bounds):
-//   ZN_TARGET_BUNDLE_ID  app under test
-//   ZN_TAP_POINT         "Add task" button center
-//   ZN_TEXTBOX_POINT     draft text field center
-//   ZN_BLUR_POINT        non-focusable point (header text)
-//   ZN_TYPE_TEXT         text typed on the system keyboard
-//   ZN_PRESCROLL_TAPS    taps on ZN_TAP_POINT to grow the list before scrolling
-//   ZN_SCROLL_FROM / ZN_SCROLL_TO  drag gesture endpoints
+//   NATIVE_SDK_TARGET_BUNDLE_ID  app under test
+//   NATIVE_SDK_TAP_POINT         "Add task" button center
+//   NATIVE_SDK_TEXTBOX_POINT     draft text field center
+//   NATIVE_SDK_BLUR_POINT        non-focusable point (header text)
+//   NATIVE_SDK_TYPE_TEXT         text typed on the system keyboard
+//   NATIVE_SDK_PRESCROLL_TAPS    taps on NATIVE_SDK_TAP_POINT to grow the list before scrolling
+//   NATIVE_SDK_SCROLL_FROM / NATIVE_SDK_SCROLL_TO  drag gesture endpoints
 
 #import <XCTest/XCTest.h>
 
-static NSString *ZeroNativeEnv(NSString *name) {
+static NSString *NativeSdkEnv(NSString *name) {
     return NSProcessInfo.processInfo.environment[name] ?: @"";
 }
 
-static CGPoint ZeroNativePointFromEnv(NSString *name) {
-    NSArray<NSString *> *parts = [ZeroNativeEnv(name) componentsSeparatedByString:@","];
+static CGPoint NativeSdkPointFromEnv(NSString *name) {
+    NSArray<NSString *> *parts = [NativeSdkEnv(name) componentsSeparatedByString:@","];
     if (parts.count != 2) return CGPointZero;
     return CGPointMake(parts[0].doubleValue, parts[1].doubleValue);
 }
 
-@interface ZeroNativeInputUITests : XCTestCase
+@interface NativeSdkInputUITests : XCTestCase
 @end
 
-@implementation ZeroNativeInputUITests
+@implementation NativeSdkInputUITests
 
 - (XCUIApplication *)foregroundApp {
-    NSString *bundleId = ZeroNativeEnv(@"ZN_TARGET_BUNDLE_ID");
-    XCTAssertTrue(bundleId.length > 0, @"ZN_TARGET_BUNDLE_ID must be set");
+    NSString *bundleId = NativeSdkEnv(@"NATIVE_SDK_TARGET_BUNDLE_ID");
+    XCTAssertTrue(bundleId.length > 0, @"NATIVE_SDK_TARGET_BUNDLE_ID must be set");
     XCUIApplication *app = [[XCUIApplication alloc] initWithBundleIdentifier:bundleId];
     // Activate (not launch): the script launched the app with its
     // automation environment; model state persists across test steps.
@@ -56,7 +56,7 @@ static CGPoint ZeroNativePointFromEnv(NSString *name) {
 // open count grew in the automation snapshot.
 - (void)testTapAddTask {
     XCUIApplication *app = [self foregroundApp];
-    [[self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_TAP_POINT")] tap];
+    [[self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_TAP_POINT")] tap];
     // Give the host-pumped frame loop a beat to publish the snapshot.
     [NSThread sleepForTimeInterval:1.0];
 }
@@ -69,15 +69,15 @@ static CGPoint ZeroNativePointFromEnv(NSString *name) {
     XCUIApplication *app = [self foregroundApp];
     XCUIElement *keyboard = app.keyboards.firstMatch;
 
-    [[self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_TEXTBOX_POINT")] tap];
+    [[self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_TEXTBOX_POINT")] tap];
     XCTAssertTrue([keyboard waitForExistenceWithTimeout:10],
                   @"system keyboard should appear when the textbox takes focus");
 
-    NSString *text = ZeroNativeEnv(@"ZN_TYPE_TEXT");
-    XCTAssertTrue(text.length > 0, @"ZN_TYPE_TEXT must be set");
+    NSString *text = NativeSdkEnv(@"NATIVE_SDK_TYPE_TEXT");
+    XCTAssertTrue(text.length > 0, @"NATIVE_SDK_TYPE_TEXT must be set");
     [app typeText:text];
 
-    [[self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_BLUR_POINT")] tap];
+    [[self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_BLUR_POINT")] tap];
     BOOL hidden = NO;
     for (int attempt = 0; attempt < 40; attempt++) {
         if (!keyboard.exists) {
@@ -93,10 +93,10 @@ static CGPoint ZeroNativePointFromEnv(NSString *name) {
 // (M4) Rotate the simulator to landscape / back to portrait through the
 // system orientation path (there is no simctl rotation command); the
 // layout-verification script asserts the relayout against the automation
-// snapshot between calls. ZN_ORIENTATION selects the target orientation.
+// snapshot between calls. NATIVE_SDK_ORIENTATION selects the target orientation.
 - (void)testRotate {
     XCUIApplication *app = [self foregroundApp];
-    NSString *orientation = ZeroNativeEnv(@"ZN_ORIENTATION");
+    NSString *orientation = NativeSdkEnv(@"NATIVE_SDK_ORIENTATION");
     XCUIDevice.sharedDevice.orientation = [orientation isEqualToString:@"landscape"]
         ? UIDeviceOrientationLandscapeLeft
         : UIDeviceOrientationPortrait;
@@ -110,14 +110,14 @@ static CGPoint ZeroNativePointFromEnv(NSString *name) {
 // the script asserts the scroll offset moved in the snapshot.
 - (void)testDragScroll {
     XCUIApplication *app = [self foregroundApp];
-    NSInteger taps = ZeroNativeEnv(@"ZN_PRESCROLL_TAPS").integerValue;
-    XCUICoordinate *add = [self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_TAP_POINT")];
+    NSInteger taps = NativeSdkEnv(@"NATIVE_SDK_PRESCROLL_TAPS").integerValue;
+    XCUICoordinate *add = [self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_TAP_POINT")];
     for (NSInteger index = 0; index < taps; index++) {
         [add tap];
     }
 
-    XCUICoordinate *from = [self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_SCROLL_FROM")];
-    XCUICoordinate *to = [self coordinateIn:app point:ZeroNativePointFromEnv(@"ZN_SCROLL_TO")];
+    XCUICoordinate *from = [self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_SCROLL_FROM")];
+    XCUICoordinate *to = [self coordinateIn:app point:NativeSdkPointFromEnv(@"NATIVE_SDK_SCROLL_TO")];
     [from pressForDuration:0.1 thenDragToCoordinate:to];
     [NSThread sleepForTimeInterval:1.0];
 }

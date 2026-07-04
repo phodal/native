@@ -1532,8 +1532,8 @@ test "ui app status item installs a tray and dispatches its commands" {
         .view = statusView,
         .on_command = statusCommand,
         .status_item = .{
-            .title = "ZN",
-            .tooltip = "zero-native status",
+            .title = "NS",
+            .tooltip = "native-sdk status",
             .items = &status_items,
         },
     });
@@ -1553,8 +1553,8 @@ test "ui app status item installs a tray and dispatches its commands" {
     };
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = frame_event });
     try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
-    try std.testing.expectEqualStrings("ZN", harness.null_platform.lastTrayTitle());
-    try std.testing.expectEqualStrings("zero-native status", harness.null_platform.lastTrayTooltip());
+    try std.testing.expectEqualStrings("NS", harness.null_platform.lastTrayTitle());
+    try std.testing.expectEqualStrings("native-sdk status", harness.null_platform.lastTrayTooltip());
     try std.testing.expectEqual(@as(usize, 3), harness.null_platform.trayItems().len);
     var second_frame = frame_event;
     second_frame.frame_index = 2;

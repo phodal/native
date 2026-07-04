@@ -1,6 +1,6 @@
 # Native UI
 
-The default zero-native app is native-rendered: the view is a `.zml` markup file, the logic is Zig, and rendering happens through zero-native's own engine. Scaffold one with `zero-native init my_app` and run it with `zig build run`.
+The default Native SDK app is native-rendered: the view is a `.zml` markup file, the logic is Zig, and rendering happens through Native SDK's own engine. Scaffold one with `native init my_app` and run it with `zig build run`.
 
 An app is four things:
 
@@ -178,7 +178,7 @@ Editable text fields present the standard Cut / Copy / Paste / Select All menu w
 For anything asynchronous — running `gh`, streaming an agent's stdout — `update` takes a third parameter, the effects channel. Declare `.update_fx` instead of `.update` (two-argument apps are unchanged):
 
 ```zig
-const Effects = zero_native.UiApp(Model, Msg).Effects;
+const Effects = native_sdk.UiApp(Model, Msg).Effects;
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
@@ -207,7 +207,7 @@ HTTP requests ride the same channel: `fx.fetch` runs one request on a worker thr
 .load => fx.fetch(.{
     .key = search_key,                                 // fetches share the spawn slots and key space
     .url = "https://api.example.com/search?q=zig",
-    .on_response = Effects.responseMsg(.fetched),      // Msg{ .fetched = zero_native.EffectResponse }
+    .on_response = Effects.responseMsg(.fetched),      // Msg{ .fetched = native_sdk.EffectResponse }
 }),
 .stop => fx.cancel(search_key),
 .fetched => |response| model.recordResults(response),  // copy response.body — the slice dies with this call
@@ -222,14 +222,14 @@ Files ride the same channel: `fx.writeFile` / `fx.readFile` persist app state �
     .key = save_key,
     .path = model.sessionPath(),
     .bytes = model.snapshotJson(),                 // copied at call time
-    .on_result = Effects.fileMsg(.saved),          // Msg{ .saved = zero_native.EffectFileResult }
+    .on_result = Effects.fileMsg(.saved),          // Msg{ .saved = native_sdk.EffectFileResult }
 }),
 .saved => |result| model.noteSaved(result.outcome),
 ```
 
 Failure and overflow are always visible: a spawn that cannot run delivers an exit Msg with reason `rejected`, a fetch that cannot run delivers a response Msg with outcome `rejected`, and a file effect that cannot run delivers a result Msg with outcome `rejected`; dropped or truncated lines carry counts and flags; `cancel` kills and reaps the process and always ends in exactly one `cancelled` exit Msg, with no further line Msgs after it. Tests use the fake executor (`effects.executor = .fake`) to assert on spawn, fetch, and file requests and feed synthetic lines, stderr (`feedStderr`, collect spawns), exits, responses, and file results back deterministically — set it before the first frame and `init_fx` boot spawns are recorded too. See `examples/effects-probe`.
 
-For timestamps, the facade owns the clocks (Zig 0.16 puts `std.time` behind `std.Io`, which `update` never sees): `zero_native.nowMs()` / `nowNanoseconds()` read the wall clock and `monotonicMs()` / `monotonicNanoseconds()` the duration clock. Time-dependent logic stores the `zero_native.Clock` seam in the model (`.system` by default) so tests substitute a deterministic `zero_native.TestClock` and advance it by hand.
+For timestamps, the facade owns the clocks (Zig 0.16 puts `std.time` behind `std.Io`, which `update` never sees): `native_sdk.nowMs()` / `nowNanoseconds()` read the wall clock and `monotonicMs()` / `monotonicNanoseconds()` the duration clock. Time-dependent logic stores the `native_sdk.Clock` seam in the model (`.system` by default) so tests substitute a deterministic `native_sdk.TestClock` and advance it by hand.
 
 ## Images
 
@@ -278,10 +278,10 @@ ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 
 Wrapping and measurement are span-aware (the platform text provider measures every run with the font it draws with), stacked paragraphs reserve their real wrapped height, and link spans are first-class: they carry `role=link` semantics in automation snapshots, show a pointer cursor, and clicking one dispatches your `Msg` with the link payload.
 
-Markdown builds on the same model. `zero_native.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, pipe tables, and `<details>` collapsibles — onto ordinary widgets:
+Markdown builds on the same model. `native_sdk.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, pipe tables, and `<details>` collapsibles — onto ordinary widgets:
 
 ```zig
-const Md = zero_native.markdown.Markdown(Msg);
+const Md = native_sdk.markdown.Markdown(Msg);
 Md.view(ui, issue.body, .{
     .on_link = Ui.linkMsg(.open_url),
     .on_details = Md.detailsMsg(.toggle_details),
@@ -347,8 +347,8 @@ The model owns the stack (TEA: push = set `nav_depth = 1`, pop = back to 0; out-
 
 ## Tooling
 
-- `zero-native markup check src/app.zml` — instant validation with `file:line:column` errors.
-- `zero-native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/zml/` in the repo for VS Code, Helix, and Neovim setup).
+- `native markup check src/app.zml` — instant validation with `file:line:column` errors.
+- `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/zml/` in the repo for VS Code, Helix, and Neovim setup).
 - The automation harness drives widgets and reads accessibility snapshots and screenshots headlessly — see [Automation](/debugging/automation).
 
 For the component catalog and styling model, see [Built-in Components](/built-in-components). For dropping down to the programmatic API, the `canvas.Ui(Msg)` builder produces exactly the same trees the markup compiles to.

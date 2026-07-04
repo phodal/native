@@ -120,8 +120,8 @@ pub fn printDiagnostic(stats: PackageStats) void {
 
 pub fn createLocalPackage(io: std.Io, output_path: []const u8) !PackageStats {
     const metadata: manifest_tool.Metadata = .{
-        .id = "dev.zero_native.local",
-        .name = "zero-native-local",
+        .id = "dev.native_sdk.local",
+        .name = "native-sdk-local",
         .version = "0.1.0",
     };
     return createMacosApp(std.heap.page_allocator, io, .{
@@ -153,7 +153,7 @@ pub fn createMacosApp(allocator: std.mem.Allocator, io: std.Io, options: Package
     defer allocator.free(info_plist);
     try writeFile(package_dir, io, "Contents/Info.plist", info_plist);
     try writeFile(package_dir, io, "Contents/PkgInfo", "APPL????");
-    try writeFile(package_dir, io, "Contents/Resources/README.txt", "Unsigned local zero-native macOS app bundle.\n");
+    try writeFile(package_dir, io, "Contents/Resources/README.txt", "Unsigned local Native SDK macOS app bundle.\n");
     const assets_output = try assetOutputPath(allocator, options.output_path, "Contents/Resources", options);
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
@@ -182,12 +182,12 @@ pub fn createIosSkeleton(io: std.Io, output_path: []const u8) !PackageStats {
     var dir = try cwd.openDir(io, output_path, .{});
     defer dir.close(io);
     try dir.createDirPath(io, "Libraries");
-    try dir.createDirPath(io, "zero-nativeHost");
+    try dir.createDirPath(io, "native-sdkHost");
     try writeFile(dir, io, "README.md", iosReadme());
     try writeFile(dir, io, "Info.plist", iosInfoPlist());
-    try writeFile(dir, io, "zero-nativeHost/ZeroNativeShellConfig.swift", iosDefaultShellConfig());
-    try writeFile(dir, io, "zero-nativeHost/ZeroNativeHostViewController.swift", iosViewController());
-    try writeFile(dir, io, "zero-nativeHost/zero_native.h", embedHeader());
+    try writeFile(dir, io, "native-sdkHost/NativeSdkShellConfig.swift", iosDefaultShellConfig());
+    try writeFile(dir, io, "native-sdkHost/NativeSdkHostViewController.swift", iosViewController());
+    try writeFile(dir, io, "native-sdkHost/native_sdk.h", embedHeader());
     return .{ .path = output_path, .target = .ios };
 }
 
@@ -196,18 +196,18 @@ pub fn createAndroidSkeleton(io: std.Io, output_path: []const u8) !PackageStats 
     try cwd.createDirPath(io, output_path);
     var dir = try cwd.openDir(io, output_path, .{});
     defer dir.close(io);
-    try dir.createDirPath(io, "app/src/main/java/dev/zero_native");
+    try dir.createDirPath(io, "app/src/main/java/dev/native_sdk");
     try dir.createDirPath(io, "app/src/main/cpp/lib");
     try dir.createDirPath(io, "app/src/main/res/values");
     try writeFile(dir, io, "README.md", androidReadme());
-    try writeFile(dir, io, "settings.gradle", "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }\nrootProject.name = 'zero-nativeHost'\ninclude ':app'\n");
+    try writeFile(dir, io, "settings.gradle", "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }\nrootProject.name = 'native-sdkHost'\ninclude ':app'\n");
     try writeFile(dir, io, "app/build.gradle", androidBuildGradle());
     try writeFile(dir, io, "app/src/main/AndroidManifest.xml", androidManifest());
-    try writeFile(dir, io, "app/src/main/java/dev/zero_native/ZeroNativeShellConfig.kt", androidDefaultShellConfig());
-    try writeFile(dir, io, "app/src/main/java/dev/zero_native/MainActivity.kt", androidActivity());
+    try writeFile(dir, io, "app/src/main/java/dev/native_sdk/NativeSdkShellConfig.kt", androidDefaultShellConfig());
+    try writeFile(dir, io, "app/src/main/java/dev/native_sdk/MainActivity.kt", androidActivity());
     try writeFile(dir, io, "app/src/main/cpp/CMakeLists.txt", androidCMakeLists());
-    try writeFile(dir, io, "app/src/main/cpp/zero_native_jni.c", androidJni());
-    try writeFile(dir, io, "app/src/main/cpp/zero_native.h", embedHeader());
+    try writeFile(dir, io, "app/src/main/cpp/native_sdk_jni.c", androidJni());
+    try writeFile(dir, io, "app/src/main/cpp/native_sdk.h", embedHeader());
     try writeFile(dir, io, "app/src/main/res/values/styles.xml", androidStyles());
     return .{ .path = output_path, .target = .android };
 }
@@ -283,12 +283,12 @@ fn createIosArtifact(allocator: std.mem.Allocator, io: std.Io, options: PackageO
     const shell_model = mobileShellModel(options.metadata);
     const shell_config = try iosShellConfigAlloc(allocator, shell_model);
     defer allocator.free(shell_config);
-    try writeFile(dir, io, "zero-nativeHost/ZeroNativeShellConfig.swift", shell_config);
+    try writeFile(dir, io, "native-sdkHost/NativeSdkShellConfig.swift", shell_config);
     const assets_output = try assetOutputPath(allocator, options.output_path, "Resources", options);
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
-    if (options.binary_path) |binary_path| try copyFileToDir(allocator, io, dir, binary_path, "Libraries/libzero-native.a");
-    try writeReport(allocator, dir, io, "package-manifest.zon", options, "libzero-native.a", bundle_stats.asset_count);
+    if (options.binary_path) |binary_path| try copyFileToDir(allocator, io, dir, binary_path, "Libraries/libnative-sdk.a");
+    try writeReport(allocator, dir, io, "package-manifest.zon", options, "libnative-sdk.a", bundle_stats.asset_count);
     return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = .ios, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine };
 }
 
@@ -306,12 +306,12 @@ fn createAndroidArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
     const shell_model = mobileShellModel(options.metadata);
     const shell_config = try androidShellConfigAlloc(allocator, shell_model);
     defer allocator.free(shell_config);
-    try writeFile(dir, io, "app/src/main/java/dev/zero_native/ZeroNativeShellConfig.kt", shell_config);
-    const assets_output = try assetOutputPath(allocator, options.output_path, "app/src/main/assets/zero-native", options);
+    try writeFile(dir, io, "app/src/main/java/dev/native_sdk/NativeSdkShellConfig.kt", shell_config);
+    const assets_output = try assetOutputPath(allocator, options.output_path, "app/src/main/assets/native-sdk", options);
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
-    if (options.binary_path) |binary_path| try copyFileToDir(allocator, io, dir, binary_path, "app/src/main/cpp/lib/libzero-native.a");
-    try writeReport(allocator, dir, io, "package-manifest.zon", options, "libzero-native.a", bundle_stats.asset_count);
+    if (options.binary_path) |binary_path| try copyFileToDir(allocator, io, dir, binary_path, "app/src/main/cpp/lib/libnative-sdk.a");
+    try writeReport(allocator, dir, io, "package-manifest.zon", options, "libnative-sdk.a", bundle_stats.asset_count);
     return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = .android, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine };
 }
 
@@ -380,76 +380,76 @@ fn embedHeader() []const u8 {
     \\#include <stdint.h>
     \\#include <stddef.h>
     \\enum {
-    \\  ZERO_NATIVE_WIDGET_ROLE_NONE = 0,
-    \\  ZERO_NATIVE_WIDGET_ROLE_GROUP = 1,
-    \\  ZERO_NATIVE_WIDGET_ROLE_TEXT = 2,
-    \\  ZERO_NATIVE_WIDGET_ROLE_IMAGE = 3,
-    \\  ZERO_NATIVE_WIDGET_ROLE_BUTTON = 4,
-    \\  ZERO_NATIVE_WIDGET_ROLE_TEXTBOX = 5,
-    \\  ZERO_NATIVE_WIDGET_ROLE_TOOLTIP = 6,
-    \\  ZERO_NATIVE_WIDGET_ROLE_DIALOG = 7,
-    \\  ZERO_NATIVE_WIDGET_ROLE_MENU = 8,
-    \\  ZERO_NATIVE_WIDGET_ROLE_MENUITEM = 9,
-    \\  ZERO_NATIVE_WIDGET_ROLE_LIST = 10,
-    \\  ZERO_NATIVE_WIDGET_ROLE_LISTITEM = 11,
-    \\  ZERO_NATIVE_WIDGET_ROLE_ROW = 12,
-    \\  ZERO_NATIVE_WIDGET_ROLE_GRID = 13,
-    \\  ZERO_NATIVE_WIDGET_ROLE_GRIDCELL = 14,
-    \\  ZERO_NATIVE_WIDGET_ROLE_TAB = 15,
-    \\  ZERO_NATIVE_WIDGET_ROLE_CHECKBOX = 16,
-    \\  ZERO_NATIVE_WIDGET_ROLE_SWITCH = 17,
-    \\  ZERO_NATIVE_WIDGET_ROLE_SLIDER = 18,
-    \\  ZERO_NATIVE_WIDGET_ROLE_PROGRESSBAR = 19,
+    \\  NATIVE_SDK_WIDGET_ROLE_NONE = 0,
+    \\  NATIVE_SDK_WIDGET_ROLE_GROUP = 1,
+    \\  NATIVE_SDK_WIDGET_ROLE_TEXT = 2,
+    \\  NATIVE_SDK_WIDGET_ROLE_IMAGE = 3,
+    \\  NATIVE_SDK_WIDGET_ROLE_BUTTON = 4,
+    \\  NATIVE_SDK_WIDGET_ROLE_TEXTBOX = 5,
+    \\  NATIVE_SDK_WIDGET_ROLE_TOOLTIP = 6,
+    \\  NATIVE_SDK_WIDGET_ROLE_DIALOG = 7,
+    \\  NATIVE_SDK_WIDGET_ROLE_MENU = 8,
+    \\  NATIVE_SDK_WIDGET_ROLE_MENUITEM = 9,
+    \\  NATIVE_SDK_WIDGET_ROLE_LIST = 10,
+    \\  NATIVE_SDK_WIDGET_ROLE_LISTITEM = 11,
+    \\  NATIVE_SDK_WIDGET_ROLE_ROW = 12,
+    \\  NATIVE_SDK_WIDGET_ROLE_GRID = 13,
+    \\  NATIVE_SDK_WIDGET_ROLE_GRIDCELL = 14,
+    \\  NATIVE_SDK_WIDGET_ROLE_TAB = 15,
+    \\  NATIVE_SDK_WIDGET_ROLE_CHECKBOX = 16,
+    \\  NATIVE_SDK_WIDGET_ROLE_SWITCH = 17,
+    \\  NATIVE_SDK_WIDGET_ROLE_SLIDER = 18,
+    \\  NATIVE_SDK_WIDGET_ROLE_PROGRESSBAR = 19,
     \\};
     \\enum {
-    \\  ZERO_NATIVE_WIDGET_FLAG_FOCUSED = 1u << 0,
-    \\  ZERO_NATIVE_WIDGET_FLAG_HOVERED = 1u << 1,
-    \\  ZERO_NATIVE_WIDGET_FLAG_PRESSED = 1u << 2,
-    \\  ZERO_NATIVE_WIDGET_FLAG_SELECTED = 1u << 3,
-    \\  ZERO_NATIVE_WIDGET_FLAG_DISABLED = 1u << 4,
-    \\  ZERO_NATIVE_WIDGET_FLAG_FOCUSABLE = 1u << 5,
-    \\  ZERO_NATIVE_WIDGET_FLAG_EXPANDED = 1u << 6,
-    \\  ZERO_NATIVE_WIDGET_FLAG_COLLAPSED = 1u << 7,
-    \\  ZERO_NATIVE_WIDGET_FLAG_REQUIRED = 1u << 8,
-    \\  ZERO_NATIVE_WIDGET_FLAG_READ_ONLY = 1u << 9,
-    \\  ZERO_NATIVE_WIDGET_FLAG_INVALID = 1u << 10,
+    \\  NATIVE_SDK_WIDGET_FLAG_FOCUSED = 1u << 0,
+    \\  NATIVE_SDK_WIDGET_FLAG_HOVERED = 1u << 1,
+    \\  NATIVE_SDK_WIDGET_FLAG_PRESSED = 1u << 2,
+    \\  NATIVE_SDK_WIDGET_FLAG_SELECTED = 1u << 3,
+    \\  NATIVE_SDK_WIDGET_FLAG_DISABLED = 1u << 4,
+    \\  NATIVE_SDK_WIDGET_FLAG_FOCUSABLE = 1u << 5,
+    \\  NATIVE_SDK_WIDGET_FLAG_EXPANDED = 1u << 6,
+    \\  NATIVE_SDK_WIDGET_FLAG_COLLAPSED = 1u << 7,
+    \\  NATIVE_SDK_WIDGET_FLAG_REQUIRED = 1u << 8,
+    \\  NATIVE_SDK_WIDGET_FLAG_READ_ONLY = 1u << 9,
+    \\  NATIVE_SDK_WIDGET_FLAG_INVALID = 1u << 10,
     \\};
     \\enum {
-    \\  ZERO_NATIVE_WIDGET_ACTION_FOCUS = 1u << 0,
-    \\  ZERO_NATIVE_WIDGET_ACTION_PRESS = 1u << 1,
-    \\  ZERO_NATIVE_WIDGET_ACTION_TOGGLE = 1u << 2,
-    \\  ZERO_NATIVE_WIDGET_ACTION_INCREMENT = 1u << 3,
-    \\  ZERO_NATIVE_WIDGET_ACTION_DECREMENT = 1u << 4,
-    \\  ZERO_NATIVE_WIDGET_ACTION_SET_TEXT = 1u << 5,
-    \\  ZERO_NATIVE_WIDGET_ACTION_SET_SELECTION = 1u << 6,
-    \\  ZERO_NATIVE_WIDGET_ACTION_SELECT = 1u << 7,
-    \\  ZERO_NATIVE_WIDGET_ACTION_DRAG = 1u << 8,
-    \\  ZERO_NATIVE_WIDGET_ACTION_DROP_FILES = 1u << 9,
-    \\  ZERO_NATIVE_WIDGET_ACTION_DISMISS = 1u << 10,
+    \\  NATIVE_SDK_WIDGET_ACTION_FOCUS = 1u << 0,
+    \\  NATIVE_SDK_WIDGET_ACTION_PRESS = 1u << 1,
+    \\  NATIVE_SDK_WIDGET_ACTION_TOGGLE = 1u << 2,
+    \\  NATIVE_SDK_WIDGET_ACTION_INCREMENT = 1u << 3,
+    \\  NATIVE_SDK_WIDGET_ACTION_DECREMENT = 1u << 4,
+    \\  NATIVE_SDK_WIDGET_ACTION_SET_TEXT = 1u << 5,
+    \\  NATIVE_SDK_WIDGET_ACTION_SET_SELECTION = 1u << 6,
+    \\  NATIVE_SDK_WIDGET_ACTION_SELECT = 1u << 7,
+    \\  NATIVE_SDK_WIDGET_ACTION_DRAG = 1u << 8,
+    \\  NATIVE_SDK_WIDGET_ACTION_DROP_FILES = 1u << 9,
+    \\  NATIVE_SDK_WIDGET_ACTION_DISMISS = 1u << 10,
     \\};
     \\enum {
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_FOCUS = 0,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_PRESS = 1,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_TOGGLE = 2,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_INCREMENT = 3,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_DECREMENT = 4,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_SET_TEXT = 5,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_SET_SELECTION = 6,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_SET_COMPOSITION = 7,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_COMMIT_COMPOSITION = 8,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_CANCEL_COMPOSITION = 9,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_SELECT = 10,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_DRAG = 11,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_DROP_FILES = 12,
-    \\  ZERO_NATIVE_WIDGET_ACTION_KIND_DISMISS = 13,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_FOCUS = 0,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_PRESS = 1,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_TOGGLE = 2,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_INCREMENT = 3,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_DECREMENT = 4,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_SET_TEXT = 5,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_SET_SELECTION = 6,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_SET_COMPOSITION = 7,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_COMMIT_COMPOSITION = 8,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_CANCEL_COMPOSITION = 9,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_SELECT = 10,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_DRAG = 11,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_DROP_FILES = 12,
+    \\  NATIVE_SDK_WIDGET_ACTION_KIND_DISMISS = 13,
     \\};
     \\enum {
-    \\  ZERO_NATIVE_GPU_SURFACE_STATUS_UNAVAILABLE = 0,
-    \\  ZERO_NATIVE_GPU_SURFACE_STATUS_INITIALIZING = 1,
-    \\  ZERO_NATIVE_GPU_SURFACE_STATUS_READY = 2,
-    \\  ZERO_NATIVE_GPU_SURFACE_STATUS_LOST = 3,
+    \\  NATIVE_SDK_GPU_SURFACE_STATUS_UNAVAILABLE = 0,
+    \\  NATIVE_SDK_GPU_SURFACE_STATUS_INITIALIZING = 1,
+    \\  NATIVE_SDK_GPU_SURFACE_STATUS_READY = 2,
+    \\  NATIVE_SDK_GPU_SURFACE_STATUS_LOST = 3,
     \\};
-    \\typedef struct zero_native_widget_semantics {
+    \\typedef struct native_sdk_widget_semantics {
     \\  uint64_t id;
     \\  uint64_t parent_id;
     \\  int role;
@@ -481,8 +481,8 @@ fn embedHeader() []const u8 {
     \\  float scroll_viewport_extent;
     \\  float scroll_content_extent;
     \\  int has_scroll;
-    \\} zero_native_widget_semantics_t;
-    \\typedef struct zero_native_widget_text_geometry {
+    \\} native_sdk_widget_semantics_t;
+    \\typedef struct native_sdk_widget_text_geometry {
     \\  uint64_t id;
     \\  int has_caret_bounds;
     \\  float caret_x;
@@ -501,8 +501,8 @@ fn embedHeader() []const u8 {
     \\  float composition_width;
     \\  float composition_height;
     \\  uintptr_t composition_rect_count;
-    \\} zero_native_widget_text_geometry_t;
-    \\typedef struct zero_native_widget_action {
+    \\} native_sdk_widget_text_geometry_t;
+    \\typedef struct native_sdk_widget_action {
     \\  uint64_t id;
     \\  int action;
     \\  const char *text;
@@ -510,8 +510,8 @@ fn embedHeader() []const u8 {
     \\  uintptr_t selection_anchor;
     \\  uintptr_t selection_focus;
     \\  int has_selection;
-    \\} zero_native_widget_action_t;
-    \\typedef struct zero_native_viewport_state {
+    \\} native_sdk_widget_action_t;
+    \\typedef struct native_sdk_viewport_state {
     \\  float width;
     \\  float height;
     \\  float scale;
@@ -528,8 +528,8 @@ fn embedHeader() []const u8 {
     \\  float content_y;
     \\  float content_width;
     \\  float content_height;
-    \\} zero_native_viewport_state_t;
-    \\typedef struct zero_native_gpu_frame_state {
+    \\} native_sdk_viewport_state_t;
+    \\typedef struct native_sdk_gpu_frame_state {
     \\  uint64_t surface_id;
     \\  uint64_t window_id;
     \\  float width;
@@ -561,54 +561,54 @@ fn embedHeader() []const u8 {
     \\  uint64_t widget_revision;
     \\  uintptr_t widget_node_count;
     \\  uintptr_t widget_semantics_count;
-    \\} zero_native_gpu_frame_state_t;
-    \\typedef struct zero_native_canvas_pixels {
+    \\} native_sdk_gpu_frame_state_t;
+    \\typedef struct native_sdk_canvas_pixels {
     \\  uintptr_t width;
     \\  uintptr_t height;
     \\  uintptr_t byte_len;
-    \\} zero_native_canvas_pixels_t;
-    \\void *zero_native_app_create(void);
-    \\void zero_native_app_destroy(void *app);
-    \\void zero_native_app_start(void *app);
-    \\void zero_native_app_activate(void *app);
-    \\void zero_native_app_deactivate(void *app);
-    \\void zero_native_app_stop(void *app);
-    \\void zero_native_app_resize(void *app, float width, float height, float scale, void *surface);
-    \\void zero_native_app_viewport(void *app, float width, float height, float scale, void *surface, float safe_top, float safe_right, float safe_bottom, float safe_left, float keyboard_top, float keyboard_right, float keyboard_bottom, float keyboard_left);
-    \\int zero_native_app_viewport_state(void *app, zero_native_viewport_state_t *out);
-    \\int zero_native_app_gpu_frame_state(void *app, zero_native_gpu_frame_state_t *out);
-    \\void zero_native_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
-    \\void zero_native_app_scroll(void *app, uint64_t id, float x, float y, float delta_x, float delta_y);
-    \\void zero_native_app_key(void *app, int phase, const char *key, uintptr_t key_len, const char *text, uintptr_t text_len, uint32_t modifiers_mask);
-    \\void zero_native_app_text(void *app, const char *text, uintptr_t len);
-    \\void zero_native_app_ime(void *app, int kind, const char *text, uintptr_t len, intptr_t cursor);
-    \\void zero_native_app_command(void *app, const char *name, uintptr_t len);
-    \\void zero_native_app_frame(void *app);
-    \\void zero_native_app_set_asset_root(void *app, const char *path, uintptr_t len);
-    \\void zero_native_app_set_asset_entry(void *app, const char *path, uintptr_t len);
-    \\uintptr_t zero_native_app_last_command_count(void *app);
-    \\const char *zero_native_app_last_command_name(void *app);
-    \\const char *zero_native_app_last_error_name(void *app);
-    \\uintptr_t zero_native_app_widget_semantics_count(void *app);
-    \\int zero_native_app_widget_semantics_at(void *app, uintptr_t index, zero_native_widget_semantics_t *out);
-    \\int zero_native_app_widget_semantics_by_id(void *app, uint64_t id, zero_native_widget_semantics_t *out);
-    \\int zero_native_app_widget_text_geometry(void *app, uint64_t id, zero_native_widget_text_geometry_t *out);
-    \\int zero_native_app_widget_action(void *app, const zero_native_widget_action_t *action);
-    \\int zero_native_app_render_pixel_size(void *app, float scale, zero_native_canvas_pixels_t *out);
-    \\int zero_native_app_render_pixels(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, zero_native_canvas_pixels_t *out);
+    \\} native_sdk_canvas_pixels_t;
+    \\void *native_sdk_app_create(void);
+    \\void native_sdk_app_destroy(void *app);
+    \\void native_sdk_app_start(void *app);
+    \\void native_sdk_app_activate(void *app);
+    \\void native_sdk_app_deactivate(void *app);
+    \\void native_sdk_app_stop(void *app);
+    \\void native_sdk_app_resize(void *app, float width, float height, float scale, void *surface);
+    \\void native_sdk_app_viewport(void *app, float width, float height, float scale, void *surface, float safe_top, float safe_right, float safe_bottom, float safe_left, float keyboard_top, float keyboard_right, float keyboard_bottom, float keyboard_left);
+    \\int native_sdk_app_viewport_state(void *app, native_sdk_viewport_state_t *out);
+    \\int native_sdk_app_gpu_frame_state(void *app, native_sdk_gpu_frame_state_t *out);
+    \\void native_sdk_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
+    \\void native_sdk_app_scroll(void *app, uint64_t id, float x, float y, float delta_x, float delta_y);
+    \\void native_sdk_app_key(void *app, int phase, const char *key, uintptr_t key_len, const char *text, uintptr_t text_len, uint32_t modifiers_mask);
+    \\void native_sdk_app_text(void *app, const char *text, uintptr_t len);
+    \\void native_sdk_app_ime(void *app, int kind, const char *text, uintptr_t len, intptr_t cursor);
+    \\void native_sdk_app_command(void *app, const char *name, uintptr_t len);
+    \\void native_sdk_app_frame(void *app);
+    \\void native_sdk_app_set_asset_root(void *app, const char *path, uintptr_t len);
+    \\void native_sdk_app_set_asset_entry(void *app, const char *path, uintptr_t len);
+    \\uintptr_t native_sdk_app_last_command_count(void *app);
+    \\const char *native_sdk_app_last_command_name(void *app);
+    \\const char *native_sdk_app_last_error_name(void *app);
+    \\uintptr_t native_sdk_app_widget_semantics_count(void *app);
+    \\int native_sdk_app_widget_semantics_at(void *app, uintptr_t index, native_sdk_widget_semantics_t *out);
+    \\int native_sdk_app_widget_semantics_by_id(void *app, uint64_t id, native_sdk_widget_semantics_t *out);
+    \\int native_sdk_app_widget_text_geometry(void *app, uint64_t id, native_sdk_widget_text_geometry_t *out);
+    \\int native_sdk_app_widget_action(void *app, const native_sdk_widget_action_t *action);
+    \\int native_sdk_app_render_pixel_size(void *app, float scale, native_sdk_canvas_pixels_t *out);
+    \\int native_sdk_app_render_pixels(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, native_sdk_canvas_pixels_t *out);
     \\
     ;
 }
 
 fn iosReadme() []const u8 {
-    return "iOS zero-native host skeleton. Link Libraries/libzero-native.a and call the functions in zero-nativeHost/zero_native.h from the native UIKit shell.\n";
+    return "iOS native-sdk host skeleton. Link Libraries/libnative-sdk.a and call the functions in native-sdkHost/native_sdk.h from the native UIKit shell.\n";
 }
 
 fn iosInfoPlist() []const u8 {
     return
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    \\<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.zero_native.ios</string><key>CFBundleName</key><string>zero-nativeHost</string></dict></plist>
+    \\<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.native_sdk.ios</string><key>CFBundleName</key><string>native-sdkHost</string></dict></plist>
     \\
     ;
 }
@@ -656,7 +656,7 @@ const MobileShellModel = struct {
 
 fn defaultMobileShellModel() MobileShellModel {
     return .{
-        .title = "zero-native",
+        .title = "native-sdk",
         .status = "Native commands ready",
         .primary_button_title = "Back",
         .primary_command = "mobile.back",
@@ -724,8 +724,8 @@ fn sourceStringLiteralAlloc(allocator: std.mem.Allocator, value: []const u8, tar
 
 fn iosDefaultShellConfig() []const u8 {
     return
-    \\enum ZeroNativeShellConfig {
-    \\    static let title = "zero-native"
+    \\enum NativeSdkShellConfig {
+    \\    static let title = "native-sdk"
     \\    static let status = "Native commands ready"
     \\    static let primaryButtonTitle = "Back"
     \\    static let primaryCommand = "mobile.back"
@@ -757,7 +757,7 @@ fn iosShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel) ![
     defer allocator.free(asset_entry);
 
     return std.fmt.allocPrint(allocator,
-        \\enum ZeroNativeShellConfig {{
+        \\enum NativeSdkShellConfig {{
         \\    static let title = {s}
         \\    static let status = {s}
         \\    static let primaryButtonTitle = {s}
@@ -776,7 +776,7 @@ fn iosViewController() []const u8 {
     \\import UIKit
     \\import WebKit
     \\
-    \\final class ZeroNativeHostViewController: UIViewController {
+    \\final class NativeSdkHostViewController: UIViewController {
     \\    private let headerView = UIView()
     \\    private let titleLabel = UILabel()
     \\    private let statusLabel = UILabel()
@@ -825,10 +825,10 @@ fn iosViewController() []const u8 {
     \\    }
     \\
     \\    private final class WidgetAccessibilityElement: UIAccessibilityElement {
-    \\        private weak var owner: ZeroNativeHostViewController?
+    \\        private weak var owner: NativeSdkHostViewController?
     \\        private let node: WidgetSemantics
     \\
-    \\        init(accessibilityContainer container: Any, owner: ZeroNativeHostViewController, node: WidgetSemantics) {
+    \\        init(accessibilityContainer container: Any, owner: NativeSdkHostViewController, node: WidgetSemantics) {
     \\            self.owner = owner
     \\            self.node = node
     \\            super.init(accessibilityContainer: container)
@@ -886,10 +886,10 @@ fn iosViewController() []const u8 {
     \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
     \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
     \\
-    \\        nativeApp = zero_native_app_create()
+    \\        nativeApp = native_sdk_app_create()
     \\        if let nativeApp {
     \\            configureNativeAssetRoot(nativeApp)
-    \\            zero_native_app_start(nativeApp)
+    \\            native_sdk_app_start(nativeApp)
     \\            refreshWidgetAccessibility()
     \\        }
     \\        loadWorkspace()
@@ -899,16 +899,16 @@ fn iosViewController() []const u8 {
     \\        guard let resourceURL = Bundle.main.resourceURL else { return nil }
     \\        let resourcesURL = resourceURL.appendingPathComponent("Resources", isDirectory: true)
     \\        let roots: [URL]
-    \\        if ZeroNativeShellConfig.assetRootSubdirectory.isEmpty {
+    \\        if NativeSdkShellConfig.assetRootSubdirectory.isEmpty {
     \\            roots = [resourceURL, resourcesURL]
     \\        } else {
     \\            roots = [
-    \\                resourceURL.appendingPathComponent(ZeroNativeShellConfig.assetRootSubdirectory, isDirectory: true),
-    \\                resourcesURL.appendingPathComponent(ZeroNativeShellConfig.assetRootSubdirectory, isDirectory: true),
+    \\                resourceURL.appendingPathComponent(NativeSdkShellConfig.assetRootSubdirectory, isDirectory: true),
+    \\                resourcesURL.appendingPathComponent(NativeSdkShellConfig.assetRootSubdirectory, isDirectory: true),
     \\            ]
     \\        }
     \\        for rootURL in roots {
-    \\            let entryURL = rootURL.appendingPathComponent(ZeroNativeShellConfig.assetEntryPath, isDirectory: false)
+    \\            let entryURL = rootURL.appendingPathComponent(NativeSdkShellConfig.assetEntryPath, isDirectory: false)
     \\            if FileManager.default.fileExists(atPath: entryURL.path) { return rootURL }
     \\        }
     \\        return roots.first
@@ -918,16 +918,16 @@ fn iosViewController() []const u8 {
     \\        guard let rootURL = packagedAssetRootURL() else { return }
     \\        let path = rootURL.path
     \\        path.withCString { pointer in
-    \\            zero_native_app_set_asset_root(nativeApp, pointer, UInt(path.utf8.count))
+    \\            native_sdk_app_set_asset_root(nativeApp, pointer, UInt(path.utf8.count))
     \\        }
-    \\        ZeroNativeShellConfig.assetEntryPath.withCString { pointer in
-    \\            zero_native_app_set_asset_entry(nativeApp, pointer, UInt(ZeroNativeShellConfig.assetEntryPath.utf8.count))
+    \\        NativeSdkShellConfig.assetEntryPath.withCString { pointer in
+    \\            native_sdk_app_set_asset_entry(nativeApp, pointer, UInt(NativeSdkShellConfig.assetEntryPath.utf8.count))
     \\        }
     \\    }
     \\
     \\    private func loadWorkspace() {
     \\        if let rootURL = packagedAssetRootURL() {
-    \\            let entryURL = rootURL.appendingPathComponent(ZeroNativeShellConfig.assetEntryPath, isDirectory: false)
+    \\            let entryURL = rootURL.appendingPathComponent(NativeSdkShellConfig.assetEntryPath, isDirectory: false)
     \\            if FileManager.default.fileExists(atPath: entryURL.path) {
     \\                webView.loadFileURL(entryURL, allowingReadAccessTo: rootURL)
     \\                return
@@ -938,15 +938,15 @@ fn iosViewController() []const u8 {
     \\
     \\    private func configureHeader() {
     \\        headerView.backgroundColor = .secondarySystemBackground
-    \\        titleLabel.text = ZeroNativeShellConfig.title
+    \\        titleLabel.text = NativeSdkShellConfig.title
     \\        titleLabel.font = .preferredFont(forTextStyle: .title2)
     \\        titleLabel.adjustsFontForContentSizeCategory = true
-    \\        statusLabel.text = ZeroNativeShellConfig.status
+    \\        statusLabel.text = NativeSdkShellConfig.status
     \\        statusLabel.font = .preferredFont(forTextStyle: .caption1)
     \\        statusLabel.textColor = .secondaryLabel
-    \\        backButton.setTitle(ZeroNativeShellConfig.primaryButtonTitle, for: .normal)
+    \\        backButton.setTitle(NativeSdkShellConfig.primaryButtonTitle, for: .normal)
     \\        backButton.addTarget(self, action: #selector(sendBackCommand), for: .touchUpInside)
-    \\        refreshButton.setTitle(ZeroNativeShellConfig.secondaryButtonTitle, for: .normal)
+    \\        refreshButton.setTitle(NativeSdkShellConfig.secondaryButtonTitle, for: .normal)
     \\        refreshButton.addTarget(self, action: #selector(sendRefreshCommand), for: .touchUpInside)
     \\        [titleLabel, statusLabel, backButton, refreshButton].forEach {
     \\            $0.translatesAutoresizingMaskIntoConstraints = false
@@ -965,22 +965,22 @@ fn iosViewController() []const u8 {
     \\    }
     \\
     \\    @objc private func sendBackCommand() {
-    \\        dispatchNativeCommand(ZeroNativeShellConfig.primaryCommand)
+    \\        dispatchNativeCommand(NativeSdkShellConfig.primaryCommand)
     \\    }
     \\
     \\    @objc private func sendRefreshCommand() {
-    \\        dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand)
+    \\        dispatchNativeCommand(NativeSdkShellConfig.secondaryCommand)
     \\    }
     \\
     \\    private func dispatchNativeCommand(_ command: String) {
     \\        guard let nativeApp else { return }
     \\        command.withCString { pointer in
-    \\            zero_native_app_command(nativeApp, pointer, UInt(command.utf8.count))
+    \\            native_sdk_app_command(nativeApp, pointer, UInt(command.utf8.count))
     \\        }
-    \\        let count = zero_native_app_last_command_count(nativeApp)
-    \\        let name = String(cString: zero_native_app_last_command_name(nativeApp))
+    \\        let count = native_sdk_app_last_command_count(nativeApp)
+    \\        let name = String(cString: native_sdk_app_last_command_name(nativeApp))
     \\        statusLabel.text = "\(name) #\(count)"
-    \\        zero_native_app_frame(nativeApp)
+    \\        native_sdk_app_frame(nativeApp)
     \\        refreshWidgetAccessibility()
     \\    }
     \\
@@ -1010,14 +1010,14 @@ fn iosViewController() []const u8 {
     \\        guard let nativeApp else { return }
     \\        let scale = Float(view.window?.screen.scale ?? UIScreen.main.scale)
     \\        let safe = view.safeAreaInsets
-    \\        zero_native_app_viewport(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil, Float(safe.top), Float(safe.right), Float(safe.bottom), Float(safe.left), 0, 0, Float(keyboardBottomInset), 0)
-    \\        zero_native_app_frame(nativeApp)
+    \\        native_sdk_app_viewport(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil, Float(safe.top), Float(safe.right), Float(safe.bottom), Float(safe.left), 0, 0, Float(keyboardBottomInset), 0)
+    \\        native_sdk_app_frame(nativeApp)
     \\        refreshWidgetAccessibility()
     \\    }
     \\
     \\    private func widgetSemanticsSnapshot() -> [WidgetSemantics] {
     \\        guard let nativeApp else { return [] }
-    \\        let count = Int(zero_native_app_widget_semantics_count(nativeApp))
+    \\        let count = Int(native_sdk_app_widget_semantics_count(nativeApp))
     \\        var nodes: [WidgetSemantics] = []
     \\        nodes.reserveCapacity(count)
     \\        for index in 0..<count {
@@ -1030,19 +1030,19 @@ fn iosViewController() []const u8 {
     \\
     \\    private func widgetSemantics(at index: Int) -> WidgetSemantics? {
     \\        guard let nativeApp else { return nil }
-    \\        var node = zero_native_widget_semantics_t()
-    \\        guard zero_native_app_widget_semantics_at(nativeApp, UInt(index), &node) != 0 else { return nil }
+    \\        var node = native_sdk_widget_semantics_t()
+    \\        guard native_sdk_app_widget_semantics_at(nativeApp, UInt(index), &node) != 0 else { return nil }
     \\        return widgetSemantics(from: node)
     \\    }
     \\
     \\    private func widgetSemantics(id: UInt64) -> WidgetSemantics? {
     \\        guard let nativeApp else { return nil }
-    \\        var node = zero_native_widget_semantics_t()
-    \\        guard zero_native_app_widget_semantics_by_id(nativeApp, id, &node) != 0 else { return nil }
+    \\        var node = native_sdk_widget_semantics_t()
+    \\        guard native_sdk_app_widget_semantics_by_id(nativeApp, id, &node) != 0 else { return nil }
     \\        return widgetSemantics(from: node)
     \\    }
     \\
-    \\    private func widgetSemantics(from node: zero_native_widget_semantics_t) -> WidgetSemantics {
+    \\    private func widgetSemantics(from node: native_sdk_widget_semantics_t) -> WidgetSemantics {
     \\        return WidgetSemantics(
     \\            id: node.id,
     \\            parentId: node.parent_id,
@@ -1073,8 +1073,8 @@ fn iosViewController() []const u8 {
     \\
     \\    private func widgetTextGeometry(id: UInt64) -> WidgetTextGeometry? {
     \\        guard let nativeApp else { return nil }
-    \\        var geometry = zero_native_widget_text_geometry_t()
-    \\        guard zero_native_app_widget_text_geometry(nativeApp, id, &geometry) != 0 else { return nil }
+    \\        var geometry = native_sdk_widget_text_geometry_t()
+    \\        guard native_sdk_app_widget_text_geometry(nativeApp, id, &geometry) != 0 else { return nil }
     \\        return WidgetTextGeometry(
     \\            id: id,
     \\            caretBounds: geometry.has_caret_bounds != 0 ? CGRect(x: CGFloat(geometry.caret_x), y: CGFloat(geometry.caret_y), width: CGFloat(geometry.caret_width), height: CGFloat(geometry.caret_height)) : nil,
@@ -1095,7 +1095,7 @@ fn iosViewController() []const u8 {
     \\        hasSelection: Bool = false
     \\    ) -> Bool {
     \\        guard let nativeApp else { return false }
-    \\        var request = zero_native_widget_action_t()
+    \\        var request = native_sdk_widget_action_t()
     \\        request.id = id
     \\        request.action = action
     \\        request.selection_anchor = selectionAnchor
@@ -1106,15 +1106,15 @@ fn iosViewController() []const u8 {
     \\            ok = text.withCString { pointer in
     \\                request.text = pointer
     \\                request.text_len = UInt(text.utf8.count)
-    \\                return zero_native_app_widget_action(nativeApp, &request)
+    \\                return native_sdk_app_widget_action(nativeApp, &request)
     \\            }
     \\        } else {
     \\            request.text = nil
     \\            request.text_len = 0
-    \\            ok = zero_native_app_widget_action(nativeApp, &request)
+    \\            ok = native_sdk_app_widget_action(nativeApp, &request)
     \\        }
     \\        if ok != 0 {
-    \\            zero_native_app_frame(nativeApp)
+    \\            native_sdk_app_frame(nativeApp)
     \\            refreshWidgetAccessibility()
     \\        }
     \\        return ok != 0
@@ -1125,7 +1125,7 @@ fn iosViewController() []const u8 {
     \\        statusLabel.accessibilityValue = "Accessible items: \(semantics.count)"
     \\        widgetAccessibilityElements = semantics.map { node in
     \\            let element = WidgetAccessibilityElement(accessibilityContainer: webView, owner: self, node: node)
-    \\            element.accessibilityIdentifier = "zero-native-widget-\(node.id)"
+    \\            element.accessibilityIdentifier = "native-sdk-widget-\(node.id)"
     \\            element.accessibilityLabel = node.label.isEmpty ? node.text : node.label
     \\            element.accessibilityValue = widgetAccessibilityValue(node)
     \\            if !node.placeholder.isEmpty && node.text.isEmpty {
@@ -1140,19 +1140,19 @@ fn iosViewController() []const u8 {
     \\
     \\    private func widgetAccessibilityValue(_ node: WidgetSemantics) -> String? {
     \\        var states: [String] = []
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_EXPANDED)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_EXPANDED)) != 0 {
     \\            states.append("Expanded")
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_COLLAPSED)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_COLLAPSED)) != 0 {
     \\            states.append("Collapsed")
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_REQUIRED)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_REQUIRED)) != 0 {
     \\            states.append("Required")
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_READ_ONLY)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_READ_ONLY)) != 0 {
     \\            states.append("Read only")
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_INVALID)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_INVALID)) != 0 {
     \\            states.append("Invalid")
     \\        }
     \\        if !states.isEmpty {
@@ -1160,9 +1160,9 @@ fn iosViewController() []const u8 {
     \\        }
     \\        if let value = node.value {
     \\            switch node.role {
-    \\            case Int32(ZERO_NATIVE_WIDGET_ROLE_CHECKBOX), Int32(ZERO_NATIVE_WIDGET_ROLE_SWITCH):
+    \\            case Int32(NATIVE_SDK_WIDGET_ROLE_CHECKBOX), Int32(NATIVE_SDK_WIDGET_ROLE_SWITCH):
     \\                return value >= 0.5 ? "On" : "Off"
-    \\            case Int32(ZERO_NATIVE_WIDGET_ROLE_SLIDER), Int32(ZERO_NATIVE_WIDGET_ROLE_PROGRESSBAR):
+    \\            case Int32(NATIVE_SDK_WIDGET_ROLE_SLIDER), Int32(NATIVE_SDK_WIDGET_ROLE_PROGRESSBAR):
     \\                return "\(Int((value * 100).rounded()))%"
     \\            default:
     \\                return "\(value)"
@@ -1173,34 +1173,34 @@ fn iosViewController() []const u8 {
     \\
     \\    private func activateWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
     \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        if widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_TOGGLE)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_TOGGLE))
+    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_TOGGLE)) {
+    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_TOGGLE))
     \\        }
-    \\        if widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_PRESS)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_PRESS))
+    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_PRESS)) {
+    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_PRESS))
     \\        }
-    \\        if widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_SELECT)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_SELECT))
+    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_SELECT)) {
+    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_SELECT))
     \\        }
     \\        return false
     \\    }
     \\
     \\    private func incrementWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
     \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_INCREMENT)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_INCREMENT))
+    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_INCREMENT)) else { return false }
+    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_INCREMENT))
     \\    }
     \\
     \\    private func decrementWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
     \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_DECREMENT)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_DECREMENT))
+    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_DECREMENT)) else { return false }
+    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_DECREMENT))
     \\    }
     \\
     \\    private func dismissWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
     \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(ZERO_NATIVE_WIDGET_ACTION_DISMISS)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(ZERO_NATIVE_WIDGET_ACTION_KIND_DISMISS))
+    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_DISMISS)) else { return false }
+    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_DISMISS))
     \\    }
     \\
     \\    private func widgetSupportsAction(_ node: WidgetSemantics, _ action: UInt32) -> Bool {
@@ -1210,23 +1210,23 @@ fn iosViewController() []const u8 {
     \\    private func widgetAccessibilityTraits(_ node: WidgetSemantics) -> UIAccessibilityTraits {
     \\        var traits: UIAccessibilityTraits = []
     \\        switch node.role {
-    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_BUTTON), Int32(ZERO_NATIVE_WIDGET_ROLE_MENUITEM):
+    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_BUTTON), Int32(NATIVE_SDK_WIDGET_ROLE_MENUITEM):
     \\            traits.insert(.button)
-    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_CHECKBOX), Int32(ZERO_NATIVE_WIDGET_ROLE_SWITCH), Int32(ZERO_NATIVE_WIDGET_ROLE_TAB):
+    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_CHECKBOX), Int32(NATIVE_SDK_WIDGET_ROLE_SWITCH), Int32(NATIVE_SDK_WIDGET_ROLE_TAB):
     \\            traits.insert(.button)
-    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_SLIDER):
+    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_SLIDER):
     \\            traits.insert(.adjustable)
-    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_IMAGE):
+    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_IMAGE):
     \\            traits.insert(.image)
-    \\        case Int32(ZERO_NATIVE_WIDGET_ROLE_TEXT), Int32(ZERO_NATIVE_WIDGET_ROLE_PROGRESSBAR):
+    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_TEXT), Int32(NATIVE_SDK_WIDGET_ROLE_PROGRESSBAR):
     \\            traits.insert(.staticText)
     \\        default:
     \\            break
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_SELECTED)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_SELECTED)) != 0 {
     \\            traits.insert(.selected)
     \\        }
-    \\        if (node.flags & UInt32(ZERO_NATIVE_WIDGET_FLAG_DISABLED)) != 0 {
+    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_DISABLED)) != 0 {
     \\            traits.insert(.notEnabled)
     \\        }
     \\        return traits
@@ -1241,8 +1241,8 @@ fn iosViewController() []const u8 {
     \\    deinit {
     \\        NotificationCenter.default.removeObserver(self)
     \\        guard let nativeApp else { return }
-    \\        zero_native_app_stop(nativeApp)
-    \\        zero_native_app_destroy(nativeApp)
+    \\        native_sdk_app_stop(nativeApp)
+    \\        native_sdk_app_destroy(nativeApp)
     \\    }
     \\
     \\    private static let html = """
@@ -1261,7 +1261,7 @@ fn iosViewController() []const u8 {
 }
 
 fn androidReadme() []const u8 {
-    return "Android zero-native host skeleton. Copy libzero-native.a into app/src/main/cpp/lib and build with Android Studio or Gradle.\n";
+    return "Android native-sdk host skeleton. Copy libnative-sdk.a into app/src/main/cpp/lib and build with Android Studio or Gradle.\n";
 }
 
 fn androidBuildGradle() []const u8 {
@@ -1272,11 +1272,11 @@ fn androidBuildGradle() []const u8 {
     \\}
     \\
     \\android {
-    \\    namespace "dev.zero_native"
+    \\    namespace "dev.native_sdk"
     \\    compileSdk 35
     \\
     \\    defaultConfig {
-    \\        applicationId "dev.zero_native"
+    \\        applicationId "dev.native_sdk"
     \\        minSdk 26
     \\        targetSdk 35
     \\        versionCode 1
@@ -1340,22 +1340,22 @@ fn androidCMakeLists() []const u8 {
     return
     \\cmake_minimum_required(VERSION 3.22.1)
     \\
-    \\project(zero_native_host C)
+    \\project(native_sdk_host C)
     \\
-    \\add_library(zero-native STATIC IMPORTED)
-    \\set_target_properties(zero-native PROPERTIES
-    \\    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/lib/libzero-native.a"
+    \\add_library(native-sdk STATIC IMPORTED)
+    \\set_target_properties(native-sdk PROPERTIES
+    \\    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/lib/libnative-sdk.a"
     \\)
     \\
-    \\add_library(zero_native_host SHARED zero_native_jni.c)
-    \\target_include_directories(zero_native_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    \\target_link_libraries(zero_native_host zero-native android log)
+    \\add_library(native_sdk_host SHARED native_sdk_jni.c)
+    \\target_include_directories(native_sdk_host PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    \\target_link_libraries(native_sdk_host native-sdk android log)
     \\
     ;
 }
 
 fn androidManifest() []const u8 {
-    return "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:theme=\"@style/AppTheme\"><activity android:name=\"dev.zero_native.MainActivity\" android:configChanges=\"keyboard|keyboardHidden|orientation|screenSize\" android:exported=\"true\" android:windowSoftInputMode=\"adjustResize\"><intent-filter><action android:name=\"android.intent.action.MAIN\"/><category android:name=\"android.intent.category.LAUNCHER\"/></intent-filter></activity></application></manifest>\n";
+    return "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:theme=\"@style/AppTheme\"><activity android:name=\"dev.native_sdk.MainActivity\" android:configChanges=\"keyboard|keyboardHidden|orientation|screenSize\" android:exported=\"true\" android:windowSoftInputMode=\"adjustResize\"><intent-filter><action android:name=\"android.intent.action.MAIN\"/><category android:name=\"android.intent.category.LAUNCHER\"/></intent-filter></activity></application></manifest>\n";
 }
 
 fn androidManifestForMetadata(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
@@ -1364,7 +1364,7 @@ fn androidManifestForMetadata(allocator: std.mem.Allocator, metadata: manifest_t
     return std.fmt.allocPrint(allocator,
         \\<manifest xmlns:android="http://schemas.android.com/apk/res/android">
         \\  <application android:label="{s}" android:theme="@style/AppTheme">
-        \\    <activity android:name="dev.zero_native.MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize" android:exported="true" android:windowSoftInputMode="adjustResize">
+        \\    <activity android:name="dev.native_sdk.MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize" android:exported="true" android:windowSoftInputMode="adjustResize">
         \\      <intent-filter>
         \\        <action android:name="android.intent.action.MAIN" />
         \\        <category android:name="android.intent.category.LAUNCHER" />
@@ -1413,10 +1413,10 @@ fn androidApplicationIdAlloc(allocator: std.mem.Allocator, id: []const u8) ![]co
 
 fn androidDefaultShellConfig() []const u8 {
     return
-    \\package dev.zero_native
+    \\package dev.native_sdk
     \\
-    \\object ZeroNativeShellConfig {
-    \\    const val title = "zero-native"
+    \\object NativeSdkShellConfig {
+    \\    const val title = "native-sdk"
     \\    const val status = "Native commands ready"
     \\    const val primaryButtonTitle = "Back"
     \\    const val primaryCommand = "mobile.back"
@@ -1448,9 +1448,9 @@ fn androidShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel
     defer allocator.free(asset_entry);
 
     return std.fmt.allocPrint(allocator,
-        \\package dev.zero_native
+        \\package dev.native_sdk
         \\
-        \\object ZeroNativeShellConfig {{
+        \\object NativeSdkShellConfig {{
         \\    const val title = {s}
         \\    const val status = {s}
         \\    const val primaryButtonTitle = {s}
@@ -1466,7 +1466,7 @@ fn androidShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel
 
 fn androidActivity() []const u8 {
     return
-    \\package dev.zero_native
+    \\package dev.native_sdk
     \\
     \\import android.app.Activity
     \\import android.content.res.Configuration
@@ -1794,7 +1794,7 @@ fn androidActivity() []const u8 {
     \\
     \\    override fun onCreate(savedInstanceState: Bundle?) {
     \\        super.onCreate(savedInstanceState)
-    \\        System.loadLibrary("zero_native_host")
+    \\        System.loadLibrary("native_sdk_host")
     \\
     \\        widgetSurface = WidgetSurfaceView()
     \\        widgetSurface.holder.addCallback(this)
@@ -1805,12 +1805,12 @@ fn androidActivity() []const u8 {
     \\            setPadding(32, 28, 32, 24)
     \\        }
     \\        val title = TextView(this).apply {
-    \\            text = ZeroNativeShellConfig.title
+    \\            text = NativeSdkShellConfig.title
     \\            textSize = 24f
     \\            setTextColor(Color.rgb(24, 24, 27))
     \\        }
     \\        statusLabel = TextView(this).apply {
-    \\            text = ZeroNativeShellConfig.status
+    \\            text = NativeSdkShellConfig.status
     \\            textSize = 13f
     \\            setTextColor(Color.rgb(95, 102, 114))
     \\            setPadding(0, 8, 0, 0)
@@ -1820,12 +1820,12 @@ fn androidActivity() []const u8 {
     \\            setPadding(0, 12, 0, 0)
     \\        }
     \\        val back = Button(this).apply {
-    \\            text = ZeroNativeShellConfig.primaryButtonTitle
-    \\            setOnClickListener { dispatchNativeCommand(ZeroNativeShellConfig.primaryCommand) }
+    \\            text = NativeSdkShellConfig.primaryButtonTitle
+    \\            setOnClickListener { dispatchNativeCommand(NativeSdkShellConfig.primaryCommand) }
     \\        }
     \\        val refresh = Button(this).apply {
-    \\            text = ZeroNativeShellConfig.secondaryButtonTitle
-    \\            setOnClickListener { dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand) }
+    \\            text = NativeSdkShellConfig.secondaryButtonTitle
+    \\            setOnClickListener { dispatchNativeCommand(NativeSdkShellConfig.secondaryCommand) }
     \\        }
     \\        actions.addView(back, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     \\        actions.addView(refresh, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -1863,24 +1863,24 @@ fn androidActivity() []const u8 {
     \\
     \\        nativeApp = nativeCreate()
     \\        nativeSetAssetRoot(nativeApp, packagedAssetRoot())
-    \\        nativeSetAssetEntry(nativeApp, ZeroNativeShellConfig.assetEntryPath)
+    \\        nativeSetAssetEntry(nativeApp, NativeSdkShellConfig.assetEntryPath)
     \\        nativeStart(nativeApp)
     \\        refreshWidgetSemanticsStatus()
     \\    }
     \\
     \\    private fun packagedAssetRoot(): String {
-    \\        return if (ZeroNativeShellConfig.assetRootSubdirectory.isEmpty()) {
-    \\            "android_asset/zero-native"
+    \\        return if (NativeSdkShellConfig.assetRootSubdirectory.isEmpty()) {
+    \\            "android_asset/native-sdk"
     \\        } else {
-    \\            "android_asset/zero-native/${ZeroNativeShellConfig.assetRootSubdirectory}"
+    \\            "android_asset/native-sdk/${NativeSdkShellConfig.assetRootSubdirectory}"
     \\        }
     \\    }
     \\
     \\    private fun packagedAssetEntry(): String {
-    \\        return if (ZeroNativeShellConfig.assetRootSubdirectory.isEmpty()) {
-    \\            "zero-native/${ZeroNativeShellConfig.assetEntryPath}"
+    \\        return if (NativeSdkShellConfig.assetRootSubdirectory.isEmpty()) {
+    \\            "native-sdk/${NativeSdkShellConfig.assetEntryPath}"
     \\        } else {
-    \\            "zero-native/${ZeroNativeShellConfig.assetRootSubdirectory}/${ZeroNativeShellConfig.assetEntryPath}"
+    \\            "native-sdk/${NativeSdkShellConfig.assetRootSubdirectory}/${NativeSdkShellConfig.assetEntryPath}"
     \\        }
     \\    }
     \\
@@ -2106,7 +2106,7 @@ fn androidActivity() []const u8 {
     \\
     \\    override fun onBackPressed() {
     \\        if (nativeApp != 0L) {
-    \\            dispatchNativeCommand(ZeroNativeShellConfig.primaryCommand)
+    \\            dispatchNativeCommand(NativeSdkShellConfig.primaryCommand)
     \\            return
     \\        }
     \\        super.onBackPressed()
@@ -2211,37 +2211,37 @@ fn androidJni() []const u8 {
     \\#include <jni.h>
     \\#include <stdint.h>
     \\#include <string.h>
-    \\#include "zero_native.h"
-    \\static jbyteArray zero_native_jni_bytes(JNIEnv *env, const char *ptr, uintptr_t len) { jbyteArray out = (*env)->NewByteArray(env, (jsize)len); if (!out) return NULL; if (ptr && len > 0) (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte*)ptr); return out; }
-    \\JNIEXPORT jlong JNICALL Java_dev_zero_1native_MainActivity_nativeCreate(JNIEnv *env, jobject self) { (void)env; (void)self; return (jlong)zero_native_app_create(); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeDestroy(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_destroy((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeStart(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_start((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeActivate(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_activate((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeDeactivate(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_deactivate((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeStop(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_stop((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetRoot(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_root((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeSetAssetEntry(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; zero_native_app_set_asset_entry((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeResize(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface) { (void)env; (void)self; zero_native_app_resize((void*)app, w, h, scale, surface); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeViewport(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface, jfloat safe_top, jfloat safe_right, jfloat safe_bottom, jfloat safe_left, jfloat keyboard_top, jfloat keyboard_right, jfloat keyboard_bottom, jfloat keyboard_left) { (void)env; (void)self; zero_native_app_viewport((void*)app, w, h, scale, surface, safe_top, safe_right, safe_bottom, safe_left, keyboard_top, keyboard_right, keyboard_bottom, keyboard_left); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeTouch(JNIEnv *env, jobject self, jlong app, jlong id, jint phase, jfloat x, jfloat y, jfloat pressure) { (void)env; (void)self; zero_native_app_touch((void*)app, (uint64_t)id, phase, x, y, pressure); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeScroll(JNIEnv *env, jobject self, jlong app, jlong id, jfloat x, jfloat y, jfloat delta_x, jfloat delta_y) { (void)env; (void)self; zero_native_app_scroll((void*)app, (uint64_t)id, x, y, delta_x, delta_y); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeKey(JNIEnv *env, jobject self, jlong app, jint phase, jstring key, jstring text, jint modifiers) { (void)self; const char *key_chars = key ? (*env)->GetStringUTFChars(env, key, NULL) : NULL; const char *text_chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_app_key((void*)app, phase, key_chars, key_chars ? strlen(key_chars) : 0, text_chars, text_chars ? strlen(text_chars) : 0, (uint32_t)modifiers); if (key_chars) (*env)->ReleaseStringUTFChars(env, key, key_chars); if (text_chars) (*env)->ReleaseStringUTFChars(env, text, text_chars); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeText(JNIEnv *env, jobject self, jlong app, jstring text) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, text, NULL); if (!chars) return; zero_native_app_text((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, text, chars); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeIme(JNIEnv *env, jobject self, jlong app, jint kind, jstring text, jlong cursor) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_app_ime((void*)app, kind, chars, chars ? strlen(chars) : 0, (intptr_t)cursor); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); }
-    \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; zero_native_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)zero_native_app_last_command_count((void*)app); }
-    \\JNIEXPORT void JNICALL Java_dev_zero_1native_MainActivity_nativeFrame(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; zero_native_app_frame((void*)app); }
-    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeGpuFrameState(JNIEnv *env, jobject self, jlong app, jlongArray longs, jintArray ints, jfloatArray floats) { (void)self; if (!longs || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, longs) < 19 || (*env)->GetArrayLength(env, ints) < 9 || (*env)->GetArrayLength(env, floats) < 3) return JNI_FALSE; zero_native_gpu_frame_state_t state; memset(&state, 0, sizeof(state)); if (!zero_native_app_gpu_frame_state((void*)app, &state)) return JNI_FALSE; const jlong long_values[19] = { (jlong)state.surface_id, (jlong)state.window_id, (jlong)state.frame_index, (jlong)state.timestamp_ns, (jlong)state.frame_interval_ns, (jlong)state.input_timestamp_ns, (jlong)state.input_latency_ns, (jlong)state.input_latency_budget_ns, (jlong)state.input_latency_budget_exceeded_count, (jlong)state.first_frame_latency_ns, (jlong)state.first_frame_latency_budget_ns, (jlong)state.first_frame_latency_budget_exceeded_count, (jlong)state.canvas_revision, (jlong)state.canvas_command_count, (jlong)state.canvas_frame_batch_count, (jlong)state.canvas_frame_budget_exceeded_count, (jlong)state.widget_revision, (jlong)state.widget_node_count, (jlong)state.widget_semantics_count }; const jint int_values[9] = { (jint)state.input_latency_budget_ok, (jint)state.first_frame_latency_budget_ok, (jint)state.nonblank, (jint)state.sample_color, (jint)state.status, (jint)state.vsync, (jint)state.canvas_frame_requires_render, (jint)state.canvas_frame_full_repaint, (jint)state.canvas_frame_budget_ok }; const jfloat float_values[3] = { (jfloat)state.width, (jfloat)state.height, (jfloat)state.scale }; (*env)->SetLongArrayRegion(env, longs, 0, 19, long_values); (*env)->SetIntArrayRegion(env, ints, 0, 9, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 3, float_values); return JNI_TRUE; }
-    \\JNIEXPORT jint JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsCount(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; return (jint)zero_native_app_widget_semantics_count((void*)app); }
-    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsFields(JNIEnv *env, jobject self, jlong app, jint index, jlongArray ids, jintArray ints, jfloatArray floats) { (void)self; if (!ids || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ids) < 12 || (*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 8) return JNI_FALSE; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return JNI_FALSE; const jlong id_values[12] = { (jlong)node.id, (jlong)node.parent_id, (jlong)node.text_selection_start, (jlong)node.text_selection_end, (jlong)node.text_composition_start, (jlong)node.text_composition_end, (jlong)node.grid_row_index, (jlong)node.grid_column_index, (jlong)node.grid_row_count, (jlong)node.grid_column_count, (jlong)node.list_item_index, (jlong)node.list_item_count }; const jint int_values[5] = { (jint)node.role, (jint)node.flags, (jint)node.actions, (jint)node.has_value, (jint)node.has_scroll }; const jfloat float_values[8] = { (jfloat)node.x, (jfloat)node.y, (jfloat)node.width, (jfloat)node.height, (jfloat)node.value, (jfloat)node.scroll_offset, (jfloat)node.scroll_viewport_extent, (jfloat)node.scroll_content_extent }; (*env)->SetLongArrayRegion(env, ids, 0, 12, id_values); (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 8, float_values); return JNI_TRUE; }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsLabel(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.label, node.label_len); }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsText(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.text, node.text_len); }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsPlaceholder(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.placeholder, node.placeholder_len); }
-    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsByIdFields(JNIEnv *env, jobject self, jlong app, jlong id, jlongArray ids, jintArray ints, jfloatArray floats) { (void)self; if (!ids || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ids) < 12 || (*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 8) return JNI_FALSE; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return JNI_FALSE; const jlong id_values[12] = { (jlong)node.id, (jlong)node.parent_id, (jlong)node.text_selection_start, (jlong)node.text_selection_end, (jlong)node.text_composition_start, (jlong)node.text_composition_end, (jlong)node.grid_row_index, (jlong)node.grid_column_index, (jlong)node.grid_row_count, (jlong)node.grid_column_count, (jlong)node.list_item_index, (jlong)node.list_item_count }; const jint int_values[5] = { (jint)node.role, (jint)node.flags, (jint)node.actions, (jint)node.has_value, (jint)node.has_scroll }; const jfloat float_values[8] = { (jfloat)node.x, (jfloat)node.y, (jfloat)node.width, (jfloat)node.height, (jfloat)node.value, (jfloat)node.scroll_offset, (jfloat)node.scroll_viewport_extent, (jfloat)node.scroll_content_extent }; (*env)->SetLongArrayRegion(env, ids, 0, 12, id_values); (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 8, float_values); return JNI_TRUE; }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsByIdLabel(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.label, node.label_len); }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsByIdText(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.text, node.text_len); }
-    \\JNIEXPORT jbyteArray JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetSemanticsByIdPlaceholder(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; zero_native_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!zero_native_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return zero_native_jni_bytes(env, "", 0); return zero_native_jni_bytes(env, node.placeholder, node.placeholder_len); }
-    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetTextGeometry(JNIEnv *env, jobject self, jlong app, jlong id, jintArray ints, jfloatArray floats) { (void)self; if (!ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 12) return JNI_FALSE; zero_native_widget_text_geometry_t geometry; memset(&geometry, 0, sizeof(geometry)); if (!zero_native_app_widget_text_geometry((void*)app, (uint64_t)id, &geometry)) return JNI_FALSE; const jint int_values[5] = { (jint)geometry.has_caret_bounds, (jint)geometry.has_selection_bounds, (jint)geometry.selection_rect_count, (jint)geometry.has_composition_bounds, (jint)geometry.composition_rect_count }; const jfloat float_values[12] = { (jfloat)geometry.caret_x, (jfloat)geometry.caret_y, (jfloat)geometry.caret_width, (jfloat)geometry.caret_height, (jfloat)geometry.selection_x, (jfloat)geometry.selection_y, (jfloat)geometry.selection_width, (jfloat)geometry.selection_height, (jfloat)geometry.composition_x, (jfloat)geometry.composition_y, (jfloat)geometry.composition_width, (jfloat)geometry.composition_height }; (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 12, float_values); return JNI_TRUE; }
-    \\JNIEXPORT jboolean JNICALL Java_dev_zero_1native_MainActivity_nativeWidgetAction(JNIEnv *env, jobject self, jlong app, jlong id, jint action, jstring text, jlong selection_anchor, jlong selection_focus, jboolean has_selection) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; zero_native_widget_action_t request; memset(&request, 0, sizeof(request)); request.id = (uint64_t)id; request.action = (int)action; request.text = chars; request.text_len = chars ? strlen(chars) : 0; request.selection_anchor = (uintptr_t)selection_anchor; request.selection_focus = (uintptr_t)selection_focus; request.has_selection = has_selection ? 1 : 0; const int ok = zero_native_app_widget_action((void*)app, &request); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); return ok ? JNI_TRUE : JNI_FALSE; }
+    \\#include "native_sdk.h"
+    \\static jbyteArray native_sdk_jni_bytes(JNIEnv *env, const char *ptr, uintptr_t len) { jbyteArray out = (*env)->NewByteArray(env, (jsize)len); if (!out) return NULL; if (ptr && len > 0) (*env)->SetByteArrayRegion(env, out, 0, (jsize)len, (const jbyte*)ptr); return out; }
+    \\JNIEXPORT jlong JNICALL Java_dev_native_1sdk_MainActivity_nativeCreate(JNIEnv *env, jobject self) { (void)env; (void)self; return (jlong)native_sdk_app_create(); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeDestroy(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_destroy((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeStart(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_start((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeActivate(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_activate((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeDeactivate(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_deactivate((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeStop(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_stop((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeSetAssetRoot(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; native_sdk_app_set_asset_root((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeSetAssetEntry(JNIEnv *env, jobject self, jlong app, jstring path) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, path, NULL); if (!chars) return; native_sdk_app_set_asset_entry((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, path, chars); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeResize(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface) { (void)env; (void)self; native_sdk_app_resize((void*)app, w, h, scale, surface); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeViewport(JNIEnv *env, jobject self, jlong app, jfloat w, jfloat h, jfloat scale, jobject surface, jfloat safe_top, jfloat safe_right, jfloat safe_bottom, jfloat safe_left, jfloat keyboard_top, jfloat keyboard_right, jfloat keyboard_bottom, jfloat keyboard_left) { (void)env; (void)self; native_sdk_app_viewport((void*)app, w, h, scale, surface, safe_top, safe_right, safe_bottom, safe_left, keyboard_top, keyboard_right, keyboard_bottom, keyboard_left); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeTouch(JNIEnv *env, jobject self, jlong app, jlong id, jint phase, jfloat x, jfloat y, jfloat pressure) { (void)env; (void)self; native_sdk_app_touch((void*)app, (uint64_t)id, phase, x, y, pressure); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeScroll(JNIEnv *env, jobject self, jlong app, jlong id, jfloat x, jfloat y, jfloat delta_x, jfloat delta_y) { (void)env; (void)self; native_sdk_app_scroll((void*)app, (uint64_t)id, x, y, delta_x, delta_y); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeKey(JNIEnv *env, jobject self, jlong app, jint phase, jstring key, jstring text, jint modifiers) { (void)self; const char *key_chars = key ? (*env)->GetStringUTFChars(env, key, NULL) : NULL; const char *text_chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; native_sdk_app_key((void*)app, phase, key_chars, key_chars ? strlen(key_chars) : 0, text_chars, text_chars ? strlen(text_chars) : 0, (uint32_t)modifiers); if (key_chars) (*env)->ReleaseStringUTFChars(env, key, key_chars); if (text_chars) (*env)->ReleaseStringUTFChars(env, text, text_chars); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeText(JNIEnv *env, jobject self, jlong app, jstring text) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, text, NULL); if (!chars) return; native_sdk_app_text((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, text, chars); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeIme(JNIEnv *env, jobject self, jlong app, jint kind, jstring text, jlong cursor) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; native_sdk_app_ime((void*)app, kind, chars, chars ? strlen(chars) : 0, (intptr_t)cursor); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); }
+    \\JNIEXPORT jint JNICALL Java_dev_native_1sdk_MainActivity_nativeCommand(JNIEnv *env, jobject self, jlong app, jstring command) { (void)self; const char *chars = (*env)->GetStringUTFChars(env, command, NULL); if (!chars) return 0; native_sdk_app_command((void*)app, chars, strlen(chars)); (*env)->ReleaseStringUTFChars(env, command, chars); return (jint)native_sdk_app_last_command_count((void*)app); }
+    \\JNIEXPORT void JNICALL Java_dev_native_1sdk_MainActivity_nativeFrame(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; native_sdk_app_frame((void*)app); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_MainActivity_nativeGpuFrameState(JNIEnv *env, jobject self, jlong app, jlongArray longs, jintArray ints, jfloatArray floats) { (void)self; if (!longs || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, longs) < 19 || (*env)->GetArrayLength(env, ints) < 9 || (*env)->GetArrayLength(env, floats) < 3) return JNI_FALSE; native_sdk_gpu_frame_state_t state; memset(&state, 0, sizeof(state)); if (!native_sdk_app_gpu_frame_state((void*)app, &state)) return JNI_FALSE; const jlong long_values[19] = { (jlong)state.surface_id, (jlong)state.window_id, (jlong)state.frame_index, (jlong)state.timestamp_ns, (jlong)state.frame_interval_ns, (jlong)state.input_timestamp_ns, (jlong)state.input_latency_ns, (jlong)state.input_latency_budget_ns, (jlong)state.input_latency_budget_exceeded_count, (jlong)state.first_frame_latency_ns, (jlong)state.first_frame_latency_budget_ns, (jlong)state.first_frame_latency_budget_exceeded_count, (jlong)state.canvas_revision, (jlong)state.canvas_command_count, (jlong)state.canvas_frame_batch_count, (jlong)state.canvas_frame_budget_exceeded_count, (jlong)state.widget_revision, (jlong)state.widget_node_count, (jlong)state.widget_semantics_count }; const jint int_values[9] = { (jint)state.input_latency_budget_ok, (jint)state.first_frame_latency_budget_ok, (jint)state.nonblank, (jint)state.sample_color, (jint)state.status, (jint)state.vsync, (jint)state.canvas_frame_requires_render, (jint)state.canvas_frame_full_repaint, (jint)state.canvas_frame_budget_ok }; const jfloat float_values[3] = { (jfloat)state.width, (jfloat)state.height, (jfloat)state.scale }; (*env)->SetLongArrayRegion(env, longs, 0, 19, long_values); (*env)->SetIntArrayRegion(env, ints, 0, 9, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 3, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jint JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsCount(JNIEnv *env, jobject self, jlong app) { (void)env; (void)self; return (jint)native_sdk_app_widget_semantics_count((void*)app); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsFields(JNIEnv *env, jobject self, jlong app, jint index, jlongArray ids, jintArray ints, jfloatArray floats) { (void)self; if (!ids || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ids) < 12 || (*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 8) return JNI_FALSE; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return JNI_FALSE; const jlong id_values[12] = { (jlong)node.id, (jlong)node.parent_id, (jlong)node.text_selection_start, (jlong)node.text_selection_end, (jlong)node.text_composition_start, (jlong)node.text_composition_end, (jlong)node.grid_row_index, (jlong)node.grid_column_index, (jlong)node.grid_row_count, (jlong)node.grid_column_count, (jlong)node.list_item_index, (jlong)node.list_item_count }; const jint int_values[5] = { (jint)node.role, (jint)node.flags, (jint)node.actions, (jint)node.has_value, (jint)node.has_scroll }; const jfloat float_values[8] = { (jfloat)node.x, (jfloat)node.y, (jfloat)node.width, (jfloat)node.height, (jfloat)node.value, (jfloat)node.scroll_offset, (jfloat)node.scroll_viewport_extent, (jfloat)node.scroll_content_extent }; (*env)->SetLongArrayRegion(env, ids, 0, 12, id_values); (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 8, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsLabel(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.label, node.label_len); }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsText(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.text, node.text_len); }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsPlaceholder(JNIEnv *env, jobject self, jlong app, jint index) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_at((void*)app, (uintptr_t)index, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.placeholder, node.placeholder_len); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsByIdFields(JNIEnv *env, jobject self, jlong app, jlong id, jlongArray ids, jintArray ints, jfloatArray floats) { (void)self; if (!ids || !ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ids) < 12 || (*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 8) return JNI_FALSE; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return JNI_FALSE; const jlong id_values[12] = { (jlong)node.id, (jlong)node.parent_id, (jlong)node.text_selection_start, (jlong)node.text_selection_end, (jlong)node.text_composition_start, (jlong)node.text_composition_end, (jlong)node.grid_row_index, (jlong)node.grid_column_index, (jlong)node.grid_row_count, (jlong)node.grid_column_count, (jlong)node.list_item_index, (jlong)node.list_item_count }; const jint int_values[5] = { (jint)node.role, (jint)node.flags, (jint)node.actions, (jint)node.has_value, (jint)node.has_scroll }; const jfloat float_values[8] = { (jfloat)node.x, (jfloat)node.y, (jfloat)node.width, (jfloat)node.height, (jfloat)node.value, (jfloat)node.scroll_offset, (jfloat)node.scroll_viewport_extent, (jfloat)node.scroll_content_extent }; (*env)->SetLongArrayRegion(env, ids, 0, 12, id_values); (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 8, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsByIdLabel(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.label, node.label_len); }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsByIdText(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.text, node.text_len); }
+    \\JNIEXPORT jbyteArray JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetSemanticsByIdPlaceholder(JNIEnv *env, jobject self, jlong app, jlong id) { (void)self; native_sdk_widget_semantics_t node; memset(&node, 0, sizeof(node)); if (!native_sdk_app_widget_semantics_by_id((void*)app, (uint64_t)id, &node)) return native_sdk_jni_bytes(env, "", 0); return native_sdk_jni_bytes(env, node.placeholder, node.placeholder_len); }
+    \\JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetTextGeometry(JNIEnv *env, jobject self, jlong app, jlong id, jintArray ints, jfloatArray floats) { (void)self; if (!ints || !floats) return JNI_FALSE; if ((*env)->GetArrayLength(env, ints) < 5 || (*env)->GetArrayLength(env, floats) < 12) return JNI_FALSE; native_sdk_widget_text_geometry_t geometry; memset(&geometry, 0, sizeof(geometry)); if (!native_sdk_app_widget_text_geometry((void*)app, (uint64_t)id, &geometry)) return JNI_FALSE; const jint int_values[5] = { (jint)geometry.has_caret_bounds, (jint)geometry.has_selection_bounds, (jint)geometry.selection_rect_count, (jint)geometry.has_composition_bounds, (jint)geometry.composition_rect_count }; const jfloat float_values[12] = { (jfloat)geometry.caret_x, (jfloat)geometry.caret_y, (jfloat)geometry.caret_width, (jfloat)geometry.caret_height, (jfloat)geometry.selection_x, (jfloat)geometry.selection_y, (jfloat)geometry.selection_width, (jfloat)geometry.selection_height, (jfloat)geometry.composition_x, (jfloat)geometry.composition_y, (jfloat)geometry.composition_width, (jfloat)geometry.composition_height }; (*env)->SetIntArrayRegion(env, ints, 0, 5, int_values); (*env)->SetFloatArrayRegion(env, floats, 0, 12, float_values); return JNI_TRUE; }
+    \\JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_MainActivity_nativeWidgetAction(JNIEnv *env, jobject self, jlong app, jlong id, jint action, jstring text, jlong selection_anchor, jlong selection_focus, jboolean has_selection) { (void)self; const char *chars = text ? (*env)->GetStringUTFChars(env, text, NULL) : NULL; native_sdk_widget_action_t request; memset(&request, 0, sizeof(request)); request.id = (uint64_t)id; request.action = (int)action; request.text = chars; request.text_len = chars ? strlen(chars) : 0; request.selection_anchor = (uintptr_t)selection_anchor; request.selection_focus = (uintptr_t)selection_focus; request.has_selection = has_selection ? 1 : 0; const int ok = native_sdk_app_widget_action((void*)app, &request); if (chars) (*env)->ReleaseStringUTFChars(env, text, chars); return ok ? JNI_TRUE : JNI_FALSE; }
     \\
     ;
 }
@@ -2255,9 +2255,9 @@ fn artifactSuffix(target: PackageTarget) []const u8 {
 
 fn artifactReadme(target: PackageTarget) []const u8 {
     return switch (target) {
-        .windows => "Windows zero-native artifact directory. Installer generation is future work.\n",
-        .linux => "Linux zero-native artifact directory. AppImage, Flatpak, and tarball generation are future work.\n",
-        else => "zero-native artifact directory.\n",
+        .windows => "Windows native-sdk artifact directory. Installer generation is future work.\n",
+        .linux => "Linux native-sdk artifact directory. AppImage, Flatpak, and tarball generation are future work.\n",
+        else => "native-sdk artifact directory.\n",
     };
 }
 
@@ -3067,59 +3067,59 @@ test "archive command reports nonzero exit" {
 
 test "mobile package templates include native command shells" {
     const header = embedHeader();
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_semantics_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_widget_semantics_t") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "const char *placeholder") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_text_geometry_t") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_widget_action_t") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_viewport_state_t") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_gpu_frame_state_t") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_GPU_SURFACE_STATUS_READY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ROLE_TEXTBOX") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_FLAG_EXPANDED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_FLAG_COLLAPSED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_FLAG_REQUIRED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_FLAG_READ_ONLY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_FLAG_INVALID") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_SET_SELECTION") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_KIND_SET_TEXT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_DISMISS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "ZERO_NATIVE_WIDGET_ACTION_KIND_DISMISS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_viewport_state") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_gpu_frame_state") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_scroll") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_semantics_count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_semantics_at") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_semantics_by_id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_text_geometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, header, "zero_native_app_widget_action") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_widget_text_geometry_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_widget_action_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_viewport_state_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_gpu_frame_state_t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_GPU_SURFACE_STATUS_READY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_ROLE_TEXTBOX") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_FLAG_EXPANDED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_FLAG_COLLAPSED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_FLAG_REQUIRED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_FLAG_READ_ONLY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_FLAG_INVALID") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_ACTION_SET_SELECTION") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_ACTION_KIND_SET_TEXT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_ACTION_DISMISS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "NATIVE_SDK_WIDGET_ACTION_KIND_DISMISS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_viewport_state") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_gpu_frame_state") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_scroll") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_semantics_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_semantics_at") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_semantics_by_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_text_geometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_action") != null);
 
     const ios_controller = iosViewController();
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "UIButton(type: .system)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZeroNativeShellConfig.primaryCommand") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_command") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_root") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_entry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZeroNativeShellConfig.assetEntryPath") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NativeSdkShellConfig.primaryCommand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_entry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NativeSdkShellConfig.assetEntryPath") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "accessibilityPerformEscape") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "dismissWidgetAccessibilityNode") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZERO_NATIVE_WIDGET_FLAG_EXPANDED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZERO_NATIVE_WIDGET_FLAG_REQUIRED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_FLAG_EXPANDED") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_FLAG_REQUIRED") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "states.joined(separator: \", \")") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "webView.loadFileURL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "appendingPathComponent(\"Resources\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "keyboardWillChangeFrameNotification") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_viewport") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetSemantics") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "let placeholder: String") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "accessibilityHint = node.placeholder") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetTextGeometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_semantics_count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_semantics_by_id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_text_geometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_widget_action") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_semantics_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_semantics_by_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_text_geometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_action") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "WidgetAccessibilityElement(accessibilityContainer: webView") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "override func accessibilityActivate") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "ZERO_NATIVE_WIDGET_ACTION_KIND_INCREMENT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_ACTION_KIND_INCREMENT") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_controller, "view.safeAreaInsets") != null);
     try std.testing.expect(std.mem.indexOf(u8, iosDefaultShellConfig(), "primaryCommand = \"mobile.back\"") != null);
 
@@ -3128,11 +3128,11 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, android_gradle, "externalNativeBuild") != null);
 
     const android_activity = androidActivity();
-    try std.testing.expect(std.mem.indexOf(u8, android_activity, "System.loadLibrary(\"zero_native_host\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "System.loadLibrary(\"native_sdk_host\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeSetAssetRoot(nativeApp, packagedAssetRoot())") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_activity, "ZeroNativeShellConfig.assetEntryPath") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "NativeSdkShellConfig.assetEntryPath") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "webView.loadUrl(url)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(ZeroNativeShellConfig.secondaryCommand)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "dispatchNativeCommand(NativeSdkShellConfig.secondaryCommand)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "WebView(this)") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeViewport(nativeApp") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeScroll(nativeApp") != null);
@@ -3167,24 +3167,24 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, androidDefaultShellConfig(), "const val secondaryCommand = \"mobile.refresh\"") != null);
 
     const android_cmake = androidCMakeLists();
-    try std.testing.expect(std.mem.indexOf(u8, android_cmake, "add_library(zero_native_host SHARED zero_native_jni.c)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_cmake, "add_library(native_sdk_host SHARED native_sdk_jni.c)") != null);
 
     const android_jni = androidJni();
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "#include <stdint.h>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_root") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_set_asset_entry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_viewport") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_gpu_frame_state") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_scroll") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_key") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_text") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_ime") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_semantics_count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_semantics_at") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_semantics_by_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_set_asset_root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_set_asset_entry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_gpu_frame_state") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_scroll") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_key") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_ime") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_widget_semantics_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_widget_semantics_at") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_widget_semantics_by_id") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_jni, "node.placeholder") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_text_geometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, android_jni, "zero_native_app_widget_action") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_widget_text_geometry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_jni, "native_sdk_app_widget_action") != null);
 }
 
 test "android shell config escapes Kotlin string interpolation" {
@@ -3215,12 +3215,12 @@ test "mobile skeletons create native library drop-in directories" {
 
     var ios_libs = try cwd.openDir(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios/Libraries", .{});
     ios_libs.close(std.testing.io);
-    var ios_config = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios/zero-nativeHost/ZeroNativeShellConfig.swift", .{});
+    var ios_config = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios/native-sdkHost/NativeSdkShellConfig.swift", .{});
     ios_config.close(std.testing.io);
 
     var android_libs = try cwd.openDir(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android/app/src/main/cpp/lib", .{});
     android_libs.close(std.testing.io);
-    var android_config = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android/app/src/main/java/dev/zero_native/ZeroNativeShellConfig.kt", .{});
+    var android_config = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android/app/src/main/java/dev/native_sdk/NativeSdkShellConfig.kt", .{});
     android_config.close(std.testing.io);
 
     var cmake = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android/app/src/main/cpp/CMakeLists.txt", .{});
@@ -3251,7 +3251,7 @@ test "mobile package artifacts use manifest identity metadata" {
         .views = &shell_views,
     }};
     const metadata: manifest_tool.Metadata = .{
-        .id = "dev.zero-native.mobile-app",
+        .id = "dev.native-sdk.mobile-app",
         .name = "mobile-demo",
         .display_name = "Mobile Demo",
         .version = "2.3.4",
@@ -3276,22 +3276,22 @@ test "mobile package artifacts use manifest identity metadata" {
 
     const plist = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Info.plist");
     defer std.testing.allocator.free(plist);
-    try std.testing.expect(std.mem.indexOf(u8, plist, "dev.zero-native.mobile-app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "dev.native-sdk.mobile-app") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "Mobile Demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "2.3.4") != null);
 
     const gradle = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/build.gradle");
     defer std.testing.allocator.free(gradle);
-    try std.testing.expect(std.mem.indexOf(u8, gradle, "applicationId \"dev.zero_native.mobile_app\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, gradle, "namespace \"dev.zero_native.mobile_app\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gradle, "applicationId \"dev.native_sdk.mobile_app\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gradle, "namespace \"dev.native_sdk.mobile_app\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, gradle, "versionName \"2.3.4\"") != null);
 
     const manifest = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/AndroidManifest.xml");
     defer std.testing.allocator.free(manifest);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "android:label=\"Mobile Demo\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, manifest, "android:name=\"dev.zero_native.MainActivity\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "android:name=\"dev.native_sdk.MainActivity\"") != null);
 
-    const ios_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/zero-nativeHost/ZeroNativeShellConfig.swift");
+    const ios_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/native-sdkHost/NativeSdkShellConfig.swift");
     defer std.testing.allocator.free(ios_shell_config);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let title = \"Field Console\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let status = \"Shell ready\"") != null);
@@ -3299,11 +3299,11 @@ test "mobile package artifacts use manifest identity metadata" {
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let secondaryButtonTitle = \"Sync Now\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetRootSubdirectory = \"dist\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetEntryPath = \"main.html\"") != null);
-    const ios_controller = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/zero-nativeHost/ZeroNativeHostViewController.swift");
+    const ios_controller = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/native-sdkHost/NativeSdkHostViewController.swift");
     defer std.testing.allocator.free(ios_controller);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "zero_native_app_set_asset_entry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_entry") != null);
 
-    const android_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/zero_native/ZeroNativeShellConfig.kt");
+    const android_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/native_sdk/NativeSdkShellConfig.kt");
     defer std.testing.allocator.free(android_shell_config);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val title = \"Field Console\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val status = \"Shell ready\"") != null);
@@ -3311,15 +3311,15 @@ test "mobile package artifacts use manifest identity metadata" {
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val secondaryCommand = \"mobile.sync\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val assetRootSubdirectory = \"dist\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_shell_config, "const val assetEntryPath = \"main.html\"") != null);
-    const android_activity = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/zero_native/MainActivity.kt");
+    const android_activity = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/native_sdk/MainActivity.kt");
     defer std.testing.allocator.free(android_activity);
-    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeSetAssetEntry(nativeApp, ZeroNativeShellConfig.assetEntryPath)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeSetAssetEntry(nativeApp, NativeSdkShellConfig.assetEntryPath)") != null);
 
     const ios_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Resources/dist/main.html");
     defer std.testing.allocator.free(ios_asset);
     try std.testing.expectEqualStrings("<h1>Mobile</h1>", ios_asset);
 
-    const android_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/assets/zero-native/dist/main.html");
+    const android_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/assets/native-sdk/dist/main.html");
     defer std.testing.allocator.free(android_asset);
     try std.testing.expectEqualStrings("<h1>Mobile</h1>", android_asset);
 }
@@ -3332,7 +3332,7 @@ test "mobile packages allow chromium desktop engine metadata" {
     try cwd.writeFile(std.testing.io, .{ .sub_path = ".zig-cache/test-package-mobile-chromium/assets/index.html", .data = "<h1>Mobile</h1>" });
 
     const metadata: manifest_tool.Metadata = .{
-        .id = "dev.zero-native.mobile-chromium",
+        .id = "dev.native-sdk.mobile-chromium",
         .name = "mobile-chromium",
         .display_name = "Mobile Chromium",
         .version = "1.0.0",

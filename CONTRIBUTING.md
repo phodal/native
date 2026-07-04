@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve zero-native. This guide is for maintainers and contributors working on the framework repository itself.
+Thanks for helping improve the Native SDK. This guide is for maintainers and contributors working on the framework repository itself.
 
 For app author documentation, start at [zero-native.dev](https://zero-native.dev).
 
@@ -41,8 +41,8 @@ zig build run-webview
 Check the npm CLI package:
 
 ```bash
-npm --prefix packages/zero-native run version:check
-npm --prefix packages/zero-native run scripts:check
+npm --prefix packages/native-sdk run version:check
+npm --prefix packages/native-sdk run scripts:check
 ```
 
 Check the documentation site:
@@ -63,7 +63,7 @@ zig build run-webview -Dweb-engine=system
 For Chromium on macOS, install CEF and run with the Chromium engine:
 
 ```bash
-zero-native cef install
+native cef install
 zig build run-webview -Dweb-engine=chromium
 ```
 
@@ -85,7 +85,7 @@ zig build package
 Package explicitly through the CLI:
 
 ```bash
-zero-native package --target macos --manifest app.zon --assets assets --binary zig-out/lib/libzero-native.a
+native package --target macos --manifest app.zon --assets assets --binary zig-out/lib/libnative-sdk.a
 ```
 
 For Chromium packages, configure `.web_engine = "chromium"` and `.cef` in `app.zon`, or use temporary `--web-engine` and `--cef-dir` overrides while testing.
@@ -101,12 +101,12 @@ zig build run-webview -Dautomation=true
 Interact with the running app:
 
 ```bash
-zero-native automate wait
-zero-native automate list
-zero-native automate bridge '{"id":"ping","command":"native.ping","payload":null}'
+native automate wait
+native automate list
+native automate bridge '{"id":"ping","command":"native.ping","payload":null}'
 ```
 
-Automation writes artifacts under `.zig-cache/zero-native-automation`.
+Automation writes artifacts under `.zig-cache/native-sdk-automation`.
 
 
 ## Making a Pull Request

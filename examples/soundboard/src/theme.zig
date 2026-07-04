@@ -4,12 +4,12 @@
 //! framework's high-contrast palettes (accessibility beats brand), and
 //! reduce-motion zeroes the motion tokens through the theme options.
 
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 const Color = canvas.Color;
 
-pub fn tokens(scheme: zero_native.ColorScheme, high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
+pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
     var out = canvas.DesignTokens.theme(.{
         .color_scheme = switch (scheme) {
             .light => .light,

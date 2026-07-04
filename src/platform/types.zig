@@ -755,9 +755,9 @@ pub const ViewInfo = struct {
 };
 
 pub const AppInfo = struct {
-    app_name: []const u8 = "zero-native",
+    app_name: []const u8 = "native-sdk",
     window_title: []const u8 = "",
-    bundle_id: []const u8 = "dev.zero_native.app",
+    bundle_id: []const u8 = "dev.native_sdk.app",
     icon_path: []const u8 = "",
     main_window: WindowOptions = .{},
     windows: []const WindowOptions = &.{},

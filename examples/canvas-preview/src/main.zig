@@ -1,6 +1,6 @@
 //! canvas-preview: the "both architectures in one window" dogfood app.
 //!
-//! One window hosts a zero-native canvas (native-rendered toolbar and
+//! One window hosts a native-sdk canvas (native-rendered toolbar and
 //! sidebar on a Metal-backed gpu_surface) and a live platform webview
 //! side by side. The webview is declared in the scene like any other
 //! shell view; `UiApp.Options.web_panes` then keeps it snapped to a
@@ -15,12 +15,12 @@
 
 const std = @import("std");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 pub const canvas_label = "preview-canvas";
 pub const webview_label = "preview";
@@ -36,7 +36,7 @@ const window_height: f32 = 640;
 const sidebar_width: f32 = 224;
 const toolbar_height: f32 = 56;
 
-pub const shell_views = [_]zero_native.ShellView{
+pub const shell_views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Canvas chrome", .accessibility_label = "Canvas Preview chrome", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
     // The live webview: a scene view like any other. Parented to the
     // canvas view so pane frames share the canvas coordinate space; the
@@ -44,15 +44,15 @@ pub const shell_views = [_]zero_native.ShellView{
     // anchor widget's layout frame.
     .{ .label = webview_label, .kind = .webview, .parent = canvas_label, .url = example_url, .x = sidebar_width + 16, .y = toolbar_height + 20, .width = window_width - sidebar_width - 32, .height = window_height - toolbar_height - 36, .layer = 20 },
 };
-pub const shell_windows = [_]zero_native.ShellWindow{.{
+pub const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native Canvas Preview",
+    .title = "Native SDK Canvas Preview",
     .width = window_width,
     .height = window_height,
     .restore_state = false,
     .views = &shell_views,
 }};
-pub const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 // ------------------------------------------------------------------ model
 
@@ -103,7 +103,7 @@ pub fn update(model: *Model, msg: Msg) void {
 
 // ------------------------------------------------------------------- view
 
-const PreviewApp = zero_native.UiApp(Model, Msg);
+const PreviewApp = native_sdk.UiApp(Model, Msg);
 pub const PreviewUi = canvas.Ui(Msg);
 
 pub fn view(ui: *PreviewUi, model: *const Model) PreviewUi.Node {
@@ -151,7 +151,7 @@ pub fn command(name: []const u8) ?Msg {
     return null;
 }
 
-fn onFrame(model: *const Model, frame: zero_native.platform.GpuFrame) ?Msg {
+fn onFrame(model: *const Model, frame: native_sdk.platform.GpuFrame) ?Msg {
     _ = frame;
     if (model.gpu_frames_seen) return null;
     return .frame_presented;
@@ -159,7 +159,7 @@ fn onFrame(model: *const Model, frame: zero_native.platform.GpuFrame) ?Msg {
 
 /// Menu-bar extra (macOS NSStatusItem): the same commands the toolbar
 /// dispatches, reachable while the window is in the background.
-pub const status_items = [_]zero_native.TrayMenuItem{
+pub const status_items = [_]native_sdk.TrayMenuItem{
     .{ .id = 1, .label = "Show Example", .command = example_command },
     .{ .id = 2, .label = "Show Docs", .command = docs_command },
     .{ .separator = true },
@@ -177,8 +177,8 @@ pub fn options() PreviewApp.Options {
         .on_command = command,
         .on_frame = onFrame,
         .status_item = .{
-            .title = "ZN",
-            .tooltip = "zero-native Canvas Preview",
+            .title = "NS",
+            .tooltip = "Native SDK Canvas Preview",
             .items = &status_items,
         },
     };
@@ -193,8 +193,8 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "canvas-preview",
-        .window_title = "zero-native Canvas Preview",
-        .bundle_id = "dev.zero_native.canvas_preview",
+        .window_title = "Native SDK Canvas Preview",
+        .bundle_id = "dev.native_sdk.canvas_preview",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
         .restore_state = false,

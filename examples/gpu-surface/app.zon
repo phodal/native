@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.gpu_surface",
+    .id = "dev.native_sdk.gpu_surface",
     .name = "gpu-surface",
     .display_name = "GPU Surface",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native GPU Surface",
+                .title = "Native SDK GPU Surface",
                 .width = 1120,
                 .height = 720,
                 .restore_policy = "center_on_primary",

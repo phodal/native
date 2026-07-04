@@ -1,12 +1,12 @@
-# zero-native evals
+# Native SDK evals
 
-An eval harness for AI-agent authoring of zero-native apps. It formalizes the "clean-agent trial": give a fresh agent nothing but a scaffolded workspace, the `native-ui` skill, and a task prompt, then grade what it produced deterministically.
+An eval harness for AI-agent authoring of Native SDK apps. It formalizes the "clean-agent trial": give a fresh agent nothing but a scaffolded workspace, the `native-ui` skill, and a task prompt, then grade what it produced deterministically.
 
 Per case the runner:
 
-1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/zero-native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `zero-native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills). The workspace is then **pre-warmed** (`zig build test` once) so the agent's own builds are incremental and its wall-clock isn't spent compiling the framework.
+1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills). The workspace is then **pre-warmed** (`zig build test` once) so the agent's own builds are incremental and its wall-clock isn't spent compiling the framework.
 2. **Runs the agent-under-test**: `claude -p "<task prompt>"` headless in the workspace, routed through the Vercel AI Gateway, with a per-run `CLAUDE_CONFIG_DIR` so no user-level memory/plugins/hooks leak in, `--max-turns`, a wall-clock timeout, and the full `stream-json` transcript captured to `results/`.
-3. **Grades** with deterministic checks: `zig build test` in the workspace, `zero-native markup check` on the `.zml` files, per-case file greps (e.g. "the board uses `<template>`"), and live automation-snapshot greps (build with `-Dautomation=true`, launch, `zero-native automate wait`, grep `snapshot.txt` for expected roles/names).
+3. **Grades** with deterministic checks: `zig build test` in the workspace, `native markup check` on the `.zml` files, per-case file greps (e.g. "the board uses `<template>`"), and live automation-snapshot greps (build with `-Dautomation=true`, launch, `native automate wait`, grep `snapshot.txt` for expected roles/names).
 4. **Judges** quality the deterministic checks can't see — idiomatic Model/Msg design, template factoring, test meaningfulness — with an `llm_judge` check: a judge model called directly through the gateway scores case-specific criteria 0–10 against the task prompt and the agent's code. Advisory by default (the score is recorded and printed but never fails the case); set `"advisory": false` on a case to make `minScore` a gate. Skipped in `--dry-run`.
 5. **Reports** a per-case `result.json` (pass/fail per check, judge scores, durations, model, turns, cost) plus a console summary table.
 
@@ -28,7 +28,7 @@ ANTHROPIC_AUTH_TOKEN=$AI_GATEWAY_API_KEY
 ANTHROPIC_API_KEY=            # empty string on purpose: a non-empty value would win over the auth token
 ```
 
-Models are gateway slugs. The coder (agent-under-test) defaults to `anthropic/claude-sonnet-5` (override with `--model` or `ZN_EVAL_MODEL`); the judge defaults to `anthropic/claude-opus-4.8` (override with `--judge-model` or `ZN_EVAL_JUDGE_MODEL`).
+Models are gateway slugs. The coder (agent-under-test) defaults to `anthropic/claude-sonnet-5` (override with `--model` or `NATIVE_SDK_EVAL_MODEL`); the judge defaults to `anthropic/claude-opus-4.8` (override with `--judge-model` or `NATIVE_SDK_EVAL_JUDGE_MODEL`).
 
 ## Usage
 
@@ -81,7 +81,7 @@ The summary table swaps the PASS/FAIL column for a `pass rate` column, the `chec
 Auth: the SDK needs `VERCEL_OIDC_TOKEN`. One-time setup in `evals/`:
 
 ```sh
-vercel link --scope vercel-labs --project zero-native
+vercel link --scope vercel-labs --project native-sdk
 vercel env pull .env.local   # the runner auto-loads VERCEL_OIDC_TOKEN from .env.local
 ```
 
@@ -91,7 +91,7 @@ Real runs exit non-zero if any case fails. Workspaces live in `.workspaces/` and
 
 ### Permissions for the agent-under-test
 
-By default the agent runs with `--permission-mode acceptEdits` plus an allowlist covering `zig ...`, `zero-native ...`, and basic file commands — enough for unattended edit/build/test loops without granting arbitrary shell. `--skip-permissions` switches to `--dangerously-skip-permissions`; only use it if the default allowlist blocks a case, and remember the workspace is a throwaway dir but the process is not otherwise sandboxed.
+By default the agent runs with `--permission-mode acceptEdits` plus an allowlist covering `zig ...`, `native-sdk ...`, and basic file commands — enough for unattended edit/build/test loops without granting arbitrary shell. `--skip-permissions` switches to `--dangerously-skip-permissions`; only use it if the default allowlist blocks a case, and remember the workspace is a throwaway dir but the process is not otherwise sandboxed.
 
 ## Cases
 

@@ -25,11 +25,11 @@
 #if __has_include(<WebView2.h>) && __has_include(<wrl.h>)
 #include <WebView2.h>
 #include <wrl.h>
-#define ZERO_NATIVE_HAS_WEBVIEW2 1
+#define NATIVE_SDK_HAS_WEBVIEW2 1
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 #else
-#define ZERO_NATIVE_HAS_WEBVIEW2 0
+#define NATIVE_SDK_HAS_WEBVIEW2 0
 #endif
 
 namespace {
@@ -63,10 +63,10 @@ constexpr uint32_t kMenuCommandBase = 0x4000;
 constexpr uint32_t kTrayCommandBase = 0x5000;
 constexpr UINT kNotificationCallbackMessage = WM_APP + 42;
 /* Posted from any thread (effect worker threads) via
- * zero_native_windows_wake; the window procedure emits kWake on the
+ * native_sdk_windows_wake; the window procedure emits kWake on the
  * message loop thread. */
 constexpr UINT kWakeMessage = WM_APP + 43;
-constexpr const char *kAssetVirtualOrigin = "https://zero-native-app.localhost";
+constexpr const char *kAssetVirtualOrigin = "https://native-sdk-app.localhost";
 
 constexpr int kViewWebView = 0;
 constexpr int kViewToolbar = 1;
@@ -209,7 +209,7 @@ struct ChildWebView {
     bool transparent = false;
     bool bridge_enabled = false;
     bool frame_explicit = true;
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
 #endif
@@ -363,7 +363,7 @@ static std::wstring widen(const std::string &value) {
 static std::wstring credentialTarget(const std::string &service, const std::string &account) {
     std::wstring service_wide = widen(service);
     std::wstring account_wide = widen(account);
-    return L"zero-native:" + std::to_wstring(service_wide.size()) + L":" + service_wide + account_wide;
+    return L"native-sdk:" + std::to_wstring(service_wide.size()) + L":" + service_wide + account_wide;
 }
 
 static std::string narrow(const std::wstring &value) {
@@ -420,7 +420,7 @@ static bool setNotificationIcon(Host *host, const std::string &icon_path, const 
     data.uCallbackMessage = kNotificationCallbackMessage;
     bool destroy_icon = false;
     data.hIcon = loadNotificationIcon(host, icon_path, &destroy_icon);
-    std::wstring tip = widen(!tooltip.empty() ? tooltip : (host->app_name.empty() ? std::string("zero-native") : host->app_name));
+    std::wstring tip = widen(!tooltip.empty() ? tooltip : (host->app_name.empty() ? std::string("native-sdk") : host->app_name));
     copyWideField(data.szTip, ARRAYSIZE(data.szTip), tip);
     BOOL ok = Shell_NotifyIconW(host->notification_icon_added ? NIM_MODIFY : NIM_ADD, &data);
     if (destroy_icon && data.hIcon) DestroyIcon(data.hIcon);
@@ -1417,7 +1417,7 @@ static void destroyNativeViewsForWindow(Host *host, uint64_t window_id) {
  *
  * A gpu_surface view is a plain Win32 child HWND driven by the CPU pixel
  * path: the runtime rasterizes canvas frames with the reference renderer
- * and hands RGBA8 buffers to zero_native_windows_present_gpu_surface_pixels,
+ * and hands RGBA8 buffers to native_sdk_windows_present_gpu_surface_pixels,
  * which swizzles them into a top-down 32bpp BGRA DIB and invalidates the
  * child; WM_PAINT blits with SetDIBitsToDevice (StretchDIBits while a
  * resize is in flight). A 16 ms WM_TIMER on the child plays the role of
@@ -1530,7 +1530,7 @@ static void emitGpuSurfaceInput(Host *host, NativeView &view, int input_kind, do
 }
 
 /* Text/composition emit variant: no pointer payload, optional byte cursor
- * into the UTF-8 text (mirrors zero_native_emit_gpu_surface_text_input in
+ * into the UTF-8 text (mirrors native_sdk_emit_gpu_surface_text_input in
  * the GTK host and emitTextInputEventWithKind in the AppKit host). */
 static void emitGpuSurfaceTextInput(Host *host, NativeView &view, int input_kind, const std::string &text, bool has_composition_cursor, size_t composition_cursor) {
     WindowsEvent event = {};
@@ -1925,17 +1925,17 @@ static const wchar_t *gpuSurfaceClassName(Host *host) {
         wc.lpfnWndProc = gpuSurfaceProc;
         wc.hInstance = host->instance;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.lpszClassName = L"ZeroNativeGpuSurface";
+        wc.lpszClassName = L"NativeSdkGpuSurface";
         registered = RegisterClassExW(&wc) != 0;
     }
-    return L"ZeroNativeGpuSurface";
+    return L"NativeSdkGpuSurface";
 }
 
 static void destroyChildWebViewsForWindow(Host *host, uint64_t window_id) {
     if (!host) return;
     for (auto it = host->webviews.begin(); it != host->webviews.end();) {
         if (it->second.window_id == window_id) {
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
             if (it->second.controller) it->second.controller->Close();
 #endif
             if (it->second.hwnd) DestroyWindow(it->second.hwnd);
@@ -1958,10 +1958,10 @@ static void destroyAllWindows(Host *host) {
     }
 }
 
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
 using CreateEnvironmentFn = HRESULT (STDAPICALLTYPE *)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
 
-static const wchar_t *zeroNativeBridgeScript() {
+static const wchar_t *nativeSdkBridgeScript() {
     return LR"ZN((function(){
 	if(window.zero&&window.zero.invoke&&window.zero.on&&window.zero._emit){return;}
 	var pending=new Map();
@@ -1969,7 +1969,7 @@ static const wchar_t *zeroNativeBridgeScript() {
 	var nextId=1;
 	function post(message){
 	if(window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage){window.chrome.webview.postMessage(message);return;}
-	throw new Error('zero-native bridge transport is unavailable');
+	throw new Error('native-sdk bridge transport is unavailable');
 	}
 	function complete(response){
 	var id=response&&response.id!=null?String(response.id):'';
@@ -2012,69 +2012,69 @@ static const wchar_t *zeroNativeBridgeScript() {
 	function viewHandle(info){return Object.freeze(Object.assign({},info,{update:function(patch){return views.update(Object.assign({},patch||{},{label:info.label,windowId:info.windowId}));},setFrame:function(frame){return views.setFrame({label:info.label,windowId:info.windowId,frame:frame});},setVisible:function(visible){return views.setVisible({label:info.label,windowId:info.windowId,visible:visible});},focus:function(){return views.focus({label:info.label,windowId:info.windowId});},close:function(){return views.close({label:info.label,windowId:info.windowId});}}));}
 	function on(name,callback){if(typeof callback!=='function'){throw new TypeError('callback must be a function');}var set=listeners.get(name);if(!set){set=new Set();listeners.set(name,set);}set.add(callback);return function(){off(name,callback);};}
 	function off(name,callback){var set=listeners.get(name);if(set){set.delete(callback);if(set.size===0){listeners.delete(name);}}}
-	function emit(name,detail){var set=listeners.get(name);if(set){Array.from(set).forEach(function(callback){callback(detail);});}window.dispatchEvent(new CustomEvent('zero-native:'+name,{detail:detail}));}
+	function emit(name,detail){var set=listeners.get(name);if(set){Array.from(set).forEach(function(callback){callback(detail);});}window.dispatchEvent(new CustomEvent('native-sdk:'+name,{detail:detail}));}
 	var commands=Object.freeze({
-	invoke:function(value){return invoke('zero-native.command.invoke',commandPayload(value));},
-	list:function(){return invoke('zero-native.command.list',{});}
+	invoke:function(value){return invoke('native-sdk.command.invoke',commandPayload(value));},
+	list:function(){return invoke('native-sdk.command.list',{});}
 	});
 	var windows=Object.freeze({
-	create:function(options){return invoke('zero-native.window.create',options||{});},
-	list:function(){return invoke('zero-native.window.list',{});},
-	focus:function(value){return invoke('zero-native.window.focus',selector(value));},
-	close:function(value){return invoke('zero-native.window.close',selector(value));}
+	create:function(options){return invoke('native-sdk.window.create',options||{});},
+	list:function(){return invoke('native-sdk.window.list',{});},
+	focus:function(value){return invoke('native-sdk.window.focus',selector(value));},
+	close:function(value){return invoke('native-sdk.window.close',selector(value));}
 	});
 	var dialogs=Object.freeze({
-	openFile:function(options){return invoke('zero-native.dialog.openFile',options||{});},
-	saveFile:function(options){return invoke('zero-native.dialog.saveFile',options||{});},
-	showMessage:function(options){return invoke('zero-native.dialog.showMessage',options||{});}
+	openFile:function(options){return invoke('native-sdk.dialog.openFile',options||{});},
+	saveFile:function(options){return invoke('native-sdk.dialog.saveFile',options||{});},
+	showMessage:function(options){return invoke('native-sdk.dialog.showMessage',options||{});}
 	});
 	function clipboardReadPayload(value){value=value||{};return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType')};}
 	function clipboardWritePayload(value){if(typeof value==='string'){return {mimeType:'text/plain',data:value};}value=value||{};var data=value.data!=null?value.data:(value.text!=null?value.text:value.value);return {mimeType:ensureString(value.mimeType||value.type||'text/plain','mimeType'),data:ensureText(data,'data')};}
 	var clipboard=Object.freeze({
-	readText:function(){return invoke('zero-native.clipboard.readText',{});},
-	writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('zero-native.clipboard.writeText',{text:ensureText(text,'text')});},
-	read:function(value){return invoke('zero-native.clipboard.read',clipboardReadPayload(value));},
-	write:function(value){return invoke('zero-native.clipboard.write',clipboardWritePayload(value));}
+	readText:function(){return invoke('native-sdk.clipboard.readText',{});},
+	writeText:function(value){var text=typeof value==='string'?value:(value||{}).text;return invoke('native-sdk.clipboard.writeText',{text:ensureText(text,'text')});},
+	read:function(value){return invoke('native-sdk.clipboard.read',clipboardReadPayload(value));},
+	write:function(value){return invoke('native-sdk.clipboard.write',clipboardWritePayload(value));}
 	});
 	var os=Object.freeze({
-	openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('zero-native.os.openUrl',{url:ensureString(options.url,'url')});},
-	showNotification:function(value){var options=typeof value==='string'?{title:value}:(value||{});var payload={title:ensureString(options.title,'title')};if(options.subtitle!=null){payload.subtitle=ensureString(options.subtitle,'subtitle');}if(options.body!=null){payload.body=ensureString(options.body,'body');}return invoke('zero-native.os.showNotification',payload);},
-	revealPath:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('zero-native.os.revealPath',{path:ensureString(options.path,'path')});},
-	addRecentDocument:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('zero-native.os.addRecentDocument',{path:ensureString(options.path,'path')});},
-	clearRecentDocuments:function(){return invoke('zero-native.os.clearRecentDocuments',{});}
+	openUrl:function(value){var options=typeof value==='string'?{url:value}:(value||{});return invoke('native-sdk.os.openUrl',{url:ensureString(options.url,'url')});},
+	showNotification:function(value){var options=typeof value==='string'?{title:value}:(value||{});var payload={title:ensureString(options.title,'title')};if(options.subtitle!=null){payload.subtitle=ensureString(options.subtitle,'subtitle');}if(options.body!=null){payload.body=ensureString(options.body,'body');}return invoke('native-sdk.os.showNotification',payload);},
+	revealPath:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('native-sdk.os.revealPath',{path:ensureString(options.path,'path')});},
+	addRecentDocument:function(value){var options=typeof value==='string'?{path:value}:(value||{});return invoke('native-sdk.os.addRecentDocument',{path:ensureString(options.path,'path')});},
+	clearRecentDocuments:function(){return invoke('native-sdk.os.clearRecentDocuments',{});}
 	});
 	function credentialPayload(value){value=value||{};return {service:ensureString(value.service,'service'),account:ensureString(value.account,'account')};}
 	function credentialSetPayload(value){var payload=credentialPayload(value);payload.secret=ensureString(value.secret!=null?value.secret:value.value,'secret');return payload;}
 	var credentials=Object.freeze({
-	set:function(value){return invoke('zero-native.credentials.set',credentialSetPayload(value));},
-	get:function(value){return invoke('zero-native.credentials.get',credentialPayload(value));},
-	delete:function(value){return invoke('zero-native.credentials.delete',credentialPayload(value));}
+	set:function(value){return invoke('native-sdk.credentials.set',credentialSetPayload(value));},
+	get:function(value){return invoke('native-sdk.credentials.get',credentialPayload(value));},
+	delete:function(value){return invoke('native-sdk.credentials.delete',credentialPayload(value));}
 	});
 	function platformFeaturePayload(value){if(typeof value==='string'){return {feature:ensureString(value,'feature')};}value=value||{};return {feature:ensureString(value.feature!=null?value.feature:value.name,'feature')};}
 	var platform=Object.freeze({
-	supports:function(value){return invoke('zero-native.platform.supports',platformFeaturePayload(value));}
+	supports:function(value){return invoke('native-sdk.platform.supports',platformFeaturePayload(value));}
 	});
 	function zoomPayload(options){options=options||{};validateWebViewSelector(options);return {label:options.label,windowId:options.windowId,zoom:ensureNumber(options.zoom,'zoom')};}
 	function layerPayload(options){options=options||{};validateWebViewSelector(options);return {label:options.label,windowId:options.windowId,layer:ensureNumber(options.layer,'layer')};}
 	var webviews=Object.freeze({
-	create:function(options){return invoke('zero-native.webview.create',createPayload(options)).then(webviewHandle);},
-	list:function(){return invoke('zero-native.webview.list',{});},
-	setFrame:function(options){return invoke('zero-native.webview.setFrame',framePayload(options));},
-	navigate:function(options){return invoke('zero-native.webview.navigate',navigatePayload(options));},
-	setZoom:function(options){return invoke('zero-native.webview.setZoom',zoomPayload(options));},
-	setLayer:function(options){return invoke('zero-native.webview.setLayer',layerPayload(options));},
-	close:function(options){return invoke('zero-native.webview.close',closePayload(options));}
+	create:function(options){return invoke('native-sdk.webview.create',createPayload(options)).then(webviewHandle);},
+	list:function(){return invoke('native-sdk.webview.list',{});},
+	setFrame:function(options){return invoke('native-sdk.webview.setFrame',framePayload(options));},
+	navigate:function(options){return invoke('native-sdk.webview.navigate',navigatePayload(options));},
+	setZoom:function(options){return invoke('native-sdk.webview.setZoom',zoomPayload(options));},
+	setLayer:function(options){return invoke('native-sdk.webview.setLayer',layerPayload(options));},
+	close:function(options){return invoke('native-sdk.webview.close',closePayload(options));}
 	});
 	var views=Object.freeze({
-	create:function(options){return invoke('zero-native.view.create',viewCreatePayload(options)).then(viewHandle);},
-	list:function(){return invoke('zero-native.view.list',{});},
-	update:function(options,patch){if(typeof options==='string'){return invoke('zero-native.view.update',viewPatchPayload(Object.assign({},patch||{},{label:options}))).then(viewHandle);}return invoke('zero-native.view.update',viewPatchPayload(options)).then(viewHandle);},
-	setFrame:function(options){return invoke('zero-native.view.setFrame',viewFramePayload(options)).then(viewHandle);},
-	setVisible:function(options){return invoke('zero-native.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},
-	focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options)).then(viewHandle);},
-	focusNext:function(options){options=options||{};return invoke('zero-native.view.focusNext',{windowId:options.windowId}).then(viewHandle);},
-	focusPrevious:function(options){options=options||{};return invoke('zero-native.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},
-	close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options));}
+	create:function(options){return invoke('native-sdk.view.create',viewCreatePayload(options)).then(viewHandle);},
+	list:function(){return invoke('native-sdk.view.list',{});},
+	update:function(options,patch){if(typeof options==='string'){return invoke('native-sdk.view.update',viewPatchPayload(Object.assign({},patch||{},{label:options}))).then(viewHandle);}return invoke('native-sdk.view.update',viewPatchPayload(options)).then(viewHandle);},
+	setFrame:function(options){return invoke('native-sdk.view.setFrame',viewFramePayload(options)).then(viewHandle);},
+	setVisible:function(options){return invoke('native-sdk.view.setVisible',viewVisiblePayload(options)).then(viewHandle);},
+	focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options)).then(viewHandle);},
+	focusNext:function(options){options=options||{};return invoke('native-sdk.view.focusNext',{windowId:options.windowId}).then(viewHandle);},
+	focusPrevious:function(options){options=options||{};return invoke('native-sdk.view.focusPrevious',{windowId:options.windowId}).then(viewHandle);},
+	close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options));}
 	});
 	try{Object.defineProperty(window,'zero',{value:Object.freeze({invoke:invoke,on:on,off:off,commands:commands,windows:windows,dialogs:dialogs,clipboard:clipboard,os:os,credentials:credentials,platform:platform,webviews:webviews,views:views,_complete:complete,_emit:emit}),configurable:false});}catch(error){}
 	})();
@@ -2242,7 +2242,7 @@ static bool createChildWebView(Host *host, const std::string &key) {
                     controller->put_IsVisible(TRUE);
                     if (found->second.webview) {
                         if (found->second.bridge_enabled) {
-                            found->second.webview->AddScriptToExecuteOnDocumentCreated(zeroNativeBridgeScript(), nullptr);
+                            found->second.webview->AddScriptToExecuteOnDocumentCreated(nativeSdkBridgeScript(), nullptr);
                             EventRegistrationToken bridge_token = {};
                             uint64_t bridge_window_id = found->second.window_id;
                             std::string bridge_label = found->second.label;
@@ -2302,7 +2302,7 @@ static bool createChildWebView(Host *host, const std::string &key) {
                                 return S_OK;
                             }).Get(), &accelerator_token);
 
-                        found->second.webview->AddWebResourceRequestedFilter(L"https://zero-native-app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                        found->second.webview->AddWebResourceRequestedFilter(L"https://native-sdk-app.localhost/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
                         EventRegistrationToken asset_token = {};
                         found->second.webview->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(
                             [host, key, environment_ref, lifetime](ICoreWebView2 *, ICoreWebView2WebResourceRequestedEventArgs *args) -> HRESULT {
@@ -2439,7 +2439,7 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
             if (host) {
                 for (auto &entry : host->windows) {
                     if (entry.second.hwnd == hwnd) {
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
                         auto main = host->webviews.find(webViewKey(entry.first, "main"));
                         if (main != host->webviews.end() && !main->second.frame_explicit) {
                             RECT rect = {};
@@ -2499,7 +2499,7 @@ static ATOM registerClass(Host *host) {
     wc.hInstance = host->instance;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    wc.lpszClassName = L"ZeroNativeWindowsHost";
+    wc.lpszClassName = L"NativeSdkWindowsHost";
     return RegisterClassExW(&wc);
 }
 
@@ -2508,7 +2508,7 @@ static bool createNativeWindow(Host *host, Window &window) {
     std::wstring title = widen(window.title.empty() ? host->window_title : window.title);
     HWND hwnd = CreateWindowExW(
         0,
-        L"ZeroNativeWindowsHost",
+        L"NativeSdkWindowsHost",
         title.c_str(),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
@@ -2533,13 +2533,13 @@ static bool createNativeWindow(Host *host, Window &window) {
 
 extern "C" {
 
-void zero_native_windows_load_window_webview(Host *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback);
-void zero_native_windows_bridge_respond_window(Host *host, uint64_t window_id, const char *response, size_t response_len);
-void zero_native_windows_bridge_respond_webview(Host *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len);
-size_t zero_native_windows_clipboard_read_data(Host *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len);
-int zero_native_windows_clipboard_write_data(Host *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len);
+void native_sdk_windows_load_window_webview(Host *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback);
+void native_sdk_windows_bridge_respond_window(Host *host, uint64_t window_id, const char *response, size_t response_len);
+void native_sdk_windows_bridge_respond_webview(Host *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len);
+size_t native_sdk_windows_clipboard_read_data(Host *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len);
+int native_sdk_windows_clipboard_write_data(Host *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len);
 
-Host *zero_native_windows_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+Host *native_sdk_windows_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
     (void)restore_frame;
     INITCOMMONCONTROLSEX controls = {};
     controls.dwSize = sizeof(controls);
@@ -2563,7 +2563,7 @@ Host *zero_native_windows_create(const char *app_name, size_t app_name_len, cons
     return host;
 }
 
-void zero_native_windows_destroy(Host *host) {
+void native_sdk_windows_destroy(Host *host) {
     if (!host) return;
     std::shared_ptr<HostLifetime> lifetime = host->lifetime;
     std::lock_guard<std::recursive_mutex> guard(lifetime->mutex);
@@ -2573,7 +2573,7 @@ void zero_native_windows_destroy(Host *host) {
     delete host;
 }
 
-void zero_native_windows_run(Host *host, EventCallback callback, void *context) {
+void native_sdk_windows_run(Host *host, EventCallback callback, void *context) {
     if (!host) return;
     host->callback = callback;
     host->callback_context = context;
@@ -2598,7 +2598,7 @@ void zero_native_windows_run(Host *host, EventCallback callback, void *context) 
     callback(context, &shutdown);
 }
 
-void zero_native_windows_stop(Host *host) {
+void native_sdk_windows_stop(Host *host) {
     if (!host) return;
     host->running = false;
     PostQuitMessage(0);
@@ -2607,7 +2607,7 @@ void zero_native_windows_stop(Host *host) {
 /* Thread-safe wake: posts kWakeMessage into the message loop, which
  * emits the kWake event on the loop thread. The lifetime mutex guards
  * the window map against concurrent create/destroy. */
-void zero_native_windows_wake(Host *host) {
+void native_sdk_windows_wake(Host *host) {
     if (!host) return;
     std::shared_ptr<HostLifetime> lifetime = host->lifetime;
     std::lock_guard<std::recursive_mutex> guard(lifetime->mutex);
@@ -2624,11 +2624,11 @@ void zero_native_windows_wake(Host *host) {
  * format GUIDs are defined locally to avoid a uuid.lib dependency.
  * GUID_WICPixelFormat32bppRGBA is straight (non-premultiplied) alpha,
  * the layout the canvas image pipeline expects. */
-static const GUID kZeroNativeCLSID_WICImagingFactory = {0xcacaf262, 0x9370, 0x4615, {0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a}};
-static const GUID kZeroNativeIID_IWICImagingFactory = {0xec5ec8a9, 0xc395, 0x4314, {0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70}};
-static const GUID kZeroNativeGUID_WICPixelFormat32bppRGBA = {0xf5c7ad2d, 0x6a8d, 0x43dd, {0xa7, 0xa8, 0xa2, 0x99, 0x35, 0x26, 0x1a, 0xe9}};
+static const GUID kNativeSdkCLSID_WICImagingFactory = {0xcacaf262, 0x9370, 0x4615, {0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a}};
+static const GUID kNativeSdkIID_IWICImagingFactory = {0xec5ec8a9, 0xc395, 0x4314, {0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70}};
+static const GUID kNativeSdkGUID_WICPixelFormat32bppRGBA = {0xf5c7ad2d, 0x6a8d, 0x43dd, {0xa7, 0xa8, 0xa2, 0x99, 0x35, 0x26, 0x1a, 0xe9}};
 
-int zero_native_windows_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
+int native_sdk_windows_decode_image(const uint8_t *bytes, size_t bytes_len, uint8_t *pixels, size_t pixels_len, size_t *out_width, size_t *out_height) {
     if (out_width) *out_width = 0;
     if (out_height) *out_height = 0;
     if (!bytes || bytes_len == 0 || !pixels || bytes_len > UINT32_MAX) return 0;
@@ -2643,7 +2643,7 @@ int zero_native_windows_decode_image(const uint8_t *bytes, size_t bytes_len, uin
     IWICBitmapFrameDecode *frame = nullptr;
     IWICFormatConverter *converter = nullptr;
     do {
-        if (FAILED(CoCreateInstance(kZeroNativeCLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, kZeroNativeIID_IWICImagingFactory, reinterpret_cast<void **>(&factory)))) break;
+        if (FAILED(CoCreateInstance(kNativeSdkCLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, kNativeSdkIID_IWICImagingFactory, reinterpret_cast<void **>(&factory)))) break;
         if (FAILED(factory->CreateStream(&stream))) break;
         if (FAILED(stream->InitializeFromMemory(const_cast<BYTE *>(bytes), static_cast<DWORD>(bytes_len)))) break;
         if (FAILED(factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &decoder))) break;
@@ -2664,7 +2664,7 @@ int zero_native_windows_decode_image(const uint8_t *bytes, size_t bytes_len, uin
         }
 
         if (FAILED(factory->CreateFormatConverter(&converter))) break;
-        if (FAILED(converter->Initialize(frame, kZeroNativeGUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) break;
+        if (FAILED(converter->Initialize(frame, kNativeSdkGUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) break;
         if (FAILED(converter->CopyPixels(nullptr, static_cast<UINT>(width * 4), static_cast<UINT>(byte_len), pixels))) break;
         result = 1;
     } while (false);
@@ -2678,12 +2678,12 @@ int zero_native_windows_decode_image(const uint8_t *bytes, size_t bytes_len, uin
     return result;
 }
 
-void zero_native_windows_load_webview(Host *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
-    zero_native_windows_load_window_webview(host, 1, source, source_len, source_kind, asset_root, asset_root_len, asset_entry, asset_entry_len, asset_origin, asset_origin_len, spa_fallback);
+void native_sdk_windows_load_webview(Host *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
+    native_sdk_windows_load_window_webview(host, 1, source, source_len, source_kind, asset_root, asset_root_len, asset_entry, asset_entry_len, asset_origin, asset_origin_len, spa_fallback);
 }
 
-void zero_native_windows_load_window_webview(Host *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
-#if !ZERO_NATIVE_HAS_WEBVIEW2
+void native_sdk_windows_load_window_webview(Host *host, uint64_t window_id, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback) {
+#if !NATIVE_SDK_HAS_WEBVIEW2
     (void)spa_fallback;
     (void)source;
     (void)source_len;
@@ -2761,22 +2761,22 @@ void zero_native_windows_load_window_webview(Host *host, uint64_t window_id, con
 #endif
 }
 
-void zero_native_windows_set_bridge_callback(Host *host, BridgeCallback callback, void *context) {
+void native_sdk_windows_set_bridge_callback(Host *host, BridgeCallback callback, void *context) {
     if (!host) return;
     host->bridge_callback = callback;
     host->bridge_context = context;
 }
 
-void zero_native_windows_bridge_respond(Host *host, const char *response, size_t response_len) {
-    zero_native_windows_bridge_respond_window(host, 1, response, response_len);
+void native_sdk_windows_bridge_respond(Host *host, const char *response, size_t response_len) {
+    native_sdk_windows_bridge_respond_window(host, 1, response, response_len);
 }
 
-void zero_native_windows_bridge_respond_window(Host *host, uint64_t window_id, const char *response, size_t response_len) {
-    zero_native_windows_bridge_respond_webview(host, window_id, "main", 4, response, response_len);
+void native_sdk_windows_bridge_respond_window(Host *host, uint64_t window_id, const char *response, size_t response_len) {
+    native_sdk_windows_bridge_respond_webview(host, window_id, "main", 4, response, response_len);
 }
 
-void zero_native_windows_bridge_respond_webview(Host *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len) {
-#if ZERO_NATIVE_HAS_WEBVIEW2
+void native_sdk_windows_bridge_respond_webview(Host *host, uint64_t window_id, const char *webview_label, size_t webview_label_len, const char *response, size_t response_len) {
+#if NATIVE_SDK_HAS_WEBVIEW2
     if (!host) return;
     std::string label = slice(webview_label, webview_label_len);
     auto found = host->webviews.find(webViewKey(window_id, label));
@@ -2795,13 +2795,13 @@ void zero_native_windows_bridge_respond_webview(Host *host, uint64_t window_id, 
 #endif
 }
 
-void zero_native_windows_emit_window_event(Host *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len) {
-#if ZERO_NATIVE_HAS_WEBVIEW2
+void native_sdk_windows_emit_window_event(Host *host, uint64_t window_id, const char *name, size_t name_len, const char *detail_json, size_t detail_json_len) {
+#if NATIVE_SDK_HAS_WEBVIEW2
     if (!host) return;
     std::string event_name = slice(name, name_len);
     if (event_name.empty()) return;
     std::string detail = detail_json && detail_json_len > 0 ? slice(detail_json, detail_json_len) : std::string("null");
-    std::string script = "(function(){var name=" + jsonStringLiteral(event_name) + ";var detail=" + detail + ";if(window.zero&&window.zero._emit){window.zero._emit(name,detail);return;}window.dispatchEvent(new CustomEvent('zero-native:'+name,{detail:detail}));})();";
+    std::string script = "(function(){var name=" + jsonStringLiteral(event_name) + ";var detail=" + detail + ";if(window.zero&&window.zero._emit){window.zero._emit(name,detail);return;}window.dispatchEvent(new CustomEvent('native-sdk:'+name,{detail:detail}));})();";
     std::wstring script_wide = widen(script);
     for (auto &entry : host->webviews) {
         ChildWebView &webview = entry.second;
@@ -2818,14 +2818,14 @@ void zero_native_windows_emit_window_event(Host *host, uint64_t window_id, const
 #endif
 }
 
-void zero_native_windows_set_security_policy(Host *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action) {
+void native_sdk_windows_set_security_policy(Host *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action) {
     if (!host) return;
     host->allowed_origins = parseNewlineList(allowed_origins, allowed_origins_len);
     host->allowed_external_urls = parseNewlineList(external_urls, external_urls_len);
     host->external_link_action = external_action;
 }
 
-void zero_native_windows_set_menus(Host *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count) {
+void native_sdk_windows_set_menus(Host *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count) {
     if (!host) return;
     host->menus.clear();
     host->menu_commands.clear();
@@ -2866,7 +2866,7 @@ void zero_native_windows_set_menus(Host *host, const char *const *menu_titles, c
     }
 }
 
-void zero_native_windows_set_shortcuts(Host *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count) {
+void native_sdk_windows_set_shortcuts(Host *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count) {
     if (!host) return;
     host->shortcuts.clear();
     if (!ids || !id_lens || !keys || !key_lens || !modifiers) return;
@@ -2884,7 +2884,7 @@ void zero_native_windows_set_shortcuts(Host *host, const char *const *ids, const
     }
 }
 
-int zero_native_windows_create_window(Host *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+int native_sdk_windows_create_window(Host *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
     (void)restore_frame;
     if (!host || host->windows.find(window_id) != host->windows.end()) return 0;
     Window window;
@@ -2901,7 +2901,7 @@ int zero_native_windows_create_window(Host *host, uint64_t window_id, const char
     return 1;
 }
 
-int zero_native_windows_focus_window(Host *host, uint64_t window_id) {
+int native_sdk_windows_focus_window(Host *host, uint64_t window_id) {
     if (!host) return 0;
     auto found = host->windows.find(window_id);
     if (found == host->windows.end() || !found->second.hwnd) return 0;
@@ -2910,7 +2910,7 @@ int zero_native_windows_focus_window(Host *host, uint64_t window_id) {
     return 1;
 }
 
-int zero_native_windows_close_window(Host *host, uint64_t window_id) {
+int native_sdk_windows_close_window(Host *host, uint64_t window_id) {
     if (!host) return 0;
     auto found = host->windows.find(window_id);
     if (found == host->windows.end() || !found->second.hwnd) return 0;
@@ -2920,7 +2920,7 @@ int zero_native_windows_close_window(Host *host, uint64_t window_id) {
     return 1;
 }
 
-int zero_native_windows_create_view(Host *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {
+int native_sdk_windows_create_view(Host *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len) {
     if (!host || label_len == 0 || !isSupportedNativeViewKind(kind) || !validNativeViewFrame(x, y, width, height)) return 0;
     auto window = host->windows.find(window_id);
     if (window == host->windows.end() || !window->second.hwnd) return 0;
@@ -3056,7 +3056,7 @@ int zero_native_windows_create_view(Host *host, uint64_t window_id, const char *
     return 1;
 }
 
-int zero_native_windows_request_gpu_surface_frame(Host *host, uint64_t window_id, const char *label, size_t label_len) {
+int native_sdk_windows_request_gpu_surface_frame(Host *host, uint64_t window_id, const char *label, size_t label_len) {
     if (!host || label_len == 0) return 0;
     auto found = host->native_views.find(nativeViewKey(window_id, slice(label, label_len)));
     if (found == host->native_views.end() || found->second.kind != kViewGpuSurface || !found->second.hwnd) return 0;
@@ -3066,7 +3066,7 @@ int zero_native_windows_request_gpu_surface_frame(Host *host, uint64_t window_id
     return 1;
 }
 
-int zero_native_windows_present_gpu_surface_pixels(Host *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
+int native_sdk_windows_present_gpu_surface_pixels(Host *host, uint64_t window_id, const char *label, size_t label_len, size_t width, size_t height, double scale, int has_dirty_rect, double dirty_x, double dirty_y, double dirty_width, double dirty_height, const uint8_t *rgba8, size_t rgba8_len) {
     (void)scale;
     (void)has_dirty_rect;
     (void)dirty_x;
@@ -3111,7 +3111,7 @@ int zero_native_windows_present_gpu_surface_pixels(Host *host, uint64_t window_i
     return 1;
 }
 
-int zero_native_windows_update_view(Host *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len) {
+int native_sdk_windows_update_view(Host *host, uint64_t window_id, const char *label, size_t label_len, int has_frame, double x, double y, double width, double height, int has_layer, int layer, int has_visible, int visible, int has_enabled, int enabled, int has_role, const char *role, size_t role_len, int has_accessibility_label, const char *accessibility_label, size_t accessibility_label_len, int has_text, const char *text, size_t text_len, int has_command, const char *command, size_t command_len) {
     if (!host || label_len == 0) return 0;
     std::string label_string = slice(label, label_len);
     auto found = host->native_views.find(nativeViewKey(window_id, label_string));
@@ -3145,15 +3145,15 @@ int zero_native_windows_update_view(Host *host, uint64_t window_id, const char *
     return 1;
 }
 
-int zero_native_windows_set_view_frame(Host *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
-    return zero_native_windows_update_view(host, window_id, label, label_len, 1, x, y, width, height, 0, 0, 0, 1, 0, 1, 0, "", 0, 0, "", 0, 0, "", 0, 0, "", 0);
+int native_sdk_windows_set_view_frame(Host *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
+    return native_sdk_windows_update_view(host, window_id, label, label_len, 1, x, y, width, height, 0, 0, 0, 1, 0, 1, 0, "", 0, 0, "", 0, 0, "", 0, 0, "", 0);
 }
 
-int zero_native_windows_set_view_visible(Host *host, uint64_t window_id, const char *label, size_t label_len, int visible) {
-    return zero_native_windows_update_view(host, window_id, label, label_len, 0, 0, 0, 0, 0, 0, 0, 1, visible, 0, 1, 0, "", 0, 0, "", 0, 0, "", 0, 0, "", 0);
+int native_sdk_windows_set_view_visible(Host *host, uint64_t window_id, const char *label, size_t label_len, int visible) {
+    return native_sdk_windows_update_view(host, window_id, label, label_len, 0, 0, 0, 0, 0, 0, 0, 1, visible, 0, 1, 0, "", 0, 0, "", 0, 0, "", 0, 0, "", 0);
 }
 
-int zero_native_windows_focus_view(Host *host, uint64_t window_id, const char *label, size_t label_len) {
+int native_sdk_windows_focus_view(Host *host, uint64_t window_id, const char *label, size_t label_len) {
     if (!host || label_len == 0) return 0;
     std::string label_string = slice(label, label_len);
     if (label_string == "main") {
@@ -3173,7 +3173,7 @@ int zero_native_windows_focus_view(Host *host, uint64_t window_id, const char *l
     return GetFocus() == found->second.hwnd ? 1 : 0;
 }
 
-int zero_native_windows_close_view(Host *host, uint64_t window_id, const char *label, size_t label_len) {
+int native_sdk_windows_close_view(Host *host, uint64_t window_id, const char *label, size_t label_len) {
     if (!host || label_len == 0) return 0;
     std::string label_string = slice(label, label_len);
     std::string key = nativeViewKey(window_id, label_string);
@@ -3183,7 +3183,7 @@ int zero_native_windows_close_view(Host *host, uint64_t window_id, const char *l
     return 1;
 }
 
-WindowsOpenDialogResult zero_native_windows_show_open_dialog(Host *host, const WindowsOpenDialogOpts *opts, char *buffer, size_t buffer_len) {
+WindowsOpenDialogResult native_sdk_windows_show_open_dialog(Host *host, const WindowsOpenDialogOpts *opts, char *buffer, size_t buffer_len) {
     WindowsOpenDialogResult result = {};
     if (!host || !opts || !buffer || buffer_len == 0) return result;
     bool uninitialize = false;
@@ -3239,7 +3239,7 @@ WindowsOpenDialogResult zero_native_windows_show_open_dialog(Host *host, const W
     return result;
 }
 
-size_t zero_native_windows_show_save_dialog(Host *host, const WindowsSaveDialogOpts *opts, char *buffer, size_t buffer_len) {
+size_t native_sdk_windows_show_save_dialog(Host *host, const WindowsSaveDialogOpts *opts, char *buffer, size_t buffer_len) {
     if (!host || !opts || !buffer || buffer_len == 0) return 0;
     bool uninitialize = false;
     if (!initializeCom(&uninitialize)) return 0;
@@ -3283,7 +3283,7 @@ size_t zero_native_windows_show_save_dialog(Host *host, const WindowsSaveDialogO
     return written;
 }
 
-int zero_native_windows_show_message_dialog(Host *host, const WindowsMessageDialogOpts *opts) {
+int native_sdk_windows_show_message_dialog(Host *host, const WindowsMessageDialogOpts *opts) {
     if (!host || !opts) return 0;
     std::wstring title = widen(slice(opts->title, opts->title_len));
     std::wstring message = widen(slice(opts->message, opts->message_len));
@@ -3303,7 +3303,7 @@ int zero_native_windows_show_message_dialog(Host *host, const WindowsMessageDial
     config.cbSize = sizeof(config);
     config.hwndParent = parentWindow(host);
     config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
-    config.pszWindowTitle = title.empty() ? L"zero-native" : title.c_str();
+    config.pszWindowTitle = title.empty() ? L"native-sdk" : title.c_str();
     config.pszMainInstruction = message.empty() ? config.pszWindowTitle : message.c_str();
     config.pszContent = informative.empty() ? nullptr : informative.c_str();
     config.cButtons = static_cast<UINT>(button_count);
@@ -3319,7 +3319,7 @@ int zero_native_windows_show_message_dialog(Host *host, const WindowsMessageDial
     return 0;
 }
 
-int zero_native_windows_show_notification(Host *host, const char *title, size_t title_len, const char *subtitle, size_t subtitle_len, const char *body, size_t body_len) {
+int native_sdk_windows_show_notification(Host *host, const char *title, size_t title_len, const char *subtitle, size_t subtitle_len, const char *body, size_t body_len) {
     if (!host || !title || title_len == 0) return 0;
     if ((subtitle_len > 0 && !subtitle) || (body_len > 0 && !body)) return 0;
     if (!ensureNotificationIcon(host)) return 0;
@@ -3339,7 +3339,7 @@ int zero_native_windows_show_notification(Host *host, const char *title, size_t 
     return Shell_NotifyIconW(NIM_MODIFY, &data) ? 1 : 0;
 }
 
-int zero_native_windows_create_tray(Host *host, const char *icon_path, size_t icon_path_len, const char *tooltip, size_t tooltip_len) {
+int native_sdk_windows_create_tray(Host *host, const char *icon_path, size_t icon_path_len, const char *tooltip, size_t tooltip_len) {
     if (!host) return 0;
     std::string icon = slice(icon_path, icon_path_len);
     std::string tip = slice(tooltip, tooltip_len);
@@ -3348,7 +3348,7 @@ int zero_native_windows_create_tray(Host *host, const char *icon_path, size_t ic
     return 1;
 }
 
-int zero_native_windows_update_tray_menu(Host *host, const uint32_t *item_ids, const char *const *labels, const size_t *label_lens, const int *separators, const int *enabled_flags, size_t count) {
+int native_sdk_windows_update_tray_menu(Host *host, const uint32_t *item_ids, const char *const *labels, const size_t *label_lens, const int *separators, const int *enabled_flags, size_t count) {
     if (!host || !host->tray_active) return 0;
     host->tray_items.clear();
     if (count > 0 && (!item_ids || !labels || !label_lens || !separators || !enabled_flags)) return 0;
@@ -3365,14 +3365,14 @@ int zero_native_windows_update_tray_menu(Host *host, const uint32_t *item_ids, c
     return 1;
 }
 
-void zero_native_windows_remove_tray(Host *host) {
+void native_sdk_windows_remove_tray(Host *host) {
     if (!host) return;
     host->tray_active = false;
     host->tray_items.clear();
     removeNotificationIcon(host);
 }
 
-int zero_native_windows_open_external_url(Host *host, const char *url, size_t url_len) {
+int native_sdk_windows_open_external_url(Host *host, const char *url, size_t url_len) {
     (void)host;
     if (!url || url_len == 0) return 0;
     std::wstring target = widen(slice(url, url_len));
@@ -3380,7 +3380,7 @@ int zero_native_windows_open_external_url(Host *host, const char *url, size_t ur
     return reinterpret_cast<intptr_t>(result) > 32 ? 1 : 0;
 }
 
-int zero_native_windows_reveal_path(Host *host, const char *path, size_t path_len) {
+int native_sdk_windows_reveal_path(Host *host, const char *path, size_t path_len) {
     (void)host;
     if (!path || path_len == 0) return 0;
     std::wstring target = widen(slice(path, path_len));
@@ -3389,7 +3389,7 @@ int zero_native_windows_reveal_path(Host *host, const char *path, size_t path_le
     return reinterpret_cast<intptr_t>(result) > 32 ? 1 : 0;
 }
 
-int zero_native_windows_add_recent_document(Host *host, const char *path, size_t path_len) {
+int native_sdk_windows_add_recent_document(Host *host, const char *path, size_t path_len) {
     (void)host;
     if (!path || path_len == 0) return 0;
     std::wstring target = widen(slice(path, path_len));
@@ -3397,13 +3397,13 @@ int zero_native_windows_add_recent_document(Host *host, const char *path, size_t
     return 1;
 }
 
-int zero_native_windows_clear_recent_documents(Host *host) {
+int native_sdk_windows_clear_recent_documents(Host *host) {
     (void)host;
     SHAddToRecentDocs(SHARD_PIDL, nullptr);
     return 1;
 }
 
-int zero_native_windows_set_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len, const char *secret, size_t secret_len) {
+int native_sdk_windows_set_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len, const char *secret, size_t secret_len) {
     (void)host;
     if (!service || service_len == 0 || !account || account_len == 0 || !secret || secret_len == 0 || secret_len > UINT32_MAX) return 0;
     HMODULE advapi = LoadLibraryW(L"advapi32.dll");
@@ -3431,7 +3431,7 @@ int zero_native_windows_set_credential(Host *host, const char *service, size_t s
     return ok ? 1 : 0;
 }
 
-size_t zero_native_windows_get_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len, char *buffer, size_t buffer_len) {
+size_t native_sdk_windows_get_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len, char *buffer, size_t buffer_len) {
     (void)host;
     if (!service || service_len == 0 || !account || account_len == 0 || !buffer) return 0;
     HMODULE advapi = LoadLibraryW(L"advapi32.dll");
@@ -3463,7 +3463,7 @@ size_t zero_native_windows_get_credential(Host *host, const char *service, size_
     return secret_len;
 }
 
-int zero_native_windows_delete_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len) {
+int native_sdk_windows_delete_credential(Host *host, const char *service, size_t service_len, const char *account, size_t account_len) {
     (void)host;
     if (!service || service_len == 0 || !account || account_len == 0) return 0;
     HMODULE advapi = LoadLibraryW(L"advapi32.dll");
@@ -3480,8 +3480,8 @@ int zero_native_windows_delete_credential(Host *host, const char *service, size_
     return ok ? 1 : 0;
 }
 
-int zero_native_windows_create_webview(Host *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled) {
-#if !ZERO_NATIVE_HAS_WEBVIEW2
+int native_sdk_windows_create_webview(Host *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len, double x, double y, double width, double height, int layer, int transparent, int bridge_enabled) {
+#if !NATIVE_SDK_HAS_WEBVIEW2
     (void)host;
     (void)window_id;
     (void)label;
@@ -3545,7 +3545,7 @@ int zero_native_windows_create_webview(Host *host, uint64_t window_id, const cha
 #endif
 }
 
-int zero_native_windows_set_webview_frame(Host *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
+int native_sdk_windows_set_webview_frame(Host *host, uint64_t window_id, const char *label, size_t label_len, double x, double y, double width, double height) {
     if (!host || label_len == 0 || !validChildWebViewFrame(x, y, width, height)) return 0;
     std::string label_string = slice(label, label_len);
     auto found = host->webviews.find(webViewKey(window_id, label_string));
@@ -3556,7 +3556,7 @@ int zero_native_windows_set_webview_frame(Host *host, uint64_t window_id, const 
     found->second.height = height;
     found->second.frame_explicit = true;
     MoveWindow(found->second.hwnd, webViewCoord(x), webViewCoord(y), webViewExtent(width), webViewExtent(height), TRUE);
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
     if (found->second.controller) {
         RECT bounds = webViewRect(found->second);
         found->second.controller->put_Bounds(bounds);
@@ -3565,8 +3565,8 @@ int zero_native_windows_set_webview_frame(Host *host, uint64_t window_id, const 
     return 1;
 }
 
-int zero_native_windows_navigate_webview(Host *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len) {
-#if !ZERO_NATIVE_HAS_WEBVIEW2
+int native_sdk_windows_navigate_webview(Host *host, uint64_t window_id, const char *label, size_t label_len, const char *url, size_t url_len) {
+#if !NATIVE_SDK_HAS_WEBVIEW2
     (void)host;
     (void)window_id;
     (void)label;
@@ -3594,8 +3594,8 @@ int zero_native_windows_navigate_webview(Host *host, uint64_t window_id, const c
 #endif
 }
 
-int zero_native_windows_set_webview_zoom(Host *host, uint64_t window_id, const char *label, size_t label_len, double zoom) {
-#if !ZERO_NATIVE_HAS_WEBVIEW2
+int native_sdk_windows_set_webview_zoom(Host *host, uint64_t window_id, const char *label, size_t label_len, double zoom) {
+#if !NATIVE_SDK_HAS_WEBVIEW2
     (void)host;
     (void)window_id;
     (void)label;
@@ -3616,7 +3616,7 @@ int zero_native_windows_set_webview_zoom(Host *host, uint64_t window_id, const c
 #endif
 }
 
-int zero_native_windows_set_webview_layer(Host *host, uint64_t window_id, const char *label, size_t label_len, int layer) {
+int native_sdk_windows_set_webview_layer(Host *host, uint64_t window_id, const char *label, size_t label_len, int layer) {
     if (!host || label_len == 0) return 0;
     std::string label_string = slice(label, label_len);
     if (label_string == "main") return 0;
@@ -3627,13 +3627,13 @@ int zero_native_windows_set_webview_layer(Host *host, uint64_t window_id, const 
     return 1;
 }
 
-int zero_native_windows_close_webview(Host *host, uint64_t window_id, const char *label, size_t label_len) {
+int native_sdk_windows_close_webview(Host *host, uint64_t window_id, const char *label, size_t label_len) {
     if (!host || label_len == 0) return 0;
     std::string label_string = slice(label, label_len);
     if (label_string == "main") return 0;
     auto found = host->webviews.find(webViewKey(window_id, label_string));
     if (found == host->webviews.end()) return 0;
-#if ZERO_NATIVE_HAS_WEBVIEW2
+#if NATIVE_SDK_HAS_WEBVIEW2
     if (found->second.controller) found->second.controller->Close();
 #endif
     if (found->second.hwnd) DestroyWindow(found->second.hwnd);
@@ -3641,15 +3641,15 @@ int zero_native_windows_close_webview(Host *host, uint64_t window_id, const char
     return 1;
 }
 
-size_t zero_native_windows_clipboard_read(Host *host, char *buffer, size_t buffer_len) {
-    return zero_native_windows_clipboard_read_data(host, "text/plain", strlen("text/plain"), buffer, buffer_len);
+size_t native_sdk_windows_clipboard_read(Host *host, char *buffer, size_t buffer_len) {
+    return native_sdk_windows_clipboard_read_data(host, "text/plain", strlen("text/plain"), buffer, buffer_len);
 }
 
-void zero_native_windows_clipboard_write(Host *host, const char *text, size_t text_len) {
-    (void)zero_native_windows_clipboard_write_data(host, "text/plain", strlen("text/plain"), text, text_len);
+void native_sdk_windows_clipboard_write(Host *host, const char *text, size_t text_len) {
+    (void)native_sdk_windows_clipboard_write_data(host, "text/plain", strlen("text/plain"), text, text_len);
 }
 
-size_t zero_native_windows_clipboard_read_data(Host *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len) {
+size_t native_sdk_windows_clipboard_read_data(Host *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len) {
     (void)host;
     UINT format = clipboardFormatForMime(mime_type, mime_type_len);
     if (!format || !buffer || buffer_len == 0 || !OpenClipboard(nullptr)) return 0;
@@ -3681,7 +3681,7 @@ size_t zero_native_windows_clipboard_read_data(Host *host, const char *mime_type
     return copied;
 }
 
-int zero_native_windows_clipboard_write_data(Host *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len) {
+int native_sdk_windows_clipboard_write_data(Host *host, const char *mime_type, size_t mime_type_len, const char *bytes, size_t bytes_len) {
     (void)host;
     UINT format = clipboardFormatForMime(mime_type, mime_type_len);
     if (!format || (!bytes && bytes_len > 0) || !OpenClipboard(nullptr)) return 0;

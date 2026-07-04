@@ -1,8 +1,8 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 const testing = std.testing;
 
 const HabitsUi = main.HabitsUi;
@@ -201,7 +201,7 @@ test "the habits view lays out through the canvas engine" {
     const tree = try buildTree(arena_state.allocator(), &model);
 
     var nodes: [256]canvas.WidgetLayoutNode = undefined;
-    const layout = try canvas.layoutWidgetTree(tree.root, zero_native.geometry.RectF.init(0, 0, 720, 520), &nodes);
+    const layout = try canvas.layoutWidgetTree(tree.root, native_sdk.geometry.RectF.init(0, 0, 720, 520), &nodes);
     try testing.expect(layout.nodes.len > 0);
 
     const add_button = findByText(tree.root, .button, "New habit").?;

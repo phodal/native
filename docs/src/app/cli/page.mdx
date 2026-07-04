@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `zero-native` CLI provides project scaffolding, validation, packaging, and debugging tools.
+The `native` CLI provides project scaffolding, validation, packaging, and debugging tools.
 
 ## Commands
 
@@ -13,77 +13,77 @@ The `zero-native` CLI provides project scaffolding, validation, packaging, and d
   </thead>
   <tbody>
     <tr>
-      <td><code>zero-native init [path] [--frontend &lt;native|next|vite|react|svelte|vue&gt;]</code> (default: native)</td>
-      <td>Scaffold a new zero-native project with the specified frontend (<code>native</code> scaffolds a native-rendered markup app with no web frontend). Omit <code>path</code> to scaffold into the current directory.</td>
+      <td><code>native init [path] [--frontend &lt;native|next|vite|react|svelte|vue&gt;]</code> (default: native)</td>
+      <td>Scaffold a new Native SDK project with the specified frontend (<code>native</code> scaffolds a native-rendered markup app with no web frontend). Omit <code>path</code> to scaffold into the current directory.</td>
     </tr>
     <tr>
-      <td><code>zero-native dev --binary &lt;path&gt;</code></td>
+      <td><code>native dev --binary &lt;path&gt;</code></td>
       <td>Start the app with a managed frontend dev server (<code>--binary</code> is required)</td>
     </tr>
     <tr>
-      <td><code>zero-native doctor</code></td>
+      <td><code>native doctor</code></td>
       <td>Check host environment, WebView, manifest, and CEF</td>
     </tr>
     <tr>
-      <td><code>zero-native cef install</code></td>
+      <td><code>native cef install</code></td>
       <td>Download, prepare, and verify the macOS CEF runtime</td>
     </tr>
     <tr>
-      <td><code>zero-native cef path</code></td>
+      <td><code>native cef path</code></td>
       <td>Print the default or configured CEF directory</td>
     </tr>
     <tr>
-      <td><code>zero-native cef doctor</code></td>
+      <td><code>native cef doctor</code></td>
       <td>Check only the CEF layout</td>
     </tr>
     <tr>
-      <td><code>zero-native validate [app.zon]</code></td>
+      <td><code>native validate [app.zon]</code></td>
       <td>Validate <code>app.zon</code> against the manifest schema</td>
     </tr>
     <tr>
-      <td><code>zero-native package</code></td>
+      <td><code>native package</code></td>
       <td>Package the app for distribution</td>
     </tr>
     <tr>
-      <td><code>zero-native bundle-assets [app.zon] [assets] [output]</code></td>
+      <td><code>native bundle-assets [app.zon] [assets] [output]</code></td>
       <td>Copy frontend assets into the build output</td>
     </tr>
     <tr>
-      <td><code>zero-native package-windows</code></td>
+      <td><code>native package-windows</code></td>
       <td>Package shortcut for Windows</td>
     </tr>
     <tr>
-      <td><code>zero-native package-linux</code></td>
+      <td><code>native package-linux</code></td>
       <td>Package shortcut for Linux</td>
     </tr>
     <tr>
-      <td><code>zero-native package-ios</code></td>
+      <td><code>native package-ios</code></td>
       <td>Package shortcut for iOS</td>
     </tr>
     <tr>
-      <td><code>zero-native package-android</code></td>
+      <td><code>native package-android</code></td>
       <td>Package shortcut for Android</td>
     </tr>
     <tr>
-      <td><code>zero-native automate &lt;command&gt;</code></td>
+      <td><code>native automate &lt;command&gt;</code></td>
       <td>Interact with the automation server</td>
     </tr>
     <tr>
-      <td><code>zero-native skills list</code></td>
+      <td><code>native skills list</code></td>
       <td>List built-in AI agent skills</td>
     </tr>
     <tr>
-      <td><code>zero-native skills get &lt;name&gt; [--full]</code></td>
+      <td><code>native skills get &lt;name&gt; [--full]</code></td>
       <td>Output built-in AI agent skill content</td>
     </tr>
     <tr>
-      <td><code>zero-native version</code></td>
-      <td>Print the zero-native version</td>
+      <td><code>native version</code></td>
+      <td>Print the native version</td>
     </tr>
   </tbody>
 </table>
 
-## `zero-native skills` subcommands
+## `native skills` subcommands
 
 <table>
   <thead>
@@ -99,7 +99,7 @@ The `zero-native` CLI provides project scaffolding, validation, packaging, and d
     </tr>
     <tr>
       <td><code>skills get core</code></td>
-      <td>Output the zero-native app-building guide for AI agents</td>
+      <td>Output the Native SDK app-building guide for AI agents</td>
     </tr>
     <tr>
       <td><code>skills get automation</code></td>
@@ -112,7 +112,7 @@ The `zero-native` CLI provides project scaffolding, validation, packaging, and d
   </tbody>
 </table>
 
-## `zero-native cef` flags
+## `native cef` flags
 
 <table>
   <thead>
@@ -128,11 +128,11 @@ The `zero-native` CLI provides project scaffolding, validation, packaging, and d
     </tr>
     <tr>
       <td><code>--version</code></td>
-      <td>CEF binary version to download. The default is zero-native's pinned tested version.</td>
+      <td>CEF binary version to download. The default is Native SDK's pinned tested version.</td>
     </tr>
     <tr>
       <td><code>--source</code></td>
-      <td><code>prepared</code> or <code>official</code>. Defaults to <code>prepared</code>, which downloads zero-native's no-CMake runtime from GitHub Releases.</td>
+      <td><code>prepared</code> or <code>official</code>. Defaults to <code>prepared</code>, which downloads Native SDK's no-CMake runtime from GitHub Releases.</td>
     </tr>
     <tr>
       <td><code>--download-url</code></td>
@@ -149,9 +149,9 @@ The `zero-native` CLI provides project scaffolding, validation, packaging, and d
   </tbody>
 </table>
 
-Core maintainers who need to build CEF before a zero-native runtime release exists should use `tools/cef/build-from-source.sh`. The CLI's default `zero-native cef install` path remains the no-CMake app-developer path.
+Core maintainers who need to build CEF before a Native SDK runtime release exists should use `tools/cef/build-from-source.sh`. The CLI's default `native cef install` path remains the no-CMake app-developer path.
 
-## `zero-native package` flags
+## `native package` flags
 
 <table>
   <thead>
@@ -220,7 +220,7 @@ Core maintainers who need to build CEF before a zero-native runtime release exis
   </tbody>
 </table>
 
-## `zero-native dev` flags
+## `native dev` flags
 
 <table>
   <thead>
@@ -253,7 +253,7 @@ Core maintainers who need to build CEF before a zero-native runtime release exis
   </tbody>
 </table>
 
-## `zero-native automate` subcommands
+## `native automate` subcommands
 
 <table>
   <thead>
@@ -349,19 +349,19 @@ Core maintainers who need to build CEF before a zero-native runtime release exis
   </thead>
   <tbody>
     <tr>
-      <td><code>ZERO_NATIVE_FRONTEND_URL</code></td>
+      <td><code>NATIVE_SDK_FRONTEND_URL</code></td>
       <td>Dev server URL (read by <code>frontend.sourceFromEnv</code>)</td>
     </tr>
     <tr>
-      <td><code>ZERO_NATIVE_FRONTEND_ASSETS</code></td>
+      <td><code>NATIVE_SDK_FRONTEND_ASSETS</code></td>
       <td>App convention for signaling pre-built assets</td>
     </tr>
     <tr>
-      <td><code>ZERO_NATIVE_LOG_DIR</code></td>
+      <td><code>NATIVE_SDK_LOG_DIR</code></td>
       <td>Override log output directory</td>
     </tr>
     <tr>
-      <td><code>ZERO_NATIVE_LOG_FORMAT</code></td>
+      <td><code>NATIVE_SDK_LOG_FORMAT</code></td>
       <td>Log format: <code>text</code> or <code>jsonl</code></td>
     </tr>
   </tbody>

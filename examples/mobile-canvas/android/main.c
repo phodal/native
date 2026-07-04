@@ -1,4 +1,4 @@
-// Minimal Android shim for a zero-native mobile canvas static library —
+// Minimal Android shim for a native-sdk mobile canvas static library —
 // the Android counterpart of examples/mobile-canvas/ios/main.m.
 //
 // Shape: a NativeActivity with no Java/Kotlin at all (`android:hasCode`
@@ -9,13 +9,13 @@
 // AChoreographer — the Android equivalent of the iOS shim's CADisplayLink.
 //
 // Presentation (M2 role): the embed host renders the retained scene
-// through the CPU reference renderer (`zero_native_app_render_pixels`,
+// through the CPU reference renderer (`native_sdk_app_render_pixels`,
 // RGBA8) and the shim copies those bytes into the ANativeWindow buffer
 // (`ANativeWindow_lock` / `_unlockAndPost`). The window buffer is
 // requested as WINDOW_FORMAT_RGBA_8888, which matches the renderer's byte
 // order exactly — unlike the CAMetalLayer path there is no BGRA swizzle,
 // only a row copy honoring the buffer's stride. The canvas revision from
-// `zero_native_app_gpu_frame_state` gates re-renders, so unchanged frames
+// `native_sdk_app_gpu_frame_state` gates re-renders, so unchanged frames
 // cost one ABI call and no copy.
 //
 // Input (M3 role, touch only): AMotionEvent sequences forward through the
@@ -23,7 +23,7 @@
 // under-slop touch is a tap (pointer_down + pointer_up), an over-slop move
 // that started over an overflowing scrollable widget (decided from the
 // semantics export) pans it through the scroll reconciliation
-// (`zero_native_app_scroll` wheel deltas, natural direction), and an
+// (`native_sdk_app_scroll` wheel deltas, natural direction), and an
 // over-slop move elsewhere becomes pointer_down + pointer_drag so sliders
 // and text selection keep desktop semantics. Coordinates are converted
 // from device pixels to view points (the space the viewport export
@@ -34,11 +34,11 @@
 //
 // Text metrics: none registered — layout uses the deterministic estimator
 // (the Android platform measure provider is future work; the ABI seam,
-// `zero_native_app_set_text_measure`, is already exported).
+// `native_sdk_app_set_text_measure`, is already exported).
 //
-// Automation: when the `debug.zero_native.automation` system property is
-// set (adb shell setprop debug.zero_native.automation 1), the shim points
-// the runtime's automation server at <internalDataPath>/zero-native-
+// Automation: when the `debug.native_sdk.automation` system property is
+// set (adb shell setprop debug.native_sdk.automation 1), the shim points
+// the runtime's automation server at <internalDataPath>/native-sdk-
 // automation, the same snapshot.txt protocol the desktop runners and the
 // iOS shim use. The APK is debuggable, so `adb shell run-as <package>`
 // can read the snapshots.
@@ -59,12 +59,12 @@
 #include <string.h>
 #include <sys/system_properties.h>
 
-// Shared with the iOS shim (examples/mobile-canvas/ios/zero_native_app.h);
+// Shared with the iOS shim (examples/mobile-canvas/ios/native_sdk_app.h);
 // the run script adds that directory to the include path so both shims
 // compile against one declaration of the C ABI instead of drifting copies.
-#include "zero_native_app.h"
+#include "native_sdk_app.h"
 
-#define LOG_TAG "zero-native"
+#define LOG_TAG "native-sdk"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
@@ -114,7 +114,7 @@ static Shim *g_shim = NULL;
 
 static void log_native_error(Shim *shim, const char *stage) {
     if (!shim->native_app) return;
-    const char *name = zero_native_app_last_error_name(shim->native_app);
+    const char *name = native_sdk_app_last_error_name(shim->native_app);
     if (name && name[0] != '\0') {
         LOGW("%s error %s", stage, name);
     }
@@ -156,7 +156,7 @@ static void push_viewport(Shim *shim) {
         if (rect.right > 0 && rect.right < px_width) safe_right = (float)(px_width - rect.right) / scale;
         if (rect.bottom > 0 && rect.bottom < px_height) safe_bottom = (float)(px_height - rect.bottom) / scale;
     }
-    zero_native_app_viewport(shim->native_app,
+    native_sdk_app_viewport(shim->native_app,
                              (float)px_width / scale, (float)px_height / scale, scale,
                              shim->window,
                              safe_top, safe_right, safe_bottom, safe_left,
@@ -184,13 +184,13 @@ static bool render_and_present(Shim *shim) {
     if (!shim->native_app || !shim->window) return false;
     const float scale = shim->scale > 0 ? shim->scale : 1.0f;
 
-    zero_native_canvas_pixels_t info = {0};
-    if (zero_native_app_render_pixel_size(shim->native_app, scale, &info) != 1) return false;
+    native_sdk_canvas_pixels_t info = {0};
+    if (native_sdk_app_render_pixel_size(shim->native_app, scale, &info) != 1) return false;
     if (info.width == 0 || info.height == 0 || info.byte_len != info.width * info.height * 4) return false;
     if (!ensure_pixel_capacity(shim, info.byte_len)) return false;
 
-    zero_native_canvas_pixels_t rendered = {0};
-    if (zero_native_app_render_pixels(shim->native_app, scale, shim->pixels, info.byte_len, &rendered) != 1) {
+    native_sdk_canvas_pixels_t rendered = {0};
+    if (native_sdk_app_render_pixels(shim->native_app, scale, shim->pixels, info.byte_len, &rendered) != 1) {
         log_native_error(shim, "render_pixels");
         return false;
     }
@@ -231,10 +231,10 @@ static void frame_callback(int64_t frame_time_nanos, void *data) {
     schedule_frame();
     if (!shim->native_app) return;
 
-    zero_native_app_frame(shim->native_app);
+    native_sdk_app_frame(shim->native_app);
 
-    zero_native_gpu_frame_state_t state = {0};
-    const bool have_state = zero_native_app_gpu_frame_state(shim->native_app, &state) == 1;
+    native_sdk_gpu_frame_state_t state = {0};
+    const bool have_state = native_sdk_app_gpu_frame_state(shim->native_app, &state) == 1;
     if (!shim->needs_present && have_state && shim->has_presented_revision &&
         state.canvas_revision == shim->last_canvas_revision) {
         return;
@@ -258,7 +258,7 @@ static void schedule_frame(void) {
 
 static void forward_touch_phase(Shim *shim, int phase, float x, float y, float pressure) {
     if (!shim->native_app) return;
-    zero_native_app_touch(shim->native_app, shim->touch_sequence, phase, x, y, pressure);
+    native_sdk_app_touch(shim->native_app, shim->touch_sequence, phase, x, y, pressure);
 }
 
 // True when an overflowing scrollable widget's bounds contain the point —
@@ -266,10 +266,10 @@ static void forward_touch_phase(Shim *shim, int phase, float x, float y, float p
 // export (see main.m scrollableWidgetAtPoint:).
 static bool scrollable_widget_at_point(Shim *shim, float x, float y) {
     if (!shim->native_app) return false;
-    const uintptr_t count = zero_native_app_widget_semantics_count(shim->native_app);
+    const uintptr_t count = native_sdk_app_widget_semantics_count(shim->native_app);
     for (uintptr_t index = 0; index < count; index++) {
-        zero_native_widget_semantics_t node = {0};
-        if (zero_native_app_widget_semantics_at(shim->native_app, index, &node) != 1) continue;
+        native_sdk_widget_semantics_t node = {0};
+        if (native_sdk_app_widget_semantics_at(shim->native_app, index, &node) != 1) continue;
         if (!node.has_scroll) continue;
         if (node.scroll_content_extent <= node.scroll_viewport_extent) continue;
         if (x < node.x || x > node.x + node.width) continue;
@@ -326,7 +326,7 @@ static int32_t handle_motion_event(Shim *shim, const AInputEvent *event) {
                 shim->touch_mode = TOUCH_MODE_SCROLLING;
             } else {
                 shim->touch_mode = TOUCH_MODE_DRAGGING;
-                forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_DOWN,
+                forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_DOWN,
                                     shim->touch_start_x, shim->touch_start_y, 1);
             }
         }
@@ -336,10 +336,10 @@ static int32_t handle_motion_event(Shim *shim, const AInputEvent *event) {
             const float delta_x = shim->touch_last_x - x;
             const float delta_y = shim->touch_last_y - y;
             if (shim->native_app && (delta_x != 0 || delta_y != 0)) {
-                zero_native_app_scroll(shim->native_app, shim->touch_sequence, x, y, delta_x, delta_y);
+                native_sdk_app_scroll(shim->native_app, shim->touch_sequence, x, y, delta_x, delta_y);
             }
         } else if (shim->touch_mode == TOUCH_MODE_DRAGGING) {
-            forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_DRAG, x, y, 1);
+            forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_DRAG, x, y, 1);
         }
         shim->touch_last_x = x;
         shim->touch_last_y = y;
@@ -349,13 +349,13 @@ static int32_t handle_motion_event(Shim *shim, const AInputEvent *event) {
         switch (shim->touch_mode) {
         case TOUCH_MODE_PENDING:
             // Under-slop touch: a tap at the start point.
-            forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_DOWN,
+            forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_DOWN,
                                 shim->touch_start_x, shim->touch_start_y, 1);
-            forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_UP,
+            forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_UP,
                                 shim->touch_start_x, shim->touch_start_y, 0);
             break;
         case TOUCH_MODE_DRAGGING:
-            forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_UP, x, y, 0);
+            forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_UP, x, y, 0);
             break;
         default:
             break;
@@ -365,7 +365,7 @@ static int32_t handle_motion_event(Shim *shim, const AInputEvent *event) {
     }
     case AMOTION_EVENT_ACTION_CANCEL: {
         if (shim->touch_mode == TOUCH_MODE_DRAGGING) {
-            forward_touch_phase(shim, ZERO_NATIVE_TOUCH_PHASE_CANCEL,
+            forward_touch_phase(shim, NATIVE_SDK_TOUCH_PHASE_CANCEL,
                                 shim->touch_last_x, shim->touch_last_y, 0);
         }
         reset_touch_tracking(shim);
@@ -413,20 +413,20 @@ static int input_queue_callback(int fd, int events, void *data) {
 
 // -------------------------------------------------------------- automation
 
-// Verification harness: `adb shell setprop debug.zero_native.automation 1`
+// Verification harness: `adb shell setprop debug.native_sdk.automation 1`
 // before launch makes the embedded runtime publish snapshot.txt into the
 // app's internal files dir — same protocol as the desktop
-// -Dautomation=true runners and the iOS shim's ZERO_NATIVE_AUTOMATION env.
+// -Dautomation=true runners and the iOS shim's NATIVE_SDK_AUTOMATION env.
 static void configure_automation(Shim *shim) {
     char value[PROP_VALUE_MAX] = {0};
-    const int len = __system_property_get("debug.zero_native.automation", value);
+    const int len = __system_property_get("debug.native_sdk.automation", value);
     if (len <= 0 || value[0] == '\0' || strcmp(value, "0") == 0) return;
     if (!shim->activity->internalDataPath) return;
     char path[1024];
-    const int written = snprintf(path, sizeof(path), "%s/zero-native-automation",
+    const int written = snprintf(path, sizeof(path), "%s/native-sdk-automation",
                                  shim->activity->internalDataPath);
     if (written <= 0 || (size_t)written >= sizeof(path)) return;
-    zero_native_app_set_automation_dir(shim->native_app, path, (uintptr_t)written);
+    native_sdk_app_set_automation_dir(shim->native_app, path, (uintptr_t)written);
     log_native_error(shim, "automation");
     LOGI("automation dir %s", path);
 }
@@ -452,7 +452,7 @@ static void on_native_window_redraw_needed(ANativeActivity *activity, ANativeWin
     if (shim->window != window) return;
     // The system expects the frame to be posted before this returns.
     shim->needs_present = true;
-    if (shim->native_app) zero_native_app_frame(shim->native_app);
+    if (shim->native_app) native_sdk_app_frame(shim->native_app);
     if (render_and_present(shim)) shim->needs_present = false;
 }
 
@@ -494,12 +494,12 @@ static void on_configuration_changed(ANativeActivity *activity) {
 
 static void on_resume(ANativeActivity *activity) {
     Shim *shim = activity->instance;
-    if (shim->native_app) zero_native_app_activate(shim->native_app);
+    if (shim->native_app) native_sdk_app_activate(shim->native_app);
 }
 
 static void on_pause(ANativeActivity *activity) {
     Shim *shim = activity->instance;
-    if (shim->native_app) zero_native_app_deactivate(shim->native_app);
+    if (shim->native_app) native_sdk_app_deactivate(shim->native_app);
 }
 
 static void on_destroy(ANativeActivity *activity) {
@@ -510,8 +510,8 @@ static void on_destroy(ANativeActivity *activity) {
         shim->input_queue = NULL;
     }
     if (shim->native_app) {
-        zero_native_app_stop(shim->native_app);
-        zero_native_app_destroy(shim->native_app);
+        native_sdk_app_stop(shim->native_app);
+        native_sdk_app_destroy(shim->native_app);
         shim->native_app = NULL;
     }
     if (shim->config) {
@@ -552,19 +552,19 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity, void *saved_s
     shim->config = AConfiguration_new();
     update_scale(shim);
 
-    shim->native_app = zero_native_app_create();
+    shim->native_app = native_sdk_app_create();
     if (!shim->native_app) {
-        LOGW("zero_native_app_create failed");
+        LOGW("native_sdk_app_create failed");
         return;
     }
 
     configure_automation(shim);
 
-    zero_native_app_start(shim->native_app);
-    zero_native_app_activate(shim->native_app);
+    native_sdk_app_start(shim->native_app);
+    native_sdk_app_activate(shim->native_app);
     log_native_error(shim, "start");
 
     g_shim = shim;
     schedule_frame();
-    LOGI("zero-native canvas shim started (scale %.2f)", (double)shim->scale);
+    LOGI("native-sdk canvas shim started (scale %.2f)", (double)shim->scale);
 }

@@ -1,14 +1,14 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const main = @import("main.zig");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 const testing = std.testing;
 
 const Model = main.Model;
 const Msg = main.Msg;
-const PreviewApp = zero_native.UiApp(Model, Msg);
+const PreviewApp = native_sdk.UiApp(Model, Msg);
 
 const preview_origins = [_][]const u8{ "zero://inline", "zero://app", "https://example.com", "https://zero-native.dev" };
 
@@ -18,8 +18,8 @@ fn createApp() !*PreviewApp {
     return app_state;
 }
 
-fn startedHarness(app_state: *PreviewApp) !*zero_native.TestHarness() {
-    const harness = try zero_native.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(960, 640) });
+fn startedHarness(app_state: *PreviewApp) !*native_sdk.TestHarness() {
+    const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = geometry.SizeF.init(960, 640) });
     errdefer harness.destroy(testing.allocator);
     harness.null_platform.gpu_surfaces = true;
     harness.runtime.options.security.navigation.allowed_origins = &preview_origins;
@@ -36,8 +36,8 @@ fn startedHarness(app_state: *PreviewApp) !*zero_native.TestHarness() {
     return harness;
 }
 
-fn previewWebView(harness: *zero_native.TestHarness()) !zero_native.platform.ViewInfo {
-    var views_buffer: [8]zero_native.platform.ViewInfo = undefined;
+fn previewWebView(harness: *native_sdk.TestHarness()) !native_sdk.platform.ViewInfo {
+    var views_buffer: [8]native_sdk.platform.ViewInfo = undefined;
     const views = harness.runtime.listViews(1, &views_buffer);
     for (views) |view| {
         if (std.mem.eql(u8, view.label, main.webview_label)) return view;
@@ -59,7 +59,7 @@ test "the scene hosts a canvas and a webview in one window, with no implicit mai
     // Both architectures live in window 1 — and the canvas-first scene
     // never grows an implicit full-window main webview behind the canvas.
     try testing.expect(harness.runtime.loaded_source == null);
-    var views_buffer: [8]zero_native.platform.ViewInfo = undefined;
+    var views_buffer: [8]native_sdk.platform.ViewInfo = undefined;
     const views = harness.runtime.listViews(1, &views_buffer);
     try testing.expectEqual(@as(usize, 2), views.len);
     var saw_canvas = false;
@@ -124,7 +124,7 @@ test "toolbar and status-item commands navigate and reload the webview" {
     // The menu-bar extra is installed with the declared items; selecting
     // "Reload Preview" (id 3) renavigates the current URL.
     try testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
-    try testing.expectEqualStrings("ZN", harness.null_platform.lastTrayTitle());
+    try testing.expectEqualStrings("NS", harness.null_platform.lastTrayTitle());
     try testing.expectEqual(@as(usize, main.status_items.len), harness.null_platform.trayItems().len);
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .tray_action = 3 });
     try testing.expectEqual(@as(u32, 1), app_state.model.reload_count);

@@ -1,6 +1,6 @@
 const std = @import("std");
 const build_options = @import("build_options");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const app_manifest = @import("app_manifest_zon");
 const manifest_commands = if (@hasField(@TypeOf(app_manifest), "commands")) app_manifest.commands else .{};
 const manifest_shortcuts = if (@hasField(@TypeOf(app_manifest), "shortcuts")) app_manifest.shortcuts else .{};
@@ -8,17 +8,17 @@ const manifest_menus = if (@hasField(@TypeOf(app_manifest), "menus")) app_manife
 const manifest_windows = if (@hasField(@TypeOf(app_manifest), "windows")) app_manifest.windows else .{};
 
 pub const StdoutTraceSink = struct {
-    pub fn sink(self: *StdoutTraceSink) zero_native.trace.Sink {
+    pub fn sink(self: *StdoutTraceSink) native_sdk.trace.Sink {
         return .{ .context = self, .write_fn = write };
     }
 
-    fn write(context: *anyopaque, record: zero_native.trace.Record) zero_native.trace.WriteError!void {
+    fn write(context: *anyopaque, record: native_sdk.trace.Record) native_sdk.trace.WriteError!void {
         _ = context;
         if (!shouldTrace(record)) return;
         // Never fail on an oversized record: logging failures must
         // degrade (truncated output), not fail dispatch upstream.
         var buffer: [4096]u8 = undefined;
-        std.debug.print("{s}\n", .{zero_native.trace.formatTextBounded(record, &buffer)});
+        std.debug.print("{s}\n", .{native_sdk.trace.formatTextBounded(record, &buffer)});
     }
 };
 
@@ -27,17 +27,17 @@ pub const RunOptions = struct {
     window_title: []const u8 = "",
     bundle_id: []const u8,
     icon_path: []const u8 = "assets/icon.icns",
-    default_frame: zero_native.geometry.RectF = zero_native.geometry.RectF.init(0, 0, 1100, 760),
-    bridge: ?zero_native.BridgeDispatcher = null,
-    builtin_bridge: zero_native.BridgePolicy = .{},
+    default_frame: native_sdk.geometry.RectF = native_sdk.geometry.RectF.init(0, 0, 1100, 760),
+    bridge: ?native_sdk.BridgeDispatcher = null,
+    builtin_bridge: native_sdk.BridgePolicy = .{},
     js_window_api: bool = false,
-    security: zero_native.SecurityPolicy = .{},
-    commands: ?[]const zero_native.Command = null,
-    menus: ?[]const zero_native.Menu = null,
-    shortcuts: ?[]const zero_native.Shortcut = null,
+    security: native_sdk.SecurityPolicy = .{},
+    commands: ?[]const native_sdk.Command = null,
+    menus: ?[]const native_sdk.Menu = null,
+    shortcuts: ?[]const native_sdk.Shortcut = null,
 
-    fn appInfo(self: RunOptions, buffers: *StateBuffers) zero_native.AppInfo {
-        var info: zero_native.AppInfo = .{
+    fn appInfo(self: RunOptions, buffers: *StateBuffers) native_sdk.AppInfo {
+        var info: native_sdk.AppInfo = .{
             .app_name = self.app_name,
             .window_title = self.window_title,
             .bundle_id = self.bundle_id,
@@ -57,25 +57,25 @@ pub const RunOptions = struct {
         return info;
     }
 
-    fn resolvedShortcuts(self: RunOptions, storage: *ShortcutStorage) []const zero_native.Shortcut {
+    fn resolvedShortcuts(self: RunOptions, storage: *ShortcutStorage) []const native_sdk.Shortcut {
         return self.shortcuts orelse storage.fromManifest();
     }
 
-    fn resolvedCommands(self: RunOptions, storage: *CommandStorage) []const zero_native.Command {
+    fn resolvedCommands(self: RunOptions, storage: *CommandStorage) []const native_sdk.Command {
         return self.commands orelse storage.fromManifest();
     }
 
-    fn resolvedMenus(self: RunOptions, storage: *MenuStorage) []const zero_native.Menu {
+    fn resolvedMenus(self: RunOptions, storage: *MenuStorage) []const native_sdk.Menu {
         return self.menus orelse storage.fromManifest();
     }
 };
 
 const CommandStorage = struct {
-    commands: [zero_native.app_manifest.max_commands]zero_native.Command = undefined,
+    commands: [native_sdk.app_manifest.max_commands]native_sdk.Command = undefined,
 
-    fn fromManifest(self: *CommandStorage) []const zero_native.Command {
+    fn fromManifest(self: *CommandStorage) []const native_sdk.Command {
         comptime {
-            if (manifest_commands.len > zero_native.app_manifest.max_commands) {
+            if (manifest_commands.len > native_sdk.app_manifest.max_commands) {
                 @compileError("app.zon defines too many commands");
             }
         }
@@ -93,12 +93,12 @@ const CommandStorage = struct {
 };
 
 const MenuStorage = struct {
-    menus: [zero_native.platform.max_menus]zero_native.Menu = undefined,
-    items: [zero_native.platform.max_menu_items]zero_native.MenuItem = undefined,
+    menus: [native_sdk.platform.max_menus]native_sdk.Menu = undefined,
+    items: [native_sdk.platform.max_menu_items]native_sdk.MenuItem = undefined,
 
-    fn fromManifest(self: *MenuStorage) []const zero_native.Menu {
+    fn fromManifest(self: *MenuStorage) []const native_sdk.Menu {
         comptime {
-            if (manifest_menus.len > zero_native.platform.max_menus) {
+            if (manifest_menus.len > native_sdk.platform.max_menus) {
                 @compileError("app.zon defines too many menus");
             }
             var item_count: usize = 0;
@@ -106,7 +106,7 @@ const MenuStorage = struct {
                 const items = if (@hasField(@TypeOf(menu), "items")) menu.items else .{};
                 item_count += items.len;
             }
-            if (item_count > zero_native.platform.max_menu_items) {
+            if (item_count > native_sdk.platform.max_menu_items) {
                 @compileError("app.zon defines too many menu items");
             }
         }
@@ -129,11 +129,11 @@ const MenuStorage = struct {
 };
 
 const ShortcutStorage = struct {
-    shortcuts: [zero_native.platform.max_shortcuts]zero_native.Shortcut = undefined,
+    shortcuts: [native_sdk.platform.max_shortcuts]native_sdk.Shortcut = undefined,
 
-    fn fromManifest(self: *ShortcutStorage) []const zero_native.Shortcut {
+    fn fromManifest(self: *ShortcutStorage) []const native_sdk.Shortcut {
         comptime {
-            if (manifest_shortcuts.len > zero_native.platform.max_shortcuts) {
+            if (manifest_shortcuts.len > native_sdk.platform.max_shortcuts) {
                 @compileError("app.zon defines too many shortcuts");
             }
         }
@@ -149,9 +149,9 @@ const ShortcutStorage = struct {
     }
 };
 
-fn manifestWindowOptions(buffers: *StateBuffers) []const zero_native.WindowOptions {
+fn manifestWindowOptions(buffers: *StateBuffers) []const native_sdk.WindowOptions {
     comptime {
-        if (manifest_windows.len > zero_native.platform.max_windows) {
+        if (manifest_windows.len > native_sdk.platform.max_windows) {
             @compileError("app.zon defines too many windows");
         }
     }
@@ -162,12 +162,12 @@ fn manifestWindowOptions(buffers: *StateBuffers) []const zero_native.WindowOptio
     return buffers.restored_windows[0..manifest_windows.len];
 }
 
-fn manifestWindow(comptime window: anytype, comptime index: usize) zero_native.WindowOptions {
+fn manifestWindow(comptime window: anytype, comptime index: usize) native_sdk.WindowOptions {
     return .{
         .id = index + 1,
         .label = windowLabel(window, index),
         .title = windowTitle(window),
-        .default_frame = zero_native.geometry.RectF.init(
+        .default_frame = native_sdk.geometry.RectF.init(
             windowFloat(window, "x", 0),
             windowFloat(window, "y", 0),
             windowFloat(window, "width", 720),
@@ -201,7 +201,7 @@ fn windowBool(comptime window: anytype, comptime field: []const u8, comptime def
     return default_value;
 }
 
-fn windowRestorePolicy(comptime window: anytype) zero_native.WindowRestorePolicy {
+fn windowRestorePolicy(comptime window: anytype) native_sdk.WindowRestorePolicy {
     if (comptime !@hasField(@TypeOf(window), "restore_policy")) return .clamp_to_visible_screen;
     const value = window.restore_policy;
     if (comptime std.mem.eql(u8, value, "clamp_to_visible_screen")) return .clamp_to_visible_screen;
@@ -209,7 +209,7 @@ fn windowRestorePolicy(comptime window: anytype) zero_native.WindowRestorePolicy
     @compileError("unknown app.zon window restore_policy");
 }
 
-fn menuItem(comptime item: anytype) zero_native.MenuItem {
+fn menuItem(comptime item: anytype) native_sdk.MenuItem {
     return .{
         .label = if (@hasField(@TypeOf(item), "label")) item.label else "",
         .command = if (@hasField(@TypeOf(item), "command")) item.command else "",
@@ -221,9 +221,9 @@ fn menuItem(comptime item: anytype) zero_native.MenuItem {
     };
 }
 
-fn shortcutModifiers(comptime shortcut: anytype) zero_native.ShortcutModifiers {
+fn shortcutModifiers(comptime shortcut: anytype) native_sdk.ShortcutModifiers {
     const values = if (@hasField(@TypeOf(shortcut), "modifiers")) shortcut.modifiers else .{};
-    var modifiers: zero_native.ShortcutModifiers = .{};
+    var modifiers: native_sdk.ShortcutModifiers = .{};
     inline for (values) |value| {
         const modifier: []const u8 = value;
         if (comptime std.mem.eql(u8, modifier, "primary")) {
@@ -243,7 +243,7 @@ fn shortcutModifiers(comptime shortcut: anytype) zero_native.ShortcutModifiers {
     return modifiers;
 }
 
-pub fn runWithOptions(app: zero_native.App, options: RunOptions, init: std.process.Init) !void {
+pub fn runWithOptions(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
     if (build_options.debug_overlay) {
         std.debug.print("debug-overlay=true backend={s} web-engine={s} trace={s}\n", .{ build_options.platform, build_options.web_engine, build_options.trace });
     }
@@ -258,21 +258,21 @@ pub fn runWithOptions(app: zero_native.App, options: RunOptions, init: std.proce
     }
 }
 
-fn runNull(app: zero_native.App, options: RunOptions, init: std.process.Init) !void {
+fn runNull(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
     var buffers: StateBuffers = undefined;
     var app_info = options.appInfo(&buffers);
     const store = prepareStateStore(init.io, init.environ_map, &app_info, &buffers);
-    var null_platform = zero_native.NullPlatform.initWithOptions(.{}, webEngine(), app_info);
+    var null_platform = native_sdk.NullPlatform.initWithOptions(.{}, webEngine(), app_info);
     var trace_sink = StdoutTraceSink{};
-    var log_buffers: zero_native.debug.LogPathBuffers = .{};
-    const log_setup = zero_native.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
-    if (log_setup) |setup| zero_native.debug.installPanicCapture(init.io, setup.paths);
-    var file_trace_sink: zero_native.debug.FileTraceSink = undefined;
-    var fanout_sinks: [2]zero_native.trace.Sink = undefined;
-    var fanout_sink: zero_native.debug.FanoutTraceSink = undefined;
+    var log_buffers: native_sdk.debug.LogPathBuffers = .{};
+    const log_setup = native_sdk.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
+    if (log_setup) |setup| native_sdk.debug.installPanicCapture(init.io, setup.paths);
+    var file_trace_sink: native_sdk.debug.FileTraceSink = undefined;
+    var fanout_sinks: [2]native_sdk.trace.Sink = undefined;
+    var fanout_sink: native_sdk.debug.FanoutTraceSink = undefined;
     var runtime_trace_sink = trace_sink.sink();
     if (log_setup) |setup| {
-        file_trace_sink = zero_native.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
+        file_trace_sink = native_sdk.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
         fanout_sinks = .{ trace_sink.sink(), file_trace_sink.sink() };
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
@@ -285,9 +285,9 @@ fn runNull(app: zero_native.App, options: RunOptions, init: std.process.Init) !v
     const commands = options.resolvedCommands(&command_storage);
     // The Runtime is tens of megabytes; construct on the heap (default
     // main-thread stacks overflow on a stack instance).
-    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    const runtime = try std.heap.page_allocator.create(native_sdk.Runtime);
     defer std.heap.page_allocator.destroy(runtime);
-    zero_native.Runtime.initAt(runtime, .{
+    native_sdk.Runtime.initAt(runtime, .{
         .platform = null_platform.platform(),
         .trace_sink = runtime_trace_sink,
         .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -298,29 +298,29 @@ fn runNull(app: zero_native.App, options: RunOptions, init: std.process.Init) !v
         .commands = commands,
         .menus = menus,
         .shortcuts = shortcuts,
-        .automation = if (build_options.automation) zero_native.automation.Server.init(init.io, ".zig-cache/zero-native-automation", app_info.resolvedWindowTitle()) else null,
+        .automation = if (build_options.automation) native_sdk.automation.Server.init(init.io, ".zig-cache/native-sdk-automation", app_info.resolvedWindowTitle()) else null,
         .window_state_store = store,
     });
 
     try runtime.run(app);
 }
 
-fn runMacos(app: zero_native.App, options: RunOptions, init: std.process.Init) !void {
+fn runMacos(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
     var buffers: StateBuffers = undefined;
     var app_info = options.appInfo(&buffers);
     const store = prepareStateStore(init.io, init.environ_map, &app_info, &buffers);
-    var mac_platform = try zero_native.platform.macos.MacPlatform.initWithOptions(zero_native.geometry.SizeF.init(720, 480), webEngine(), app_info);
+    var mac_platform = try native_sdk.platform.macos.MacPlatform.initWithOptions(native_sdk.geometry.SizeF.init(720, 480), webEngine(), app_info);
     defer mac_platform.deinit();
     var trace_sink = StdoutTraceSink{};
-    var log_buffers: zero_native.debug.LogPathBuffers = .{};
-    const log_setup = zero_native.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
-    if (log_setup) |setup| zero_native.debug.installPanicCapture(init.io, setup.paths);
-    var file_trace_sink: zero_native.debug.FileTraceSink = undefined;
-    var fanout_sinks: [2]zero_native.trace.Sink = undefined;
-    var fanout_sink: zero_native.debug.FanoutTraceSink = undefined;
+    var log_buffers: native_sdk.debug.LogPathBuffers = .{};
+    const log_setup = native_sdk.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
+    if (log_setup) |setup| native_sdk.debug.installPanicCapture(init.io, setup.paths);
+    var file_trace_sink: native_sdk.debug.FileTraceSink = undefined;
+    var fanout_sinks: [2]native_sdk.trace.Sink = undefined;
+    var fanout_sink: native_sdk.debug.FanoutTraceSink = undefined;
     var runtime_trace_sink = trace_sink.sink();
     if (log_setup) |setup| {
-        file_trace_sink = zero_native.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
+        file_trace_sink = native_sdk.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
         fanout_sinks = .{ trace_sink.sink(), file_trace_sink.sink() };
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
@@ -333,9 +333,9 @@ fn runMacos(app: zero_native.App, options: RunOptions, init: std.process.Init) !
     const commands = options.resolvedCommands(&command_storage);
     // The Runtime is tens of megabytes; construct on the heap (default
     // main-thread stacks overflow on a stack instance).
-    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    const runtime = try std.heap.page_allocator.create(native_sdk.Runtime);
     defer std.heap.page_allocator.destroy(runtime);
-    zero_native.Runtime.initAt(runtime, .{
+    native_sdk.Runtime.initAt(runtime, .{
         .platform = mac_platform.platform(),
         .trace_sink = runtime_trace_sink,
         .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -346,29 +346,29 @@ fn runMacos(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         .commands = commands,
         .menus = menus,
         .shortcuts = shortcuts,
-        .automation = if (build_options.automation) zero_native.automation.Server.init(init.io, ".zig-cache/zero-native-automation", app_info.resolvedWindowTitle()) else null,
+        .automation = if (build_options.automation) native_sdk.automation.Server.init(init.io, ".zig-cache/native-sdk-automation", app_info.resolvedWindowTitle()) else null,
         .window_state_store = store,
     });
 
     try runtime.run(app);
 }
 
-fn runLinux(app: zero_native.App, options: RunOptions, init: std.process.Init) !void {
+fn runLinux(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
     var buffers: StateBuffers = undefined;
     var app_info = options.appInfo(&buffers);
     const store = prepareStateStore(init.io, init.environ_map, &app_info, &buffers);
-    var linux_platform = try zero_native.platform.linux.LinuxPlatform.initWithOptions(zero_native.geometry.SizeF.init(720, 480), webEngine(), app_info);
+    var linux_platform = try native_sdk.platform.linux.LinuxPlatform.initWithOptions(native_sdk.geometry.SizeF.init(720, 480), webEngine(), app_info);
     defer linux_platform.deinit();
     var trace_sink = StdoutTraceSink{};
-    var log_buffers: zero_native.debug.LogPathBuffers = .{};
-    const log_setup = zero_native.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
-    if (log_setup) |setup| zero_native.debug.installPanicCapture(init.io, setup.paths);
-    var file_trace_sink: zero_native.debug.FileTraceSink = undefined;
-    var fanout_sinks: [2]zero_native.trace.Sink = undefined;
-    var fanout_sink: zero_native.debug.FanoutTraceSink = undefined;
+    var log_buffers: native_sdk.debug.LogPathBuffers = .{};
+    const log_setup = native_sdk.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
+    if (log_setup) |setup| native_sdk.debug.installPanicCapture(init.io, setup.paths);
+    var file_trace_sink: native_sdk.debug.FileTraceSink = undefined;
+    var fanout_sinks: [2]native_sdk.trace.Sink = undefined;
+    var fanout_sink: native_sdk.debug.FanoutTraceSink = undefined;
     var runtime_trace_sink = trace_sink.sink();
     if (log_setup) |setup| {
-        file_trace_sink = zero_native.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
+        file_trace_sink = native_sdk.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
         fanout_sinks = .{ trace_sink.sink(), file_trace_sink.sink() };
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
@@ -381,9 +381,9 @@ fn runLinux(app: zero_native.App, options: RunOptions, init: std.process.Init) !
     const commands = options.resolvedCommands(&command_storage);
     // The Runtime is tens of megabytes; construct on the heap (default
     // main-thread stacks overflow on a stack instance).
-    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    const runtime = try std.heap.page_allocator.create(native_sdk.Runtime);
     defer std.heap.page_allocator.destroy(runtime);
-    zero_native.Runtime.initAt(runtime, .{
+    native_sdk.Runtime.initAt(runtime, .{
         .platform = linux_platform.platform(),
         .trace_sink = runtime_trace_sink,
         .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -394,29 +394,29 @@ fn runLinux(app: zero_native.App, options: RunOptions, init: std.process.Init) !
         .commands = commands,
         .menus = menus,
         .shortcuts = shortcuts,
-        .automation = if (build_options.automation) zero_native.automation.Server.init(init.io, ".zig-cache/zero-native-automation", app_info.resolvedWindowTitle()) else null,
+        .automation = if (build_options.automation) native_sdk.automation.Server.init(init.io, ".zig-cache/native-sdk-automation", app_info.resolvedWindowTitle()) else null,
         .window_state_store = store,
     });
 
     try runtime.run(app);
 }
 
-fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init) !void {
+fn runWindows(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
     var buffers: StateBuffers = undefined;
     var app_info = options.appInfo(&buffers);
     const store = prepareStateStore(init.io, init.environ_map, &app_info, &buffers);
-    var windows_platform = try zero_native.platform.windows.WindowsPlatform.initWithOptions(zero_native.geometry.SizeF.init(720, 480), webEngine(), app_info);
+    var windows_platform = try native_sdk.platform.windows.WindowsPlatform.initWithOptions(native_sdk.geometry.SizeF.init(720, 480), webEngine(), app_info);
     defer windows_platform.deinit();
     var trace_sink = StdoutTraceSink{};
-    var log_buffers: zero_native.debug.LogPathBuffers = .{};
-    const log_setup = zero_native.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
-    if (log_setup) |setup| zero_native.debug.installPanicCapture(init.io, setup.paths);
-    var file_trace_sink: zero_native.debug.FileTraceSink = undefined;
-    var fanout_sinks: [2]zero_native.trace.Sink = undefined;
-    var fanout_sink: zero_native.debug.FanoutTraceSink = undefined;
+    var log_buffers: native_sdk.debug.LogPathBuffers = .{};
+    const log_setup = native_sdk.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
+    if (log_setup) |setup| native_sdk.debug.installPanicCapture(init.io, setup.paths);
+    var file_trace_sink: native_sdk.debug.FileTraceSink = undefined;
+    var fanout_sinks: [2]native_sdk.trace.Sink = undefined;
+    var fanout_sink: native_sdk.debug.FanoutTraceSink = undefined;
     var runtime_trace_sink = trace_sink.sink();
     if (log_setup) |setup| {
-        file_trace_sink = zero_native.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
+        file_trace_sink = native_sdk.debug.FileTraceSink.init(init.io, setup.paths.log_dir, setup.paths.log_file, setup.format);
         fanout_sinks = .{ trace_sink.sink(), file_trace_sink.sink() };
         fanout_sink = .{ .sinks = &fanout_sinks };
         runtime_trace_sink = fanout_sink.sink();
@@ -429,9 +429,9 @@ fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init)
     const commands = options.resolvedCommands(&command_storage);
     // The Runtime is tens of megabytes; construct on the heap (default
     // main-thread stacks overflow on a stack instance).
-    const runtime = try std.heap.page_allocator.create(zero_native.Runtime);
+    const runtime = try std.heap.page_allocator.create(native_sdk.Runtime);
     defer std.heap.page_allocator.destroy(runtime);
-    zero_native.Runtime.initAt(runtime, .{
+    native_sdk.Runtime.initAt(runtime, .{
         .platform = windows_platform.platform(),
         .trace_sink = runtime_trace_sink,
         .log_path = if (log_setup) |setup| setup.paths.log_file else null,
@@ -442,21 +442,21 @@ fn runWindows(app: zero_native.App, options: RunOptions, init: std.process.Init)
         .commands = commands,
         .menus = menus,
         .shortcuts = shortcuts,
-        .automation = if (build_options.automation) zero_native.automation.Server.init(init.io, ".zig-cache/zero-native-automation", app_info.resolvedWindowTitle()) else null,
+        .automation = if (build_options.automation) native_sdk.automation.Server.init(init.io, ".zig-cache/native-sdk-automation", app_info.resolvedWindowTitle()) else null,
         .window_state_store = store,
     });
 
     try runtime.run(app);
 }
 
-fn shouldTrace(record: zero_native.trace.Record) bool {
+fn shouldTrace(record: native_sdk.trace.Record) bool {
     if (comptime std.mem.eql(u8, build_options.trace, "off")) return false;
     if (comptime std.mem.eql(u8, build_options.trace, "all")) return true;
     if (comptime std.mem.eql(u8, build_options.trace, "events")) return true;
     return std.mem.indexOf(u8, record.name, build_options.trace) != null;
 }
 
-fn webEngine() zero_native.WebEngine {
+fn webEngine() native_sdk.WebEngine {
     if (comptime std.mem.eql(u8, build_options.web_engine, "chromium")) return .chromium;
     return .system;
 }
@@ -465,12 +465,12 @@ const StateBuffers = struct {
     state_dir: [1024]u8 = undefined,
     file_path: [1200]u8 = undefined,
     read: [8192]u8 = undefined,
-    restored_windows: [zero_native.platform.max_windows]zero_native.WindowOptions = undefined,
+    restored_windows: [native_sdk.platform.max_windows]native_sdk.WindowOptions = undefined,
 };
 
-fn prepareStateStore(io: std.Io, env_map: *std.process.Environ.Map, app_info: *zero_native.AppInfo, buffers: *StateBuffers) ?zero_native.window_state.Store {
-    const paths = zero_native.window_state.defaultPaths(&buffers.state_dir, &buffers.file_path, app_info.bundle_id, zero_native.debug.envFromMap(env_map)) catch return null;
-    const store = zero_native.window_state.Store.init(io, paths.state_dir, paths.file_path);
+fn prepareStateStore(io: std.Io, env_map: *std.process.Environ.Map, app_info: *native_sdk.AppInfo, buffers: *StateBuffers) ?native_sdk.window_state.Store {
+    const paths = native_sdk.window_state.defaultPaths(&buffers.state_dir, &buffers.file_path, app_info.bundle_id, native_sdk.debug.envFromMap(env_map)) catch return null;
+    const store = native_sdk.window_state.Store.init(io, paths.state_dir, paths.file_path);
     if (app_info.windows.len > 0) {
         const restored_windows = buffers.restored_windows[0..app_info.windows.len];
         for (restored_windows, 0..) |*window, index| {

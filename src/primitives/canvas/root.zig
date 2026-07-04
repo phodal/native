@@ -356,7 +356,7 @@ pub const max_text_span_runs_per_paragraph = text_spans.max_text_span_runs_per_p
 pub const max_text_span_lines_per_paragraph = text_spans.max_text_span_lines_per_paragraph;
 
 // GitHub-flavored-markdown mapper (markdown source -> widget tree + span
-// model) lives in `markdown.zig`; also exported as `zero_native.markdown`.
+// model) lives in `markdown.zig`; also exported as `native_sdk.markdown`.
 pub const markdown = @import("markdown.zig");
 
 // Experimental markup front-end lives in `ui_markup.zig` / `ui_markup_view.zig`

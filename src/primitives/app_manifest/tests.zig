@@ -397,14 +397,14 @@ test "manifest validates native menus" {
 
 test "manifest validates file associations and URL schemes" {
     const doc_extensions = [_][]const u8{ "md", ".markdown" };
-    const doc_mime_types = [_][]const u8{ "text/markdown", "application/vnd.zero-native.note+json" };
+    const doc_mime_types = [_][]const u8{ "text/markdown", "application/vnd.native-sdk.note+json" };
     const file_associations = [_]FileAssociation{.{
         .name = "Markdown Document",
         .extensions = &doc_extensions,
         .mime_types = &doc_mime_types,
         .icon = "assets/markdown.icns",
     }};
-    const url_schemes = [_]UrlScheme{.{ .scheme = "zero-native" }};
+    const url_schemes = [_]UrlScheme{.{ .scheme = "native-sdk" }};
 
     try validateManifest(.{
         .identity = .{ .id = "com.example.app", .name = "example" },

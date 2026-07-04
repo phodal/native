@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
     const platform_option = b.option(PlatformOption, "platform", "Desktop backend: auto, null, macos, linux, windows") orelse .auto;
     const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .events;
     _ = b.option(bool, "debug-overlay", "Enable debug overlay output") orelse false;
-    _ = b.option(bool, "automation", "Enable zero-native automation artifacts") orelse false;
+    _ = b.option(bool, "automation", "Enable Native SDK automation artifacts") orelse false;
     _ = b.option(bool, "webview", "Deprecated compatibility flag; native surfaces are always enabled") orelse true;
     const web_engine_override = b.option(WebEngineOption, "web-engine", "Override app.zon web engine: system, chromium");
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
@@ -130,11 +130,11 @@ pub fn build(b: *std.Build) void {
     // exports (fixed WebView shell host); user-app canvas libraries are
     // produced by `addMobileLib` from src/embed/app_exports.zig instead.
     const embed_exports_mod = module(b, target, optimize, "src/embed/c_exports.zig");
-    embed_exports_mod.addImport("zero-native", desktop_mod);
+    embed_exports_mod.addImport("native_sdk", desktop_mod);
     embed_exports_mod.export_symbol_names = &mobile_export_symbol_names;
     const embed_lib = b.addLibrary(.{
         .linkage = .static,
-        .name = "zero-native",
+        .name = "native-sdk",
         .root_module = embed_exports_mod,
     });
     b.installArtifact(embed_lib);
@@ -152,21 +152,21 @@ pub fn build(b: *std.Build) void {
     const tooling_tests = testArtifact(b, tooling_mod);
 
     const ui_markup_mod = module(b, target, optimize, "src/primitives/canvas/ui_markup.zig");
-    const markup_lsp_mod = module(b, target, optimize, "tools/zero-native/markup_lsp.zig");
+    const markup_lsp_mod = module(b, target, optimize, "tools/native-sdk/markup_lsp.zig");
     markup_lsp_mod.addImport("ui_markup", ui_markup_mod);
     const markup_lsp_tests = testArtifact(b, markup_lsp_mod);
 
-    const automation_cli_mod = module(b, target, optimize, "tools/zero-native/automation.zig");
+    const automation_cli_mod = module(b, target, optimize, "tools/native-sdk/automation.zig");
     automation_cli_mod.addImport("automation_protocol", automation_protocol_mod);
     const automation_cli_tests = testArtifact(b, automation_cli_mod);
 
-    const cli_mod = module(b, target, optimize, "tools/zero-native/main.zig");
+    const cli_mod = module(b, target, optimize, "tools/native-sdk/main.zig");
     cli_mod.addImport("tooling", tooling_mod);
     cli_mod.addImport("automation_protocol", automation_protocol_mod);
     cli_mod.addImport("ui_markup", ui_markup_mod);
     cli_mod.addImport("markup_lsp", markup_lsp_mod);
     const cli_exe = b.addExecutable(.{
-        .name = "zero-native",
+        .name = "native",
         .root_module = cli_mod,
     });
     b.installArtifact(cli_exe);
@@ -190,15 +190,15 @@ pub fn build(b: *std.Build) void {
     host_tooling_mod.addImport("platform_info", host_platform_info_mod);
     host_tooling_mod.addImport("trace", host_trace_mod);
     const host_ui_markup_mod = module(b, host_target, optimize, "src/primitives/canvas/ui_markup.zig");
-    const host_markup_lsp_mod = module(b, host_target, optimize, "tools/zero-native/markup_lsp.zig");
+    const host_markup_lsp_mod = module(b, host_target, optimize, "tools/native-sdk/markup_lsp.zig");
     host_markup_lsp_mod.addImport("ui_markup", host_ui_markup_mod);
-    const host_cli_mod = module(b, host_target, optimize, "tools/zero-native/main.zig");
+    const host_cli_mod = module(b, host_target, optimize, "tools/native-sdk/main.zig");
     host_cli_mod.addImport("tooling", host_tooling_mod);
     host_cli_mod.addImport("automation_protocol", host_automation_protocol_mod);
     host_cli_mod.addImport("ui_markup", host_ui_markup_mod);
     host_cli_mod.addImport("markup_lsp", host_markup_lsp_mod);
     const host_cli_exe = b.addExecutable(.{
-        .name = "zero-native",
+        .name = "native",
         .root_module = host_cli_mod,
     });
     const file_contains_checker_mod = module(b, host_target, optimize, "tools/check_file_contains.zig");
@@ -231,42 +231,42 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(markup_lsp_tests).step);
     test_step.dependOn(&b.addRunArtifact(automation_cli_tests).step);
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-package-types", "Verify package TypeScript platform feature names", &.{
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativeCommandInfo" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "list(): Promise<ZeroNativeCommandInfo[]>" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativeCreateWebViewViewOptions" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "Stable runtime view id" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "update(label: string" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "focus(options: string | ZeroNativeViewSelector)" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "close(options: string | ZeroNativeViewSelector)" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "kind: \"webview\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "url: string" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "ZeroNativePlatformFeatureSelector" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "supports(value: ZeroNativePlatformFeature | ZeroNativePlatformFeatureSelector)" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"native_control_commands\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"nativeControlCommands\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"recent_documents\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"recentDocuments\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"file_drops\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"fileDrops\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"app_activation_events\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"appActivationEvents\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"gpu_surfaces\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "\"gpuSurfaces\"" },
-        .{ .path = "packages/zero-native/zero-native.d.ts", .pattern = "gpuFirstFrameLatencyNs: number" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "NativeSdkCommandInfo" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "list(): Promise<NativeSdkCommandInfo[]>" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "NativeSdkCreateWebViewViewOptions" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "Stable runtime view id" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "update(label: string" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "focus(options: string | NativeSdkViewSelector)" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "close(options: string | NativeSdkViewSelector)" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "kind: \"webview\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "url: string" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "NativeSdkPlatformFeatureSelector" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "supports(value: NativeSdkPlatformFeature | NativeSdkPlatformFeatureSelector)" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"native_control_commands\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"nativeControlCommands\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"recent_documents\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"recentDocuments\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"file_drops\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"fileDrops\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"app_activation_events\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"appActivationEvents\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"gpu_surfaces\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"gpuSurfaces\"" },
+        .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "gpuFirstFrameLatencyNs: number" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-bridge-view-selector-helpers", "Verify injected view helpers accept string selectors", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "viewSelectorPayload(options)" },
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "viewSelectorPayload(options)" },
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "viewSelectorPayload(options)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "viewSelectorPayload(options)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "focus:function(options){return invoke('zero-native.view.focus',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
-        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "close:function(options){return invoke('zero-native.view.close',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "focus:function(options){return invoke('native-sdk.view.focus',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options))" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "close:function(options){return invoke('native-sdk.view.close',viewSelectorPayload(options))" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-command-contracts", "Verify command docs match native view update contracts", &.{
         .{ .path = "docs/src/app/commands/page.mdx", .pattern = ".text = \"Refreshed\"" },
@@ -287,9 +287,9 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "update:function(options,patch)" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-packaged-assets-webview2", "Verify Windows packaged assets are served through WebView2 request interception", &.{
-        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "constexpr const char *kAssetVirtualOrigin = \"https://zero-native-app.localhost\";" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "constexpr const char *kAssetVirtualOrigin = \"https://native-sdk-app.localhost\";" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return virtualAssetEntryUrl(webview.asset_entry);" },
-        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "AddWebResourceRequestedFilter(L\"https://zero-native-app.localhost/*\"" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "AddWebResourceRequestedFilter(L\"https://native-sdk-app.localhost/*\"" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "assetWebResourceResponse(environment_ref.Get(), found->second, uri)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "bridgeOriginForWebViewUrl(source_webview->second, source_url)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "webview.spa_fallback = spa_fallback != 0;" },
@@ -302,17 +302,17 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/cef_host.mm", .pattern = "bridgeOriginForWindowId:window_id_ webViewLabel:labelString sourceURL:sourceURLString" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-native-accessibility-roles", "Verify AppKit native views publish accessibility roles", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeAccessibilityRoleForNativeViewKind" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkAccessibilityRoleForNativeViewKind" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSAccessibilityToolbarRole" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSAccessibilityProgressIndicatorRole" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "view.accessibilityRole = ZeroNativeAccessibilityRoleForNativeViewKind(kind)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "view.accessibilityRole = NativeSdkAccessibilityRoleForNativeViewKind(kind)" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-input-repaints-retained-canvas", "Verify GPU input wakes retained canvas frames", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)requestRetainedCanvasFrame" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-input-paces-retained-canvas", "Verify GPU input frame requests are paced to the display interval", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeRetainedFrameIntervalNanoseconds" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRetainedFrameIntervalNanoseconds" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "retainedFrameLastEmitNs" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "queuePointerMotionInputEvent:(NSEvent *)event" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "pendingPointerMotionKind = kind" },
@@ -335,7 +335,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "canvasTextureMatchesDrawable" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-transforms", "Verify AppKit GPU packet presenter applies command transforms", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketApplyTransform(command[@\"transform\"])" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketApplyTransform(command[@\"transform\"])" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[affine setTransformStruct:transform]" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[affine concat]" },
     });
@@ -346,10 +346,10 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[kind isEqualToString:@\"stroke_path\"]" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-corner-radii", "Verify AppKit GPU packet presenter honors per-corner radii", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketRoundedRectPath" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGFloat topRight = ZeroNativePacketRadiusAt(radiusValue, 1, maxRadius)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGFloat bottomLeft = ZeroNativePacketRadiusAt(radiusValue, 3, maxRadius)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "return ZeroNativePacketRoundedRectPath(rect, shape[@\"radius\"])" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketRoundedRectPath" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGFloat topRight = NativeSdkPacketRadiusAt(radiusValue, 1, maxRadius)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGFloat bottomLeft = NativeSdkPacketRadiusAt(radiusValue, 3, maxRadius)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "return NativeSdkPacketRoundedRectPath(rect, shape[@\"radius\"])" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-load-frames", "Verify AppKit GPU packet presenter handles retained load frames", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "canvasPacketPixels" },
@@ -358,47 +358,47 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "hasDirtyRect:uploadDirtyRect" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-blur-effects", "Verify AppKit GPU packet presenter applies blur effects", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketApplyBlur" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketApplyBlur" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CGBitmapContextGetData(context)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSIntersectionRect(rect, clipRect)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketTransformRect(transformValue, ZeroNativePacketRect(effect[@\"rect\"]))" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "return ZeroNativePacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketTransformRect(transformValue, NativeSdkPacketRect(effect[@\"rect\"]))" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "return NativeSdkPacketApplyBlur(effect, opacity, context, scale, transformValue, hasClip, clipRect)" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-text-layout", "Verify AppKit GPU packet presenter honors text layout metadata", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSMutableParagraphStyle" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketTextLineBreakMode" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketTextAlignment" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketNumber(layout[@\"maxWidth\"], 0)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketTextLineBreakMode" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketTextAlignment" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketNumber(layout[@\"maxWidth\"], 0)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[value drawWithRect:NSMakeRect(origin.x, origin.y - size, textWidth, textHeight)" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-font-assets", "Verify AppKit GPU packet text registers bundled font assets", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "#import <CoreText/CoreText.h>" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "CTFontManagerRegisterFontsForURL" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "@[ @\"fonts\", @\"Fonts\", @\"assets/fonts\" ]" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeRegisterBundledFonts();" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativePacketPreferredFont(text, size)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRegisterBundledFonts();" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkPacketPreferredFont(text, size)" },
         .{ .path = "src/tooling/templates.zig", .pattern = "app_mod.linkFramework(\"CoreText\", .{});" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-span-fonts", "Verify AppKit packet text resolves reserved span font ids to real weighted and italic faces", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *ZeroNativeItalicSansFont(NSFont *font)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *ZeroNativeWeightedSansFont(" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeWeightedSansFont(@[ @\"Geist-Medium\", @\"Geist Medium\" ], base, NSFontWeightMedium, NO, size)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeItalicSansFont(base)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZeroNativeItalicSansFont(ZeroNativeWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size))" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *NativeSdkItalicSansFont(NSFont *font)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *NativeSdkWeightedSansFont(" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkWeightedSansFont(@[ @\"Geist-Medium\", @\"Geist Medium\" ], base, NSFontWeightMedium, NO, size)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(base)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size))" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "zero_native_appkit_set_view_cursor" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSTrackingMouseMoved" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_GPU_INPUT_POINTER_CANCEL" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_CANCEL" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "_surfaceCursor = cursor ?: [NSCursor arrowCursor]" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSCursor pointingHandCursor" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-accessibility-actions", "Verify AppKit GPU widget accessibility actions route to the runtime", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityPerformPress" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "emitWidgetAccessibilityActionWithId" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_EVENT_WIDGET_ACCESSIBILITY_ACTION" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NATIVE_SDK_APPKIT_EVENT_WIDGET_ACCESSIBILITY_ACTION" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-accessibility-text-ranges", "Verify AppKit GPU widget accessibility publishes text selection ranges", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilitySelectedTextRange" },
@@ -415,7 +415,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSTextInputClient" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "insertText:(id)string replacementRange" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "setMarkedText:(id)string selectedRange" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_GPU_INPUT_IME_SET_COMPOSITION" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NATIVE_SDK_APPKIT_GPU_INPUT_IME_SET_COMPOSITION" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-gpu-widget-ime-bridge", "Verify the Windows GPU host routes WM_IME composition onto the shared IME event kinds", &.{
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "case WM_IME_STARTCOMPOSITION:" },
@@ -430,20 +430,20 @@ pub fn build(b: *std.Build) void {
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-text-command-bridge", "Verify AppKit GPU text widgets route native text commands", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)selectAll:(id)sender" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "@selector(selectAll:)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "emitSyntheticKeyDownWithKey:@\"a\" modifiers:(ZeroNativeShortcutModifierPrimary | ZeroNativeShortcutModifierCommand)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "emitSyntheticKeyDownWithKey:@\"a\" modifiers:(NativeSdkShortcutModifierPrimary | NativeSdkShortcutModifierCommand)" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-appearance-bridge", "Verify AppKit reports system light and dark appearance changes", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "effectiveAppearance" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityDisplayShouldReduceMotion" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "accessibilityDisplayShouldIncreaseContrast" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ZERO_NATIVE_APPKIT_EVENT_APPEARANCE_CHANGED" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NATIVE_SDK_APPKIT_EVENT_APPEARANCE_CHANGED" },
         .{ .path = "src/platform/macos/root.zig", .pattern = ".reduce_motion = event.reduce_motion != 0" },
         .{ .path = "src/platform/macos/root.zig", .pattern = ".high_contrast = event.high_contrast != 0" },
         .{ .path = "src/platform/macos/root.zig", .pattern = ".appearance_changed => state.emit" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-docs-builtin-bridge-policy", "Verify bridge policy docs include guarded dialog commands", &.{
-        .{ .path = "docs/src/app/security/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },
-        .{ .path = "docs/src/app/bridge/builtin-commands/page.mdx", .pattern = ".{ .name = \"zero-native.dialog.saveFile\"" },
+        .{ .path = "docs/src/app/security/page.mdx", .pattern = ".{ .name = \"native-sdk.dialog.saveFile\"" },
+        .{ .path = "docs/src/app/bridge/builtin-commands/page.mdx", .pattern = ".{ .name = \"native-sdk.dialog.saveFile\"" },
     });
 
     addTestStep(b, "test-geometry", "Run geometry module tests", geometry_tests);
@@ -455,25 +455,25 @@ pub fn build(b: *std.Build) void {
     addTestStep(b, "test-platform-info", "Run platform info module tests", platform_info_tests);
     addTestStep(b, "test-json", "Run JSON primitive tests", json_tests);
     addTestStep(b, "test-canvas", "Run canvas display list tests", canvas_tests);
-    addTestStep(b, "test-desktop", "Run zero-native framework tests", desktop_tests);
+    addTestStep(b, "test-desktop", "Run Native SDK framework tests", desktop_tests);
     addTestStep(b, "test-automation-protocol", "Run automation protocol tests", automation_protocol_tests);
-    addTestStep(b, "test-automation-cli", "Run zero-native automate CLI tests", automation_cli_tests);
-    addTestStep(b, "test-tooling", "Run zero-native tooling tests", tooling_tests);
+    addTestStep(b, "test-automation-cli", "Run native automate CLI tests", automation_cli_tests);
+    addTestStep(b, "test-tooling", "Run Native SDK tooling tests", tooling_tests);
 
     const run_hello = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}) });
     run_hello.setCwd(b.path("examples/hello"));
-    const run_hello_step = b.step("run-hello", "Run the zero-native hello WebView example");
+    const run_hello_step = b.step("run-hello", "Run the native-sdk hello WebView example");
     run_hello_step.dependOn(&run_hello.step);
 
     const run_webview = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}), b.fmt("-Dweb-engine={s}", .{@tagName(web_engine)}), b.fmt("-Dcef-dir={s}", .{cef_dir}) });
     run_webview.setCwd(b.path("examples/webview"));
-    const run_webview_step = b.step("run-webview", "Run the zero-native WebView example");
+    const run_webview_step = b.step("run-webview", "Run the native-sdk WebView example");
     run_webview_step.dependOn(&run_webview.step);
 
     const browser_cef_dir = cef_dir_override orelse defaultCefDir(selected_platform, "third_party/cef/macos");
     const run_browser = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}), b.fmt("-Dweb-engine={s}", .{@tagName(browser_web_engine)}), b.fmt("-Dcef-dir={s}", .{browser_cef_dir}) });
     run_browser.setCwd(b.path("examples/browser"));
-    const run_browser_step = b.step("run-browser", "Run the zero-native browser example");
+    const run_browser_step = b.step("run-browser", "Run the native-sdk browser example");
     run_browser_step.dependOn(&run_browser.step);
 
     const build_webview_system = b.addSystemCommand(&.{ "zig", "build", b.fmt("-Dplatform={s}", .{platform_arg}), "-Dweb-engine=system" });
@@ -514,18 +514,18 @@ pub fn build(b: *std.Build) void {
     addExampleTestStep(b, native_examples_step, "test-example-canvas-preview", "Run canvas preview example tests", "examples/canvas-preview");
     addExampleTestStep(b, native_examples_step, "test-example-capabilities", "Run capabilities example tests", "examples/capabilities");
     addFileContainsCheckStep(b, file_contains_checker, native_examples_step, "test-example-capabilities-events", "Verify capabilities example event bridge names", &.{
-        .{ .path = "examples/capabilities/src/main.zig", .pattern = "zero-native:drop:files" },
+        .{ .path = "examples/capabilities/src/main.zig", .pattern = "native-sdk:drop:files" },
     });
 
     const mobile_examples_step = b.step("test-examples-mobile", "Verify mobile example project layouts");
     addLayoutCheckStep(b, mobile_examples_step, "test-example-ios-layout", "Verify iOS example layout", &.{
         "examples/ios/README.md",
         "examples/ios/app.zon",
-        "examples/ios/ZeroNativeIOSExample.xcodeproj/project.pbxproj",
-        "examples/ios/ZeroNativeIOSExample/AppDelegate.swift",
-        "examples/ios/ZeroNativeIOSExample/SceneDelegate.swift",
-        "examples/ios/ZeroNativeIOSExample/ZeroNativeHostViewController.swift",
-        "examples/ios/ZeroNativeIOSExample/zero_native.h",
+        "examples/ios/NativeSdkIOSExample.xcodeproj/project.pbxproj",
+        "examples/ios/NativeSdkIOSExample/AppDelegate.swift",
+        "examples/ios/NativeSdkIOSExample/SceneDelegate.swift",
+        "examples/ios/NativeSdkIOSExample/NativeSdkHostViewController.swift",
+        "examples/ios/NativeSdkIOSExample/native_sdk.h",
     });
     addLayoutCheckStep(b, mobile_examples_step, "test-example-android-layout", "Verify Android example layout", &.{
         "examples/android/README.md",
@@ -534,10 +534,10 @@ pub fn build(b: *std.Build) void {
         "examples/android/build.gradle",
         "examples/android/app/build.gradle",
         "examples/android/app/src/main/AndroidManifest.xml",
-        "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt",
+        "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt",
         "examples/android/app/src/main/cpp/CMakeLists.txt",
-        "examples/android/app/src/main/cpp/zero_native_jni.c",
-        "examples/android/app/src/main/cpp/zero_native.h",
+        "examples/android/app/src/main/cpp/native_sdk_jni.c",
+        "examples/android/app/src/main/cpp/native_sdk.h",
     });
     addLayoutCheckStep(b, mobile_examples_step, "test-example-mobile-shell-layout", "Verify shared mobile-shell metadata", &.{
         "examples/mobile-shell/README.md",
@@ -560,31 +560,31 @@ pub fn build(b: *std.Build) void {
         .{ .path = "examples/android/app.zon", .pattern = ".label = \"mobile-header\"" },
     });
     addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-android-widget-ime", "Verify Android retained widget IME and action bridge", &.{
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "override fun onCreateInputConnection" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "nativeIme(nativeApp, kind, text, cursor)" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_KIND_SET_COMPOSITION = 7" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DRAG = 1 shl 8" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DROP_FILES = 1 shl 9" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "override fun onCreateInputConnection" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "nativeIme(nativeApp, kind, text, cursor)" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_KIND_SET_COMPOSITION = 7" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DRAG = 1 shl 8" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "WIDGET_ACTION_DROP_FILES = 1 shl 9" },
     });
     addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-widget-abi", "Verify mobile examples use stable widget ABI lookups", &.{
-        .{ .path = "examples/ios/ZeroNativeIOSExample/zero_native.h", .pattern = "zero_native_viewport_state_t" },
-        .{ .path = "examples/ios/ZeroNativeIOSExample/zero_native.h", .pattern = "zero_native_app_scroll" },
-        .{ .path = "examples/ios/ZeroNativeIOSExample/zero_native.h", .pattern = "zero_native_app_set_text_measure" },
-        .{ .path = "examples/android/app/src/main/cpp/zero_native.h", .pattern = "zero_native_app_set_text_measure" },
-        .{ .path = "examples/mobile-canvas/ios/zero_native_app.h", .pattern = "zero_native_app_set_text_measure" },
-        .{ .path = "examples/ios/ZeroNativeIOSExample/ZeroNativeHostViewController.swift", .pattern = "zero_native_app_widget_semantics_by_id" },
-        .{ .path = "examples/android/app/src/main/cpp/zero_native.h", .pattern = "zero_native_app_widget_semantics_by_id" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "nativeScroll(nativeApp" },
-        .{ .path = "examples/android/app/src/main/java/dev/zero_native/examples/android/MainActivity.kt", .pattern = "nativeWidgetSemanticsByIdFields" },
-        .{ .path = "examples/android/app/src/main/cpp/zero_native_jni.c", .pattern = "zero_native_app_widget_semantics_by_id" },
-        .{ .path = "examples/android/app/src/main/cpp/zero_native_jni.c", .pattern = "zero_native_app_scroll" },
+        .{ .path = "examples/ios/NativeSdkIOSExample/native_sdk.h", .pattern = "native_sdk_viewport_state_t" },
+        .{ .path = "examples/ios/NativeSdkIOSExample/native_sdk.h", .pattern = "native_sdk_app_scroll" },
+        .{ .path = "examples/ios/NativeSdkIOSExample/native_sdk.h", .pattern = "native_sdk_app_set_text_measure" },
+        .{ .path = "examples/android/app/src/main/cpp/native_sdk.h", .pattern = "native_sdk_app_set_text_measure" },
+        .{ .path = "examples/mobile-canvas/ios/native_sdk_app.h", .pattern = "native_sdk_app_set_text_measure" },
+        .{ .path = "examples/ios/NativeSdkIOSExample/NativeSdkHostViewController.swift", .pattern = "native_sdk_app_widget_semantics_by_id" },
+        .{ .path = "examples/android/app/src/main/cpp/native_sdk.h", .pattern = "native_sdk_app_widget_semantics_by_id" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "nativeScroll(nativeApp" },
+        .{ .path = "examples/android/app/src/main/java/dev/native_sdk/examples/android/MainActivity.kt", .pattern = "nativeWidgetSemanticsByIdFields" },
+        .{ .path = "examples/android/app/src/main/cpp/native_sdk_jni.c", .pattern = "native_sdk_app_widget_semantics_by_id" },
+        .{ .path = "examples/android/app/src/main/cpp/native_sdk_jni.c", .pattern = "native_sdk_app_scroll" },
     });
     addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-canvas-span-fonts", "Verify the iOS embed shim measures reserved span font ids with the macOS face mapping", &.{
-        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "static UIFont *ZeroNativeItalicSansFont(UIFont *font)" },
-        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "static UIFont *ZeroNativeWeightedSansFont(" },
-        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "ZeroNativeWeightedSansFont(@[ @\"Geist-Medium\", @\"Geist Medium\" ], UIFontWeightMedium, size)" },
-        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "ZeroNativeWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], UIFontWeightBold, size)" },
-        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "ZeroNativeItalicSansFont(ZeroNativeWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], UIFontWeightBold, size))" },
+        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "static UIFont *NativeSdkItalicSansFont(UIFont *font)" },
+        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "static UIFont *NativeSdkWeightedSansFont(" },
+        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "NativeSdkWeightedSansFont(@[ @\"Geist-Medium\", @\"Geist Medium\" ], UIFontWeightMedium, size)" },
+        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], UIFontWeightBold, size)" },
+        .{ .path = "examples/mobile-canvas/ios/main.m", .pattern = "NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], UIFontWeightBold, size))" },
     });
 
     const build_mobile_canvas_lib = b.addSystemCommand(&.{ "zig", "build", "lib" });
@@ -622,13 +622,13 @@ pub fn build(b: *std.Build) void {
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
         \\request='{"id":"smoke","command":"native.ping","payload":{"source":"smoke"}}'
-        \\response_file=".zig-cache/zero-native-automation/bridge-response.txt"
-        \\mkdir -p .zig-cache/zero-native-automation
-        \\rm -f .zig-cache/zero-native-automation/snapshot.txt .zig-cache/zero-native-automation/windows.txt .zig-cache/zero-native-automation/command.txt "$response_file"
-        \\printf 'bridge %s\n' "$request" > .zig-cache/zero-native-automation/command.txt
-        \\"$app" > .zig-cache/zero-native-webview-smoke.log 2>&1 &
+        \\response_file=".zig-cache/native-sdk-automation/bridge-response.txt"
+        \\mkdir -p .zig-cache/native-sdk-automation
+        \\rm -f .zig-cache/native-sdk-automation/snapshot.txt .zig-cache/native-sdk-automation/windows.txt .zig-cache/native-sdk-automation/command.txt "$response_file"
+        \\printf 'bridge %s\n' "$request" > .zig-cache/native-sdk-automation/command.txt
+        \\"$app" > .zig-cache/native-sdk-webview-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-webview-smoke.log) ----" >&2; cat .zig-cache/zero-native-webview-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-webview-smoke.log) ----" >&2; cat .zig-cache/native-sdk-webview-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\snapshot="$("$cli" automate wait 2>&1)"
         \\case "$snapshot" in *"ready=true"*) ;; *) echo "automation snapshot was not ready" >&2; exit 1 ;; esac
         \\attempts=0
@@ -637,25 +637,25 @@ pub fn build(b: *std.Build) void {
         \\case "$response" in *'"ok":true'*) ;; *) echo "native.ping did not succeed: $response" >&2; exit 1 ;; esac
         \\case "$response" in *'pong from Zig'*) ;; *) echo "native.ping response was unexpected: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-create","command":"zero-native.webview.create","payload":{"label":"smoke","url":"https://example.com","frame":{"x":24,"y":24,"width":320,"height":220}}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-create","command":"native-sdk.webview.create","payload":{"label":"smoke","url":"https://example.com","frame":{"x":24,"y":24,"width":320,"height":220}}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "webview create did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-resize","command":"zero-native.webview.setFrame","payload":{"label":"smoke","frame":{"x":36,"y":36,"width":420,"height":260}}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-resize","command":"native-sdk.webview.setFrame","payload":{"label":"smoke","frame":{"x":36,"y":36,"width":420,"height":260}}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "webview resize did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-navigate","command":"zero-native.webview.navigate","payload":{"label":"smoke","url":"https://example.com/?smoke=1"}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-navigate","command":"native-sdk.webview.navigate","payload":{"label":"smoke","url":"https://example.com/?smoke=1"}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "webview navigate did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-close","command":"zero-native.webview.close","payload":{"label":"smoke"}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-close","command":"native-sdk.webview.close","payload":{"label":"smoke"}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
@@ -679,17 +679,17 @@ pub fn build(b: *std.Build) void {
         \\app="zig-out/bin/native-shell"
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
-        \\automation_dir=".zig-cache/zero-native-automation"
+        \\automation_dir=".zig-cache/native-sdk-automation"
         \\response_file="$automation_dir/bridge-response.txt"
         \\mkdir -p "$automation_dir"
         \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt" "$response_file"
-        \\"$app" > .zig-cache/zero-native-native-shell-smoke.log 2>&1 &
+        \\"$app" > .zig-cache/native-sdk-native-shell-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-native-shell-smoke.log) ----" >&2; cat .zig-cache/zero-native-native-shell-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-native-shell-smoke.log) ----" >&2; cat .zig-cache/native-sdk-native-shell-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "native-shell automation snapshot was not ready" >&2; exit 1 ;; esac
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\case "$snapshot" in *'window @w1 "zero-native Native Shell"'*) ;; *) echo "native-shell window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK Native Shell"'*) ;; *) echo "native-shell window was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/toolbar kind=toolbar'*) ;; *) echo "toolbar view was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/sidebar kind=sidebar'*) ;; *) echo "sidebar view was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/main kind=webview'*) ;; *) echo "main WebView was missing from snapshot" >&2; exit 1 ;; esac
@@ -729,16 +729,16 @@ pub fn build(b: *std.Build) void {
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'window @w1 "zero-native Native Shell" bounds=('*' 900x640)'*) break ;; esac
+        \\  case "$snapshot" in *'window @w1 "Native SDK Native Shell" bounds=('*' 900x640)'*) break ;; esac
         \\  attempts=$((attempts + 1))
         \\  sleep 0.1
         \\done
-        \\case "$snapshot" in *'window @w1 "zero-native Native Shell" bounds=('*' 900x640)'*) ;; *) echo "native-shell window resize was not reflected in snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK Native Shell" bounds=('*' 900x640)'*) ;; *) echo "native-shell window resize was not reflected in snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/toolbar kind=toolbar'*'bounds=(0,0 900x52)'*) ;; *) echo "native-shell toolbar did not relayout after resize" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/main kind=webview'*'bounds=(240,52 660x548)'*) ;; *) echo "native-shell main WebView did not relayout after resize" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/statusbar kind=statusbar'*'bounds=(240,600 660x40)'*) ;; *) echo "native-shell statusbar did not relayout after resize" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"native-shell-refresh","command":"zero-native.command.invoke","payload":{"name":"app.refresh"}}' > "$automation_dir/command.txt"
+        \\printf 'bridge %s\n' '{"id":"native-shell-refresh","command":"native-sdk.command.invoke","payload":{"name":"app.refresh"}}' > "$automation_dir/command.txt"
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
@@ -815,31 +815,31 @@ pub fn build(b: *std.Build) void {
         \\app="zig-out/bin/gpu-surface"
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
-        \\automation_dir=".zig-cache/zero-native-automation"
+        \\automation_dir=".zig-cache/native-sdk-automation"
         \\mkdir -p "$automation_dir"
         \\# Startup latencies are load-sensitive on shared CI/agent machines.
-        \\# ZN_SMOKE_BUDGET_MS raises the first-frame latency budget (default
+        \\# NATIVE_SDK_SMOKE_BUDGET_MS raises the first-frame latency budget (default
         \\# stays 150 ms) and the automation-ready ceiling (default stays
         \\# 500 ms; the ceiling never drops below it) without weakening the
         \\# local defaults; every correctness assertion stays strict.
-        \\smoke_budget_ms="${ZN_SMOKE_BUDGET_MS:-150}"
-        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
-        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
+        \\smoke_budget_ms="${NATIVE_SDK_SMOKE_BUDGET_MS:-150}"
+        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
+        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
         \\smoke_budget_ns=$((smoke_budget_ms * 1000000))
         \\ready_budget_ms="$smoke_budget_ms"
         \\if [ "$ready_budget_ms" -lt 500 ]; then ready_budget_ms=500; fi
         \\ready_budget_ns=$((ready_budget_ms * 1000000))
         \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt"
-        \\"$app" > .zig-cache/zero-native-gpu-surface-smoke.log 2>&1 &
+        \\"$app" > .zig-cache/native-sdk-gpu-surface-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-gpu-surface-smoke.log) ----" >&2; cat .zig-cache/zero-native-gpu-surface-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-gpu-surface-smoke.log) ----" >&2; cat .zig-cache/native-sdk-gpu-surface-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-surface automation snapshot was not ready" >&2; exit 1 ;; esac
         \\ready_uptime="$(printf '%s\n' "$ready" | sed -n 's/.*runtime_uptime_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-surface automation ready uptime was missing" >&2; exit 1 ;; esac
         \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt "$ready_budget_ns" ]; then echo "gpu-surface automation ready exceeded $ready_budget_ms ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\case "$snapshot" in *'window @w1 "zero-native GPU Surface"'*) ;; *) echo "gpu-surface window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK GPU Surface"'*) ;; *) echo "gpu-surface window was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'accessibility_label="Animated GPU surface"'*) ;; *) echo "gpu_surface view was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/inspector kind=webview'*) ;; *) echo "inspector WebView was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/toolbar kind=toolbar'*) ;; *) echo "toolbar view was missing from snapshot" >&2; exit 1 ;; esac
@@ -857,7 +857,7 @@ pub fn build(b: *std.Build) void {
         \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt "$smoke_budget_ns" ]; then echo "gpu-surface first frame exceeded $smoke_budget_ms ms: $first_frame_latency ns" >&2; exit 1; fi
         \\# The runtime publishes its own fixed 150 ms budget verdict. Within that
         \\# budget the verdict must agree exactly; beyond it (reachable only when
-        \\# ZN_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
+        \\# NATIVE_SDK_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
         \\if [ "$first_frame_latency" -le 150000000 ]; then
         \\  case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_ns=150000000'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "gpu-surface first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\else
@@ -876,11 +876,11 @@ pub fn build(b: *std.Build) void {
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'window @w1 "zero-native GPU Surface" bounds=('*' 960x620)'*) break ;; esac
+        \\  case "$snapshot" in *'window @w1 "Native SDK GPU Surface" bounds=('*' 960x620)'*) break ;; esac
         \\  attempts=$((attempts + 1))
         \\  sleep 0.1
         \\done
-        \\case "$snapshot" in *'window @w1 "zero-native GPU Surface" bounds=('*' 960x620)'*) ;; *) echo "gpu-surface window resize was not reflected in snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK GPU Surface" bounds=('*' 960x620)'*) ;; *) echo "gpu-surface window resize was not reflected in snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/canvas kind=gpu_surface'*'bounds=(0,0 680x534)'*) ;; *) echo "gpu_surface view did not relayout after resize" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/inspector kind=webview'*'bounds=(680,52 280x534)'*) ;; *) echo "inspector WebView did not relayout after resize" >&2; exit 1 ;; esac
         \\echo "gpu-surface smoke ok"
@@ -902,12 +902,12 @@ pub fn build(b: *std.Build) void {
         \\app="zig-out/bin/gpu-dashboard"
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
-        \\automation_dir=".zig-cache/zero-native-automation"
+        \\automation_dir=".zig-cache/native-sdk-automation"
         \\mkdir -p "$automation_dir"
         \\# First-frame latency is load-sensitive: a cold file cache or CI/agent
         \\# machine contention can blow the 150 ms budget while the frame itself
         \\# is presented and correct. Load tolerance without weakening the proof:
-        \\#   (a) ZN_SMOKE_BUDGET_MS raises the smoke's latency budget (default
+        \\#   (a) NATIVE_SDK_SMOKE_BUDGET_MS raises the smoke's latency budget (default
         \\#       stays 150 ms) and the automation-ready ceiling (default stays
         \\#       500 ms; the ceiling never drops below it), and
         \\#   (b) a budget-only overrun relaunches the app once and re-measures.
@@ -915,15 +915,15 @@ pub fn build(b: *std.Build) void {
         \\# retained content, widget semantics) stays strict on whichever launch
         \\# survives, and the runtime's own fixed 150 ms budget verdict is still
         \\# asserted verbatim whenever the measured latency is within 150 ms.
-        \\smoke_budget_ms="${ZN_SMOKE_BUDGET_MS:-150}"
-        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
-        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
+        \\smoke_budget_ms="${NATIVE_SDK_SMOKE_BUDGET_MS:-150}"
+        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
+        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
         \\smoke_budget_ns=$((smoke_budget_ms * 1000000))
         \\ready_budget_ms="$smoke_budget_ms"
         \\if [ "$ready_budget_ms" -lt 500 ]; then ready_budget_ms=500; fi
         \\ready_budget_ns=$((ready_budget_ms * 1000000))
         \\pid=""
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-gpu-dashboard-smoke.log) ----" >&2; cat .zig-cache/zero-native-gpu-dashboard-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-gpu-dashboard-smoke.log) ----" >&2; cat .zig-cache/native-sdk-gpu-dashboard-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\stop_app() {
         \\  kill "$pid" >/dev/null 2>&1 || true
         \\  wait "$pid" >/dev/null 2>&1 || true
@@ -931,7 +931,7 @@ pub fn build(b: *std.Build) void {
         \\}
         \\launch_and_measure_first_frame() {
         \\  rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt"
-        \\  "$app" > .zig-cache/zero-native-gpu-dashboard-smoke.log 2>&1 &
+        \\  "$app" > .zig-cache/native-sdk-gpu-dashboard-smoke.log 2>&1 &
         \\  pid=$!
         \\  ready="$("$cli" automate wait 2>&1)"
         \\  case "$ready" in *"ready=true"*) ;; *) echo "gpu-dashboard automation snapshot was not ready" >&2; exit 1 ;; esac
@@ -939,7 +939,7 @@ pub fn build(b: *std.Build) void {
         \\  case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-dashboard automation ready uptime was missing" >&2; exit 1 ;; esac
         \\  if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt "$ready_budget_ns" ]; then echo "gpu-dashboard automation ready exceeded $ready_budget_ms ms: $ready_uptime ns" >&2; exit 1; fi
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'window @w1 "zero-native GPU Dashboard"'*) ;; *) echo "gpu-dashboard window was missing from snapshot" >&2; exit 1 ;; esac
+        \\  case "$snapshot" in *'window @w1 "Native SDK GPU Dashboard"'*) ;; *) echo "gpu-dashboard window was missing from snapshot" >&2; exit 1 ;; esac
         \\  case "$snapshot" in *'view @w1/main kind=webview'*) echo "dashboard should not create an implicit main WebView" >&2; exit 1 ;; *) ;; esac
         \\  case "$snapshot" in *'source kind=html bytes=0'*) echo "dashboard should not publish an empty default WebView source" >&2; exit 1 ;; *) ;; esac
         \\  case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'accessibility_label="Native-rendered product dashboard canvas"'*) ;; *) echo "dashboard GPU canvas was missing from snapshot" >&2; exit 1 ;; esac
@@ -965,7 +965,7 @@ pub fn build(b: *std.Build) void {
         \\if [ "$first_frame_latency" -gt "$smoke_budget_ns" ]; then echo "dashboard GPU first frame exceeded $smoke_budget_ms ms on both launches: $first_frame_latency ns" >&2; exit 1; fi
         \\# The runtime publishes its own fixed 150 ms budget verdict. Within that
         \\# budget the verdict must agree exactly; beyond it (reachable only when
-        \\# ZN_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
+        \\# NATIVE_SDK_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
         \\if [ "$first_frame_latency" -le 150000000 ]; then
         \\  case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_ns=150000000'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "dashboard GPU first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\else
@@ -1015,11 +1015,11 @@ pub fn build(b: *std.Build) void {
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'window @w1 "zero-native GPU Dashboard" bounds=('*' 1120x700)'*'view @w1/dashboard-canvas kind=gpu_surface'*'bounds=(0,0 1120x700)'*'gpu_nonblank=true'*'canvas_commands=70'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
+        \\  case "$snapshot" in *'window @w1 "Native SDK GPU Dashboard" bounds=('*' 1120x700)'*'view @w1/dashboard-canvas kind=gpu_surface'*'bounds=(0,0 1120x700)'*'gpu_nonblank=true'*'canvas_commands=70'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) break ;; esac
         \\  attempts=$((attempts + 1))
         \\  sleep 0.1
         \\done
-        \\case "$snapshot" in *'window @w1 "zero-native GPU Dashboard" bounds=('*' 1120x700)'*) ;; *) echo "dashboard window resize was not reflected in snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK GPU Dashboard" bounds=('*' 1120x700)'*) ;; *) echo "dashboard window resize was not reflected in snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'bounds=(0,0 1120x700)'*) ;; *) echo "dashboard GPU canvas did not relayout after resize" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/dashboard-canvas kind=gpu_surface'*'gpu_nonblank=true'*'canvas_commands=70'*'canvas_frame_gpu_packet_unsupported=0'*'canvas_frame_gpu_packet_representable=true'*) ;; *) echo "dashboard GPU canvas did not remain packet-renderable after resize" >&2; exit 1 ;; esac
         \\canvas_revision_after_resize="$(canvas_revision_from_snapshot)"
@@ -1068,8 +1068,8 @@ pub fn build(b: *std.Build) void {
     // of `zig build test` or the fast gate tier: N launches are slow and the
     // numbers only mean something on a controlled machine. Runs via
     // `scripts/gate.sh full --perf` locally and a dedicated macos-14 CI job.
-    // Knobs: ZN_PERF_LAUNCHES, ZN_PERF_INTERACTIONS, ZN_PERF_BUDGET_MS,
-    // ZN_PERF_INPUT_BUDGET_MS — see scripts/perf-gpu-dashboard.sh.
+    // Knobs: NATIVE_SDK_PERF_LAUNCHES, NATIVE_SDK_PERF_INTERACTIONS, NATIVE_SDK_PERF_BUDGET_MS,
+    // NATIVE_SDK_PERF_INPUT_BUDGET_MS — see scripts/perf-gpu-dashboard.sh.
     const gpu_dashboard_perf_step = b.step("test-gpu-dashboard-perf", "Run macOS GPU dashboard percentile performance check (N launches; slow)");
     const gpu_dashboard_perf_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true" });
     gpu_dashboard_perf_build.setCwd(b.path("examples/gpu-dashboard"));
@@ -1089,12 +1089,12 @@ pub fn build(b: *std.Build) void {
         \\app="zig-out/bin/canvas-preview"
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
-        \\automation_dir=".zig-cache/zero-native-automation"
+        \\automation_dir=".zig-cache/native-sdk-automation"
         \\mkdir -p "$automation_dir"
         \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt" "$automation_dir/screenshot-preview-canvas.png"
-        \\"$app" > .zig-cache/zero-native-canvas-preview-smoke.log 2>&1 &
+        \\"$app" > .zig-cache/native-sdk-canvas-preview-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-canvas-preview-smoke.log) ----" >&2; cat .zig-cache/zero-native-canvas-preview-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-canvas-preview-smoke.log) ----" >&2; cat .zig-cache/native-sdk-canvas-preview-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "canvas-preview automation snapshot was not ready" >&2; exit 1 ;; esac
         \\# Both architectures live in window 1: a presenting Metal canvas and
@@ -1114,7 +1114,7 @@ pub fn build(b: *std.Build) void {
         \\# Resize keeps the pane snapped to the anchor widget's new frame:
         \\# the panel right of the 224pt sidebar and below the 56pt toolbar.
         \\"$cli" automate resize 1200 800 >/dev/null 2>&1
-        \\"$cli" automate assert 'window @w1 "zero-native Canvas Preview" bounds=.*1200x800' 'view @w1/preview kind=webview.*bounds=.224,56 976x744'
+        \\"$cli" automate assert 'window @w1 "Native SDK Canvas Preview" bounds=.*1200x800' 'view @w1/preview kind=webview.*bounds=.224,56 976x744'
         \\# Canvas screenshot evidence (reference-rendered PNG of the chrome).
         \\"$cli" automate screenshot preview-canvas >/dev/null 2>&1
         \\test -s "$automation_dir/screenshot-preview-canvas.png" || { echo "canvas-preview screenshot was empty" >&2; exit 1; }
@@ -1137,31 +1137,31 @@ pub fn build(b: *std.Build) void {
         \\app="zig-out/bin/gpu-components"
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
-        \\automation_dir=".zig-cache/zero-native-automation"
+        \\automation_dir=".zig-cache/native-sdk-automation"
         \\mkdir -p "$automation_dir"
         \\# Startup latencies are load-sensitive on shared CI/agent machines.
-        \\# ZN_SMOKE_BUDGET_MS raises the first-frame latency budget (default
+        \\# NATIVE_SDK_SMOKE_BUDGET_MS raises the first-frame latency budget (default
         \\# stays 150 ms) and the automation-ready ceiling (default stays
         \\# 500 ms; the ceiling never drops below it) without weakening the
         \\# local defaults; every correctness assertion stays strict.
-        \\smoke_budget_ms="${ZN_SMOKE_BUDGET_MS:-150}"
-        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
-        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "ZN_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
+        \\smoke_budget_ms="${NATIVE_SDK_SMOKE_BUDGET_MS:-150}"
+        \\case "$smoke_budget_ms" in ''|*[!0-9]*) echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1 ;; esac
+        \\if [ "$smoke_budget_ms" -le 0 ]; then echo "NATIVE_SDK_SMOKE_BUDGET_MS must be a positive integer of milliseconds: $smoke_budget_ms" >&2; exit 1; fi
         \\smoke_budget_ns=$((smoke_budget_ms * 1000000))
         \\ready_budget_ms="$smoke_budget_ms"
         \\if [ "$ready_budget_ms" -lt 500 ]; then ready_budget_ms=500; fi
         \\ready_budget_ns=$((ready_budget_ms * 1000000))
         \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/accessibility.txt" "$automation_dir/windows.txt" "$automation_dir/command.txt"
-        \\"$app" > .zig-cache/zero-native-gpu-components-smoke.log 2>&1 &
+        \\"$app" > .zig-cache/native-sdk-gpu-components-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-gpu-components-smoke.log) ----" >&2; cat .zig-cache/zero-native-gpu-components-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-gpu-components-smoke.log) ----" >&2; cat .zig-cache/native-sdk-gpu-components-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\ready="$("$cli" automate wait 2>&1)"
         \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-components automation snapshot was not ready" >&2; exit 1 ;; esac
         \\ready_uptime="$(printf '%s\n' "$ready" | sed -n 's/.*runtime_uptime_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$ready_uptime" in ''|*[!0-9]*) echo "gpu-components automation ready uptime was missing" >&2; exit 1 ;; esac
         \\if [ "$ready_uptime" -le 0 ] || [ "$ready_uptime" -gt "$ready_budget_ns" ]; then echo "gpu-components automation ready exceeded $ready_budget_ms ms: $ready_uptime ns" >&2; exit 1; fi
         \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\case "$snapshot" in *'window @w1 "zero-native GPU Components"'*) ;; *) echo "gpu-components window was missing from snapshot" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'window @w1 "Native SDK GPU Components"'*) ;; *) echo "gpu-components window was missing from snapshot" >&2; exit 1 ;; esac
         \\case "$snapshot" in *'view @w1/main kind=webview'*) echo "components should not create an implicit main WebView" >&2; exit 1 ;; *) ;; esac
         \\case "$snapshot" in *'source kind=html bytes=0'*) echo "components should not publish an empty default WebView source" >&2; exit 1 ;; *) ;; esac
         \\attempts=0
@@ -1178,7 +1178,7 @@ pub fn build(b: *std.Build) void {
         \\if [ "$first_frame_latency" -le 0 ] || [ "$first_frame_latency" -gt "$smoke_budget_ns" ]; then echo "components GPU first frame exceeded $smoke_budget_ms ms: $first_frame_latency ns" >&2; exit 1; fi
         \\# The runtime publishes its own fixed 150 ms budget verdict. Within that
         \\# budget the verdict must agree exactly; beyond it (reachable only when
-        \\# ZN_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
+        \\# NATIVE_SDK_SMOKE_BUDGET_MS > 150) the runtime must report the overrun honestly.
         \\if [ "$first_frame_latency" -le 150000000 ]; then
         \\  case "$snapshot" in *'view @w1/components-canvas kind=gpu_surface'*'gpu_first_frame_latency_budget_ns=150000000'*'gpu_first_frame_latency_budget_exceeded=0'*'gpu_first_frame_latency_budget_ok=true'*) ;; *) echo "components GPU first frame exceeded the latency budget" >&2; exit 1 ;; esac
         \\else
@@ -1228,20 +1228,20 @@ pub fn build(b: *std.Build) void {
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-native"'*) break ;; esac
+        \\  case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="native-sdk"'*) break ;; esac
         \\  attempts=$((attempts + 1))
         \\  sleep 0.1
         \\done
-        \\case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-native"'*) ;; *) echo "widget focus automation did not focus retained text" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="native-sdk"'*) ;; *) echo "widget focus automation did not focus retained text" >&2; exit 1 ;; esac
         \\"$cli" automate widget-key components-canvas z z >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
         \\  snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
-        \\  case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-nativez"'*) break ;; esac
+        \\  case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="native-sdkz"'*) break ;; esac
         \\  attempts=$((attempts + 1))
         \\  sleep 0.1
         \\done
-        \\case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="zero-nativez"'*) ;; *) echo "widget keyboard automation did not update retained text" >&2; exit 1 ;; esac
+        \\case "$snapshot" in *'widget @w1/components-canvas#111 role=textbox'*'focused=true'*'text="native-sdkz"'*) ;; *) echo "widget keyboard automation did not update retained text" >&2; exit 1 ;; esac
         \\"$cli" automate widget-key components-canvas tab >/dev/null 2>&1
         \\attempts=0
         \\while [ "$attempts" -lt 50 ]; do
@@ -1512,13 +1512,13 @@ pub fn build(b: *std.Build) void {
         \\cli="$1"
         \\case "$cli" in /*) ;; *) cli="../../$cli" ;; esac
         \\request='{"id":"ping","command":"native.ping","payload":{"source":"cef-smoke"}}'
-        \\response_file=".zig-cache/zero-native-automation/bridge-response.txt"
-        \\mkdir -p .zig-cache/zero-native-automation
-        \\rm -f .zig-cache/zero-native-automation/snapshot.txt .zig-cache/zero-native-automation/windows.txt .zig-cache/zero-native-automation/command.txt "$response_file"
-        \\printf 'bridge %s\n' "$request" > .zig-cache/zero-native-automation/command.txt
-        \\"$app" > .zig-cache/zero-native-webview-cef-smoke.log 2>&1 &
+        \\response_file=".zig-cache/native-sdk-automation/bridge-response.txt"
+        \\mkdir -p .zig-cache/native-sdk-automation
+        \\rm -f .zig-cache/native-sdk-automation/snapshot.txt .zig-cache/native-sdk-automation/windows.txt .zig-cache/native-sdk-automation/command.txt "$response_file"
+        \\printf 'bridge %s\n' "$request" > .zig-cache/native-sdk-automation/command.txt
+        \\"$app" > .zig-cache/native-sdk-webview-cef-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/zero-native-webview-cef-smoke.log) ----" >&2; cat .zig-cache/zero-native-webview-cef-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-webview-cef-smoke.log) ----" >&2; cat .zig-cache/native-sdk-webview-cef-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\snapshot="$("$cli" automate wait 2>&1)"
         \\case "$snapshot" in *"ready=true"*) ;; *) echo "automation snapshot was not ready" >&2; exit 1 ;; esac
         \\attempts=0
@@ -1526,25 +1526,25 @@ pub fn build(b: *std.Build) void {
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*'pong from Zig'*) ;; *) echo "native.ping response was unexpected: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-create","command":"zero-native.webview.create","payload":{"label":"smoke","url":"https://example.com","frame":{"x":24,"y":24,"width":320,"height":220}}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-create","command":"native-sdk.webview.create","payload":{"label":"smoke","url":"https://example.com","frame":{"x":24,"y":24,"width":320,"height":220}}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "cef webview create did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-resize","command":"zero-native.webview.setFrame","payload":{"label":"smoke","frame":{"x":36,"y":36,"width":420,"height":260}}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-resize","command":"native-sdk.webview.setFrame","payload":{"label":"smoke","frame":{"x":36,"y":36,"width":420,"height":260}}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "cef webview resize did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-navigate","command":"zero-native.webview.navigate","payload":{"label":"smoke","url":"https://example.com/?smoke=1"}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-navigate","command":"native-sdk.webview.navigate","payload":{"label":"smoke","url":"https://example.com/?smoke=1"}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "cef webview navigate did not succeed: $response" >&2; exit 1 ;; esac
         \\rm -f "$response_file"
-        \\printf 'bridge %s\n' '{"id":"webview-close","command":"zero-native.webview.close","payload":{"label":"smoke"}}' > .zig-cache/zero-native-automation/command.txt
+        \\printf 'bridge %s\n' '{"id":"webview-close","command":"native-sdk.webview.close","payload":{"label":"smoke"}}' > .zig-cache/native-sdk-automation/command.txt
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
@@ -1563,12 +1563,12 @@ pub fn build(b: *std.Build) void {
     const dev_step = b.step("dev", "Run managed frontend dev server and native shell");
     dev_step.dependOn(&dev_run.step);
 
-    const lib_step = b.step("lib", "Build zero-native embeddable static library");
+    const lib_step = b.step("lib", "Build native-sdk embeddable static library");
     lib_step.dependOn(&b.addInstallArtifact(embed_lib, .{}).step);
 
     const doctor_run = b.addRunArtifact(host_cli_exe);
     doctor_run.addArg("doctor");
-    const doctor_step = b.step("doctor", "Print zero-native platform diagnostics");
+    const doctor_step = b.step("doctor", "Print native-sdk platform diagnostics");
     doctor_step.dependOn(&doctor_run.step);
 
     const validate_run = b.addRunArtifact(host_cli_exe);
@@ -1587,7 +1587,7 @@ pub fn build(b: *std.Build) void {
         "--target",
         @tagName(package_target),
         "--output",
-        b.fmt("zig-out/package/zero-native-{s}-{s}-{s}{s}", .{ package_version, @tagName(package_target), optimize_name, packageSuffix(package_target) }),
+        b.fmt("zig-out/package/native-sdk-{s}-{s}-{s}{s}", .{ package_version, @tagName(package_target), optimize_name, packageSuffix(package_target) }),
         "--binary",
     });
     package_run.addFileArg(embed_lib.getEmittedBin());
@@ -1604,7 +1604,7 @@ pub fn build(b: *std.Build) void {
         "--target",
         "macos",
         "--output",
-        b.fmt("zig-out/package/zero-native-cef-smoke-{s}.app", .{optimize_name}),
+        b.fmt("zig-out/package/native-sdk-cef-smoke-{s}.app", .{optimize_name}),
         "--binary",
     });
     package_cef_run.addFileArg(embed_lib.getEmittedBin());
@@ -1617,7 +1617,7 @@ pub fn build(b: *std.Build) void {
         "sh", "-c",
         b.fmt(
             \\set -e
-            \\app="zig-out/package/zero-native-cef-smoke-{s}.app"
+            \\app="zig-out/package/native-sdk-cef-smoke-{s}.app"
             \\test -d "$app/Contents/Frameworks/Chromium Embedded Framework.framework"
             \\test -f "$app/Contents/Frameworks/Chromium Embedded Framework.framework/Resources/icudtl.dat"
             \\test -f "$app/Contents/Frameworks/Chromium Embedded Framework.framework/Libraries/libGLESv2.dylib"
@@ -1630,22 +1630,22 @@ pub fn build(b: *std.Build) void {
     package_cef_smoke_step.dependOn(&package_cef_check.step);
 
     const package_windows_run = b.addRunArtifact(host_cli_exe);
-    package_windows_run.addArgs(&.{ "package-windows", "--output", b.fmt("zig-out/package/zero-native-{s}-windows-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
+    package_windows_run.addArgs(&.{ "package-windows", "--output", b.fmt("zig-out/package/native-sdk-{s}-windows-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
     const package_windows_step = b.step("package-windows", "Create local Windows artifact directory");
     package_windows_step.dependOn(&package_windows_run.step);
 
     const package_linux_run = b.addRunArtifact(host_cli_exe);
-    package_linux_run.addArgs(&.{ "package-linux", "--output", b.fmt("zig-out/package/zero-native-{s}-linux-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
+    package_linux_run.addArgs(&.{ "package-linux", "--output", b.fmt("zig-out/package/native-sdk-{s}-linux-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
     const package_linux_step = b.step("package-linux", "Create local Linux artifact directory");
     package_linux_step.dependOn(&package_linux_run.step);
 
     const package_ios_run = b.addRunArtifact(host_cli_exe);
-    package_ios_run.addArgs(&.{ "package-ios", "--output", b.fmt("zig-out/mobile/zero-native-{s}-ios-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
+    package_ios_run.addArgs(&.{ "package-ios", "--output", b.fmt("zig-out/mobile/native-sdk-{s}-ios-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
     const package_ios_step = b.step("package-ios", "Create local iOS host skeleton");
     package_ios_step.dependOn(&package_ios_run.step);
 
     const package_android_run = b.addRunArtifact(host_cli_exe);
-    package_android_run.addArgs(&.{ "package-android", "--output", b.fmt("zig-out/mobile/zero-native-{s}-android-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
+    package_android_run.addArgs(&.{ "package-android", "--output", b.fmt("zig-out/mobile/native-sdk-{s}-android-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
     const package_android_step = b.step("package-android", "Create local Android host skeleton");
     package_android_step.dependOn(&package_android_run.step);
 
@@ -1674,7 +1674,7 @@ pub fn build(b: *std.Build) void {
         "--target",
         "macos",
         "--output",
-        b.fmt("zig-out/package/zero-native-{s}-macos-{s}.app", .{ package_version, optimize_name }),
+        b.fmt("zig-out/package/native-sdk-{s}-macos-{s}.app", .{ package_version, optimize_name }),
         "--binary",
     });
     notarize_run.addFileArg(embed_lib.getEmittedBin());
@@ -1688,10 +1688,10 @@ pub fn build(b: *std.Build) void {
     const dmg_script = b.addSystemCommand(&.{
         "sh", "-c",
         b.fmt(
-            \\APP="zig-out/package/zero-native-{s}-macos-{s}.app"
-            \\DMG="zig-out/package/zero-native-{s}-macos-{s}.dmg"
+            \\APP="zig-out/package/native-sdk-{s}-macos-{s}.app"
+            \\DMG="zig-out/package/native-sdk-{s}-macos-{s}.dmg"
             \\test -d "$APP" || {{ echo "run 'zig build package' first" >&2; exit 1; }}
-            \\hdiutil create -volname "zero-native" -srcfolder "$APP" -ov -format UDZO "$DMG"
+            \\hdiutil create -volname "native-sdk" -srcfolder "$APP" -ov -format UDZO "$DMG"
             \\echo "created $DMG"
         , .{ package_version, optimize_name, package_version, optimize_name }),
     });
@@ -1734,7 +1734,7 @@ fn module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
 
 fn testArtifact(b: *std.Build, mod: *std.Build.Module) *std.Build.Step.Compile {
     // use_llvm: Zig 0.16.0's self-hosted x86_64 backend miscompiles the
-    // SysV C ABI for f32-heavy signatures (zero_native_app_viewport); see
+    // SysV C ABI for f32-heavy signatures (native_sdk_app_viewport); see
     // useLlvmWorkaround in build/app.zig for the full story and repro.
     const use_llvm = if (mod.resolved_target) |target| @import("build/app.zig").useLlvmWorkaround(target) else null;
     return b.addTest(.{ .root_module = mod, .use_llvm = use_llvm });

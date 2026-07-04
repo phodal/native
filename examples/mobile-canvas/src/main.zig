@@ -1,12 +1,12 @@
 //! mobile-canvas: the smallest UiApp compiled into the mobile embed
-//! static library. `zero_native.addMobileLib` wires this module as the
+//! static library. `native_sdk.addMobileLib` wires this module as the
 //! `"app"` import of the library root; the embed host instantiates the
 //! UiApp on a gpu_surface canvas scene (window 1, "mobile-surface") and
-//! pumps it from the shim's frame callback over the `zero_native_app_*`
+//! pumps it from the shim's frame callback over the `native_sdk_app_*`
 //! C ABI.
 
-const zero_native = @import("zero-native");
-const canvas = zero_native.canvas;
+const native_sdk = @import("native_sdk");
+const canvas = native_sdk.canvas;
 
 pub const Model = struct {
     count: u32 = 0,
@@ -19,7 +19,7 @@ pub const Msg = union(enum) {
     note_edit: canvas.TextInputEvent,
 };
 
-const App = zero_native.UiApp(Model, Msg);
+const App = native_sdk.UiApp(Model, Msg);
 
 pub fn initModel() Model {
     return .{};
@@ -28,8 +28,8 @@ pub fn initModel() Model {
 pub fn mobileOptions() App.Options {
     return .{
         .name = "mobile-canvas",
-        .scene = zero_native.embed.mobile_shell_scene,
-        .canvas_label = zero_native.embed.mobile_gpu_surface_label,
+        .scene = native_sdk.embed.mobile_shell_scene,
+        .canvas_label = native_sdk.embed.mobile_gpu_surface_label,
         .update = update,
         .view = view,
     };

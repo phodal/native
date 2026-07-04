@@ -8,29 +8,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 const canvas_label = "probe-canvas";
 const window_width: f32 = 560;
 const window_height: f32 = 480;
 
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Effects probe canvas", .accessibility_label = "Effects probe", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native Effects Probe",
+    .title = "Native SDK Effects Probe",
     .width = window_width,
     .height = window_height,
     .restore_state = false,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 // ------------------------------------------------------------------ model
 
@@ -62,11 +62,11 @@ pub const Model = struct {
     total_lines: u64 = 0,
     dropped_lines: u32 = 0,
     streaming: bool = false,
-    last_exit: ?zero_native.EffectExit = null,
+    last_exit: ?native_sdk.EffectExit = null,
 
     /// Copy the payload: the line slice is drain scratch and dies with
     /// this update call.
-    fn recordLine(model: *Model, line: zero_native.EffectLine) void {
+    fn recordLine(model: *Model, line: native_sdk.EffectLine) void {
         model.total_lines += 1;
         model.dropped_lines += line.dropped_before;
         if (model.visible_count == max_visible_lines) {
@@ -104,11 +104,11 @@ pub const Model = struct {
 pub const Msg = union(enum) {
     start,
     cancel,
-    line: zero_native.EffectLine,
-    exited: zero_native.EffectExit,
+    line: native_sdk.EffectLine,
+    exited: native_sdk.EffectExit,
 };
 
-const ProbeApp = zero_native.UiApp(Model, Msg);
+const ProbeApp = native_sdk.UiApp(Model, Msg);
 pub const Effects = ProbeApp.Effects;
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
@@ -177,8 +177,8 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "effects-probe",
-        .window_title = "zero-native Effects Probe",
-        .bundle_id = "dev.zero_native.effects_probe",
+        .window_title = "Native SDK Effects Probe",
+        .bundle_id = "dev.native_sdk.effects_probe",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
         .restore_state = false,

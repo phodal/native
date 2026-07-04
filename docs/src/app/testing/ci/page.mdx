@@ -1,27 +1,27 @@
 # Testing in CI
 
-Apps scaffolded with `zero-native init` ship a GitHub Actions workflow at `.github/workflows/ci.yml`. Like everything init generates, the file belongs to you: it starts with proven recipes and grows with the app.
+Apps scaffolded with `native init` ship a GitHub Actions workflow at `.github/workflows/ci.yml`. Like everything init generates, the file belongs to you: it starts with proven recipes and grows with the app.
 
 ## Three tiers of confidence
 
-zero-native apps test in three tiers, each running in progressively more realistic environments:
+Native SDK apps test in three tiers, each running in progressively more realistic environments:
 
 1. **Logic tests, everywhere** — `zig build test -Dplatform=null` runs the app's `Model`/`Msg`/`update` loop, the markup compiler, and the canvas layout engine on the headless null platform. No window server, no GPU, no OS dependencies: these run on any runner (and in the generated workflow's `test` job).
 2. **Xvfb automation smoke, on Linux** — the app builds with `-Dplatform=linux -Dautomation=true`, launches a real GTK window under a virtual X display, and is driven through the file-based [automation](/automation) protocol: wait for readiness, assert on the accessibility snapshot, capture a screenshot. This proves the real render path (window, GPU surface, widget semantics) without GUI hardware.
-3. **Real windows, on macOS runners** — GitHub's macOS runners provide a GUI-capable session, so AppKit windows actually open there. The same `zero-native automate` commands drive them; the framework's own CI runs its WebView and GPU smoke suites this way.
+3. **Real windows, on macOS runners** — GitHub's macOS runners provide a GUI-capable session, so AppKit windows actually open there. The same `native automate` commands drive them; the framework's own CI runs its WebView and GPU smoke suites this way.
 
 Most apps get lasting value from tiers 1 and 2 alone — that is what the generated workflow sets up.
 
 ## Deterministic screenshots as goldens
 
-`zero-native automate screenshot <view-label>` renders a `gpu_surface` view through the deterministic CPU reference renderer at scale 1. Two captures of an unchanged scene are byte-identical on the same machine, so screenshot diffs make honest golden checks: commit a known-good PNG and `cmp` against a fresh capture in CI, or just assert the artifact is non-empty as the generated workflow does. Text measurement can differ across OS versions, so compare goldens captured on the same runner image rather than across platforms.
+`native automate screenshot <view-label>` renders a `gpu_surface` view through the deterministic CPU reference renderer at scale 1. Two captures of an unchanged scene are byte-identical on the same machine, so screenshot diffs make honest golden checks: commit a known-good PNG and `cmp` against a fresh capture in CI, or just assert the artifact is non-empty as the generated workflow does. Text measurement can differ across OS versions, so compare goldens captured on the same runner image rather than across platforms.
 
 ## Snapshot assertions with `automate assert`
 
-`zero-native automate assert` replaces grep-and-sleep chains with one polling command:
+`native automate assert` replaces grep-and-sleep chains with one polling command:
 
 ```bash
-zero-native automate assert 'gpu_nonblank=true' 'role=button name="Reset"' 'count: 0'
+native automate assert 'gpu_nonblank=true' 'role=button name="Reset"' 'count: 0'
 ```
 
 Each argument is a regex that must match `snapshot.txt`. The command polls until every pattern matches or the timeout expires, then exits 0 (CI-friendly). On failure it exits non-zero, names each missing pattern, and prints the snapshot tail so the CI log carries the evidence.
@@ -33,22 +33,22 @@ The supported regex subset is grep-like: literals, `.`, postfix `*` `+` `?`, lin
 
 ```bash
 # Wait for a state transition, then prove nothing degraded.
-zero-native automate assert --timeout-ms 10000 '4 open'
-zero-native automate assert --absent 'error event=' 'dispatch_errors=[1-9]'
+native automate assert --timeout-ms 10000 '4 open'
+native automate assert --absent 'error event=' 'dispatch_errors=[1-9]'
 ```
 
 ## The generated workflow
 
-`zero-native init` writes two jobs for native apps (web-frontend scaffolds get the `test` job only, since the smoke recipe is native-specific):
+`native init` writes two jobs for native apps (web-frontend scaffolds get the `test` job only, since the smoke recipe is native-specific):
 
 ```yaml
 env:
-  # build.zig.zon expects the zero-native framework checkout at this
+  # build.zig.zon expects the Native SDK framework checkout at this
   # path, relative to the repository root.
-  ZERO_NATIVE_PATH: "../zero-native"
+  NATIVE_SDK_PATH: "../native-sdk"
 ```
 
-Both jobs fetch the framework into that path when it is missing, so the app's `build.zig.zon` path dependency resolves on a fresh runner. If your framework checkout lives elsewhere (or you scaffolded from an unusual directory), adjust `ZERO_NATIVE_PATH` and `build.zig.zon` together.
+Both jobs fetch the framework into that path when it is missing, so the app's `build.zig.zon` path dependency resolves on a fresh runner. If your framework checkout lives elsewhere (or you scaffolded from an unusual directory), adjust `NATIVE_SDK_PATH` and `build.zig.zon` together.
 
 The `test` job is tier 1:
 
@@ -65,21 +65,21 @@ The `smoke` job is tier 2. It installs GTK and Xvfb, builds the framework CLI, t
 - name: Build and drive the app headless
   run: |
     set -euo pipefail
-    cli="$ZERO_NATIVE_PATH/zig-out/bin/zero-native"
+    cli="$NATIVE_SDK_PATH/zig-out/bin/native"
     zig build -Dplatform=linux -Dweb-engine=system -Dautomation=true
-    rm -rf .zig-cache/zero-native-automation
+    rm -rf .zig-cache/native-sdk-automation
     xvfb-run -a ./zig-out/bin/my-app &
     pid=$!
     trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
     "$cli" automate wait
     "$cli" automate assert 'gpu_nonblank=true' 'role=button name="Reset"' 'count: 0'
     "$cli" automate screenshot main-canvas
-    test -s .zig-cache/zero-native-automation/screenshot-main-canvas.png
+    test -s .zig-cache/native-sdk-automation/screenshot-main-canvas.png
 ```
 
 Step by step:
 
-1. `rm -rf .zig-cache/zero-native-automation` clears stale automation artifacts so assertions never pass against a previous run.
+1. `rm -rf .zig-cache/native-sdk-automation` clears stale automation artifacts so assertions never pass against a previous run.
 2. `xvfb-run -a` launches the real binary under a virtual display; the `trap` guarantees the app dies with the job.
 3. `automate wait` blocks until the runtime publishes `ready=true`.
 4. `automate assert` proves the GPU surface presented non-blank pixels and the scaffolded counter UI (the Reset button and the `count: 0` status bar) reached the accessibility snapshot.

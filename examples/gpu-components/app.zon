@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.gpu_components",
+    .id = "dev.native_sdk.gpu_components",
     .name = "gpu-components",
     .display_name = "GPU Components",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native GPU Components",
+                .title = "Native SDK GPU Components",
                 .width = 1180,
                 .height = 760,
                 .restore_state = false,

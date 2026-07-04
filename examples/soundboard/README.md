@@ -1,6 +1,6 @@
-# zero-native soundboard example
+# Native SDK soundboard example
 
-A music-library browser built to showcase native-rendered zero-native UI: an album grid with cover art through the runtime image pipeline, track lists with native context menus, a now-playing bar with transport controls and a seek slider, live search, and a custom light/dark theme.
+A music-library browser built to showcase native-rendered Native SDK UI: an album grid with cover art through the runtime image pipeline, track lists with native context menus, a now-playing bar with transport controls and a seek slider, live search, and a custom light/dark theme.
 
 **Playback is simulated.** Pressing play starts a repeating runtime timer effect (`fx.startTimer`) that advances a progress counter; no audio is decoded or played. Everything else is real: typed dispatch, the effects channel (the timer, plus a `pbcopy` spawn behind the Copy Title context-menu item), platform image decoding, native scrolling, and OS context menus.
 
@@ -46,5 +46,5 @@ Verify live through the automation harness:
 ```sh
 zig build -Dplatform=macos -Dweb-engine=system -Dautomation=true
 ./zig-out/bin/soundboard &
-zero-native automate assert 'gpu_nonblank=true' 'role=listitem name="Midnight Voltage by Neon Cascade"' 'role=button name="Play or pause"'
+native automate assert 'gpu_nonblank=true' 'role=listitem name="Midnight Voltage by Neon Cascade"' 'role=button name="Play or pause"'
 ```

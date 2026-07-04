@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.habits",
+    .id = "dev.native_sdk.habits",
     .name = "habits",
     .display_name = "Habits",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Habits",
+                .title = "Native SDK Habits",
                 .width = 720,
                 .height = 520,
                 .restore_state = false,

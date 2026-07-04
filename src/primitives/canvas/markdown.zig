@@ -1,4 +1,4 @@
-//! `zero_native.markdown` — a GitHub-flavored-markdown subset mapped onto
+//! `native_sdk.markdown` — a GitHub-flavored-markdown subset mapped onto
 //! the widget tree + inline span model.
 //!
 //! `Markdown(Msg).view(ui, source, options)` returns an ordinary builder

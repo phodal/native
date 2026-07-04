@@ -1,4 +1,4 @@
-# zero-native gpu-dashboard example
+# Native SDK gpu-dashboard example
 
 This example combines native app chrome, a `gpu_surface`, and a retained canvas display list:
 

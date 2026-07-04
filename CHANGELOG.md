@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to zero-native will be documented in this file.
+All notable changes to the Native SDK (formerly zero-native) will be documented in this file.
 
 ## Unreleased
 

@@ -1,7 +1,7 @@
 //! Runtime-owned application loop for the declarative ui builder.
 //!
 //! `UiApp(Model, Msg)` wraps an elm-style app — model value, `update`
-//! function, `view` function — as a `zero_native.App`, owning everything the
+//! function, `view` function — as a `native_sdk.App`, owning everything the
 //! builder examples previously hand-rolled: the two-arena rebuild swap, the
 //! first-frame install choreography (`setCanvasWidgetLayout` +
 //! `emitCanvasWidgetDisplayList`), presentation buffers, resize handling,

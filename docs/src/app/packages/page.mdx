@@ -1,6 +1,6 @@
 # Package Distribution
 
-zero-native is distributed as a Zig codebase plus a small npm wrapper package for the CLI. The former primitive modules (`geometry`, `assets`, `app_dirs`, `trace`, `app_manifest`, `diagnostics`, and `platform_info`) are now internal zero-native modules and are available through the main `zero-native` import instead of standalone Zig packages.
+The Native SDK is distributed as a Zig codebase plus a small npm wrapper package for the CLI. The former primitive modules (`geometry`, `assets`, `app_dirs`, `trace`, `app_manifest`, `diagnostics`, and `platform_info`) are now internal Native SDK modules and are available through the main `native_sdk` import instead of standalone Zig packages.
 
 <table>
   <thead>
@@ -11,18 +11,18 @@ zero-native is distributed as a Zig codebase plus a small npm wrapper package fo
   </thead>
   <tbody>
     <tr>
-      <td><code>zero-native</code></td>
-      <td>npm package that installs the <code>zero-native</code> command and wraps the native Zig CLI binary</td>
+      <td><code>@native-sdk/cli</code></td>
+      <td>npm package that installs the <code>native</code> command and wraps the native Zig CLI binary</td>
     </tr>
   </tbody>
 </table>
 
 ## Install
 
-The zero-native CLI is published to npm as `zero-native`:
+The Native SDK CLI is published to npm as `@native-sdk/cli`:
 
 ```bash
-npm install -g zero-native
+npm install -g @native-sdk/cli
 ```
 
-The npm package includes prebuilt binaries for macOS (arm64/x64), Linux (gnu/musl, arm64/x64), and Windows (x64). See `packages/zero-native/` in the repository for the wrapper scripts and packaging metadata.
+The npm package includes prebuilt binaries for macOS (arm64/x64), Linux (gnu/musl, arm64/x64), and Windows (x64). See `packages/native-sdk/` in the repository for the wrapper scripts and packaging metadata.

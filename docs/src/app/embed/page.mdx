@@ -1,11 +1,11 @@
 # Embedded App
 
-`EmbeddedApp` drives the runtime without the full platform event loop. Use it for embedding zero-native in an existing application, game engine, or custom render loop.
+`EmbeddedApp` drives the runtime without the full platform event loop. Use it for embedding the Native SDK in an existing application, game engine, or custom render loop.
 
 ## Usage
 
 ```zig
-var embedded = zero_native.embed.EmbeddedApp.init(my_app.app(), my_platform);
+var embedded = native_sdk.embed.EmbeddedApp.init(my_app.app(), my_platform);
 
 try embedded.start();
 
@@ -66,16 +66,16 @@ try embedded.stop();
 
 ## How it works
 
-`EmbeddedApp` wraps a `Runtime` and an `App`. Each method dispatches a platform event via `runtime.dispatchPlatformEvent`, giving you full control over the event loop while still using zero-native's runtime, bridge, and window management.
+`EmbeddedApp` wraps a `Runtime` and an `App`. Each method dispatches a platform event via `runtime.dispatchPlatformEvent`, giving you full control over the event loop while still using Native SDK's runtime, bridge, and window management.
 
 ## Mobile examples
 
 The repository includes full mobile host examples:
 
-- `examples/ios` - Xcode project with a Swift `UIViewController`, `WKWebView`, and `zero_native.h` bridge.
-- `examples/android` - Gradle/Kotlin project with JNI and CMake wiring for `libzero-native.a`.
+- `examples/ios` - Xcode project with a Swift `UIViewController`, `WKWebView`, and `native_sdk.h` bridge.
+- `examples/android` - Gradle/Kotlin project with JNI and CMake wiring for `libnative-sdk.a`.
 
-Both examples expect a local `libzero-native.a` built from the repository and copied into the path documented in each example README.
+Both examples expect a local `libnative-sdk.a` built from the repository and copied into the path documented in each example README.
 
 ## Mobile host contract
 
@@ -85,65 +85,65 @@ Mobile embedding uses the same runtime lifecycle through a thin native host:
   <thead>
     <tr>
       <th>Host event</th>
-      <th>zero-native call</th>
+      <th>Native SDK call</th>
       <th>Current examples</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td>View/controller creation</td>
-      <td><code>zero_native_app_create</code>, configure packaged assets if needed, then <code>zero_native_app_start</code></td>
+      <td><code>native_sdk_app_create</code>, configure packaged assets if needed, then <code>native_sdk_app_start</code></td>
       <td>Swift <code>viewDidLoad</code>; Android <code>onCreate</code></td>
     </tr>
     <tr>
       <td>Packaged asset source</td>
-      <td><code>zero_native_app_set_asset_root</code> and <code>zero_native_app_set_asset_entry</code> before startup</td>
+      <td><code>native_sdk_app_set_asset_root</code> and <code>native_sdk_app_set_asset_entry</code> before startup</td>
       <td>Generated package hosts point the runtime at the bundled asset root and manifest frontend entry</td>
     </tr>
     <tr>
       <td>App activation lifecycle</td>
-      <td><code>zero_native_app_activate</code>, <code>zero_native_app_deactivate</code></td>
+      <td><code>native_sdk_app_activate</code>, <code>native_sdk_app_deactivate</code></td>
       <td>Swift <code>SceneDelegate</code> active/resign-active callbacks; Android <code>onResume</code>/<code>onPause</code></td>
     </tr>
     <tr>
       <td>Content size or surface changes</td>
-      <td><code>zero_native_app_resize</code>, then <code>zero_native_app_frame</code></td>
+      <td><code>native_sdk_app_resize</code>, then <code>native_sdk_app_frame</code></td>
       <td>Swift <code>viewDidLayoutSubviews</code>; Android <code>surfaceChanged</code> with orientation/screen-size changes handled in the same activity</td>
     </tr>
     <tr>
       <td>Touch input</td>
-      <td><code>zero_native_app_touch</code>, then <code>zero_native_app_frame</code></td>
+      <td><code>native_sdk_app_touch</code>, then <code>native_sdk_app_frame</code></td>
       <td>Android forwards <code>MotionEvent</code> data; iOS keeps touch handling in UIKit/WebKit for now</td>
     </tr>
     <tr>
       <td>Keyboard and inset changes</td>
-      <td>Host layout update, then <code>zero_native_app_resize</code> and <code>zero_native_app_frame</code> when the surface changes</td>
+      <td>Host layout update, then <code>native_sdk_app_resize</code> and <code>native_sdk_app_frame</code> when the surface changes</td>
       <td>Swift keyboard frame notifications adjust the <code>WKWebView</code> constraint; Android uses <code>adjustResize</code></td>
     </tr>
     <tr>
       <td>Native commands</td>
-      <td><code>zero_native_app_command</code></td>
+      <td><code>native_sdk_app_command</code></td>
       <td>Mobile chrome can dispatch stable command IDs such as <code>mobile.back</code> and <code>mobile.refresh</code> through the embedded runtime</td>
     </tr>
     <tr>
       <td>Shutdown</td>
-      <td><code>zero_native_app_stop</code>, then <code>zero_native_app_destroy</code></td>
+      <td><code>native_sdk_app_stop</code>, then <code>native_sdk_app_destroy</code></td>
       <td>Swift controller deinit; Android <code>onDestroy</code></td>
     </tr>
   </tbody>
 </table>
 
-The mobile examples keep navigation/header UI in UIKit or Android views and keep rich content in `WKWebView` or Android `WebView`. Native header buttons and the Android system Back action dispatch command IDs through `zero_native_app_command`, so mobile chrome can use the same command/event model as desktop menus, shortcuts, and native controls. App activation, safe areas, orientation, keyboard avoidance, back gestures, and platform lifecycle ownership stay in the native host. Keyboard changes are handled by native layout first and forwarded to zero-native as resize/frame work when the content surface changes. Mobile `ShellView` metadata maps to generated native host config for the header labels, command buttons, and WebView workspace; dynamic runtime view mutation remains a desktop API for now.
+The mobile examples keep navigation/header UI in UIKit or Android views and keep rich content in `WKWebView` or Android `WebView`. Native header buttons and the Android system Back action dispatch command IDs through `native_sdk_app_command`, so mobile chrome can use the same command/event model as desktop menus, shortcuts, and native controls. App activation, safe areas, orientation, keyboard avoidance, back gestures, and platform lifecycle ownership stay in the native host. Keyboard changes are handled by native layout first and forwarded to the Native SDK as resize/frame work when the content surface changes. Mobile `ShellView` metadata maps to generated native host config for the header labels, command buttons, and WebView workspace; dynamic runtime view mutation remains a desktop API for now.
 
 ## Testing with EmbeddedApp
 
 ```zig
-var null_platform = zero_native.NullPlatform.init(.{});
+var null_platform = native_sdk.NullPlatform.init(.{});
 var state: u8 = 0;
-var embedded = zero_native.embed.EmbeddedApp.init(.{
+var embedded = native_sdk.embed.EmbeddedApp.init(.{
     .context = &state,
     .name = "embedded",
-    .source = zero_native.WebViewSource.html("<p>Embedded</p>"),
+    .source = native_sdk.WebViewSource.html("<p>Embedded</p>"),
 }, null_platform.platform());
 
 try embedded.start();

@@ -1,6 +1,6 @@
 const std = @import("std");
-const zero_native = @import("zero_native");
+const native_sdk = @import("native_sdk");
 
 pub fn build(b: *std.Build) void {
-    zero_native.addApp(b, b.dependency("zero_native", .{}), .{ .name = "habits" });
+    native_sdk.addApp(b, b.dependency("native_sdk", .{}), .{ .name = "habits" });
 }

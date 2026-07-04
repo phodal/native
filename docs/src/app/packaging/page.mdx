@@ -1,6 +1,6 @@
 # Packaging
 
-zero-native provides tooling to bundle your app into distributable packages for macOS, Linux, and Windows. Chromium packaging is currently supported for macOS and includes the CEF runtime when `.web_engine = "chromium"` and the matching CEF layout is installed.
+The Native SDK provides tooling to bundle your app into distributable packages for macOS, Linux, and Windows. Chromium packaging is currently supported for macOS and includes the CEF runtime when `.web_engine = "chromium"` and the matching CEF layout is installed.
 
 ## Quick start
 
@@ -13,7 +13,7 @@ zig build package
 Or use the CLI directly with more control:
 
 ```bash
-zero-native package --target macos --manifest app.zon --binary zig-out/bin/MyApp
+native package --target macos --manifest app.zon --binary zig-out/bin/MyApp
 ```
 
 ## Build options
@@ -158,7 +158,7 @@ Linux packaging creates an install tree:
 - `share/mime/packages/<name>.xml` -- shared MIME metadata when file associations are configured
 
 ```bash
-zero-native package --target linux --manifest app.zon --binary zig-out/bin/MyApp
+native package --target linux --manifest app.zon --binary zig-out/bin/MyApp
 ```
 
 Configured file associations and URL schemes are added to the desktop file `MimeType` list. Extension-only associations get generated `application/x-...` MIME types with glob patterns in the shared MIME package.
@@ -166,7 +166,7 @@ Configured file associations and URL schemes are added to the desktop file `Mime
 ## Windows
 
 ```bash
-zero-native package --target windows --manifest app.zon --binary zig-out/bin/MyApp.exe
+native package --target windows --manifest app.zon --binary zig-out/bin/MyApp.exe
 ```
 
 Windows packaging is in early development. The packager copies the binary and assets into a distributable directory structure. When file associations or URL schemes are configured, the artifact also includes `install/register-file-types.ps1`, which registers the package-local executable under the current user's `HKCU\Software\Classes` registry keys.
@@ -229,9 +229,9 @@ This copies the required CEF framework, libraries, and resources into the app bu
 Use the same CEF version for install, build, package, and CI verification. The usual app-developer flow is:
 
 ```bash
-zero-native cef install --version <pinned-version>
+native cef install --version <pinned-version>
 zig build
-zero-native package --target macos
+native package --target macos
 ```
 
 Set `.web_engine = "chromium"` and `.cef = .{ .dir = "third_party/cef/macos", .auto_install = false }` in `app.zon` for the normal Chromium package path. Use `-Dweb-engine`, `--web-engine`, `-Dcef-dir`, or `--cef-dir` only when you need a one-off override.
@@ -259,21 +259,21 @@ This produces `icon.icns` (macOS) and `icon.ico` (Windows) from `assets/icon.png
 Check that your manifest and environment are ready for packaging:
 
 ```bash
-zero-native doctor --manifest app.zon --strict
-zero-native validate app.zon
+native doctor --manifest app.zon --strict
+native validate app.zon
 ```
 
-`doctor` checks the host environment, WebView availability, manifest validity, log paths, and optional CEF paths. Add `--strict` to fail on any warning. See [Debugging](/debugging) for details on what `zero-native doctor` checks.
+`doctor` checks the host environment, WebView availability, manifest validity, log paths, and optional CEF paths. Add `--strict` to fail on any warning. See [Debugging](/debugging) for details on what `native doctor` checks.
 
 ## Platform shortcut commands
 
-In addition to `zero-native package --target <platform>`, the CLI provides shortcut commands:
+In addition to `native package --target <platform>`, the CLI provides shortcut commands:
 
 ```bash
-zero-native package-windows [--output path] [--binary path]
-zero-native package-linux [--output path] [--binary path]
-zero-native package-ios [--output path] [--binary path]
-zero-native package-android [--output path] [--binary path]
+native package-windows [--output path] [--binary path]
+native package-linux [--output path] [--binary path]
+native package-ios [--output path] [--binary path]
+native package-android [--output path] [--binary path]
 ```
 
 ## Platform targets

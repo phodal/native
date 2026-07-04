@@ -7,10 +7,10 @@
 //! that composes all of it into one tree.
 
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const model_mod = @import("model.zig");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 
 pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;

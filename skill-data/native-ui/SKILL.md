@@ -1,14 +1,14 @@
 ---
 name: native-ui
-description: Authoring guide for native-rendered zero-native apps - declarative .zml markup views plus Zig logic on the UiApp loop. Use when building or modifying native UI (widgets, layout, bindings, messages), writing .zml files, wiring Model/Msg/update, testing markup views, or verifying a native app through the automation harness.
+description: Authoring guide for native-rendered Native SDK apps - declarative .zml markup views plus Zig logic on the UiApp loop. Use when building or modifying native UI (widgets, layout, bindings, messages), writing .zml files, wiring Model/Msg/update, testing markup views, or verifying a native app through the automation harness.
 ---
 
 # Author native UI with markup + Zig
 
-A native-rendered zero-native app is a markup view plus Zig logic:
+A native-rendered Native SDK app is a markup view plus Zig logic:
 
 - `src/<view>.zml` — the entire UI: elements, layout, bindings, message dispatch.
-- `src/main.zig` — `Model` (plain struct), `Msg` (tagged union), `update(model, msg)`, and a `main` that hands them to `zero_native.UiApp(Model, Msg)`.
+- `src/main.zig` — `Model` (plain struct), `Msg` (tagged union), `update(model, msg)`, and a `main` that hands them to `native_sdk.UiApp(Model, Msg)`.
 
 The markup compiles to the same widget tree a hand-written `canvas.Ui(Msg)` builder view would produce: identical structural widget ids, identical typed handler table. Markup can never mutate state — it binds values and dispatches messages; all logic lives in Zig.
 
@@ -19,7 +19,7 @@ Start a new app by copying `examples/habits/` (smallest) or `examples/ui-inbox/`
 ## App wiring
 
 ```zig
-const HabitsApp = zero_native.UiApp(Model, Msg);
+const HabitsApp = native_sdk.UiApp(Model, Msg);
 
 pub fn main(init: std.process.Init) !void {
     const app_state = try std.heap.page_allocator.create(HabitsApp); // multi-MB struct: never on the stack
@@ -46,7 +46,7 @@ The runtime owns the loop: install on first GPU frame, presentation, resize, poi
 
 ```zig
 const dev = @import("builtin").mode == .Debug;
-const App = zero_native.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev });
+const App = native_sdk.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev });
 const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("habits.zml"));
 // options:
 .view = CompiledView.build,
@@ -60,7 +60,7 @@ With both set (dev), the compiled view renders until the watched file first chan
 Declare the webview in the scene next to the gpu_surface (parent it to the canvas view), reserve its region with an empty panel carrying a semantics label, and let `Options.web_panes` snap the webview to that widget's layout frame while the model drives navigation:
 
 ```zig
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "app-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
     .{ .label = "preview", .kind = .webview, .parent = "app-canvas", .url = "https://example.com/", .x = 240, .y = 76, .width = 704, .height = 548 },
 };
@@ -293,7 +293,7 @@ Static text is selectable too: click-drag inside one `text` leaf or `paragraph` 
 `update` can take a third parameter — the effects channel — by declaring `.update_fx` instead of `.update` (existing two-argument apps are untouched; set exactly one):
 
 ```zig
-const App = zero_native.UiApp(Model, Msg);
+const App = native_sdk.UiApp(Model, Msg);
 const Effects = App.Effects;
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void { ... }
@@ -321,8 +321,8 @@ fn boot(model: *Model, fx: *Effects) void {
 pub const Msg = union(enum) {
     start,
     cancel,
-    line: zero_native.EffectLine,     // payload types are fixed
-    exited: zero_native.EffectExit,
+    line: native_sdk.EffectLine,     // payload types are fixed
+    exited: native_sdk.EffectExit,
 };
 
 .start => fx.spawn(.{
@@ -354,7 +354,7 @@ Rules that keep this honest:
 pub const Msg = union(enum) {
     load,
     stop,
-    fetched: zero_native.EffectResponse,   // the fixed payload type
+    fetched: native_sdk.EffectResponse,   // the fixed payload type
 };
 
 .load => fx.fetch(.{
@@ -406,8 +406,8 @@ Stream rules: each body line is one `on_line` Msg (same payload type and copy ru
 pub const Msg = union(enum) {
     save,
     boot,
-    saved: zero_native.EffectFileResult,   // the fixed payload type
-    loaded: zero_native.EffectFileResult,
+    saved: native_sdk.EffectFileResult,   // the fixed payload type
+    loaded: native_sdk.EffectFileResult,
 };
 
 .save => fx.writeFile(.{
@@ -435,7 +435,7 @@ File rules:
 
 ```zig
 pub const Msg = union(enum) {
-    tick: zero_native.EffectTimer,    // the fixed payload type
+    tick: native_sdk.EffectTimer,    // the fixed payload type
     ...
 };
 
@@ -483,20 +483,20 @@ The `.wake` platform event is how live platforms marshal worker completions onto
 Zig 0.16 puts `std.time.milliTimestamp` behind `std.Io`, which `update` never sees — do NOT call `clock_gettime` yourself. The facade owns the clocks:
 
 ```zig
-zero_native.nowMs()                  // wall ms since the Unix epoch (i64) — ledger timestamps
-zero_native.nowNanoseconds()         // wall ns (i128)
-zero_native.monotonicMs()            // duration clock (u64, arbitrary origin, never goes backwards)
-zero_native.monotonicNanoseconds()   // subtract two reads for an elapsed time
+native_sdk.nowMs()                  // wall ms since the Unix epoch (i64) — ledger timestamps
+native_sdk.nowNanoseconds()         // wall ns (i128)
+native_sdk.monotonicMs()            // duration clock (u64, arbitrary origin, never goes backwards)
+native_sdk.monotonicNanoseconds()   // subtract two reads for an elapsed time
 ```
 
 Time-DEPENDENT logic (elapsed-time display, timeouts driven from update) should hold the seam in the model instead of calling the free functions, so tests stay deterministic:
 
 ```zig
-pub const Model = struct { clock: zero_native.Clock = .system, ... };
+pub const Model = struct { clock: native_sdk.Clock = .system, ... };
 .step_started => model.entry.started_ms = model.clock.wallMs(),
 
 // in tests:
-var test_clock: zero_native.TestClock = .{};
+var test_clock: native_sdk.TestClock = .{};
 model.clock = test_clock.clock();
 test_clock.advanceMs(1500);          // moves wall + monotonic together
 test_clock.setWallMs(1_700_000_000_000);  // NTP-style wall jump, monotonic untouched
@@ -590,7 +590,7 @@ Both engines implement templates: the interpreter expands at build time, `Compil
 
 ## Markdown in markup: `<markdown>`
 
-A leaf element that renders a markdown string (the GFM subset below) as ordinary widgets, wiring `zero_native.markdown` for you — both engines implement it identically:
+A leaf element that renders a markdown string (the GFM subset below) as ordinary widgets, wiring `native_sdk.markdown` for you — both engines implement it identically:
 
 ```html
 <markdown source="{issue_body}" on-link="open_url" on-details="toggle_details" details-expanded="{details_expanded}" />
@@ -647,7 +647,7 @@ ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 Markdown (GitHub-flavored subset) maps onto the same widgets. In markup use the `<markdown>` element above; from a Zig view call it directly:
 
 ```zig
-const Md = zero_native.markdown.Markdown(Msg);
+const Md = native_sdk.markdown.Markdown(Msg);
 // inside view():
 Md.view(ui, model.body_markdown, .{
     .on_link = Ui.linkMsg(.open_url),
@@ -662,7 +662,7 @@ Md.view(ui, model.body_markdown, .{
 
 ## Validate without building
 
-`zero-native markup check src/view.zml` — instant grammar/structure validation with `file:line:column` errors. Binding paths and message tags are checked against your actual Model/Msg when the app builds (and on hot reload).
+`native markup check src/view.zml` — instant grammar/structure validation with `file:line:column` errors. Binding paths and message tags are checked against your actual Model/Msg when the app builds (and on hot reload).
 
 ## Testing pattern
 
@@ -679,23 +679,23 @@ main.update(&model, tree.msgForPointer(button.id, .up).?);        // dispatch ex
 
 Two `msgForPointer` traps: a **disabled** control yields `null` (assert `== null` rather than unwrapping when testing disabled states), and the tree is a snapshot — after each dispatch, rebuild the view before pressing anything again.
 
-Runtime-integration tests use `zero_native.TestHarness()` on the null platform; heap-allocate both the harness and the app struct (they are multi-megabyte; stack allocation crashes).
+Runtime-integration tests use `native_sdk.TestHarness()` on the null platform; heap-allocate both the harness and the app struct (they are multi-megabyte; stack allocation crashes).
 
 ## Verify live through the automation harness
 
 ```bash
 zig build -Dplatform=macos -Dweb-engine=system -Dautomation=true
 ./zig-out/bin/<app> &   # run from the example directory
-zero-native automate wait                     # blocks until ready=true
-cat .zig-cache/zero-native-automation/snapshot.txt   # widgets with ids, roles, names, bounds, state
-zero-native automate widget-click <canvas-label> <id>   # id is the bare number (snapshot prints #id)
+native automate wait                     # blocks until ready=true
+cat .zig-cache/native-sdk-automation/snapshot.txt   # widgets with ids, roles, names, bounds, state
+native automate widget-click <canvas-label> <id>   # id is the bare number (snapshot prints #id)
 ```
 
 Snapshots expose the same structural widget ids your tests see, so live assertions are greps: click by id, re-read the snapshot, and check names/values/counts changed. Widget ids are stable across rebuilds, reorders, and hot reloads — asserting an id stayed constant while its bounds or state changed is the standard way to prove keyed identity.
 
-For scripted checks (and the CI workflow `zero-native init` scaffolds), replace grep-and-sleep with `zero-native automate assert`: each argument is a regex that must match the snapshot, polled up to `--timeout-ms` (default 30000), with `--absent` inverting the check. Failure names the missing patterns and prints the snapshot tail.
+For scripted checks (and the CI workflow `native init` scaffolds), replace grep-and-sleep with `native automate assert`: each argument is a regex that must match the snapshot, polled up to `--timeout-ms` (default 30000), with `--absent` inverting the check. Failure names the missing patterns and prints the snapshot tail.
 
 ```bash
-zero-native automate assert 'gpu_nonblank=true' 'role=button name="Reset"' 'count: 0'
-zero-native automate assert --absent 'error event='
+native automate assert 'gpu_nonblank=true' 'role=button name="Reset"' 'count: 0'
+native automate assert --absent 'error event='
 ```

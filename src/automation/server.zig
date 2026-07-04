@@ -9,7 +9,7 @@ const windows_initial_capacity: usize = 1024;
 pub const Server = struct {
     io: std.Io,
     directory: []const u8 = protocol.default_dir,
-    title: []const u8 = "zero-native",
+    title: []const u8 = "native-sdk",
 
     pub fn init(io: std.Io, directory: []const u8, title: []const u8) Server {
         return .{ .io = io, .directory = directory, .title = title };
@@ -124,7 +124,7 @@ test "server publishes large retained widget snapshots" {
             .id = 1000 + index,
             .role = "textbox",
             .name = "Retained component field with a descriptive accessible name",
-            .text_value = "zero-native retained widget snapshot payload",
+            .text_value = "native-sdk retained widget snapshot payload",
             .bounds = geometry.RectF.init(@floatFromInt(index), @floatFromInt(index), 180, 28),
             .actions = .{ .focus = true, .set_text = true, .set_selection = true },
             .text_selection = .{ .start = 1, .end = 12 },

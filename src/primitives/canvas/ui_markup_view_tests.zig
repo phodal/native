@@ -1566,7 +1566,7 @@ pub const AvatarModel = struct {
 pub const avatar_markup_source =
     \\<row gap="8" cross="center">
     \\  <avatar image="{user_image}" label="{user_name}">CT</avatar>
-    \\  <avatar image="{teammateImage}">ZN</avatar>
+    \\  <avatar image="{teammateImage}">NS</avatar>
     \\</row>
 ;
 
@@ -1577,7 +1577,7 @@ pub const AvatarUi = canvas.Ui(AvatarMsg);
 pub fn handAvatarView(ui: *AvatarUi, model: *const AvatarModel) AvatarUi.Node {
     return ui.row(.{ .gap = 8, .cross = .center }, .{
         ui.avatar(.{ .image = model.user_image, .semantics = .{ .label = model.user_name } }, "CT"),
-        ui.avatar(.{ .image = model.teammateImage() }, "ZN"),
+        ui.avatar(.{ .image = model.teammateImage() }, "NS"),
     });
 }
 
@@ -1610,7 +1610,7 @@ test "the avatar image binding resolves model fields and fns to the widget image
     try testing.expectEqual(@as(canvas.ImageId, 7), field_avatar.image_id);
     try testing.expectEqual(canvas.ImageFit.cover, field_avatar.image_fit);
     try testing.expectEqualStrings("Chris Tate", field_avatar.semantics.label);
-    const fn_avatar = findByText(markup_tree.root, .avatar, "ZN").?;
+    const fn_avatar = findByText(markup_tree.root, .avatar, "NS").?;
     try testing.expectEqual(@as(canvas.ImageId, 8), fn_avatar.image_id);
 
     // 0 is the "no image" sentinel: the widget stays on the initials

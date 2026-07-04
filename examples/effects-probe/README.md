@@ -17,7 +17,7 @@ zig build run
 ```bash
 zig build -Dplatform=macos -Dweb-engine=system -Dautomation=true
 ./zig-out/bin/effects-probe &
-zero-native automate wait
+native automate wait
 # click Start (find the id in snapshot.txt), watch "stream line N" grow,
 # click Cancel, verify the count stops and the status shows "cancelled".
 ```

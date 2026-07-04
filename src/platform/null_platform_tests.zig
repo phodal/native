@@ -185,17 +185,17 @@ test "null platform records OS actions" {
 
     try services.showNotification(.{
         .title = "Build finished",
-        .subtitle = "zero-native",
+        .subtitle = "native-sdk",
         .body = "All checks passed.",
     });
     try services.openExternalUrl("https://example.com/docs");
     try services.revealPath("/tmp/example.txt");
     try services.addRecentDocument("/tmp/recent.txt");
     try services.writeClipboard("plain text");
-    try services.setCredential(.{ .service = "dev.zero-native.test", .account = "alice", .secret = "secret-token" });
+    try services.setCredential(.{ .service = "dev.native-sdk.test", .account = "alice", .secret = "secret-token" });
     try services.createTray(.{
         .icon_path = "/tmp/tray.png",
-        .tooltip = "zero-native",
+        .tooltip = "native-sdk",
         .items = &.{
             .{ .id = 1, .label = "Open" },
             .{ .separator = true },
@@ -205,7 +205,7 @@ test "null platform records OS actions" {
 
     try std.testing.expectEqual(@as(usize, 1), null_platform.notificationCount());
     try std.testing.expectEqualStrings("Build finished", null_platform.lastNotificationTitle());
-    try std.testing.expectEqualStrings("zero-native", null_platform.lastNotificationSubtitle());
+    try std.testing.expectEqualStrings("native-sdk", null_platform.lastNotificationSubtitle());
     try std.testing.expectEqualStrings("All checks passed.", null_platform.lastNotificationBody());
     try std.testing.expectEqualStrings("https://example.com/docs", null_platform.lastExternalUrl());
     try std.testing.expectEqualStrings("/tmp/example.txt", null_platform.lastRevealedPath());
@@ -223,12 +223,12 @@ test "null platform records OS actions" {
     try std.testing.expectError(error.UnsupportedService, services.readClipboardData("text/plain", &clipboard_buffer));
 
     try std.testing.expectEqual(@as(usize, 1), null_platform.credentialSetCount());
-    try std.testing.expectEqualStrings("dev.zero-native.test", null_platform.lastCredentialService());
+    try std.testing.expectEqualStrings("dev.native-sdk.test", null_platform.lastCredentialService());
     try std.testing.expectEqualStrings("alice", null_platform.lastCredentialAccount());
     try std.testing.expectEqualStrings("secret-token", null_platform.lastCredentialSecret());
     try std.testing.expectEqual(@as(usize, 1), null_platform.trayCreateCount());
     try std.testing.expectEqualStrings("/tmp/tray.png", null_platform.lastTrayIconPath());
-    try std.testing.expectEqualStrings("zero-native", null_platform.lastTrayTooltip());
+    try std.testing.expectEqualStrings("native-sdk", null_platform.lastTrayTooltip());
     try std.testing.expectEqual(@as(usize, 3), null_platform.trayItems().len);
     try std.testing.expectEqual(@as(TrayItemId, 1), null_platform.trayItems()[0].id);
     try std.testing.expectEqualStrings("Open", null_platform.trayItems()[0].label);
@@ -237,12 +237,12 @@ test "null platform records OS actions" {
     try std.testing.expect(!null_platform.trayItems()[2].enabled);
 
     var credential_buffer: [64]u8 = undefined;
-    const secret = try services.getCredential(.{ .service = "dev.zero-native.test", .account = "alice" }, &credential_buffer);
+    const secret = try services.getCredential(.{ .service = "dev.native-sdk.test", .account = "alice" }, &credential_buffer);
     try std.testing.expectEqualStrings("secret-token", secret);
-    try std.testing.expectError(error.CredentialNotFound, services.getCredential(.{ .service = "dev.zero-native.test", .account = "bob" }, &credential_buffer));
-    try services.deleteCredential(.{ .service = "dev.zero-native.test", .account = "alice" });
+    try std.testing.expectError(error.CredentialNotFound, services.getCredential(.{ .service = "dev.native-sdk.test", .account = "bob" }, &credential_buffer));
+    try services.deleteCredential(.{ .service = "dev.native-sdk.test", .account = "alice" });
     try std.testing.expectEqual(@as(usize, 1), null_platform.credentialDeleteCount());
-    try std.testing.expectError(error.CredentialNotFound, services.getCredential(.{ .service = "dev.zero-native.test", .account = "alice" }, &credential_buffer));
+    try std.testing.expectError(error.CredentialNotFound, services.getCredential(.{ .service = "dev.native-sdk.test", .account = "alice" }, &credential_buffer));
 
     try services.clearRecentDocuments();
     try std.testing.expectEqual(@as(usize, 1), null_platform.recentDocumentsClearedCount());

@@ -1,8 +1,8 @@
 const std = @import("std");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
 const window_width: f32 = 1120;
 const window_height: f32 = 720;
@@ -81,8 +81,8 @@ const html =
     \\</html>
 ;
 
-const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
-const shell_views = [_]zero_native.ShellView{
+const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = toolbar_height, .layer = 20, .role = "Toolbar" },
     .{ .label = "toolbar-title", .kind = .label, .parent = "toolbar", .x = 18, .y = 16, .width = 220, .height = 20, .layer = 21, .text = "GPU Surface" },
     .{ .label = "frame-mode", .kind = .segmented_control, .parent = "toolbar", .x = 252, .y = 11, .width = 178, .height = 30, .layer = 21, .text = "Canvas|Hybrid", .command = mode_command },
@@ -93,14 +93,14 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "statusbar", .kind = .statusbar, .edge = .bottom, .height = statusbar_height, .layer = 20, .role = "Status" },
     .{ .label = "status-label", .kind = .label, .parent = "statusbar", .x = 14, .y = 8, .width = 720, .height = 18, .layer = 21, .text = "Metal surface ready." },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native GPU Surface",
+    .title = "Native SDK GPU Surface",
     .width = window_width,
     .height = window_height,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 const GpuSurfaceApp = struct {
     refresh_count: u32 = 0,
@@ -109,22 +109,22 @@ const GpuSurfaceApp = struct {
     gpu_resize_count: u32 = 0,
     gpu_input_count: u32 = 0,
 
-    fn app(self: *@This()) zero_native.App {
+    fn app(self: *@This()) native_sdk.App {
         return .{
             .context = self,
             .name = "gpu-surface",
-            .source = zero_native.WebViewSource.html(html),
+            .source = native_sdk.WebViewSource.html(html),
             .scene_fn = scene,
             .event_fn = event,
         };
     }
 
-    fn scene(context: *anyopaque) anyerror!zero_native.ShellConfig {
+    fn scene(context: *anyopaque) anyerror!native_sdk.ShellConfig {
         _ = context;
         return shell_scene;
     }
 
-    fn event(context: *anyopaque, runtime: *zero_native.Runtime, event_value: zero_native.Event) anyerror!void {
+    fn event(context: *anyopaque, runtime: *native_sdk.Runtime, event_value: native_sdk.Event) anyerror!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         switch (event_value) {
             .command => |command| {
@@ -154,19 +154,19 @@ const GpuSurfaceApp = struct {
         }
     }
 
-    fn updateStatus(self: *@This(), runtime: *zero_native.Runtime, window_id: zero_native.WindowId, text: []const u8) anyerror!void {
+    fn updateStatus(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, text: []const u8) anyerror!void {
         _ = self;
         _ = try runtime.updateView(window_id, "status-label", .{ .text = text });
     }
 
-    fn refresh(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn refresh(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         self.refresh_count += 1;
         var status_buffer: [160]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "GPU surface refreshed from {s}. Count {d}.", .{ @tagName(command.source), self.refresh_count });
         try self.updateStatus(runtime, command.window_id, status);
     }
 
-    fn toggleMode(self: *@This(), runtime: *zero_native.Runtime, command: zero_native.CommandEvent) anyerror!void {
+    fn toggleMode(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
         self.mode_count += 1;
         var status_buffer: [160]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "Mode control fired from {s}. Count {d}.", .{ @tagName(command.source), self.mode_count });
@@ -178,10 +178,10 @@ pub fn main(init: std.process.Init) !void {
     var app = GpuSurfaceApp{};
     try runner.runWithOptions(app.app(), .{
         .app_name = "gpu-surface",
-        .window_title = "zero-native GPU Surface",
-        .bundle_id = "dev.zero_native.gpu_surface",
+        .window_title = "Native SDK GPU Surface",
+        .bundle_id = "dev.native_sdk.gpu_surface",
         .icon_path = "assets/icon.icns",
-        .default_frame = zero_native.geometry.RectF.init(0, 0, window_width, window_height),
+        .default_frame = native_sdk.geometry.RectF.init(0, 0, window_width, window_height),
         .js_window_api = false,
         .security = .{
             .permissions = &app_permissions,

@@ -27,42 +27,42 @@ const mobile_gpu_surface_label = types.mobile_gpu_surface_label;
 const mobileWidgetFlags = conversions.mobileWidgetFlags;
 const mobileWidgetActions = conversions.mobileWidgetActions;
 const mobileWidgetActionKindFromInt = conversions.mobileWidgetActionKindFromInt;
-const zero_native_app_create = c_api.zero_native_app_create;
-const zero_native_app_destroy = c_api.zero_native_app_destroy;
-const zero_native_app_start = c_api.zero_native_app_start;
-const zero_native_app_activate = c_api.zero_native_app_activate;
-const zero_native_app_deactivate = c_api.zero_native_app_deactivate;
-const zero_native_app_resize = c_api.zero_native_app_resize;
-const zero_native_app_viewport = c_api.zero_native_app_viewport;
-const zero_native_app_viewport_state = c_api.zero_native_app_viewport_state;
-const zero_native_app_gpu_frame_state = c_api.zero_native_app_gpu_frame_state;
-const zero_native_app_touch = c_api.zero_native_app_touch;
-const zero_native_app_scroll = c_api.zero_native_app_scroll;
-const zero_native_app_key = c_api.zero_native_app_key;
-const zero_native_app_text = c_api.zero_native_app_text;
-const zero_native_app_ime = c_api.zero_native_app_ime;
-const zero_native_app_command = c_api.zero_native_app_command;
-const zero_native_app_set_asset_root = c_api.zero_native_app_set_asset_root;
-const zero_native_app_set_asset_entry = c_api.zero_native_app_set_asset_entry;
-const zero_native_app_last_command_count = c_api.zero_native_app_last_command_count;
-const zero_native_app_last_command_name = c_api.zero_native_app_last_command_name;
-const zero_native_app_last_error_name = c_api.zero_native_app_last_error_name;
-const zero_native_app_widget_semantics_count = c_api.zero_native_app_widget_semantics_count;
-const zero_native_app_widget_semantics_at = c_api.zero_native_app_widget_semantics_at;
-const zero_native_app_widget_semantics_by_id = c_api.zero_native_app_widget_semantics_by_id;
-const zero_native_app_widget_text_geometry = c_api.zero_native_app_widget_text_geometry;
-const zero_native_app_widget_action = c_api.zero_native_app_widget_action;
+const native_sdk_app_create = c_api.native_sdk_app_create;
+const native_sdk_app_destroy = c_api.native_sdk_app_destroy;
+const native_sdk_app_start = c_api.native_sdk_app_start;
+const native_sdk_app_activate = c_api.native_sdk_app_activate;
+const native_sdk_app_deactivate = c_api.native_sdk_app_deactivate;
+const native_sdk_app_resize = c_api.native_sdk_app_resize;
+const native_sdk_app_viewport = c_api.native_sdk_app_viewport;
+const native_sdk_app_viewport_state = c_api.native_sdk_app_viewport_state;
+const native_sdk_app_gpu_frame_state = c_api.native_sdk_app_gpu_frame_state;
+const native_sdk_app_touch = c_api.native_sdk_app_touch;
+const native_sdk_app_scroll = c_api.native_sdk_app_scroll;
+const native_sdk_app_key = c_api.native_sdk_app_key;
+const native_sdk_app_text = c_api.native_sdk_app_text;
+const native_sdk_app_ime = c_api.native_sdk_app_ime;
+const native_sdk_app_command = c_api.native_sdk_app_command;
+const native_sdk_app_set_asset_root = c_api.native_sdk_app_set_asset_root;
+const native_sdk_app_set_asset_entry = c_api.native_sdk_app_set_asset_entry;
+const native_sdk_app_last_command_count = c_api.native_sdk_app_last_command_count;
+const native_sdk_app_last_command_name = c_api.native_sdk_app_last_command_name;
+const native_sdk_app_last_error_name = c_api.native_sdk_app_last_error_name;
+const native_sdk_app_widget_semantics_count = c_api.native_sdk_app_widget_semantics_count;
+const native_sdk_app_widget_semantics_at = c_api.native_sdk_app_widget_semantics_at;
+const native_sdk_app_widget_semantics_by_id = c_api.native_sdk_app_widget_semantics_by_id;
+const native_sdk_app_widget_text_geometry = c_api.native_sdk_app_widget_text_geometry;
+const native_sdk_app_widget_action = c_api.native_sdk_app_widget_action;
 
 fn mobileWidgetSemanticsByIdForTest(app: ?*anyopaque, id: u64) !MobileWidgetSemantics {
     var node: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_by_id(app, id, &node));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_semantics_by_id(app, id, &node));
     try std.testing.expectEqual(id, node.id);
     return node;
 }
 
 fn expectNoMobileWidgetSemanticsByIdForTest(app: ?*anyopaque, id: u64) !void {
     var node: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_by_id(app, id, &node));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_semantics_by_id(app, id, &node));
 }
 test "embedded app starts and loads source" {
     var null_platform = platform.NullPlatform.init(.{});
@@ -80,12 +80,12 @@ test "embedded app starts and loads source" {
 }
 
 test "mobile C ABI can load packaged asset source" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
-    const asset_root = "/tmp/zero-native-mobile-assets";
-    zero_native_app_set_asset_root(app, asset_root, asset_root.len);
-    zero_native_app_start(app);
+    const asset_root = "/tmp/native-sdk-mobile-assets";
+    native_sdk_app_set_asset_root(app, asset_root, asset_root.len);
+    native_sdk_app_start(app);
 
     const self = mobileApp(app).?;
     const source = self.null_platform.loaded_source.?;
@@ -95,18 +95,18 @@ test "mobile C ABI can load packaged asset source" {
     try std.testing.expectEqualStrings(asset_root, source.asset_options.?.root_path);
     try std.testing.expectEqualStrings("index.html", source.asset_options.?.entry);
     try std.testing.expect(source.asset_options.?.spa_fallback);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI can load custom packaged asset entry" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
-    const asset_root = "/tmp/zero-native-mobile-assets";
+    const asset_root = "/tmp/native-sdk-mobile-assets";
     const asset_entry = "main.html";
-    zero_native_app_set_asset_root(app, asset_root, asset_root.len);
-    zero_native_app_set_asset_entry(app, asset_entry, asset_entry.len);
-    zero_native_app_start(app);
+    native_sdk_app_set_asset_root(app, asset_root, asset_root.len);
+    native_sdk_app_set_asset_entry(app, asset_entry, asset_entry.len);
+    native_sdk_app_start(app);
 
     const self = mobileApp(app).?;
     const source = self.null_platform.loaded_source.?;
@@ -114,45 +114,45 @@ test "mobile C ABI can load custom packaged asset entry" {
     try std.testing.expect(source.asset_options != null);
     try std.testing.expectEqualStrings(asset_root, source.asset_options.?.root_path);
     try std.testing.expectEqualStrings(asset_entry, source.asset_options.?.entry);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI can reset asset root before startup" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
-    const asset_root = "/tmp/zero-native-mobile-assets";
-    zero_native_app_set_asset_root(app, asset_root, asset_root.len);
-    zero_native_app_set_asset_root(app, asset_root, 0);
-    zero_native_app_start(app);
+    const asset_root = "/tmp/native-sdk-mobile-assets";
+    native_sdk_app_set_asset_root(app, asset_root, asset_root.len);
+    native_sdk_app_set_asset_root(app, asset_root, 0);
+    native_sdk_app_start(app);
 
     const self = mobileApp(app).?;
     const source = self.null_platform.loaded_source.?;
     try std.testing.expectEqual(platform.WebViewSourceKind.html, source.kind);
     try std.testing.expectEqualStrings(mobile_html, source.bytes);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI forwards activation lifecycle through embedded runtime" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
-    zero_native_app_start(app);
-    zero_native_app_activate(app);
-    zero_native_app_deactivate(app);
+    native_sdk_app_start(app);
+    native_sdk_app_activate(app);
+    native_sdk_app_deactivate(app);
 
     const self = mobileApp(app).?;
     try std.testing.expectEqual(@as(usize, 1), self.activation_count);
     try std.testing.expectEqual(@as(usize, 1), self.deactivation_count);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI forwards surface resize and touch input" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
     var native_surface_token: u8 = 0;
-    zero_native_app_resize(app, 390, 844, 3, &native_surface_token);
+    native_sdk_app_resize(app, 390, 844, 3, &native_surface_token);
 
     const self = mobileApp(app).?;
     try std.testing.expectEqual(@as(usize, 1), self.mobile_surface_resize_count);
@@ -160,7 +160,7 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, 844), self.mobile_surface_height);
     try std.testing.expectEqual(@as(f32, 3), self.mobile_surface_scale);
 
-    zero_native_app_viewport(app, 390, 700, 3, &native_surface_token, 47, 0, 34, 0, 0, 0, 144, 0);
+    native_sdk_app_viewport(app, 390, 700, 3, &native_surface_token, 47, 0, 34, 0, 0, 0, 144, 0);
     try std.testing.expectEqual(@as(usize, 2), self.mobile_surface_resize_count);
     try std.testing.expectEqual(@as(f32, 390), self.embedded.runtime.surface.size.width);
     try std.testing.expectEqual(@as(f32, 700), self.embedded.runtime.surface.size.height);
@@ -169,7 +169,7 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, 144), self.embedded.runtime.surface.keyboard_insets.bottom);
 
     var viewport: MobileViewportState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_viewport_state(app, &viewport));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_viewport_state(app, &viewport));
     try std.testing.expectEqual(@as(f32, 390), viewport.width);
     try std.testing.expectEqual(@as(f32, 700), viewport.height);
     try std.testing.expectEqual(@as(f32, 3), viewport.scale);
@@ -181,12 +181,12 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, 47), viewport.content_y);
     try std.testing.expectEqual(@as(f32, 390), viewport.content_width);
     try std.testing.expectEqual(@as(f32, 509), viewport.content_height);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_viewport_state(app, null));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_viewport_state(app, null));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_touch(app, 42, 0, 11, 22, 0.5);
+    native_sdk_app_touch(app, 42, 0, 11, 22, 0.5);
     try std.testing.expectEqual(@as(usize, 1), self.touch_count);
     try std.testing.expectEqual(@as(u64, 42), self.last_touch_id);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_down, self.last_touch_kind);
@@ -194,20 +194,20 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, 11), self.last_touch_x);
     try std.testing.expectEqual(@as(f32, 22), self.last_touch_y);
     try std.testing.expectEqual(@as(f32, 0.5), self.last_touch_pressure);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_touch(app, 42, 2, 13, 25, 0.75);
+    native_sdk_app_touch(app, 42, 2, 13, 25, 0.75);
     try std.testing.expectEqual(@as(usize, 2), self.touch_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_drag, self.last_touch_kind);
     try std.testing.expectEqual(@as(f32, 13), self.last_touch_x);
     try std.testing.expectEqual(@as(f32, 25), self.last_touch_y);
     try std.testing.expectEqual(@as(f32, 0.75), self.last_touch_pressure);
 
-    zero_native_app_touch(app, 42, 3, 13, 25, 0);
+    native_sdk_app_touch(app, 42, 3, 13, 25, 0);
     try std.testing.expectEqual(@as(usize, 3), self.touch_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_cancel, self.last_touch_kind);
 
-    zero_native_app_scroll(app, 42, 15, 26, -2, 18);
+    native_sdk_app_scroll(app, 42, 15, 26, -2, 18);
     try std.testing.expectEqual(@as(usize, 4), self.touch_count);
     try std.testing.expectEqual(@as(usize, 4), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.scroll, self.last_touch_kind);
@@ -218,61 +218,61 @@ test "mobile C ABI forwards surface resize and touch input" {
     try std.testing.expectEqual(@as(f32, -2), self.last_touch_delta_x);
     try std.testing.expectEqual(@as(f32, 18), self.last_touch_delta_y);
     try std.testing.expectEqual(@as(f32, 0), self.last_touch_pressure);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_touch(app, 42, 99, 13, 25, 0);
+    native_sdk_app_touch(app, 42, 99, 13, 25, 0);
     try std.testing.expectEqual(@as(usize, 4), self.touch_count);
-    try std.testing.expectEqualStrings("InvalidTouchPhase", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("InvalidTouchPhase", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI forwards key text and IME input" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
     const self = mobileApp(app).?;
-    zero_native_app_key(app, 0, "enter", "enter".len, "", 0, 17);
+    native_sdk_app_key(app, 0, "enter", "enter".len, "", 0, 17);
     try std.testing.expectEqual(@as(usize, 1), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.key_down, self.last_input_kind);
     try std.testing.expectEqualStrings("enter", self.last_input_key[0..self.last_input_key_len]);
     try std.testing.expect(self.last_input_modifiers.primary);
     try std.testing.expect(self.last_input_modifiers.shift);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_text(app, "é", "é".len);
+    native_sdk_app_text(app, "é", "é".len);
     try std.testing.expectEqual(@as(usize, 2), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.text_input, self.last_input_kind);
     try std.testing.expectEqualStrings("é", self.last_input_text[0..self.last_input_text_len]);
 
-    zero_native_app_ime(app, 0, "かな", "かな".len, "かな".len);
+    native_sdk_app_ime(app, 0, "かな", "かな".len, "かな".len);
     try std.testing.expectEqual(@as(usize, 3), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_set_composition, self.last_input_kind);
     try std.testing.expectEqualStrings("かな", self.last_input_text[0..self.last_input_text_len]);
     try std.testing.expectEqual(@as(?usize, "かな".len), self.last_input_composition_cursor);
 
-    zero_native_app_ime(app, 1, "", 0, -1);
+    native_sdk_app_ime(app, 1, "", 0, -1);
     try std.testing.expectEqual(@as(usize, 4), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_commit_composition, self.last_input_kind);
 
-    zero_native_app_ime(app, 2, "", 0, -1);
+    native_sdk_app_ime(app, 2, "", 0, -1);
     try std.testing.expectEqual(@as(usize, 5), self.input_count);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.ime_cancel_composition, self.last_input_kind);
 
-    zero_native_app_key(app, 99, "enter", "enter".len, "", 0, 0);
+    native_sdk_app_key(app, 99, "enter", "enter".len, "", 0, 0);
     try std.testing.expectEqual(@as(usize, 5), self.input_count);
-    try std.testing.expectEqualStrings("InvalidKeyPhase", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("InvalidKeyPhase", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_ime(app, 99, "", 0, -1);
+    native_sdk_app_ime(app, 99, "", 0, -1);
     try std.testing.expectEqual(@as(usize, 5), self.input_count);
-    try std.testing.expectEqualStrings("InvalidImeKind", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("InvalidImeKind", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI exposes GPU frame state" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
     const self = mobileApp(app).?;
     self.null_platform.gpu_surfaces = true;
-    zero_native_app_start(app);
+    native_sdk_app_start(app);
     const view = try self.embedded.runtime.createView(.{
         .window_id = 1,
         .label = mobile_gpu_surface_label,
@@ -324,7 +324,7 @@ test "mobile C ABI exposes GPU frame state" {
     } });
 
     var state: MobileGpuFrameState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_gpu_frame_state(app, &state));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_gpu_frame_state(app, &state));
     try std.testing.expectEqual(view.id, state.surface_id);
     try std.testing.expectEqual(@as(u64, 1), state.window_id);
     try std.testing.expectEqual(@as(f32, 390), state.width);
@@ -345,19 +345,19 @@ test "mobile C ABI exposes GPU frame state" {
     try std.testing.expect(state.canvas_revision > 0);
     try std.testing.expectEqual(@as(usize, 2), state.widget_node_count);
     try std.testing.expectEqual(@as(usize, 2), state.widget_semantics_count);
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_gpu_frame_state(app, null));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_gpu_frame_state(app, null));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI exposes GPU widget accessibility semantics" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
     const self = mobileApp(app).?;
     self.null_platform.gpu_surfaces = true;
-    zero_native_app_start(app);
+    native_sdk_app_start(app);
     _ = try self.embedded.runtime.createView(.{
         .window_id = 1,
         .label = mobile_gpu_surface_label,
@@ -462,17 +462,17 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     }, geometry.RectF.init(0, 0, 320, 180), &nodes);
     _ = try self.embedded.runtime.setCanvasWidgetLayout(1, mobile_gpu_surface_label, layout);
 
-    try std.testing.expectEqual(@as(usize, 13), zero_native_app_widget_semantics_count(app));
+    try std.testing.expectEqual(@as(usize, 13), native_sdk_app_widget_semantics_count(app));
 
     var root_node: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 0, &root_node));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_semantics_at(app, 0, &root_node));
     try std.testing.expectEqual(@as(u64, 1), root_node.id);
     try std.testing.expectEqual(@as(u64, 0), root_node.parent_id);
     try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.group), root_node.role);
     try std.testing.expectEqualStrings("Mobile canvas widgets", root_node.label.?[0..root_node.label_len]);
 
     var button_node: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 1, &button_node));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_semantics_at(app, 1, &button_node));
     try std.testing.expectEqual(@as(u64, 2), button_node.id);
     try std.testing.expectEqual(@as(u64, 1), button_node.parent_id);
     try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.button), button_node.role);
@@ -485,7 +485,7 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expectEqual(@as(f32, 32), button_node.height);
 
     var text_node: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_semantics_at(app, 2, &text_node));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_semantics_at(app, 2, &text_node));
     try std.testing.expectEqual(@as(u64, 3), text_node.id);
     try std.testing.expectEqual(@intFromEnum(MobileWidgetRole.textbox), text_node.role);
     try std.testing.expectEqualStrings("Report title", text_node.label.?[0..text_node.label_len]);
@@ -506,7 +506,7 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expect((scroll_node.actions & @intFromEnum(MobileWidgetAction.increment)) != 0);
     try std.testing.expect((scroll_node.actions & @intFromEnum(MobileWidgetAction.decrement)) != 0);
 
-    zero_native_app_scroll(app, 11, 24, 112, 0, 14);
+    native_sdk_app_scroll(app, 11, 24, 112, 0, 14);
     const scrolled_node = try mobileWidgetSemanticsByIdForTest(app, 4);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.scroll, self.last_input_kind);
     try std.testing.expectEqual(@as(u64, 11), self.last_touch_id);
@@ -539,7 +539,7 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expect((status_cell.actions & @intFromEnum(MobileWidgetAction.select)) != 0);
 
     var text_geometry: MobileWidgetTextGeometry = .{};
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_text_geometry(app, 3, &text_geometry));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_text_geometry(app, 3, &text_geometry));
     try std.testing.expectEqual(@as(u64, 3), text_geometry.id);
     try std.testing.expectEqual(@as(c_int, 0), text_geometry.has_caret_bounds);
     try std.testing.expectEqual(@as(c_int, 1), text_geometry.has_selection_bounds);
@@ -547,18 +547,18 @@ test "mobile C ABI exposes GPU widget accessibility semantics" {
     try std.testing.expect(text_geometry.selection_width > 0);
     try std.testing.expectEqual(@as(c_int, 0), text_geometry.has_composition_bounds);
 
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_text_geometry(app, 2, &text_geometry));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_text_geometry(app, 2, &text_geometry));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_at(app, 99, &text_node));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_semantics_at(app, 99, &text_node));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
     try expectNoMobileWidgetSemanticsByIdForTest(app, 99);
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
     try expectNoMobileWidgetSemanticsByIdForTest(app, 0);
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_semantics_by_id(app, 2, null));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_semantics_by_id(app, 2, null));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 test "mobile C ABI maps widget state and dismiss action flags" {
@@ -590,12 +590,12 @@ test "mobile C ABI maps widget state and dismiss action flags" {
 }
 
 test "mobile C ABI dispatches GPU widget accessibility actions" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
     const self = mobileApp(app).?;
     self.null_platform.gpu_surfaces = true;
-    zero_native_app_start(app);
+    native_sdk_app_start(app);
     _ = try self.embedded.runtime.createView(.{
         .window_id = 1,
         .label = mobile_gpu_surface_label,
@@ -663,22 +663,22 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
     _ = try self.embedded.runtime.setCanvasWidgetLayout(1, mobile_gpu_surface_label, layout);
 
     var action = MobileWidgetActionRequest{ .id = 2, .action = @intFromEnum(MobileWidgetActionKind.press) };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
-    try std.testing.expectEqual(@as(usize, 1), zero_native_app_last_command_count(app));
-    try std.testing.expectEqualStrings("widget.run", std.mem.span(zero_native_app_last_command_name(app)));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(usize, 1), native_sdk_app_last_command_count(app));
+    try std.testing.expectEqualStrings("widget.run", std.mem.span(native_sdk_app_last_command_name(app)));
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), self.embedded.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_up, self.last_input_kind);
     try std.testing.expectEqual(@as(usize, 0), self.last_input_key_len);
 
     action = .{ .id = 3, .action = @intFromEnum(MobileWidgetActionKind.toggle) };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     const checkbox = try mobileWidgetSemanticsByIdForTest(app, 3);
     try std.testing.expectEqual(@as(c_int, 1), checkbox.has_value);
     try std.testing.expectEqual(@as(f32, 1), checkbox.value);
     try std.testing.expect((checkbox.flags & @intFromEnum(MobileWidgetFlag.selected)) != 0);
 
     action = .{ .id = 4, .action = @intFromEnum(MobileWidgetActionKind.increment) };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     const slider = try mobileWidgetSemanticsByIdForTest(app, 4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.55), slider.value, 0.001);
 
@@ -689,7 +689,7 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
         .text = title,
         .text_len = title.len,
     };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     var text_field = try mobileWidgetSemanticsByIdForTest(app, 5);
     try std.testing.expectEqualStrings(title, text_field.text.?[0..text_field.text_len]);
     try std.testing.expectEqual(@as(isize, @intCast(title.len)), text_field.text_selection_start);
@@ -702,14 +702,14 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
         .text = composition,
         .text_len = composition.len,
     };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     text_field = try mobileWidgetSemanticsByIdForTest(app, 5);
     try std.testing.expectEqualStrings("Hello world!", text_field.text.?[0..text_field.text_len]);
     try std.testing.expectEqual(@as(isize, @intCast(title.len)), text_field.text_composition_start);
     try std.testing.expectEqual(@as(isize, @intCast(title.len + composition.len)), text_field.text_composition_end);
 
     action = .{ .id = 5, .action = @intFromEnum(MobileWidgetActionKind.commit_composition) };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     text_field = try mobileWidgetSemanticsByIdForTest(app, 5);
     try std.testing.expectEqualStrings("Hello world!", text_field.text.?[0..text_field.text_len]);
     try std.testing.expectEqual(@as(isize, -1), text_field.text_composition_start);
@@ -722,13 +722,13 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
         .selection_focus = 5,
         .has_selection = 1,
     };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     text_field = try mobileWidgetSemanticsByIdForTest(app, 5);
     try std.testing.expectEqual(@as(isize, 0), text_field.text_selection_start);
     try std.testing.expectEqual(@as(isize, 5), text_field.text_selection_end);
 
     action = .{ .id = 6, .action = @intFromEnum(MobileWidgetActionKind.select) };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     const list_item = try mobileWidgetSemanticsByIdForTest(app, 6);
     try std.testing.expectEqual(@as(c_int, 1), list_item.has_value);
     try std.testing.expectEqual(@as(f32, 1), list_item.value);
@@ -741,7 +741,7 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
         .text = drag_delta,
         .text_len = drag_delta.len,
     };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     try std.testing.expectEqual(platform.GpuSurfaceInputKind.pointer_drag, self.last_input_kind);
     try std.testing.expectApproxEqAbs(@as(f32, 276), self.last_touch_x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 74), self.last_touch_y, 0.001);
@@ -753,21 +753,21 @@ test "mobile C ABI dispatches GPU widget accessibility actions" {
         .text = drop_paths,
         .text_len = drop_paths.len,
     };
-    try std.testing.expectEqual(@as(c_int, 1), zero_native_app_widget_action(app, &action));
+    try std.testing.expectEqual(@as(c_int, 1), native_sdk_app_widget_action(app, &action));
     try std.testing.expectEqualStrings("drop:files", self.null_platform.lastWindowEventName());
     try std.testing.expect(std.mem.indexOf(u8, self.null_platform.lastWindowEventDetail(), "\"paths\":[\"/tmp/mobile-report.csv\"]") != null);
 
     action = .{ .id = 99, .action = @intFromEnum(MobileWidgetActionKind.press) };
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_action(app, &action));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_action(app, &action));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
     action = .{ .id = 5, .action = @intFromEnum(MobileWidgetActionKind.set_selection) };
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_action(app, &action));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_action(app, &action));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
     action = .{ .id = 2, .action = 999 };
-    try std.testing.expectEqual(@as(c_int, 0), zero_native_app_widget_action(app, &action));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), native_sdk_app_widget_action(app, &action));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 }
 
 // ------------------------------------------------------------- UiApp host
@@ -828,15 +828,15 @@ const MobileCounterHost = ui_host.UiAppHost(MobileCounterDef);
 const MobileCounterApi = c_api.MobileCApi(MobileCounterHost);
 
 fn expectNoUiHostError(app: ?*anyopaque) !void {
-    try std.testing.expectEqualStrings("", std.mem.span(MobileCounterApi.zero_native_app_last_error_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(MobileCounterApi.native_sdk_app_last_error_name(app)));
 }
 
 fn findMobileSemanticsByRole(app: ?*anyopaque, role: MobileWidgetRole) !MobileWidgetSemantics {
-    const count = MobileCounterApi.zero_native_app_widget_semantics_count(app);
+    const count = MobileCounterApi.native_sdk_app_widget_semantics_count(app);
     var index: usize = 0;
     while (index < count) : (index += 1) {
         var node: MobileWidgetSemantics = .{};
-        try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, index, &node));
+        try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(app, index, &node));
         if (node.role == @intFromEnum(role)) return node;
     }
     return error.TestUnexpectedResult;
@@ -853,41 +853,41 @@ fn uiHostRetainedTextExists(self: *MobileCounterHost, text: []const u8) !bool {
 fn tapMobileWidget(app: ?*anyopaque, node: MobileWidgetSemantics) !void {
     const x = node.x + node.width / 2;
     const y = node.y + node.height / 2;
-    MobileCounterApi.zero_native_app_touch(app, 1, 0, x, y, 1);
+    MobileCounterApi.native_sdk_app_touch(app, 1, 0, x, y, 1);
     try expectNoUiHostError(app);
-    MobileCounterApi.zero_native_app_touch(app, 1, 1, x, y, 0);
+    MobileCounterApi.native_sdk_app_touch(app, 1, 1, x, y, 0);
     try expectNoUiHostError(app);
 }
 
 test "mobile C ABI drives a user UiApp canvas scene end to end" {
-    const app = MobileCounterApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer MobileCounterApi.zero_native_app_destroy(app);
+    const app = MobileCounterApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileCounterApi.native_sdk_app_destroy(app);
     const self: *MobileCounterHost = @ptrCast(@alignCast(app));
 
-    MobileCounterApi.zero_native_app_start(app);
+    MobileCounterApi.native_sdk_app_start(app);
     try expectNoUiHostError(app);
 
     // Host-reported viewport: window and mobile-surface view take the size.
     var surface_token: u8 = 0;
-    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
     try expectNoUiHostError(app);
     var viewport: MobileViewportState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_viewport_state(app, &viewport));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_viewport_state(app, &viewport));
     try std.testing.expectEqual(@as(f32, 390), viewport.width);
     try std.testing.expectEqual(@as(f32, 844), viewport.height);
 
     // First host-pumped frame installs the widget tree and presents pixels.
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
     try std.testing.expect(self.ui.installed);
     try std.testing.expect(try uiHostRetainedTextExists(self, "Count 0"));
     try std.testing.expectEqual(@as(usize, 1), self.null_platform.gpu_surface_present_count);
 
     // The next frame reports the presented pixels: nonblank with a sample.
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
     var frame_state: MobileGpuFrameState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_gpu_frame_state(app, &frame_state));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_gpu_frame_state(app, &frame_state));
     try std.testing.expectEqual(@as(f32, 390), frame_state.width);
     try std.testing.expectEqual(@as(f32, 844), frame_state.height);
     try std.testing.expectEqual(@as(c_int, 1), frame_state.nonblank);
@@ -897,14 +897,14 @@ test "mobile C ABI drives a user UiApp canvas scene end to end" {
 
     // Pixels are retrievable over the ABI and are not blank.
     var pixel_info: MobileCanvasPixels = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_render_pixel_size(app, 1, &pixel_info));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_render_pixel_size(app, 1, &pixel_info));
     try std.testing.expectEqual(@as(usize, 390), pixel_info.width);
     try std.testing.expectEqual(@as(usize, 844), pixel_info.height);
     try std.testing.expectEqual(@as(usize, 390 * 844 * 4), pixel_info.byte_len);
     const pixels = try std.testing.allocator.alloc(u8, pixel_info.byte_len);
     defer std.testing.allocator.free(pixels);
     var rendered: MobileCanvasPixels = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_render_pixels(app, 1, pixels.ptr, pixels.len, &rendered));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_render_pixels(app, 1, pixels.ptr, pixels.len, &rendered));
     try std.testing.expectEqual(pixel_info.byte_len, rendered.byte_len);
     var nonblank_pixels = false;
     for (pixels) |byte| {
@@ -918,7 +918,7 @@ test "mobile C ABI drives a user UiApp canvas scene end to end" {
     // Before any input lands nothing is focused: the platform keyboard
     // must stay hidden.
     var text_input: MobileTextInputState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_text_input_state(app, &text_input));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_text_input_state(app, &text_input));
     try std.testing.expectEqual(@as(c_int, 0), text_input.active);
     try std.testing.expectEqual(@as(u64, 0), text_input.widget_id);
 
@@ -932,7 +932,7 @@ test "mobile C ABI drives a user UiApp canvas scene end to end" {
     try std.testing.expectEqual(button.id, (try findMobileSemanticsByRole(app, .button)).id);
 
     // The button takes focus but is not editable text: still no keyboard.
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_text_input_state(app, &text_input));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_text_input_state(app, &text_input));
     try std.testing.expectEqual(@as(c_int, 0), text_input.active);
     try std.testing.expectEqual(button.id, text_input.widget_id);
 
@@ -943,58 +943,58 @@ test "mobile C ABI drives a user UiApp canvas scene end to end" {
 
     // Textbox focus is IME intent: the state the shim keys the system
     // keyboard's show/hide on, with the widget's frame for caret tracking.
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_text_input_state(app, &text_input));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_text_input_state(app, &text_input));
     try std.testing.expectEqual(@as(c_int, 1), text_input.active);
     try std.testing.expectEqual(textbox.id, text_input.widget_id);
     try std.testing.expectEqual(textbox.x, text_input.x);
     try std.testing.expectEqual(textbox.y, text_input.y);
     try std.testing.expectEqual(textbox.width, text_input.width);
     try std.testing.expectEqual(textbox.height, text_input.height);
-    try std.testing.expectEqual(@as(c_int, 0), MobileCounterApi.zero_native_app_text_input_state(app, null));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(MobileCounterApi.zero_native_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 0), MobileCounterApi.native_sdk_app_text_input_state(app, null));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(MobileCounterApi.native_sdk_app_last_error_name(app)));
 
-    MobileCounterApi.zero_native_app_text(app, "hi", "hi".len);
+    MobileCounterApi.native_sdk_app_text(app, "hi", "hi".len);
     try expectNoUiHostError(app);
     try std.testing.expectEqualStrings("hi", self.ui.model.draft.text());
-    MobileCounterApi.zero_native_app_ime(app, 0, "ho", "ho".len, "ho".len);
+    MobileCounterApi.native_sdk_app_ime(app, 0, "ho", "ho".len, "ho".len);
     try expectNoUiHostError(app);
-    MobileCounterApi.zero_native_app_ime(app, 1, "ho", "ho".len, -1);
+    MobileCounterApi.native_sdk_app_ime(app, 1, "ho", "ho".len, -1);
     try expectNoUiHostError(app);
     try std.testing.expectEqualStrings("hiho", self.ui.model.draft.text());
     var textbox_after: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_by_id(app, textbox.id, &textbox_after));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_by_id(app, textbox.id, &textbox_after));
     try std.testing.expectEqualStrings("hiho", textbox_after.text.?[0..textbox_after.text_len]);
 
     // Tapping the (non-editable) button again moves focus away from the
     // textbox: IME intent clears and the shim hides the keyboard.
     try tapMobileWidget(app, button);
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_text_input_state(app, &text_input));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_text_input_state(app, &text_input));
     try std.testing.expectEqual(@as(c_int, 0), text_input.active);
     try std.testing.expectEqual(button.id, text_input.widget_id);
 
     // The model-driven UI keeps presenting through host-pumped frames.
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
     try std.testing.expect(self.null_platform.gpu_surface_present_count >= 2);
 }
 
 test "mobile UiApp host insets widget layout by safe-area and keyboard viewport chrome" {
-    const app = MobileCounterApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer MobileCounterApi.zero_native_app_destroy(app);
+    const app = MobileCounterApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileCounterApi.native_sdk_app_destroy(app);
 
-    MobileCounterApi.zero_native_app_start(app);
+    MobileCounterApi.native_sdk_app_start(app);
     try expectNoUiHostError(app);
 
     // Portrait with a notch and home indicator: widget layout starts below
     // the top inset and ends above the bottom one while the canvas itself
     // keeps the full surface size (chrome/clear paint edge to edge).
     var surface_token: u8 = 0;
-    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 0, 0);
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
 
     var root: MobileWidgetSemantics = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(app, 0, &root));
     try std.testing.expectEqual(@as(f32, 0), root.x);
     try std.testing.expectEqual(@as(f32, 59), root.y);
     try std.testing.expectEqual(@as(f32, 390), root.width);
@@ -1005,21 +1005,21 @@ test "mobile UiApp host insets widget layout by safe-area and keyboard viewport 
     // The canvas stays surface-sized and device pixels honor the viewport
     // scale end to end: 390x844 points at 3x renders 1170x2532 pixels.
     var frame_state: MobileGpuFrameState = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_gpu_frame_state(app, &frame_state));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_gpu_frame_state(app, &frame_state));
     try std.testing.expectEqual(@as(f32, 390), frame_state.width);
     try std.testing.expectEqual(@as(f32, 844), frame_state.height);
     try std.testing.expectEqual(@as(f32, 3), frame_state.scale);
     var pixel_info: MobileCanvasPixels = .{};
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_render_pixel_size(app, 3, &pixel_info));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_render_pixel_size(app, 3, &pixel_info));
     try std.testing.expectEqual(@as(usize, 1170), pixel_info.width);
     try std.testing.expectEqual(@as(usize, 2532), pixel_info.height);
 
     // Rotation: landscape swaps the size and moves the notch to the sides;
     // the viewport resize relayouts against the new insets.
-    MobileCounterApi.zero_native_app_viewport(app, 844, 390, 3, &surface_token, 0, 59, 21, 59, 0, 0, 0, 0);
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_viewport(app, 844, 390, 3, &surface_token, 0, 59, 21, 59, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(app, 0, &root));
     try std.testing.expectEqual(@as(f32, 59), root.x);
     try std.testing.expectEqual(@as(f32, 0), root.y);
     try std.testing.expectEqual(@as(f32, 844 - 59 - 59), root.width);
@@ -1027,20 +1027,20 @@ test "mobile UiApp host insets widget layout by safe-area and keyboard viewport 
 
     // System keyboard: its inset combines edge-wise with the safe areas so
     // content is laid out above it.
-    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 336, 0);
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_viewport(app, 390, 844, 3, &surface_token, 59, 0, 34, 0, 0, 0, 336, 0);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(app, 0, &root));
     try std.testing.expectEqual(@as(f32, 59), root.y);
     try std.testing.expectEqual(@as(f32, 844 - 59 - 336), root.height);
 
     // Removing the insets restores the desktop-identical full-bounds
     // layout (desktop surfaces report zero insets, so this is the layout
     // golden tests cover).
-    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 3, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_viewport(app, 390, 844, 3, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(app, 0, &root));
     try std.testing.expectEqual(@as(f32, 0), root.x);
     try std.testing.expectEqual(@as(f32, 0), root.y);
     try std.testing.expectEqual(@as(f32, 390), root.width);
@@ -1101,11 +1101,11 @@ const MobileMeasureDef = struct {
 const MobileMeasureApi = c_api.MobileCApi(ui_host.UiAppHost(MobileMeasureDef));
 
 fn measureTestTextWidth(app: ?*anyopaque) !f32 {
-    const count = MobileMeasureApi.zero_native_app_widget_semantics_count(app);
+    const count = MobileMeasureApi.native_sdk_app_widget_semantics_count(app);
     var index: usize = 0;
     while (index < count) : (index += 1) {
         var node: MobileWidgetSemantics = .{};
-        try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_widget_semantics_at(app, index, &node));
+        try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.native_sdk_app_widget_semantics_at(app, index, &node));
         if (node.role == @intFromEnum(MobileWidgetRole.text)) return node.width;
     }
     return error.TestUnexpectedResult;
@@ -1115,25 +1115,25 @@ test "mobile C ABI text measure provider changes embed text layout" {
     var surface_token: u8 = 0;
 
     // Baseline: no provider, deterministic estimator metrics.
-    const baseline_app = MobileMeasureApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
-    MobileMeasureApi.zero_native_app_start(baseline_app);
-    MobileMeasureApi.zero_native_app_viewport(baseline_app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
-    MobileMeasureApi.zero_native_app_frame(baseline_app);
+    const baseline_app = MobileMeasureApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    MobileMeasureApi.native_sdk_app_start(baseline_app);
+    MobileMeasureApi.native_sdk_app_viewport(baseline_app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.native_sdk_app_frame(baseline_app);
     const baseline_width = try measureTestTextWidth(baseline_app);
     try std.testing.expect(baseline_width > 0);
-    MobileMeasureApi.zero_native_app_destroy(baseline_app);
+    MobileMeasureApi.native_sdk_app_destroy(baseline_app);
 
     // Registering a measure callback before start makes the installing
     // layout measure through it: the text widget's bounds change.
-    const app = MobileMeasureApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer MobileMeasureApi.zero_native_app_destroy(app);
+    const app = MobileMeasureApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileMeasureApi.native_sdk_app_destroy(app);
     const self: *ui_host.UiAppHost(MobileMeasureDef) = @ptrCast(@alignCast(app));
     var measure_calls: usize = 0;
-    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_set_text_measure(app, fakeMobileMeasureText, &measure_calls));
+    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.native_sdk_app_set_text_measure(app, fakeMobileMeasureText, &measure_calls));
     try std.testing.expect(self.embedded.runtime.textMeasureProvider() != null);
-    MobileMeasureApi.zero_native_app_start(app);
-    MobileMeasureApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
-    MobileMeasureApi.zero_native_app_frame(app);
+    MobileMeasureApi.native_sdk_app_start(app);
+    MobileMeasureApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.native_sdk_app_frame(app);
     try std.testing.expect(measure_calls > 0);
     const measured_width = try measureTestTextWidth(app);
     try std.testing.expect(measured_width > baseline_width);
@@ -1146,34 +1146,34 @@ test "mobile C ABI text measure provider changes embed text layout" {
     // runtime-side provider stays installed — retained display-list
     // commands carry its pointer for the runtime's lifetime — but the
     // bridge reports no measurement, which is the estimator path.
-    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.zero_native_app_set_text_measure(app, null, null));
+    try std.testing.expectEqual(@as(c_int, 1), MobileMeasureApi.native_sdk_app_set_text_measure(app, null, null));
     try std.testing.expect(self.embedded.runtime.textMeasureProvider() != null);
-    MobileMeasureApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
-    MobileMeasureApi.zero_native_app_frame(app);
+    MobileMeasureApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileMeasureApi.native_sdk_app_frame(app);
     const restored_width = try measureTestTextWidth(app);
     try std.testing.expectEqual(baseline_width, restored_width);
 }
 
 test "mobile C ABI publishes automation snapshots into a host-set directory" {
-    const app = MobileCounterApi.zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer MobileCounterApi.zero_native_app_destroy(app);
+    const app = MobileCounterApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileCounterApi.native_sdk_app_destroy(app);
     const self: *MobileCounterHost = @ptrCast(@alignCast(app));
 
     const dir = ".zig-cache/test-mobile-embed-automation";
     std.Io.Dir.cwd().deleteTree(std.testing.io, dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(std.testing.io, dir) catch {};
 
-    MobileCounterApi.zero_native_app_start(app);
+    MobileCounterApi.native_sdk_app_start(app);
     try expectNoUiHostError(app);
-    try std.testing.expectEqual(@as(c_int, 0), MobileCounterApi.zero_native_app_set_automation_dir(app, "", 0));
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(MobileCounterApi.zero_native_app_last_error_name(app)));
-    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.zero_native_app_set_automation_dir(app, dir, dir.len));
+    try std.testing.expectEqual(@as(c_int, 0), MobileCounterApi.native_sdk_app_set_automation_dir(app, "", 0));
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(MobileCounterApi.native_sdk_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_set_automation_dir(app, dir, dir.len));
     try expectNoUiHostError(app);
     try std.testing.expect(self.embedded.runtime.options.automation != null);
 
     var surface_token: u8 = 0;
-    MobileCounterApi.zero_native_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
-    MobileCounterApi.zero_native_app_frame(app);
+    MobileCounterApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_frame(app);
     try expectNoUiHostError(app);
 
     var buffer: [16 * 1024]u8 = undefined;
@@ -1185,19 +1185,19 @@ test "mobile C ABI publishes automation snapshots into a host-set directory" {
 }
 
 test "mobile C ABI dispatches native commands through embedded runtime" {
-    const app = zero_native_app_create() orelse return error.TestUnexpectedResult;
-    defer zero_native_app_destroy(app);
+    const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer native_sdk_app_destroy(app);
 
-    zero_native_app_command(app, "mobile.refresh", "mobile.refresh".len);
-    try std.testing.expectEqual(@as(usize, 1), zero_native_app_last_command_count(app));
-    try std.testing.expectEqualStrings("mobile.refresh", std.mem.span(zero_native_app_last_command_name(app)));
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    native_sdk_app_command(app, "mobile.refresh", "mobile.refresh".len);
+    try std.testing.expectEqual(@as(usize, 1), native_sdk_app_last_command_count(app));
+    try std.testing.expectEqualStrings("mobile.refresh", std.mem.span(native_sdk_app_last_command_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_command(app, "", 0);
-    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(zero_native_app_last_error_name(app)));
+    native_sdk_app_command(app, "", 0);
+    try std.testing.expectEqualStrings("InvalidCommand", std.mem.span(native_sdk_app_last_error_name(app)));
 
-    zero_native_app_command(app, "mobile.open", "mobile.open".len);
-    try std.testing.expectEqual(@as(usize, 2), zero_native_app_last_command_count(app));
-    try std.testing.expectEqualStrings("mobile.open", std.mem.span(zero_native_app_last_command_name(app)));
-    try std.testing.expectEqualStrings("", std.mem.span(zero_native_app_last_error_name(app)));
+    native_sdk_app_command(app, "mobile.open", "mobile.open".len);
+    try std.testing.expectEqual(@as(usize, 2), native_sdk_app_last_command_count(app));
+    try std.testing.expectEqualStrings("mobile.open", std.mem.span(native_sdk_app_last_command_name(app)));
+    try std.testing.expectEqualStrings("", std.mem.span(native_sdk_app_last_error_name(app)));
 }

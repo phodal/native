@@ -659,7 +659,7 @@ pub const use_no_children_message = "use takes no children (the template body is
 /// malformed expressions, misshapen structure tags, and template/use
 /// wiring. Binding paths and message tags are checked against the concrete
 /// Model/Msg by the interpreter; this pass is what
-/// `zero-native markup check` runs.
+/// `native markup check` runs.
 pub fn validate(document: MarkupDocument) ?MarkupErrorInfo {
     for (document.templates, 0..) |template_node, index| {
         if (validateTemplate(document, template_node, index)) |info| return info;

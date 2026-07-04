@@ -886,7 +886,7 @@ test "widget inputs expose textbox semantics and render shadcn input tokens" {
         .id = 18,
         .kind = .input,
         .frame = geometry.RectF.init(10, 12, 180, 36),
-        .text = "zero-native",
+        .text = "native-sdk",
         .semantics = .{ .label = "Project name" },
     };
 
@@ -901,7 +901,7 @@ test "widget inputs expose textbox semantics and render shadcn input tokens" {
     try std.testing.expectEqual(@as(usize, 1), semantics.len);
     try std.testing.expectEqual(WidgetRole.textbox, semantics[0].role);
     try std.testing.expectEqualStrings("Project name", semantics[0].label);
-    try std.testing.expectEqualStrings("zero-native", semantics[0].text_value);
+    try std.testing.expectEqualStrings("native-sdk", semantics[0].text_value);
     try std.testing.expectEqualStrings("", semantics[0].placeholder);
     try std.testing.expect(semantics[0].focusable);
     try std.testing.expect(semantics[0].actions.set_text);
@@ -939,7 +939,7 @@ test "widget inputs expose textbox semantics and render shadcn input tokens" {
     }
     switch (display_list.commands[2]) {
         .draw_text => |text| {
-            try std.testing.expectEqualStrings("zero-native", text.text);
+            try std.testing.expectEqualStrings("native-sdk", text.text);
             try std.testing.expectEqualDeep(Color.rgb8(230, 236, 242), text.color);
         },
         else => return error.TestUnexpectedResult,

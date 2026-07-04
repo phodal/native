@@ -1241,7 +1241,7 @@ test "real executor reports unspawnable binaries as spawn_failed" {
     var h = try Harness.create();
     defer h.destroy();
 
-    test_argv = &.{"/nonexistent/zero-native-effects-test-binary"};
+    test_argv = &.{"/nonexistent/native-sdk-effects-test-binary"};
     test_stdin = null;
     try h.app_state.dispatch(&h.harness.runtime, 1, .start);
     try waitForRealCompletion(&h, sawExit);

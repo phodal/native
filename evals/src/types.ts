@@ -6,7 +6,7 @@ export interface EvalCase {
   description: string;
   /** The task prompt handed to the agent-under-test. Describes app requirements, never the solution. */
   prompt: string;
-  /** Scaffold frontend passed to `zero-native init --frontend <frontend>`. */
+  /** Scaffold frontend passed to `native init --frontend <frontend>`. */
   frontend: "native";
   /** Wall-clock budget for the agent run, in milliseconds. */
   timeoutMs: number;
@@ -30,7 +30,7 @@ export interface BuildTestCheck {
   args?: string[];
 }
 
-/** Run `zero-native markup check` on every `src/**\/*.zml` in the workspace. */
+/** Run `native markup check` on every `src/**\/*.zml` in the workspace. */
 export interface MarkupCheckCheck {
   type: "markup_check";
 }

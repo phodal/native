@@ -1,6 +1,6 @@
 # System Tray
 
-zero-native supports system tray icons with menus. Tray menu items can dispatch explicit command names with `source = .tray`; items without a command dispatch the compatibility command name `"tray.action"`.
+The Native SDK supports system tray icons with menus. Tray menu items can dispatch explicit command names with `source = .tray`; items without a command dispatch the compatibility command name `"tray.action"`.
 
 Tray support is currently implemented on macOS and Windows system WebView hosts. Linux returns `UnsupportedService` until a portable status notifier implementation is selected.
 
@@ -95,7 +95,7 @@ When a user clicks a tray menu item, the runtime dispatches a `CommandEvent` wit
 
 ```zig
 try runtime.createTray(.{
-    .tooltip = "zero-native",
+    .tooltip = "native-sdk",
     .items = &.{
         .{ .id = 1, .label = "Refresh", .command = "app.refresh" },
         .{ .separator = true },
@@ -129,7 +129,7 @@ app.* = PreviewApp.init(allocator, .{}, .{
     .on_command = command,
     .status_item = .{
         .title = "ZN",
-        .tooltip = "zero-native Canvas Preview",
+        .tooltip = "Native SDK Canvas Preview",
         .items = &.{
             .{ .id = 1, .label = "Show Docs", .command = "app.docs" },
             .{ .separator = true },

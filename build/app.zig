@@ -1,7 +1,7 @@
 //! Framework build helper: `addApp` gives a markup/builder app a complete
 //! build (exe, run, test) from a ~5-line build.zig. The app supplies
 //! src/main.zig, app.zon, and assets; the runner and all framework modules
-//! come from the zero-native dependency.
+//! come from the native-sdk dependency.
 
 const std = @import("std");
 
@@ -31,40 +31,40 @@ pub const AppOptions = struct {
     main: []const u8 = "src/main.zig",
 };
 
-/// The `zero_native_app_*` C ABI every embed static library exports.
+/// The `native_sdk_app_*` C ABI every embed static library exports.
 pub const mobile_export_symbol_names = [_][]const u8{
-    "zero_native_app_create",
-    "zero_native_app_destroy",
-    "zero_native_app_start",
-    "zero_native_app_activate",
-    "zero_native_app_deactivate",
-    "zero_native_app_stop",
-    "zero_native_app_resize",
-    "zero_native_app_viewport",
-    "zero_native_app_viewport_state",
-    "zero_native_app_gpu_frame_state",
-    "zero_native_app_text_input_state",
-    "zero_native_app_set_text_measure",
-    "zero_native_app_set_automation_dir",
-    "zero_native_app_touch",
-    "zero_native_app_scroll",
-    "zero_native_app_key",
-    "zero_native_app_text",
-    "zero_native_app_ime",
-    "zero_native_app_command",
-    "zero_native_app_frame",
-    "zero_native_app_set_asset_root",
-    "zero_native_app_set_asset_entry",
-    "zero_native_app_last_command_count",
-    "zero_native_app_last_command_name",
-    "zero_native_app_last_error_name",
-    "zero_native_app_widget_semantics_count",
-    "zero_native_app_widget_semantics_at",
-    "zero_native_app_widget_semantics_by_id",
-    "zero_native_app_widget_text_geometry",
-    "zero_native_app_widget_action",
-    "zero_native_app_render_pixel_size",
-    "zero_native_app_render_pixels",
+    "native_sdk_app_create",
+    "native_sdk_app_destroy",
+    "native_sdk_app_start",
+    "native_sdk_app_activate",
+    "native_sdk_app_deactivate",
+    "native_sdk_app_stop",
+    "native_sdk_app_resize",
+    "native_sdk_app_viewport",
+    "native_sdk_app_viewport_state",
+    "native_sdk_app_gpu_frame_state",
+    "native_sdk_app_text_input_state",
+    "native_sdk_app_set_text_measure",
+    "native_sdk_app_set_automation_dir",
+    "native_sdk_app_touch",
+    "native_sdk_app_scroll",
+    "native_sdk_app_key",
+    "native_sdk_app_text",
+    "native_sdk_app_ime",
+    "native_sdk_app_command",
+    "native_sdk_app_frame",
+    "native_sdk_app_set_asset_root",
+    "native_sdk_app_set_asset_entry",
+    "native_sdk_app_last_command_count",
+    "native_sdk_app_last_command_name",
+    "native_sdk_app_last_error_name",
+    "native_sdk_app_widget_semantics_count",
+    "native_sdk_app_widget_semantics_at",
+    "native_sdk_app_widget_semantics_by_id",
+    "native_sdk_app_widget_text_geometry",
+    "native_sdk_app_widget_action",
+    "native_sdk_app_render_pixel_size",
+    "native_sdk_app_render_pixels",
 };
 
 pub const MobileSceneOption = enum {
@@ -86,15 +86,15 @@ pub const MobileLibOptions = struct {
 };
 
 /// Mobile counterpart of `addApp`: produce the embed static library
-/// (`zero_native_app_*` C ABI) compiled with the user's UiApp. Call it from
+/// (`native_sdk_app_*` C ABI) compiled with the user's UiApp. Call it from
 /// a standalone build.zig (it registers the standard `target`/`optimize`
 /// options itself).
 pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLibOptions) void {
-    const target = zeroNativeTarget(b);
+    const target = nativeSdkTarget(b);
     const optimize_request = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size");
     const optimize = exampleOptimizeMode(b, optimize_request, .Debug);
 
-    const zero_native_mod = zeroNativeModule(b, dep, target, optimize);
+    const native_sdk_mod = nativeSdkModule(b, dep, target, optimize);
     // Android hosts load the embed lib inside a shared object
     // (System.loadLibrary / NativeActivity), so every object must be PIC —
     // without it Zig emits local-exec TLS relocations (R_AARCH64_TLSLE_*)
@@ -110,10 +110,10 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
         .optimize = optimize,
         .pic = pic,
     });
-    exports_mod.addImport("zero-native", zero_native_mod);
+    exports_mod.addImport("native_sdk", native_sdk_mod);
     if (options.scene == .canvas) {
         const app_mod = localModule(b, target, optimize, options.main);
-        app_mod.addImport("zero-native", zero_native_mod);
+        app_mod.addImport("native_sdk", native_sdk_mod);
         exports_mod.addImport("app", app_mod);
     }
     exports_mod.export_symbol_names = &mobile_export_symbol_names;
@@ -122,7 +122,7 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
         .linkage = .static,
         .name = options.name,
         .root_module = exports_mod,
-        // The embed C ABI (`zero_native_app_viewport`) is exactly the
+        // The embed C ABI (`native_sdk_app_viewport`) is exactly the
         // f32-heavy SysV signature Zig 0.16.0's self-hosted x86_64 backend
         // miscompiles (see useLlvmWorkaround in the framework build.zig):
         // clang-compiled hosts calling a self-hosted Debug lib receive
@@ -137,14 +137,14 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
 }
 
 pub fn addApp(b: *std.Build, dep: *std.Build.Dependency, app_options: AppOptions) void {
-    const target = zeroNativeTarget(b);
+    const target = nativeSdkTarget(b);
     const optimize_request = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size");
     const optimize = exampleOptimizeMode(b, optimize_request, .Debug);
     const app_optimize = exampleOptimizeMode(b, optimize_request, .ReleaseFast);
     const platform_option = b.option(PlatformOption, "platform", "Desktop backend: auto, null, macos, linux, windows") orelse .auto;
     const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .events;
     const debug_overlay = b.option(bool, "debug-overlay", "Enable debug overlay output") orelse false;
-    const automation_enabled = b.option(bool, "automation", "Enable zero-native automation artifacts") orelse false;
+    const automation_enabled = b.option(bool, "automation", "Enable Native SDK automation artifacts") orelse false;
     const js_bridge_enabled = b.option(bool, "js-bridge", "Enable optional JavaScript bridge stubs") orelse false;
     const web_engine_override = b.option(WebEngineOption, "web-engine", "Override app.zon web engine: system, chromium");
     const cef_dir_override = b.option([]const u8, "cef-dir", "Override CEF root directory for Chromium builds");
@@ -206,7 +206,7 @@ pub fn addApp(b: *std.Build, dep: *std.Build.Dependency, app_options: AppOptions
 
 /// Zig 0.16.0's self-hosted x86_64 backend miscompiles the SysV C calling
 /// convention for f32-heavy signatures with interleaved pointer arguments
-/// (`zero_native_app_viewport`: 11 f32s + 2 pointers): both the caller and
+/// (`native_sdk_app_viewport`: 11 f32s + 2 pointers): both the caller and
 /// the callee place/read the wrong registers and stack slots, so safe-area
 /// insets arrive as garbage on x86_64 Debug builds while every LLVM-backed
 /// build is correct. Minimal repro (fails under `zig test`, passes with
@@ -233,23 +233,23 @@ fn exampleOptimizeMode(b: *std.Build, requested: ?std.builtin.OptimizeMode, defa
 }
 
 fn appModule(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, app_options: AppOptions, options_mod: *std.Build.Module) *std.Build.Module {
-    const zero_native_mod = zeroNativeModule(b, dep, target, optimize);
+    const native_sdk_mod = nativeSdkModule(b, dep, target, optimize);
     const runner_mod = b.createModule(.{
         .root_source_file = dep.path("src/app_runner/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    runner_mod.addImport("zero-native", zero_native_mod);
+    runner_mod.addImport("native_sdk", native_sdk_mod);
     runner_mod.addImport("build_options", options_mod);
     runner_mod.addImport("app_manifest_zon", b.createModule(.{ .root_source_file = b.path("app.zon") }));
 
     const app_mod = localModule(b, target, optimize, app_options.main);
-    app_mod.addImport("zero-native", zero_native_mod);
+    app_mod.addImport("native_sdk", native_sdk_mod);
     app_mod.addImport("runner", runner_mod);
     return app_mod;
 }
 
-fn zeroNativeTarget(b: *std.Build) std.Build.ResolvedTarget {
+fn nativeSdkTarget(b: *std.Build) std.Build.ResolvedTarget {
     const target = b.standardTargetOptions(.{});
     if (target.result.os.tag != .macos) return target;
 
@@ -289,7 +289,7 @@ fn localModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
     });
 }
 
-fn zeroNativeModule(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn nativeSdkModule(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
     const geometry_mod = externalModule(b, dep, target, optimize, "src/primitives/geometry/root.zig");
     const assets_mod = externalModule(b, dep, target, optimize, "src/primitives/assets/root.zig");
     const app_dirs_mod = externalModule(b, dep, target, optimize, "src/primitives/app_dirs/root.zig");
@@ -305,17 +305,17 @@ fn zeroNativeModule(b: *std.Build, dep: *std.Build.Dependency, target: std.Build
     debug_mod.addImport("app_dirs", app_dirs_mod);
     debug_mod.addImport("trace", trace_mod);
 
-    const zero_native_mod = externalModule(b, dep, target, optimize, "src/root.zig");
-    zero_native_mod.addImport("geometry", geometry_mod);
-    zero_native_mod.addImport("assets", assets_mod);
-    zero_native_mod.addImport("app_dirs", app_dirs_mod);
-    zero_native_mod.addImport("trace", trace_mod);
-    zero_native_mod.addImport("app_manifest", app_manifest_mod);
-    zero_native_mod.addImport("diagnostics", diagnostics_mod);
-    zero_native_mod.addImport("platform_info", platform_info_mod);
-    zero_native_mod.addImport("json", json_mod);
-    zero_native_mod.addImport("canvas", canvas_mod);
-    return zero_native_mod;
+    const native_sdk_mod = externalModule(b, dep, target, optimize, "src/root.zig");
+    native_sdk_mod.addImport("geometry", geometry_mod);
+    native_sdk_mod.addImport("assets", assets_mod);
+    native_sdk_mod.addImport("app_dirs", app_dirs_mod);
+    native_sdk_mod.addImport("trace", trace_mod);
+    native_sdk_mod.addImport("app_manifest", app_manifest_mod);
+    native_sdk_mod.addImport("diagnostics", diagnostics_mod);
+    native_sdk_mod.addImport("platform_info", platform_info_mod);
+    native_sdk_mod.addImport("json", json_mod);
+    native_sdk_mod.addImport("canvas", canvas_mod);
+    return native_sdk_mod;
 }
 
 fn externalModule(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, path: []const u8) *std.Build.Module {
@@ -347,12 +347,12 @@ fn linkPlatform(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.Res
             .chromium => {
                 const cef_check = addCefCheck(b, target, cef_dir);
                 if (cef_auto_install) {
-                    const cef_auto = b.addSystemCommand(&.{ "zero-native", "cef", "install", "--dir", cef_dir });
+                    const cef_auto = b.addSystemCommand(&.{ "native", "cef", "install", "--dir", cef_dir });
                     cef_check.step.dependOn(&cef_auto.step);
                 }
                 exe.step.dependOn(&cef_check.step);
                 const include_arg = b.fmt("-I{s}", .{cef_dir});
-                const define_arg = b.fmt("-DZERO_NATIVE_CEF_DIR=\"{s}\"", .{cef_dir});
+                const define_arg = b.fmt("-DNATIVE_SDK_CEF_DIR=\"{s}\"", .{cef_dir});
                 const sdk_include = if (b.sysroot) |sysroot| b.fmt("-I{s}/usr/include", .{sysroot}) else "";
                 const flags: []const []const u8 = if (b.sysroot) |sysroot| &.{ "-fobjc-arc", "-fno-sanitize=builtin", "-ObjC++", "-std=c++17", "-stdlib=libc++", "-mmacosx-version-min=11.0", "-isysroot", sysroot, sdk_include, include_arg, define_arg } else &.{ "-fobjc-arc", "-fno-sanitize=builtin", "-ObjC++", "-std=c++17", "-stdlib=libc++", "-mmacosx-version-min=11.0", include_arg, define_arg };
                 app_mod.addCSourceFile(.{ .file = dep.path("src/platform/macos/cef_host.mm"), .flags = flags });
@@ -385,12 +385,12 @@ fn linkPlatform(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.Res
             .chromium => {
                 const cef_check = addCefCheck(b, target, cef_dir);
                 if (cef_auto_install) {
-                    const cef_auto = b.addSystemCommand(&.{ "zero-native", "cef", "install", "--dir", cef_dir });
+                    const cef_auto = b.addSystemCommand(&.{ "native", "cef", "install", "--dir", cef_dir });
                     cef_check.step.dependOn(&cef_auto.step);
                 }
                 exe.step.dependOn(&cef_check.step);
                 const include_arg = b.fmt("-I{s}", .{cef_dir});
-                const define_arg = b.fmt("-DZERO_NATIVE_CEF_DIR=\"{s}\"", .{cef_dir});
+                const define_arg = b.fmt("-DNATIVE_SDK_CEF_DIR=\"{s}\"", .{cef_dir});
                 app_mod.addCSourceFile(.{ .file = dep.path("src/platform/linux/cef_host.cpp"), .flags = &.{ "-std=c++17", include_arg, define_arg } });
                 app_mod.addObjectFile(b.path(b.fmt("{s}/libcef_dll_wrapper/libcef_dll_wrapper.a", .{cef_dir})));
                 app_mod.addLibraryPath(b.path(b.fmt("{s}/Release", .{cef_dir})));
@@ -406,12 +406,12 @@ fn linkPlatform(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.Res
             .chromium => {
                 const cef_check = addCefCheck(b, target, cef_dir);
                 if (cef_auto_install) {
-                    const cef_auto = b.addSystemCommand(&.{ "zero-native", "cef", "install", "--dir", cef_dir });
+                    const cef_auto = b.addSystemCommand(&.{ "native", "cef", "install", "--dir", cef_dir });
                     cef_check.step.dependOn(&cef_auto.step);
                 }
                 exe.step.dependOn(&cef_check.step);
                 const include_arg = b.fmt("-I{s}", .{cef_dir});
-                const define_arg = b.fmt("-DZERO_NATIVE_CEF_DIR=\"{s}\"", .{cef_dir});
+                const define_arg = b.fmt("-DNATIVE_SDK_CEF_DIR=\"{s}\"", .{cef_dir});
                 app_mod.addCSourceFile(.{ .file = dep.path("src/platform/windows/cef_host.cpp"), .flags = &.{ "-std=c++17", include_arg, define_arg } });
                 app_mod.addObjectFile(b.path(b.fmt("{s}/libcef_dll_wrapper/libcef_dll_wrapper.lib", .{cef_dir})));
                 app_mod.addLibraryPath(b.path(b.fmt("{s}/Release", .{cef_dir})));
@@ -461,7 +461,7 @@ fn addCefCheck(b: *std.Build, target: std.Build.ResolvedTarget, cef_dir: []const
             \\test -d "{s}/Release/Chromium Embedded Framework.framework" &&
             \\test -f "{s}/libcef_dll_wrapper/libcef_dll_wrapper.a" || {{
             \\  echo "missing CEF dependency for -Dweb-engine=chromium" >&2
-            \\  echo "Fix with: zero-native cef install --dir {s}" >&2
+            \\  echo "Fix with: native cef install --dir {s}" >&2
             \\  exit 1
             \\}}
         , .{ cef_dir, cef_dir, cef_dir, cef_dir }),
@@ -470,7 +470,7 @@ fn addCefCheck(b: *std.Build, target: std.Build.ResolvedTarget, cef_dir: []const
             \\test -f "{s}/Release/libcef.so" &&
             \\test -f "{s}/libcef_dll_wrapper/libcef_dll_wrapper.a" || {{
             \\  echo "missing CEF dependency for -Dweb-engine=chromium" >&2
-            \\  echo "Fix with: zero-native cef install --dir {s}" >&2
+            \\  echo "Fix with: native cef install --dir {s}" >&2
             \\  exit 1
             \\}}
         , .{ cef_dir, cef_dir, cef_dir, cef_dir }),
@@ -479,7 +479,7 @@ fn addCefCheck(b: *std.Build, target: std.Build.ResolvedTarget, cef_dir: []const
             \\test -f "{s}/Release/libcef.dll" &&
             \\test -f "{s}/libcef_dll_wrapper/libcef_dll_wrapper.lib" || {{
             \\  echo "missing CEF dependency for -Dweb-engine=chromium" >&2
-            \\  echo "Fix with: zero-native cef install --dir {s}" >&2
+            \\  echo "Fix with: native cef install --dir {s}" >&2
             \\  exit 1
             \\}}
         , .{ cef_dir, cef_dir, cef_dir, cef_dir }),

@@ -772,7 +772,7 @@ pub const NullPlatform = struct {
     fn showOpenDialog(context: ?*anyopaque, options: OpenDialogOptions, buffer: []u8) anyerror!OpenDialogResult {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         _ = options;
-        const path = "/tmp/zero-native-open.txt";
+        const path = "/tmp/native-sdk-open.txt";
         const copied = try copyInto(buffer, path);
         self.open_dialog_count += 1;
         return .{ .count = 1, .paths = copied };
@@ -780,7 +780,7 @@ pub const NullPlatform = struct {
 
     fn showSaveDialog(context: ?*anyopaque, options: SaveDialogOptions, buffer: []u8) anyerror!?[]const u8 {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
-        const path = if (options.default_name.len > 0) options.default_name else "/tmp/zero-native-save.txt";
+        const path = if (options.default_name.len > 0) options.default_name else "/tmp/native-sdk-save.txt";
         const copied = try copyInto(buffer, path);
         self.save_dialog_count += 1;
         return copied;

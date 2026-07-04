@@ -14,12 +14,12 @@
 
 const std = @import("std");
 const runner = @import("runner");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-pub const panic = std.debug.FullPanic(zero_native.debug.capturePanic);
+pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 const window_width: f32 = 1240;
 const window_height: f32 = 780;
@@ -30,8 +30,8 @@ const canvas_height: f32 = window_height;
 const default_canvas_size = geometry.SizeF.init(canvas_width, canvas_height);
 const statusbar_height: f32 = 34;
 const max_dashboard_pipelines: usize = 8;
-const max_dashboard_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
-const max_dashboard_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
+const max_dashboard_commands: usize = native_sdk.runtime.max_canvas_commands_per_view;
+const max_dashboard_glyphs: usize = native_sdk.runtime.max_canvas_glyphs_per_view;
 const max_dashboard_widgets: usize = 64;
 const dashboard_chrome_prefix_commands: usize = 6;
 const expected_dashboard_command_count: usize = 72;
@@ -73,19 +73,19 @@ const hero_stops = [_]canvas.GradientStop{
     .{ .offset = 1, .color = color(17, 161, 153) },
 };
 
-const app_permissions = [_][]const u8{ zero_native.security.permission_command, zero_native.security.permission_view };
-const shell_views = [_]zero_native.ShellView{
+const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = dashboard_canvas_label, .kind = .gpu_surface, .fill = true, .min_width = 720, .layer = 12, .role = "Native-rendered dashboard canvas", .accessibility_label = "Native-rendered product dashboard canvas", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
 };
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
-    .title = "zero-native GPU Dashboard",
+    .title = "Native SDK GPU Dashboard",
     .width = window_width,
     .height = window_height,
     .restore_state = false,
     .views = &shell_views,
 }};
-const shell_scene: zero_native.ShellConfig = .{ .windows = &shell_windows };
+const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 // ------------------------------------------------------------------ model
 
@@ -118,7 +118,7 @@ const filter_entries = [_]DashboardEntry{
 /// Renderer diagnostics carried from a presented gpu frame into `update`
 /// through the `on_frame` hook.
 pub const DashboardFrameStatus = struct {
-    risk: zero_native.platform.CanvasFrameProfileRisk,
+    risk: native_sdk.platform.CanvasFrameProfileRisk,
     work_units: usize,
     commands: usize,
     batches: usize,
@@ -140,7 +140,7 @@ pub const Msg = union(enum) {
     submit_forecast,
     submit_search,
     activity_scrolled: canvas.ScrollState,
-    set_appearance: zero_native.Appearance,
+    set_appearance: native_sdk.Appearance,
     frame_status: DashboardFrameStatus,
 };
 
@@ -155,7 +155,7 @@ pub const Model = struct {
     auto_refresh: bool = true,
     confidence: f32 = 0.62,
     activity_scroll: f32 = 18,
-    color_scheme: zero_native.ColorScheme = .light,
+    color_scheme: native_sdk.ColorScheme = .light,
     reduce_motion: bool = false,
     high_contrast: bool = false,
     reported_planned_frame: bool = false,
@@ -453,7 +453,7 @@ fn entryKey(entry: *const DashboardEntry) canvas.UiKey {
 
 // -------------------------------------------------------------------- app
 
-pub const DashboardApp = zero_native.UiApp(Model, Msg);
+pub const DashboardApp = native_sdk.UiApp(Model, Msg);
 
 fn dashboardOptions() DashboardApp.Options {
     return .{
@@ -498,7 +498,7 @@ fn dashboardCommand(name: []const u8) ?Msg {
 
 /// The model owns color scheme, contrast, and reduce-motion state so
 /// `tokens_fn` can derive from it.
-fn dashboardAppearance(appearance: zero_native.Appearance) ?Msg {
+fn dashboardAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
 }
 
@@ -531,7 +531,7 @@ fn dashboardAnimations(model: *const Model, tree: *const DashboardApp.Ui.Tree, s
 
 /// Report the first planned frame's renderer diagnostics into the status
 /// line, once.
-fn dashboardOnFrame(model: *const Model, frame: zero_native.platform.GpuFrame) ?Msg {
+fn dashboardOnFrame(model: *const Model, frame: native_sdk.platform.GpuFrame) ?Msg {
     if (model.reported_planned_frame or frame.canvas_command_count == 0) return null;
     return Msg{ .frame_status = .{
         .risk = frame.canvas_frame_profile_risk,
@@ -669,11 +669,11 @@ fn dashboardWidgetTokensForScale(pixel_snap_scale: f32) canvas.DesignTokens {
     return dashboardWidgetTokensForSchemeAndScale(.light, pixel_snap_scale);
 }
 
-fn dashboardWidgetTokensForSchemeAndScale(color_scheme: zero_native.ColorScheme, pixel_snap_scale: f32) canvas.DesignTokens {
+fn dashboardWidgetTokensForSchemeAndScale(color_scheme: native_sdk.ColorScheme, pixel_snap_scale: f32) canvas.DesignTokens {
     return dashboardWidgetTokensForSchemeScaleMotionAndContrast(color_scheme, pixel_snap_scale, false, false);
 }
 
-fn dashboardWidgetTokensForSchemeScaleMotionAndContrast(color_scheme: zero_native.ColorScheme, pixel_snap_scale: f32, reduce_motion: bool, high_contrast: bool) canvas.DesignTokens {
+fn dashboardWidgetTokensForSchemeScaleMotionAndContrast(color_scheme: native_sdk.ColorScheme, pixel_snap_scale: f32, reduce_motion: bool, high_contrast: bool) canvas.DesignTokens {
     var tokens = canvas.DesignTokens.theme(.{ .color_scheme = switch (color_scheme) {
         .light => .light,
         .dark => .dark,
@@ -768,8 +768,8 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "gpu-dashboard",
-        .window_title = "zero-native GPU Dashboard",
-        .bundle_id = "dev.zero_native.gpu_dashboard",
+        .window_title = "Native SDK GPU Dashboard",
+        .bundle_id = "dev.native_sdk.gpu_dashboard",
         .icon_path = "assets/icon.icns",
         .default_frame = geometry.RectF.init(0, 0, window_width, window_height),
         .restore_state = false,
@@ -803,7 +803,7 @@ fn destroyTestApp(app_state: *DashboardApp) void {
     std.testing.allocator.destroy(app_state);
 }
 
-fn dashboardSnapshotWidgetNamed(snapshot: zero_native.automation.snapshot.Input, role: []const u8, name: []const u8) ?zero_native.automation.snapshot.Widget {
+fn dashboardSnapshotWidgetNamed(snapshot: native_sdk.automation.snapshot.Input, role: []const u8, name: []const u8) ?native_sdk.automation.snapshot.Widget {
     for (snapshot.widgets) |widget| {
         if (!std.mem.eql(u8, widget.view_label, dashboard_canvas_label)) continue;
         if (!std.mem.eql(u8, widget.role, role)) continue;
@@ -812,7 +812,7 @@ fn dashboardSnapshotWidgetNamed(snapshot: zero_native.automation.snapshot.Input,
     return null;
 }
 
-fn dashboardSnapshotWidgetNameContains(snapshot: zero_native.automation.snapshot.Input, role: []const u8, fragment: []const u8) ?zero_native.automation.snapshot.Widget {
+fn dashboardSnapshotWidgetNameContains(snapshot: native_sdk.automation.snapshot.Input, role: []const u8, fragment: []const u8) ?native_sdk.automation.snapshot.Widget {
     for (snapshot.widgets) |widget| {
         if (!std.mem.eql(u8, widget.view_label, dashboard_canvas_label)) continue;
         if (!std.mem.eql(u8, widget.role, role)) continue;
@@ -821,7 +821,7 @@ fn dashboardSnapshotWidgetNameContains(snapshot: zero_native.automation.snapshot
     return null;
 }
 
-fn dashboardSnapshotWidgetById(snapshot: zero_native.automation.snapshot.Input, id: u64) ?zero_native.automation.snapshot.Widget {
+fn dashboardSnapshotWidgetById(snapshot: native_sdk.automation.snapshot.Input, id: u64) ?native_sdk.automation.snapshot.Widget {
     for (snapshot.widgets) |widget| {
         if (widget.id == id and std.mem.eql(u8, widget.view_label, dashboard_canvas_label)) return widget;
     }
@@ -863,12 +863,12 @@ fn expectDashboardTextCommand(display_list: canvas.DisplayList, id: canvas.Objec
     }
 }
 
-fn resetDashboardDirty(runtime: *zero_native.Runtime) void {
+fn resetDashboardDirty(runtime: *native_sdk.Runtime) void {
     runtime.invalidated = false;
     runtime.dirty_region_count = 0;
 }
 
-fn expectCompactDashboardDirty(runtime: *const zero_native.Runtime, max_width: f32, max_height: f32) !void {
+fn expectCompactDashboardDirty(runtime: *const native_sdk.Runtime, max_width: f32, max_height: f32) !void {
     const regions = runtime.pendingDirtyRegions();
     try std.testing.expect(regions.len > 0);
 
@@ -910,7 +910,7 @@ fn expectDashboardRect(actual: geometry.RectF, expected: geometry.RectF) !void {
     try std.testing.expectApproxEqAbs(expected.height, actual.height, 0.001);
 }
 
-test "gpu dashboard scene declares one full-window zero-native canvas" {
+test "gpu dashboard scene declares one full-window native-sdk canvas" {
     try std.testing.expectEqual(@as(usize, 1), shell_views.len);
     try std.testing.expect(shell_views[0].kind == .gpu_surface);
     try std.testing.expect(shell_views[0].parent == null);
@@ -1120,11 +1120,11 @@ test "gpu dashboard display list renders through the reference surface" {
     var visual_effects: [max_dashboard_commands]canvas.VisualEffect = undefined;
     var visual_effect_cache_entries: [max_dashboard_commands]canvas.VisualEffectCacheEntry = undefined;
     var visual_effect_cache_actions: [max_dashboard_commands * 2]canvas.VisualEffectCacheAction = undefined;
-    var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
-    var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
-    var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var glyphs: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [native_sdk.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
     var text_layout_plans: [max_dashboard_commands]canvas.TextLayoutPlan = undefined;
-    var text_layout_lines: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
+    var text_layout_lines: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
     var text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined;
     var text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined;
     var changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined;
@@ -1211,11 +1211,11 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
     var visual_effects: [max_dashboard_commands]canvas.VisualEffect = undefined;
     var visual_effect_cache_entries: [max_dashboard_commands]canvas.VisualEffectCacheEntry = undefined;
     var visual_effect_cache_actions: [max_dashboard_commands * 2]canvas.VisualEffectCacheAction = undefined;
-    var glyphs: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
-    var glyph_cache_entries: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
-    var glyph_cache_actions: [zero_native.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var glyphs: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [native_sdk.runtime.max_canvas_glyphs_per_view * 2]canvas.GlyphAtlasCacheAction = undefined;
     var text_layout_plans: [max_dashboard_commands]canvas.TextLayoutPlan = undefined;
-    var text_layout_lines: [zero_native.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
+    var text_layout_lines: [native_sdk.runtime.max_canvas_glyphs_per_view]canvas.TextLine = undefined;
     var text_layout_cache_entries: [max_dashboard_commands]canvas.TextLayoutCacheEntry = undefined;
     var text_layout_cache_actions: [max_dashboard_commands * 2]canvas.TextLayoutCacheAction = undefined;
     var changes: [max_dashboard_commands * 2 + 1]canvas.DiffChange = undefined;
@@ -1253,7 +1253,7 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
 test "gpu dashboard scheduled animations render without display list rebuild" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1308,7 +1308,7 @@ test "gpu dashboard scheduled animations render without display list rebuild" {
 test "gpu dashboard app registers canvas display list on first gpu frame" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1482,7 +1482,7 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const updated_forecast = dashboardSnapshotWidgetNamed(snapshot, "textbox", "Forecast amount").?;
     try std.testing.expectEqualStrings("$14.1M", updated_forecast.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 6, .end = 6 }, updated_forecast.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 6, .end = 6 }, updated_forecast.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardTextCommand(display_list, widgetPartCommandId(forecast_field.id, widget_text_slot), "$14.1M");
 
@@ -1492,7 +1492,7 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const composing_forecast = dashboardSnapshotWidgetNamed(snapshot, "textbox", "Forecast amount").?;
     try std.testing.expectEqualStrings("$14.1Mest", composing_forecast.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 6, .end = 9 }, composing_forecast.text_composition.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 6, .end = 9 }, composing_forecast.text_composition.?);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try std.testing.expect(display_list.findCommandById(widgetPartCommandId(forecast_field.id, widget_composition_slot)) != null);
 
@@ -1512,7 +1512,7 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Dashboard");
     const committed_forecast = dashboardSnapshotWidgetNamed(snapshot, "textbox", "Forecast amount").?;
     try std.testing.expectEqualStrings("$14.1M!", committed_forecast.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 7, .end = 7 }, committed_forecast.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 7, .end = 7 }, committed_forecast.text_selection.?);
     try std.testing.expect(committed_forecast.text_composition == null);
     display_list = try harness.runtime.canvasDisplayList(1, "dashboard-canvas");
     try expectDashboardTextCommand(display_list, widgetPartCommandId(forecast_field.id, widget_text_slot), "$14.1M!");
@@ -1589,13 +1589,13 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_pipeline_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_pipeline_retain_count);
     try std.testing.expectEqual(@as(usize, 0), frame.canvas_frame_profile_work_units);
-    try std.testing.expectEqual(zero_native.platform.CanvasFrameProfileRisk.idle, frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(native_sdk.platform.CanvasFrameProfileRisk.idle, frame.canvas_frame_profile_risk);
 }
 
 test "gpu dashboard shell commands map to typed messages" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1628,7 +1628,7 @@ test "gpu dashboard shell commands map to typed messages" {
 test "gpu dashboard follows system appearance tokens" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1653,7 +1653,7 @@ test "gpu dashboard follows system appearance tokens" {
     // the token hook derives dark high-contrast reduced-motion tokens, and
     // the chrome rebuild adopts them.
     try harness.runtime.dispatchPlatformEvent(app_handle, .{ .appearance_changed = .{ .color_scheme = .dark, .reduce_motion = true, .high_contrast = true } });
-    try std.testing.expectEqual(zero_native.ColorScheme.dark, app.model.color_scheme);
+    try std.testing.expectEqual(native_sdk.ColorScheme.dark, app.model.color_scheme);
     try std.testing.expect(app.model.reduce_motion);
     try std.testing.expect(app.model.high_contrast);
     try std.testing.expectEqualDeep(dashboardWidgetTokensForSchemeScaleMotionAndContrast(.dark, 2, true, true), try harness.runtime.canvasWidgetDesignTokens(1, "dashboard-canvas"));
@@ -1678,7 +1678,7 @@ test "gpu dashboard follows system appearance tokens" {
 test "gpu dashboard app rebuilds retained scene for resized gpu surfaces" {
     // The runtime and the app are both multi-megabyte structs; keep them off
     // the test thread's stack.
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1744,7 +1744,7 @@ test "gpu dashboard frame status message formats renderer diagnostics" {
     var model = Model{};
 
     // The on_frame hook only reports the first planned frame.
-    var gpu_frame = zero_native.platform.GpuFrame{
+    var gpu_frame = native_sdk.platform.GpuFrame{
         .window_id = 1,
         .label = dashboard_canvas_label,
         .canvas_command_count = 0,

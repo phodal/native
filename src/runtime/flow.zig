@@ -773,15 +773,15 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
 
         fn handleBuiltinBridgeMessage(self: *Runtime, app: App, message: platform.BridgeMessage) anyerror!bool {
             const request = bridge.parseRequest(message.bytes) catch return false;
-            const is_command = std.mem.startsWith(u8, request.command, "zero-native.command.");
-            const is_window = std.mem.startsWith(u8, request.command, "zero-native.window.");
-            const is_view = std.mem.startsWith(u8, request.command, "zero-native.view.");
-            const is_webview = std.mem.startsWith(u8, request.command, "zero-native.webview.");
-            const is_platform = std.mem.startsWith(u8, request.command, "zero-native.platform.");
-            const is_dialog = std.mem.startsWith(u8, request.command, "zero-native.dialog.");
-            const is_os = std.mem.startsWith(u8, request.command, "zero-native.os.");
-            const is_clipboard = std.mem.startsWith(u8, request.command, "zero-native.clipboard.");
-            const is_credentials = std.mem.startsWith(u8, request.command, "zero-native.credentials.");
+            const is_command = std.mem.startsWith(u8, request.command, "native-sdk.command.");
+            const is_window = std.mem.startsWith(u8, request.command, "native-sdk.window.");
+            const is_view = std.mem.startsWith(u8, request.command, "native-sdk.view.");
+            const is_webview = std.mem.startsWith(u8, request.command, "native-sdk.webview.");
+            const is_platform = std.mem.startsWith(u8, request.command, "native-sdk.platform.");
+            const is_dialog = std.mem.startsWith(u8, request.command, "native-sdk.dialog.");
+            const is_os = std.mem.startsWith(u8, request.command, "native-sdk.os.");
+            const is_clipboard = std.mem.startsWith(u8, request.command, "native-sdk.clipboard.");
+            const is_credentials = std.mem.startsWith(u8, request.command, "native-sdk.credentials.");
             if (!is_command and !is_window and !is_view and !is_webview and !is_platform and !is_dialog and !is_os and !is_clipboard and !is_credentials) return false;
 
             var response_buffer: [bridge.max_response_bytes]u8 = undefined;

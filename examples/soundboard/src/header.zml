@@ -5,7 +5,7 @@
 <column>
   <row height="60" padding="12" gap="12" cross="center" background="surface" label="Soundboard header">
     <badge variant="primary">Soundboard</badge>
-    <text size="sm" width="84" foreground="text_muted">zero-native</text>
+    <text size="sm" width="84" foreground="text_muted">Native SDK</text>
     <tabs gap="4">
       <button size="sm" variant="ghost" selected="{albumsShowing}" on-press="show_albums">Albums</button>
       <button size="sm" variant="ghost" selected="{songsShowing}" on-press="show_songs">Songs</button>

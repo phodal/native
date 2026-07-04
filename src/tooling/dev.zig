@@ -48,9 +48,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !void {
         const values = base_env.values();
         for (keys, values) |key, value| try env.put(key, value);
     }
-    try env.put("ZERO_NATIVE_FRONTEND_URL", url);
-    try env.put("ZERO_NATIVE_MODE", "dev");
-    try env.put("ZERO_NATIVE_HMR", "1");
+    try env.put("NATIVE_SDK_FRONTEND_URL", url);
+    try env.put("NATIVE_SDK_MODE", "dev");
+    try env.put("NATIVE_SDK_HMR", "1");
 
     const app_args = [_][]const u8{binary_path};
     var app_child = try std.process.spawn(io, .{

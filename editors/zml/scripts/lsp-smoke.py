@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""End-to-end smoke test for `zero-native markup lsp` — no editor required.
+"""End-to-end smoke test for `native markup lsp` — no editor required.
 
 Spawns the server, speaks LSP over stdio with Content-Length framing:
 initialize -> initialized -> didOpen (broken .zml) -> expect
 publishDiagnostics at the right line/column -> didChange (fixed .zml) ->
 expect empty diagnostics -> completion -> hover -> shutdown -> exit.
 
-Usage: lsp-smoke.py [path/to/zero-native]   (default: zig-out/bin/zero-native)
+Usage: lsp-smoke.py [path/to/native-sdk]   (default: zig-out/bin/native)
 """
 
 import json
@@ -62,7 +62,7 @@ def expect(condition, label):
 
 
 def main():
-    server = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/zero-native"
+    server = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/native"
     proc = subprocess.Popen(
         [server, "markup", "lsp"],
         stdin=subprocess.PIPE,

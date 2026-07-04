@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.effects_probe",
+    .id = "dev.native_sdk.effects_probe",
     .name = "effects-probe",
     .display_name = "Effects Probe",
     .version = "0.1.0",
@@ -10,7 +10,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Effects Probe",
+                .title = "Native SDK Effects Probe",
                 .width = 560,
                 .height = 480,
                 .restore_state = false,

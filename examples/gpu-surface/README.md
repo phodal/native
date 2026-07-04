@@ -1,4 +1,4 @@
-# zero-native gpu-surface example
+# Native SDK gpu-surface example
 
 This example shows a real GPU-backed child surface in the native view tree:
 

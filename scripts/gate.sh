@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tiered local gate for zero-native.
+# Tiered local gate for the Native SDK.
 #
 #   scripts/gate.sh fast [base-ref]                  # affected-only: what your diff touches
 #   scripts/gate.sh full [base-ref] [--all] [--perf] # everything CI-shaped that runs locally
@@ -229,7 +229,7 @@ else # full
   markup_check() {
     zig build || return 1
     # shellcheck disable=SC2046
-    ./zig-out/bin/zero-native markup check $(find examples -name '*.zml' | sort)
+    ./zig-out/bin/native markup check $(find examples -name '*.zml' | sort)
   }
   run_step "markup-check" markup_check
 

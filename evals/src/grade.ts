@@ -116,7 +116,7 @@ async function markupCheck(context: GradeContext): Promise<PendingResult> {
   if (files.length === 0) {
     return {
       type: "markup_check",
-      description: "zero-native markup check src/*.zml",
+      description: "native markup check src/*.zml",
       status: "fail",
       detail: "no .zml files found under src/",
     };
@@ -131,7 +131,7 @@ async function markupCheck(context: GradeContext): Promise<PendingResult> {
       failures.push(`${relative(context.workspace.path, file)}:\n${tailLines(result, 8)}`);
     }
   }
-  const description = `zero-native markup check (${files.map((f) => relative(context.workspace.path, f)).join(", ")})`;
+  const description = `native markup check (${files.map((f) => relative(context.workspace.path, f)).join(", ")})`;
   if (failures.length === 0) return { type: "markup_check", description, status: "pass" };
   return { type: "markup_check", description, status: "fail", detail: failures.join("\n") };
 }
@@ -158,7 +158,7 @@ function fileGrep(
 
 /**
  * Live grading through the automation harness: build with -Dautomation=true,
- * launch the app, `zero-native automate wait`, then grep the widget snapshot.
+ * launch the app, `native automate wait`, then grep the widget snapshot.
  * Mirrors the repo's linux-canvas-smoke CI job, but local-macOS.
  */
 async function snapshotGrep(
@@ -185,7 +185,7 @@ async function snapshotGrep(
   if (!binary) {
     return { type: "snapshot_grep", description, status: "fail", detail: "no executable in zig-out/bin" };
   }
-  rmSync(join(workspace, ".zig-cache", "zero-native-automation"), { recursive: true, force: true });
+  rmSync(join(workspace, ".zig-cache", "native-sdk-automation"), { recursive: true, force: true });
   const app = spawn(binary, [], { cwd: workspace, stdio: "ignore" });
   try {
     const wait = await exec(context.workspace.cliPath, ["automate", "wait"], {
@@ -201,7 +201,7 @@ async function snapshotGrep(
         detail: `automate wait did not report ready=true:\n${tailLines(wait, 6)}`,
       };
     }
-    const snapshotPath = join(workspace, ".zig-cache", "zero-native-automation", "snapshot.txt");
+    const snapshotPath = join(workspace, ".zig-cache", "native-sdk-automation", "snapshot.txt");
     const regexes = check.patterns.map((pattern) => new RegExp(pattern, "m"));
     // Widget lines appear in the snapshot only after the first rendered
     // frame (widget_nodes starts at 0), so poll rather than read once.

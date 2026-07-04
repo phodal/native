@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a zero-native mobile embed static library for Android, link it into
+# Build a native-sdk mobile embed static library for Android, link it into
 # the minimal NativeActivity presentation shim (main.c), assemble an APK
 # without Gradle, then install + launch it on a device/emulator and verify:
 #   1. a non-blank screenshot (presentation),
@@ -63,14 +63,14 @@ LIB="$(ls "$EXAMPLE_DIR"/zig-out/lib/*.a | head -1)"
 APP_NAME="$(basename "$LIB")"
 APP_NAME="${APP_NAME#lib}"
 APP_NAME="${APP_NAME%.a}"
-PACKAGE="dev.zero_native.${APP_NAME//-/_}"
-SO_NAME="zero_native_shim"
+PACKAGE="dev.native_sdk.${APP_NAME//-/_}"
+SO_NAME="native_sdk_shim"
 
 MISSING=()
 for symbol in create destroy start viewport frame render_pixel_size render_pixels \
               touch scroll gpu_frame_state widget_semantics_count set_automation_dir; do
-  nm -g --defined-only "$LIB" 2>/dev/null | grep -q " T zero_native_app_${symbol}\$" \
-    || MISSING+=("zero_native_app_${symbol}")
+  nm -g --defined-only "$LIB" 2>/dev/null | grep -q " T native_sdk_app_${symbol}\$" \
+    || MISSING+=("native_sdk_app_${symbol}")
 done
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo "static lib is missing ABI symbols: ${MISSING[*]}" >&2
@@ -185,7 +185,7 @@ if [[ "$DEVICE_COUNT" -eq 0 ]]; then
   AVD="$([[ -x "$EMULATOR" ]] && "$EMULATOR" -list-avds 2>/dev/null | head -1 || true)"
   if [[ -z "$AVD" ]]; then
     echo "no device attached and no emulator AVD available" >&2
-    echo "create one with: avdmanager create avd -n zero-native -k 'system-images;android-34;google_apis;arm64-v8a'" >&2
+    echo "create one with: avdmanager create avd -n native-sdk -k 'system-images;android-34;google_apis;arm64-v8a'" >&2
     exit 1
   fi
   echo "== booting emulator AVD: $AVD"
@@ -198,7 +198,7 @@ if [[ "$DEVICE_COUNT" -eq 0 ]]; then
 fi
 
 echo "== install + launch $PACKAGE (automation enabled)"
-"$ADB" shell setprop debug.zero_native.automation 1
+"$ADB" shell setprop debug.native_sdk.automation 1
 "$ADB" install -r "$APK" >/dev/null
 "$ADB" shell am force-stop "$PACKAGE" || true
 "$ADB" shell am start -n "$PACKAGE/android.app.NativeActivity" >/dev/null
@@ -242,7 +242,7 @@ echo "OK: non-blank frame ($DISTINCT distinct colors)"
 
 # --------------------------------------- rung 3b: automation snapshot + tap
 
-SNAPSHOT_REMOTE="files/zero-native-automation/snapshot.txt"
+SNAPSHOT_REMOTE="files/native-sdk-automation/snapshot.txt"
 read_snapshot() {
   "$ADB" shell run-as "$PACKAGE" cat "$SNAPSHOT_REMOTE" 2>/dev/null | tr -d '\r'
 }

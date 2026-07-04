@@ -12,8 +12,8 @@ import "./globals.css";
 export const metadata: Metadata = {
   metadataBase: new URL("https://zero-native.dev"),
   title: {
-    default: "zero-native | Write Markup. Ship Native Pixels.",
-    template: "%s | zero-native",
+    default: "Native SDK | Write Markup. Ship Native Pixels.",
+    template: "%s | Native SDK",
   },
   description:
     "Cross-platform native UI: declarative markup views, design-token styling, and Zig logic on an Elm-style loop — rendered into real OS windows with no browser in the binary.",
@@ -21,15 +21,15 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: "https://zero-native.dev",
-    siteName: "zero-native",
-    title: "zero-native | Write Markup. Ship Native Pixels.",
+    siteName: "Native SDK",
+    title: "Native SDK | Write Markup. Ship Native Pixels.",
     description:
       "Cross-platform native UI: declarative markup views, design-token styling, and Zig logic on an Elm-style loop — rendered into real OS windows with no browser in the binary.",
-    images: [{ url: "/og", width: 1200, height: 630, alt: "zero-native" }],
+    images: [{ url: "/og", width: 1200, height: 630, alt: "Native SDK" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "zero-native | Write Markup. Ship Native Pixels.",
+    title: "Native SDK | Write Markup. Ship Native Pixels.",
     description:
       "Cross-platform native UI: declarative markup views, design-token styling, and Zig logic on an Elm-style loop — rendered into real OS windows with no browser in the binary.",
     images: ["/og"],
@@ -76,7 +76,7 @@ function Header({ stars }: { stars?: string }) {
             </svg>
           </span>
           <Link href="/">
-            <span className={`${GeistPixelSquare.className} text-lg`}>zero-native</span>
+            <span className={`${GeistPixelSquare.className} text-lg`}>Native SDK</span>
           </Link>
         </div>
         <nav className="flex items-center gap-4">

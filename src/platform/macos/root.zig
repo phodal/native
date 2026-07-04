@@ -98,62 +98,62 @@ const shortcut_modifier_control: u32 = 1 << 2;
 const shortcut_modifier_option: u32 = 1 << 3;
 const shortcut_modifier_shift: u32 = 1 << 4;
 
-extern fn zero_native_appkit_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) ?*AppKitHost;
-extern fn zero_native_appkit_destroy(host: *AppKitHost) void;
-extern fn zero_native_appkit_run(host: *AppKitHost, callback: AppKitCallback, context: ?*anyopaque) void;
-extern fn zero_native_appkit_stop(host: *AppKitHost) void;
-extern fn zero_native_appkit_load_webview(host: *AppKitHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
-extern fn zero_native_appkit_load_window_webview(host: *AppKitHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
-extern fn zero_native_appkit_set_bridge_callback(host: *AppKitHost, callback: AppKitBridgeCallback, context: ?*anyopaque) void;
-extern fn zero_native_appkit_bridge_respond(host: *AppKitHost, response: [*]const u8, response_len: usize) void;
-extern fn zero_native_appkit_bridge_respond_window(host: *AppKitHost, window_id: u64, response: [*]const u8, response_len: usize) void;
-extern fn zero_native_appkit_bridge_respond_webview(host: *AppKitHost, window_id: u64, webview_label: [*]const u8, webview_label_len: usize, response: [*]const u8, response_len: usize) void;
-extern fn zero_native_appkit_emit_window_event(host: *AppKitHost, window_id: u64, name: [*]const u8, name_len: usize, detail_json: [*]const u8, detail_json_len: usize) void;
-extern fn zero_native_appkit_set_security_policy(host: *AppKitHost, allowed_origins: [*]const u8, allowed_origins_len: usize, external_urls: [*]const u8, external_urls_len: usize, external_action: c_int) void;
-extern fn zero_native_appkit_set_menus(host: *AppKitHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
-extern fn zero_native_appkit_set_shortcuts(host: *AppKitHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
-extern fn zero_native_appkit_set_automation_frame_polling(host: *AppKitHost, enabled: c_int) void;
-extern fn zero_native_appkit_create_window(host: *AppKitHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) c_int;
-extern fn zero_native_appkit_focus_window(host: *AppKitHost, window_id: u64) c_int;
-extern fn zero_native_appkit_close_window(host: *AppKitHost, window_id: u64) c_int;
-extern fn zero_native_appkit_create_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, kind: c_int, parent: [*]const u8, parent_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, visible: c_int, enabled: c_int, role: [*]const u8, role_len: usize, accessibility_label: [*]const u8, accessibility_label_len: usize, text: [*]const u8, text_len: usize, command: [*]const u8, command_len: usize) c_int;
-extern fn zero_native_appkit_update_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, has_frame: c_int, x: f64, y: f64, width: f64, height: f64, has_layer: c_int, layer: c_int, has_visible: c_int, visible: c_int, has_enabled: c_int, enabled: c_int, has_role: c_int, role: [*]const u8, role_len: usize, has_accessibility_label: c_int, accessibility_label: [*]const u8, accessibility_label_len: usize, has_text: c_int, text: [*]const u8, text_len: usize, has_command: c_int, command: [*]const u8, command_len: usize) c_int;
-extern fn zero_native_appkit_set_view_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
-extern fn zero_native_appkit_set_view_visible(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, visible: c_int) c_int;
-extern fn zero_native_appkit_set_view_cursor(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, cursor: c_int) c_int;
-extern fn zero_native_appkit_focus_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
-extern fn zero_native_appkit_close_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
-extern fn zero_native_appkit_request_gpu_surface_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
-extern fn zero_native_appkit_set_gpu_surface_scroll_drivers(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, drivers: [*]const AppKitScrollDriver, count: usize) c_int;
-extern fn zero_native_appkit_show_context_menu(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, token: u64, items: [*]const AppKitContextMenuItem, count: usize) c_int;
-extern fn zero_native_appkit_start_timer(host: *AppKitHost, timer_id: u64, interval_ns: u64, repeats: c_int) void;
-extern fn zero_native_appkit_cancel_timer(host: *AppKitHost, timer_id: u64) void;
-extern fn zero_native_appkit_wake(host: *AppKitHost) void;
-extern fn zero_native_appkit_present_gpu_surface_pixels(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, width: usize, height: usize, scale: f64, has_dirty_rect: c_int, dirty_x: f64, dirty_y: f64, dirty_width: f64, dirty_height: f64, rgba8: [*]const u8, rgba8_len: usize) c_int;
-extern fn zero_native_appkit_present_gpu_surface_packet(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, surface_width: f64, surface_height: f64, scale: f64, clear_r: u8, clear_g: u8, clear_b: u8, clear_a: u8, requires_render: c_int, command_count: usize, unsupported_command_count: usize, representable: c_int, json: [*]const u8, json_len: usize) c_int;
-extern fn zero_native_appkit_upload_gpu_surface_image(host: *AppKitHost, image_id: u64, width: usize, height: usize, rgba8: [*]const u8, rgba8_len: usize) c_int;
-extern fn zero_native_appkit_remove_gpu_surface_image(host: *AppKitHost, image_id: u64) c_int;
-extern fn zero_native_appkit_update_widget_accessibility(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, nodes: [*]const AppKitWidgetAccessibilityNode, node_count: usize) c_int;
-extern fn zero_native_appkit_create_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, transparent: c_int, bridge_enabled: c_int) c_int;
-extern fn zero_native_appkit_set_webview_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
-extern fn zero_native_appkit_navigate_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize) c_int;
-extern fn zero_native_appkit_set_webview_zoom(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, zoom: f64) c_int;
-extern fn zero_native_appkit_set_webview_layer(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, layer: c_int) c_int;
-extern fn zero_native_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
-extern fn zero_native_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
-extern fn zero_native_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
-extern fn zero_native_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
-extern fn zero_native_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
-extern fn zero_native_appkit_clipboard_read_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
-extern fn zero_native_appkit_clipboard_write_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, bytes: [*]const u8, bytes_len: usize) c_int;
-extern fn zero_native_appkit_show_notification(host: *AppKitHost, title: [*]const u8, title_len: usize, subtitle: [*]const u8, subtitle_len: usize, body: [*]const u8, body_len: usize) c_int;
-extern fn zero_native_appkit_open_external_url(host: *AppKitHost, url: [*]const u8, url_len: usize) c_int;
-extern fn zero_native_appkit_reveal_path(host: *AppKitHost, path: [*]const u8, path_len: usize) c_int;
-extern fn zero_native_appkit_add_recent_document(host: *AppKitHost, path: [*]const u8, path_len: usize) c_int;
-extern fn zero_native_appkit_clear_recent_documents(host: *AppKitHost) c_int;
-extern fn zero_native_appkit_set_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, secret: [*]const u8, secret_len: usize) c_int;
-extern fn zero_native_appkit_get_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, buffer: [*]u8, buffer_len: usize) usize;
-extern fn zero_native_appkit_delete_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize) c_int;
+extern fn native_sdk_appkit_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) ?*AppKitHost;
+extern fn native_sdk_appkit_destroy(host: *AppKitHost) void;
+extern fn native_sdk_appkit_run(host: *AppKitHost, callback: AppKitCallback, context: ?*anyopaque) void;
+extern fn native_sdk_appkit_stop(host: *AppKitHost) void;
+extern fn native_sdk_appkit_load_webview(host: *AppKitHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
+extern fn native_sdk_appkit_load_window_webview(host: *AppKitHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
+extern fn native_sdk_appkit_set_bridge_callback(host: *AppKitHost, callback: AppKitBridgeCallback, context: ?*anyopaque) void;
+extern fn native_sdk_appkit_bridge_respond(host: *AppKitHost, response: [*]const u8, response_len: usize) void;
+extern fn native_sdk_appkit_bridge_respond_window(host: *AppKitHost, window_id: u64, response: [*]const u8, response_len: usize) void;
+extern fn native_sdk_appkit_bridge_respond_webview(host: *AppKitHost, window_id: u64, webview_label: [*]const u8, webview_label_len: usize, response: [*]const u8, response_len: usize) void;
+extern fn native_sdk_appkit_emit_window_event(host: *AppKitHost, window_id: u64, name: [*]const u8, name_len: usize, detail_json: [*]const u8, detail_json_len: usize) void;
+extern fn native_sdk_appkit_set_security_policy(host: *AppKitHost, allowed_origins: [*]const u8, allowed_origins_len: usize, external_urls: [*]const u8, external_urls_len: usize, external_action: c_int) void;
+extern fn native_sdk_appkit_set_menus(host: *AppKitHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
+extern fn native_sdk_appkit_set_shortcuts(host: *AppKitHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
+extern fn native_sdk_appkit_set_automation_frame_polling(host: *AppKitHost, enabled: c_int) void;
+extern fn native_sdk_appkit_create_window(host: *AppKitHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) c_int;
+extern fn native_sdk_appkit_focus_window(host: *AppKitHost, window_id: u64) c_int;
+extern fn native_sdk_appkit_close_window(host: *AppKitHost, window_id: u64) c_int;
+extern fn native_sdk_appkit_create_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, kind: c_int, parent: [*]const u8, parent_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, visible: c_int, enabled: c_int, role: [*]const u8, role_len: usize, accessibility_label: [*]const u8, accessibility_label_len: usize, text: [*]const u8, text_len: usize, command: [*]const u8, command_len: usize) c_int;
+extern fn native_sdk_appkit_update_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, has_frame: c_int, x: f64, y: f64, width: f64, height: f64, has_layer: c_int, layer: c_int, has_visible: c_int, visible: c_int, has_enabled: c_int, enabled: c_int, has_role: c_int, role: [*]const u8, role_len: usize, has_accessibility_label: c_int, accessibility_label: [*]const u8, accessibility_label_len: usize, has_text: c_int, text: [*]const u8, text_len: usize, has_command: c_int, command: [*]const u8, command_len: usize) c_int;
+extern fn native_sdk_appkit_set_view_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
+extern fn native_sdk_appkit_set_view_visible(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, visible: c_int) c_int;
+extern fn native_sdk_appkit_set_view_cursor(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, cursor: c_int) c_int;
+extern fn native_sdk_appkit_focus_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
+extern fn native_sdk_appkit_close_view(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
+extern fn native_sdk_appkit_request_gpu_surface_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
+extern fn native_sdk_appkit_set_gpu_surface_scroll_drivers(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, drivers: [*]const AppKitScrollDriver, count: usize) c_int;
+extern fn native_sdk_appkit_show_context_menu(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, token: u64, items: [*]const AppKitContextMenuItem, count: usize) c_int;
+extern fn native_sdk_appkit_start_timer(host: *AppKitHost, timer_id: u64, interval_ns: u64, repeats: c_int) void;
+extern fn native_sdk_appkit_cancel_timer(host: *AppKitHost, timer_id: u64) void;
+extern fn native_sdk_appkit_wake(host: *AppKitHost) void;
+extern fn native_sdk_appkit_present_gpu_surface_pixels(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, width: usize, height: usize, scale: f64, has_dirty_rect: c_int, dirty_x: f64, dirty_y: f64, dirty_width: f64, dirty_height: f64, rgba8: [*]const u8, rgba8_len: usize) c_int;
+extern fn native_sdk_appkit_present_gpu_surface_packet(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, surface_width: f64, surface_height: f64, scale: f64, clear_r: u8, clear_g: u8, clear_b: u8, clear_a: u8, requires_render: c_int, command_count: usize, unsupported_command_count: usize, representable: c_int, json: [*]const u8, json_len: usize) c_int;
+extern fn native_sdk_appkit_upload_gpu_surface_image(host: *AppKitHost, image_id: u64, width: usize, height: usize, rgba8: [*]const u8, rgba8_len: usize) c_int;
+extern fn native_sdk_appkit_remove_gpu_surface_image(host: *AppKitHost, image_id: u64) c_int;
+extern fn native_sdk_appkit_update_widget_accessibility(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, nodes: [*]const AppKitWidgetAccessibilityNode, node_count: usize) c_int;
+extern fn native_sdk_appkit_create_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, transparent: c_int, bridge_enabled: c_int) c_int;
+extern fn native_sdk_appkit_set_webview_frame(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
+extern fn native_sdk_appkit_navigate_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, url: [*]const u8, url_len: usize) c_int;
+extern fn native_sdk_appkit_set_webview_zoom(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, zoom: f64) c_int;
+extern fn native_sdk_appkit_set_webview_layer(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize, layer: c_int) c_int;
+extern fn native_sdk_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
+extern fn native_sdk_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
+extern fn native_sdk_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
+extern fn native_sdk_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
+extern fn native_sdk_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
+extern fn native_sdk_appkit_clipboard_read_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
+extern fn native_sdk_appkit_clipboard_write_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, bytes: [*]const u8, bytes_len: usize) c_int;
+extern fn native_sdk_appkit_show_notification(host: *AppKitHost, title: [*]const u8, title_len: usize, subtitle: [*]const u8, subtitle_len: usize, body: [*]const u8, body_len: usize) c_int;
+extern fn native_sdk_appkit_open_external_url(host: *AppKitHost, url: [*]const u8, url_len: usize) c_int;
+extern fn native_sdk_appkit_reveal_path(host: *AppKitHost, path: [*]const u8, path_len: usize) c_int;
+extern fn native_sdk_appkit_add_recent_document(host: *AppKitHost, path: [*]const u8, path_len: usize) c_int;
+extern fn native_sdk_appkit_clear_recent_documents(host: *AppKitHost) c_int;
+extern fn native_sdk_appkit_set_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, secret: [*]const u8, secret_len: usize) c_int;
+extern fn native_sdk_appkit_get_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, buffer: [*]u8, buffer_len: usize) usize;
+extern fn native_sdk_appkit_delete_credential(host: *AppKitHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize) c_int;
 
 const AppKitScrollDriver = extern struct {
     driver_id: u64,
@@ -284,13 +284,13 @@ const widget_action_dismiss: u32 = 1 << 10;
 
 const AppKitTrayCallback = *const fn (context: ?*anyopaque, item_id: u32) callconv(.c) void;
 
-extern fn zero_native_appkit_show_open_dialog(host: *AppKitHost, opts: *const AppKitOpenDialogOpts, buffer: [*]u8, buffer_len: usize) AppKitOpenDialogResult;
-extern fn zero_native_appkit_show_save_dialog(host: *AppKitHost, opts: *const AppKitSaveDialogOpts, buffer: [*]u8, buffer_len: usize) usize;
-extern fn zero_native_appkit_show_message_dialog(host: *AppKitHost, opts: *const AppKitMessageDialogOpts) c_int;
-extern fn zero_native_appkit_create_tray(host: *AppKitHost, icon_path: [*]const u8, icon_path_len: usize, title: [*]const u8, title_len: usize, tooltip: [*]const u8, tooltip_len: usize) void;
-extern fn zero_native_appkit_update_tray_menu(host: *AppKitHost, item_ids: [*]const u32, labels: [*]const [*]const u8, label_lens: [*]const usize, separators: [*]const c_int, enabled_flags: [*]const c_int, count: usize) void;
-extern fn zero_native_appkit_remove_tray(host: *AppKitHost) void;
-extern fn zero_native_appkit_set_tray_callback(host: *AppKitHost, callback: AppKitTrayCallback, context: ?*anyopaque) void;
+extern fn native_sdk_appkit_show_open_dialog(host: *AppKitHost, opts: *const AppKitOpenDialogOpts, buffer: [*]u8, buffer_len: usize) AppKitOpenDialogResult;
+extern fn native_sdk_appkit_show_save_dialog(host: *AppKitHost, opts: *const AppKitSaveDialogOpts, buffer: [*]u8, buffer_len: usize) usize;
+extern fn native_sdk_appkit_show_message_dialog(host: *AppKitHost, opts: *const AppKitMessageDialogOpts) c_int;
+extern fn native_sdk_appkit_create_tray(host: *AppKitHost, icon_path: [*]const u8, icon_path_len: usize, title: [*]const u8, title_len: usize, tooltip: [*]const u8, tooltip_len: usize) void;
+extern fn native_sdk_appkit_update_tray_menu(host: *AppKitHost, item_ids: [*]const u32, labels: [*]const [*]const u8, label_lens: [*]const usize, separators: [*]const c_int, enabled_flags: [*]const c_int, count: usize) void;
+extern fn native_sdk_appkit_remove_tray(host: *AppKitHost) void;
+extern fn native_sdk_appkit_set_tray_callback(host: *AppKitHost, callback: AppKitTrayCallback, context: ?*anyopaque) void;
 
 pub const MacPlatform = struct {
     host: *AppKitHost,
@@ -311,7 +311,7 @@ pub const MacPlatform = struct {
         const window_options = app_info.resolvedMainWindow();
         const window_title = window_options.resolvedTitle(app_info.app_name);
         const frame = window_options.default_frame;
-        const host = zero_native_appkit_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0) orelse return error.CreateFailed;
+        const host = native_sdk_appkit_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0) orelse return error.CreateFailed;
         return .{
             .host = host,
             .web_engine = web_engine,
@@ -325,7 +325,7 @@ pub const MacPlatform = struct {
     }
 
     pub fn deinit(self: *MacPlatform) void {
-        zero_native_appkit_destroy(self.host);
+        native_sdk_appkit_destroy(self.host);
     }
 
     pub fn platform(self: *MacPlatform) platform_mod.Platform {
@@ -434,9 +434,9 @@ pub const MacPlatform = struct {
             .handler = handler,
             .handler_context = handler_context,
         };
-        zero_native_appkit_set_bridge_callback(self.host, appkitBridgeCallback, &self.state);
-        zero_native_appkit_set_tray_callback(self.host, appkitTrayCallback, &self.state);
-        zero_native_appkit_run(self.host, appkitCallback, &self.state);
+        native_sdk_appkit_set_bridge_callback(self.host, appkitBridgeCallback, &self.state);
+        native_sdk_appkit_set_tray_callback(self.host, appkitTrayCallback, &self.state);
+        native_sdk_appkit_run(self.host, appkitCallback, &self.state);
         if (self.state.failed) return error.CallbackFailed;
     }
 
@@ -461,7 +461,7 @@ const RunState = struct {
         const context = self.handler_context orelse return;
         handler(context, event) catch {
             self.failed = true;
-            if (self.self) |mac| zero_native_appkit_stop(mac.host);
+            if (self.self) |mac| native_sdk_appkit_stop(mac.host);
         };
     }
 };
@@ -620,17 +620,17 @@ fn gpuSurfaceInputEventFromAppKitEvent(event: *const AppKitEvent) platform_mod.G
 
 fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    const len = zero_native_appkit_clipboard_read(self.host, buffer.ptr, buffer.len);
+    const len = native_sdk_appkit_clipboard_read(self.host, buffer.ptr, buffer.len);
     if (len > buffer.len) return error.NoSpaceLeft;
     return buffer[0..len];
 }
 
-/// CoreText-backed text measurement matching `ZeroNativePacketDrawText`'s
+/// CoreText-backed text measurement matching `NativeSdkPacketDrawText`'s
 /// font resolution. Negative host results (invalid UTF-8) are surfaced as
 /// negative so the canvas provider falls back to its estimator.
 fn measureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
     _ = context;
-    return @floatCast(zero_native_appkit_measure_text(font_id, size, text.ptr, text.len));
+    return @floatCast(native_sdk_appkit_measure_text(font_id, size, text.ptr, text.len));
 }
 
 /// CGImageSource-backed image decoding (PNG, JPEG, ... — every codec
@@ -639,7 +639,7 @@ fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!p
     _ = context;
     var width: usize = 0;
     var height: usize = 0;
-    return switch (zero_native_appkit_decode_image(bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
+    return switch (native_sdk_appkit_decode_image(bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
         1 => .{ .width = width, .height = height, .rgba8 = buffer[0 .. width * height * 4] },
         -1 => error.ImageTooLarge,
         else => error.ImageDecodeFailed,
@@ -648,19 +648,19 @@ fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!p
 
 fn writeClipboard(context: ?*anyopaque, text: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_clipboard_write(self.host, text.ptr, text.len);
+    native_sdk_appkit_clipboard_write(self.host, text.ptr, text.len);
 }
 
 fn readClipboardData(context: ?*anyopaque, mime_type: []const u8, buffer: []u8) anyerror![]const u8 {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    const len = zero_native_appkit_clipboard_read_data(self.host, mime_type.ptr, mime_type.len, buffer.ptr, buffer.len);
+    const len = native_sdk_appkit_clipboard_read_data(self.host, mime_type.ptr, mime_type.len, buffer.ptr, buffer.len);
     if (len > buffer.len) return error.NoSpaceLeft;
     return buffer[0..len];
 }
 
 fn writeClipboardData(context: ?*anyopaque, data: platform_mod.ClipboardData) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_clipboard_write_data(self.host, data.mime_type.ptr, data.mime_type.len, data.bytes.ptr, data.bytes.len) == 0) return error.UnsupportedService;
+    if (native_sdk_appkit_clipboard_write_data(self.host, data.mime_type.ptr, data.mime_type.len, data.bytes.ptr, data.bytes.len) == 0) return error.UnsupportedService;
 }
 
 fn loadWebView(context: ?*anyopaque, source: platform_mod.WebViewSource) anyerror!void {
@@ -670,7 +670,7 @@ fn loadWebView(context: ?*anyopaque, source: platform_mod.WebViewSource) anyerro
 fn loadWindowWebView(context: ?*anyopaque, window_id: platform_mod.WindowId, source: platform_mod.WebViewSource) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     const assets: platform_mod.WebViewAssetSource = source.asset_options orelse .{ .root_path = "", .entry = "", .origin = "", .spa_fallback = false };
-    zero_native_appkit_load_window_webview(
+    native_sdk_appkit_load_window_webview(
         self.host,
         window_id,
         source.bytes.ptr,
@@ -692,34 +692,34 @@ fn loadWindowWebView(context: ?*anyopaque, window_id: platform_mod.WindowId, sou
 
 fn completeBridge(context: ?*anyopaque, response: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_bridge_respond(self.host, response.ptr, response.len);
+    native_sdk_appkit_bridge_respond(self.host, response.ptr, response.len);
 }
 
 fn completeWindowBridge(context: ?*anyopaque, window_id: platform_mod.WindowId, response: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_bridge_respond_window(self.host, window_id, response.ptr, response.len);
+    native_sdk_appkit_bridge_respond_window(self.host, window_id, response.ptr, response.len);
 }
 
 fn completeWebViewBridge(context: ?*anyopaque, window_id: platform_mod.WindowId, webview_label: []const u8, response: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_bridge_respond_webview(self.host, window_id, webview_label.ptr, webview_label.len, response.ptr, response.len);
+    native_sdk_appkit_bridge_respond_webview(self.host, window_id, webview_label.ptr, webview_label.len, response.ptr, response.len);
 }
 
 fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name: []const u8, detail_json: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_emit_window_event(self.host, window_id, name.ptr, name.len, detail_json.ptr, detail_json.len);
+    native_sdk_appkit_emit_window_event(self.host, window_id, name.ptr, name.len, detail_json.ptr, detail_json.len);
 }
 
 fn configureAutomationFramePolling(context: ?*anyopaque, enabled: bool) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_set_automation_frame_polling(self.host, if (enabled) 1 else 0);
+    native_sdk_appkit_set_automation_frame_polling(self.host, if (enabled) 1 else 0);
 }
 
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     const title = options.resolvedTitle(self.app_info.app_name);
     const frame = options.default_frame;
-    if (zero_native_appkit_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0) == 0) return error.CreateFailed;
+    if (native_sdk_appkit_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0) == 0) return error.CreateFailed;
     return .{
         .id = options.id,
         .label = options.label,
@@ -733,12 +733,12 @@ fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyer
 
 fn focusWindow(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_focus_window(self.host, window_id) == 0) return error.FocusFailed;
+    if (native_sdk_appkit_focus_window(self.host, window_id) == 0) return error.FocusFailed;
 }
 
 fn closeWindow(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_close_window(self.host, window_id) == 0) return error.CloseFailed;
+    if (native_sdk_appkit_close_window(self.host, window_id) == 0) return error.CloseFailed;
 }
 
 fn createView(context: ?*anyopaque, options: platform_mod.ViewOptions) anyerror!void {
@@ -748,7 +748,7 @@ fn createView(context: ?*anyopaque, options: platform_mod.ViewOptions) anyerror!
     if (self.web_engine != .system) return error.UnsupportedViewKind;
     const frame = options.frame;
     const parent = options.parent orelse "";
-    if (zero_native_appkit_create_view(
+    if (native_sdk_appkit_create_view(
         self.host,
         options.window_id,
         options.label.ptr,
@@ -783,7 +783,7 @@ fn updateView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []c
     const accessibility_label = patch.accessibility_label orelse "";
     const text = patch.text orelse "";
     const command = patch.command orelse "";
-    if (zero_native_appkit_update_view(
+    if (native_sdk_appkit_update_view(
         self.host,
         window_id,
         label.ptr,
@@ -817,54 +817,54 @@ fn updateView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []c
 fn setViewFrame(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, frame: geometry.RectF) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
-    if (zero_native_appkit_set_view_frame(self.host, window_id, label.ptr, label.len, frame.x, frame.y, frame.width, frame.height) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_set_view_frame(self.host, window_id, label.ptr, label.len, frame.x, frame.y, frame.width, frame.height) == 0) return error.ViewNotFound;
 }
 
 fn setViewVisible(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, visible: bool) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
-    if (zero_native_appkit_set_view_visible(self.host, window_id, label.ptr, label.len, if (visible) 1 else 0) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_set_view_visible(self.host, window_id, label.ptr, label.len, if (visible) 1 else 0) == 0) return error.ViewNotFound;
 }
 
 fn setViewCursor(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, cursor: platform_mod.Cursor) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
-    if (zero_native_appkit_set_view_cursor(self.host, window_id, label.ptr, label.len, appKitCursor(cursor)) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_set_view_cursor(self.host, window_id, label.ptr, label.len, appKitCursor(cursor)) == 0) return error.ViewNotFound;
 }
 
 fn focusView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewFocus;
-    if (zero_native_appkit_focus_view(self.host, window_id, label.ptr, label.len) == 0) return error.UnsupportedViewFocus;
+    if (native_sdk_appkit_focus_view(self.host, window_id, label.ptr, label.len) == 0) return error.UnsupportedViewFocus;
 }
 
 fn closeView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
-    if (zero_native_appkit_close_view(self.host, window_id, label.ptr, label.len) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_close_view(self.host, window_id, label.ptr, label.len) == 0) return error.ViewNotFound;
 }
 
 fn startTimer(context: ?*anyopaque, id: u64, interval_ns: u64, repeats: bool) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_start_timer(self.host, id, interval_ns, if (repeats) 1 else 0);
+    native_sdk_appkit_start_timer(self.host, id, interval_ns, if (repeats) 1 else 0);
 }
 
 fn cancelTimer(context: ?*anyopaque, id: u64) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_cancel_timer(self.host, id);
+    native_sdk_appkit_cancel_timer(self.host, id);
 }
 
 /// Thread-safe: dispatches onto the main queue, which emits `.wake` on
 /// the AppKit run loop. The one service worker threads may call.
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_wake(self.host);
+    native_sdk_appkit_wake(self.host);
 }
 
 fn requestGpuSurfaceFrame(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedService;
-    if (zero_native_appkit_request_gpu_surface_frame(self.host, window_id, label.ptr, label.len) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_request_gpu_surface_frame(self.host, window_id, label.ptr, label.len) == 0) return error.ViewNotFound;
 }
 
 fn setGpuSurfaceScrollDrivers(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, drivers: []const platform_mod.GpuSurfaceScrollDriver) anyerror!void {
@@ -885,7 +885,7 @@ fn setGpuSurfaceScrollDrivers(context: ?*anyopaque, window_id: platform_mod.Wind
             .set_offset = if (driver.set_offset) 1 else 0,
         };
     }
-    if (zero_native_appkit_set_gpu_surface_scroll_drivers(self.host, window_id, label.ptr, label.len, &specs, count) == 0) return error.ViewNotFound;
+    if (native_sdk_appkit_set_gpu_surface_scroll_drivers(self.host, window_id, label.ptr, label.len, &specs, count) == 0) return error.ViewNotFound;
 }
 
 fn showContextMenu(context: ?*anyopaque, request: platform_mod.ContextMenuRequest) anyerror!void {
@@ -901,7 +901,7 @@ fn showContextMenu(context: ?*anyopaque, request: platform_mod.ContextMenuReques
             .separator = if (item.separator) 1 else 0,
         };
     }
-    if (zero_native_appkit_show_context_menu(
+    if (native_sdk_appkit_show_context_menu(
         self.host,
         request.window_id,
         request.view_label.ptr,
@@ -918,7 +918,7 @@ fn presentGpuSurfacePixels(context: ?*anyopaque, pixels: platform_mod.GpuSurface
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedViewKind;
     const dirty_bounds = if (pixels.dirty_bounds) |bounds| bounds.normalized() else geometry.RectF{};
-    if (zero_native_appkit_present_gpu_surface_pixels(
+    if (native_sdk_appkit_present_gpu_surface_pixels(
         self.host,
         pixels.window_id,
         pixels.label.ptr,
@@ -939,7 +939,7 @@ fn presentGpuSurfacePixels(context: ?*anyopaque, pixels: platform_mod.GpuSurface
 fn presentGpuSurfacePacket(context: ?*anyopaque, packet: platform_mod.GpuSurfacePacket) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedService;
-    const result = zero_native_appkit_present_gpu_surface_packet(
+    const result = native_sdk_appkit_present_gpu_surface_packet(
         self.host,
         packet.window_id,
         packet.label.ptr,
@@ -969,7 +969,7 @@ fn presentGpuSurfacePacket(context: ?*anyopaque, packet: platform_mod.GpuSurface
 fn uploadGpuSurfaceImage(context: ?*anyopaque, image: platform_mod.GpuSurfaceImagePixels) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedService;
-    if (zero_native_appkit_upload_gpu_surface_image(
+    if (native_sdk_appkit_upload_gpu_surface_image(
         self.host,
         image.id,
         image.width,
@@ -982,7 +982,7 @@ fn uploadGpuSurfaceImage(context: ?*anyopaque, image: platform_mod.GpuSurfaceIma
 fn removeGpuSurfaceImage(context: ?*anyopaque, id: u64) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedService;
-    if (zero_native_appkit_remove_gpu_surface_image(self.host, id) == 0) return error.InvalidGpuSurfaceImage;
+    if (native_sdk_appkit_remove_gpu_surface_image(self.host, id) == 0) return error.InvalidGpuSurfaceImage;
 }
 
 fn updateWidgetAccessibility(context: ?*anyopaque, snapshot: platform_mod.WidgetAccessibilitySnapshot) anyerror!void {
@@ -1034,7 +1034,7 @@ fn updateWidgetAccessibility(context: ?*anyopaque, snapshot: platform_mod.Widget
             .action_flags = widgetActionFlags(node.actions),
         };
     }
-    if (zero_native_appkit_update_widget_accessibility(
+    if (native_sdk_appkit_update_widget_accessibility(
         self.host,
         snapshot.window_id,
         snapshot.view_label.ptr,
@@ -1087,37 +1087,37 @@ fn appKitCursor(cursor: platform_mod.Cursor) c_int {
 fn createWebView(context: ?*anyopaque, options: platform_mod.WebViewOptions) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     const frame = options.frame;
-    if (zero_native_appkit_create_webview(self.host, options.window_id, options.label.ptr, options.label.len, options.url.ptr, options.url.len, frame.x, frame.y, frame.width, frame.height, options.layer, if (options.transparent) 1 else 0, if (options.bridge_enabled) 1 else 0) == 0) return error.CreateFailed;
+    if (native_sdk_appkit_create_webview(self.host, options.window_id, options.label.ptr, options.label.len, options.url.ptr, options.url.len, frame.x, frame.y, frame.width, frame.height, options.layer, if (options.transparent) 1 else 0, if (options.bridge_enabled) 1 else 0) == 0) return error.CreateFailed;
 }
 
 fn setWebViewFrame(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, frame: geometry.RectF) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_set_webview_frame(self.host, window_id, label.ptr, label.len, frame.x, frame.y, frame.width, frame.height) == 0) return error.WebViewNotFound;
+    if (native_sdk_appkit_set_webview_frame(self.host, window_id, label.ptr, label.len, frame.x, frame.y, frame.width, frame.height) == 0) return error.WebViewNotFound;
 }
 
 fn navigateWebView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, url: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_navigate_webview(self.host, window_id, label.ptr, label.len, url.ptr, url.len) == 0) return error.WebViewNotFound;
+    if (native_sdk_appkit_navigate_webview(self.host, window_id, label.ptr, label.len, url.ptr, url.len) == 0) return error.WebViewNotFound;
 }
 
 fn setWebViewZoom(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, zoom: f64) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_set_webview_zoom(self.host, window_id, label.ptr, label.len, zoom) == 0) return error.WebViewNotFound;
+    if (native_sdk_appkit_set_webview_zoom(self.host, window_id, label.ptr, label.len, zoom) == 0) return error.WebViewNotFound;
 }
 
 fn setWebViewLayer(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, layer: i32) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_set_webview_layer(self.host, window_id, label.ptr, label.len, layer) == 0) return error.WebViewNotFound;
+    if (native_sdk_appkit_set_webview_layer(self.host, window_id, label.ptr, label.len, layer) == 0) return error.WebViewNotFound;
 }
 
 fn closeWebView(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_close_webview(self.host, window_id, label.ptr, label.len) == 0) return error.WebViewNotFound;
+    if (native_sdk_appkit_close_webview(self.host, window_id, label.ptr, label.len) == 0) return error.WebViewNotFound;
 }
 
 fn showNotification(context: ?*anyopaque, options: platform_mod.NotificationOptions) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_show_notification(
+    if (native_sdk_appkit_show_notification(
         self.host,
         options.title.ptr,
         options.title.len,
@@ -1130,7 +1130,7 @@ fn showNotification(context: ?*anyopaque, options: platform_mod.NotificationOpti
 
 fn setCredential(context: ?*anyopaque, credential: platform_mod.Credential) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_set_credential(
+    if (native_sdk_appkit_set_credential(
         self.host,
         credential.service.ptr,
         credential.service.len,
@@ -1143,7 +1143,7 @@ fn setCredential(context: ?*anyopaque, credential: platform_mod.Credential) anye
 
 fn getCredential(context: ?*anyopaque, key: platform_mod.CredentialKey, buffer: []u8) anyerror![]const u8 {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    const len = zero_native_appkit_get_credential(
+    const len = native_sdk_appkit_get_credential(
         self.host,
         key.service.ptr,
         key.service.len,
@@ -1159,7 +1159,7 @@ fn getCredential(context: ?*anyopaque, key: platform_mod.CredentialKey, buffer: 
 
 fn deleteCredential(context: ?*anyopaque, key: platform_mod.CredentialKey) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_delete_credential(
+    if (native_sdk_appkit_delete_credential(
         self.host,
         key.service.ptr,
         key.service.len,
@@ -1170,22 +1170,22 @@ fn deleteCredential(context: ?*anyopaque, key: platform_mod.CredentialKey) anyer
 
 fn openExternalUrl(context: ?*anyopaque, url: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_open_external_url(self.host, url.ptr, url.len) == 0) return error.UnsupportedService;
+    if (native_sdk_appkit_open_external_url(self.host, url.ptr, url.len) == 0) return error.UnsupportedService;
 }
 
 fn revealPath(context: ?*anyopaque, path: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_reveal_path(self.host, path.ptr, path.len) == 0) return error.UnsupportedService;
+    if (native_sdk_appkit_reveal_path(self.host, path.ptr, path.len) == 0) return error.UnsupportedService;
 }
 
 fn addRecentDocument(context: ?*anyopaque, path: []const u8) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_add_recent_document(self.host, path.ptr, path.len) == 0) return error.UnsupportedService;
+    if (native_sdk_appkit_add_recent_document(self.host, path.ptr, path.len) == 0) return error.UnsupportedService;
 }
 
 fn clearRecentDocuments(context: ?*anyopaque) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    if (zero_native_appkit_clear_recent_documents(self.host) == 0) return error.UnsupportedService;
+    if (native_sdk_appkit_clear_recent_documents(self.host) == 0) return error.UnsupportedService;
 }
 
 fn configureSecurityPolicy(context: ?*anyopaque, policy: security.Policy) anyerror!void {
@@ -1194,7 +1194,7 @@ fn configureSecurityPolicy(context: ?*anyopaque, policy: security.Policy) anyerr
     var external_buffer: [4096]u8 = undefined;
     const origins = try policy_values.join(policy.navigation.allowed_origins, &origins_buffer);
     const external_urls = try policy_values.join(policy.navigation.external_links.allowed_urls, &external_buffer);
-    zero_native_appkit_set_security_policy(
+    native_sdk_appkit_set_security_policy(
         self.host,
         origins.ptr,
         origins.len,
@@ -1242,7 +1242,7 @@ fn configureMenus(context: ?*anyopaque, menus: []const platform_mod.Menu) anyerr
         }
     }
 
-    zero_native_appkit_set_menus(
+    native_sdk_appkit_set_menus(
         self.host,
         menu_titles[0..menus.len].ptr,
         menu_title_lens[0..menus.len].ptr,
@@ -1278,7 +1278,7 @@ fn configureShortcuts(context: ?*anyopaque, shortcuts: []const platform_mod.Shor
         key_lens[index] = shortcut.key.len;
         modifiers[index] = shortcutModifierFlags(shortcut.modifiers);
     }
-    zero_native_appkit_set_shortcuts(self.host, ids[0..shortcuts.len].ptr, id_lens[0..shortcuts.len].ptr, keys[0..shortcuts.len].ptr, key_lens[0..shortcuts.len].ptr, modifiers[0..shortcuts.len].ptr, shortcuts.len);
+    native_sdk_appkit_set_shortcuts(self.host, ids[0..shortcuts.len].ptr, id_lens[0..shortcuts.len].ptr, keys[0..shortcuts.len].ptr, key_lens[0..shortcuts.len].ptr, modifiers[0..shortcuts.len].ptr, shortcuts.len);
 }
 
 fn shortcutModifierFlags(modifiers: platform_mod.ShortcutModifiers) u32 {
@@ -1449,7 +1449,7 @@ fn showOpenDialog(context: ?*anyopaque, options: platform_mod.OpenDialogOptions,
         .allow_directories = if (options.allow_directories) 1 else 0,
         .allow_multiple = if (options.allow_multiple) 1 else 0,
     };
-    const result = zero_native_appkit_show_open_dialog(self.host, &opts, buffer.ptr, buffer.len);
+    const result = native_sdk_appkit_show_open_dialog(self.host, &opts, buffer.ptr, buffer.len);
     if (result.bytes_written > buffer.len) return error.NoSpaceLeft;
     return .{
         .count = result.count,
@@ -1471,7 +1471,7 @@ fn showSaveDialog(context: ?*anyopaque, options: platform_mod.SaveDialogOptions,
         .extensions = ext_str.ptr,
         .extensions_len = ext_str.len,
     };
-    const written = zero_native_appkit_show_save_dialog(self.host, &opts, buffer.ptr, buffer.len);
+    const written = native_sdk_appkit_show_save_dialog(self.host, &opts, buffer.ptr, buffer.len);
     if (written > buffer.len) return error.NoSpaceLeft;
     if (written == 0) return null;
     return buffer[0..written];
@@ -1494,7 +1494,7 @@ fn showMessageDialog(context: ?*anyopaque, options: platform_mod.MessageDialogOp
         .tertiary_button = options.tertiary_button.ptr,
         .tertiary_button_len = options.tertiary_button.len,
     };
-    const result = zero_native_appkit_show_message_dialog(self.host, &opts);
+    const result = native_sdk_appkit_show_message_dialog(self.host, &opts);
     return @enumFromInt(result);
 }
 
@@ -1502,7 +1502,7 @@ const max_tray_items: usize = 32;
 
 fn createTray(context: ?*anyopaque, options: platform_mod.TrayOptions) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_create_tray(self.host, options.icon_path.ptr, options.icon_path.len, options.title.ptr, options.title.len, options.tooltip.ptr, options.tooltip.len);
+    native_sdk_appkit_create_tray(self.host, options.icon_path.ptr, options.icon_path.len, options.title.ptr, options.title.len, options.tooltip.ptr, options.tooltip.len);
     if (options.items.len > 0) {
         try updateTrayMenu(context, options.items);
     }
@@ -1523,12 +1523,12 @@ fn updateTrayMenu(context: ?*anyopaque, items: []const platform_mod.TrayMenuItem
         separators[i] = if (item.separator) 1 else 0;
         enabled_flags[i] = if (item.enabled) 1 else 0;
     }
-    zero_native_appkit_update_tray_menu(self.host, &ids, &labels, &label_lens, &separators, &enabled_flags, count);
+    native_sdk_appkit_update_tray_menu(self.host, &ids, &labels, &label_lens, &separators, &enabled_flags, count);
 }
 
 fn removeTray(context: ?*anyopaque) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    zero_native_appkit_remove_tray(self.host);
+    native_sdk_appkit_remove_tray(self.host);
 }
 
 fn appkitTrayCallback(context: ?*anyopaque, item_id: u32) callconv(.c) void {

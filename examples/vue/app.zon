@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.vue-example",
+    .id = "dev.native_sdk.vue-example",
     .name = "vue-example",
     .display_name = "Vue Example",
     .version = "0.1.0",

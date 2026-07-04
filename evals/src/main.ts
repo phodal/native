@@ -25,7 +25,7 @@ import type {
 const USAGE = `usage: pnpm eval [options] [case ...]
 
 Runs Claude Code headless (claude -p) through the Vercel AI Gateway against a
-freshly scaffolded zero-native workspace, then grades the result.
+freshly scaffolded native-sdk workspace, then grades the result.
 
 options:
   --list               list available cases and exit

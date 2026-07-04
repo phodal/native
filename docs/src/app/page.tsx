@@ -2,8 +2,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { Code } from "@/components/code";
 
-const installCommands = `npm install -g zero-native
-zero-native init my_app
+const installCommands = `npm install -g @native-sdk/cli
+native init my_app
 cd my_app && zig build run`;
 
 const zmlSample = `<column gap="12" padding="16">

@@ -1,8 +1,8 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 
-const canvas = zero_native.canvas;
-const geometry = zero_native.geometry;
+const canvas = native_sdk.canvas;
+const geometry = native_sdk.geometry;
 
 const model = @import("model.zig");
 const component_scene = @import("scene.zig");
@@ -592,7 +592,7 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    try std.testing.expectEqual(@as(u64, 15535383597506120578), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 12077691111347092818), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -624,7 +624,7 @@ test "gpu components catalog previews use canonical built-in foundations" {
 }
 
 test "gpu components frame event adapter preserves packet status" {
-    const frame = zero_native.platform.GpuFrame{
+    const frame = native_sdk.platform.GpuFrame{
         .window_id = 1,
         .label = canvas_label,
         .size = geometry.SizeF.init(canvas_width, canvas_height),
@@ -782,7 +782,7 @@ test "gpu components image widget exposes image semantics and display command" {
 }
 
 test "gpu components app registers component lab on first gpu frame" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -816,7 +816,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const presented_frame = try harness.runtime.gpuSurfaceFrame(1, canvas_label);
     try std.testing.expect(!presented_frame.canvas_frame_requires_render);
     try std.testing.expect(!presented_frame.canvas_frame_full_repaint);
-    try std.testing.expectEqual(zero_native.platform.CanvasFrameProfileRisk.idle, presented_frame.canvas_frame_profile_risk);
+    try std.testing.expectEqual(native_sdk.platform.CanvasFrameProfileRisk.idle, presented_frame.canvas_frame_profile_risk);
     try std.testing.expectEqual(@as(usize, 0), presented_frame.canvas_frame_profile_work_units);
 
     try harness.runtime.dispatchPlatformEvent(app.app(), .{ .gpu_surface_frame = .{
@@ -870,7 +870,7 @@ test "gpu components app registers component lab on first gpu frame" {
     const project_name = componentSnapshotWidget(snapshot, 111).?;
     try std.testing.expectEqualStrings("textbox", project_name.role);
     try std.testing.expectEqualStrings("Project name", project_name.name);
-    try std.testing.expectEqualStrings("zero-native", project_name.text_value);
+    try std.testing.expectEqualStrings("native-sdk", project_name.text_value);
     try std.testing.expect(project_name.actions.set_text);
     try std.testing.expect(project_name.actions.set_selection);
     const component_combobox = componentSnapshotWidget(snapshot, 112).?;
@@ -977,10 +977,10 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     var keyed_project = componentSnapshotWidget(snapshot, 111).?;
     try std.testing.expect(keyed_project.focused);
-    try std.testing.expectEqualStrings("zero-nativez", keyed_project.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 12, .end = 12 }, keyed_project.text_selection.?);
+    try std.testing.expectEqualStrings("native-sdkz", keyed_project.text_value);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 11, .end = 11 }, keyed_project.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
-    try expectComponentTextCommand(display_list, project_text_id, "zero-nativez");
+    try expectComponentTextCommand(display_list, project_text_id, "native-sdkz");
 
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-key components-canvas tab");
@@ -994,7 +994,7 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     var edited_project = componentSnapshotWidget(snapshot, 111).?;
     try std.testing.expectEqualStrings("zero-canvas", edited_project.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 11, .end = 11 }, edited_project.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 11, .end = 11 }, edited_project.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, project_text_id, "zero-canvas");
 
@@ -1002,7 +1002,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 111 set-selection 4 10");
     snapshot = harness.runtime.automationSnapshot("Components");
     edited_project = componentSnapshotWidget(snapshot, 111).?;
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 4, .end = 10 }, edited_project.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 4, .end = 10 }, edited_project.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(project_selection_id) != null);
     try expectComponentTextCommand(display_list, project_text_id, "zero-canvas");
@@ -1013,8 +1013,8 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     edited_project = componentSnapshotWidget(snapshot, 111).?;
     try std.testing.expectEqualStrings("zero-canvas++", edited_project.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 13, .end = 13 }, edited_project.text_selection.?);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 11, .end = 13 }, edited_project.text_composition.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 13, .end = 13 }, edited_project.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 11, .end = 13 }, edited_project.text_composition.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, project_text_id, "zero-canvas++");
     try std.testing.expect(display_list.findCommandById(project_composition_id) != null);
@@ -1034,7 +1034,7 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     var edited_search = componentSnapshotWidget(snapshot, 112).?;
     try std.testing.expectEqualStrings("controls", edited_search.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 8, .end = 8 }, edited_search.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 8, .end = 8 }, edited_search.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, search_text_id, "controls");
 
@@ -1042,7 +1042,7 @@ test "gpu components app registers component lab on first gpu frame" {
     try harness.runtime.dispatchAutomationCommand(app.app(), "widget-action components-canvas 112 set-selection 0 8");
     snapshot = harness.runtime.automationSnapshot("Components");
     edited_search = componentSnapshotWidget(snapshot, 112).?;
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 0, .end = 8 }, edited_search.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 0, .end = 8 }, edited_search.text_selection.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try std.testing.expect(display_list.findCommandById(search_selection_id) != null);
     try expectComponentTextCommand(display_list, search_text_id, "controls");
@@ -1053,8 +1053,8 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     edited_search = componentSnapshotWidget(snapshot, 112).?;
     try std.testing.expectEqualStrings("controls-native", edited_search.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 15, .end = 15 }, edited_search.text_selection.?);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 8, .end = 15 }, edited_search.text_composition.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 15, .end = 15 }, edited_search.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 8, .end = 15 }, edited_search.text_composition.?);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, search_text_id, "controls-native");
     try std.testing.expect(display_list.findCommandById(search_composition_id) != null);
@@ -1075,7 +1075,7 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     edited_search = componentSnapshotWidget(snapshot, 112).?;
     try std.testing.expectEqualStrings("controls++", edited_search.text_value);
-    try std.testing.expectEqualDeep(zero_native.automation.snapshot.TextRange{ .start = 10, .end = 10 }, edited_search.text_selection.?);
+    try std.testing.expectEqualDeep(native_sdk.automation.snapshot.TextRange{ .start = 10, .end = 10 }, edited_search.text_selection.?);
     try std.testing.expect(edited_search.text_composition == null);
     display_list = try harness.runtime.canvasDisplayList(1, canvas_label);
     try expectComponentTextCommand(display_list, search_text_id, "controls++");
@@ -1157,7 +1157,7 @@ test "gpu components app registers component lab on first gpu frame" {
 }
 
 test "gpu components keeps textarea text when opening inputs dropdown" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1199,7 +1199,7 @@ test "gpu components keeps textarea text when opening inputs dropdown" {
 }
 
 test "gpu components virtual scroll clamps at edges" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1276,7 +1276,7 @@ test "gpu components virtual scroll clamps at edges" {
 }
 
 test "gpu components native theme command updates retained design tokens" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1328,7 +1328,7 @@ test "gpu components native theme command updates retained design tokens" {
 }
 
 test "gpu components follow system appearance until toolbar theme override" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1375,7 +1375,7 @@ test "gpu components follow system appearance until toolbar theme override" {
 }
 
 test "gpu components pointer clicks update retained controls" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1506,7 +1506,7 @@ test "gpu components pointer clicks update retained controls" {
 }
 
 test "gpu components pointer opens and selects environment dropdown options" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1563,7 +1563,7 @@ test "gpu components pointer opens and selects environment dropdown options" {
 }
 
 test "gpu components keyboard navigates and dismisses environment dropdown" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1636,7 +1636,7 @@ test "gpu components keyboard navigates and dismisses environment dropdown" {
 }
 
 test "gpu components surface launchers open and close overlays" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1718,7 +1718,7 @@ test "gpu components surface launchers open and close overlays" {
 }
 
 test "gpu components slider drag presents incremental cached frame" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1784,7 +1784,7 @@ test "gpu components slider drag presents incremental cached frame" {
 }
 
 test "gpu components sidebar handle drag resizes retained layout" {
-    const harness = try zero_native.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
+    const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);
     harness.null_platform.gpu_surfaces = true;
 
@@ -1811,7 +1811,7 @@ test "gpu components sidebar handle drag resizes retained layout" {
         .x = canvas_sidebar_width,
         .y = canvas_content_y + 20,
     } });
-    try std.testing.expectEqual(zero_native.platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
+    try std.testing.expectEqual(native_sdk.platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerDragByDelta(&harness.runtime, app_handle, canvas_sidebar_resize_handle_id, 60);

@@ -1,5 +1,5 @@
 //! Live proof for T1: a fixture UiApp renders a markdown string (bold /
-//! inline code / link / task list) through `zero_native.markdown`, and the
+//! inline code / link / task list) through `native_sdk.markdown`, and the
 //! full runtime loop — install, automation snapshot, click dispatch,
 //! retained re-emission, screenshot — works end to end.
 //!

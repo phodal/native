@@ -32,10 +32,10 @@ jobs:
       - name: Compare package.json version to npm and check GitHub release
         id: check
         run: |
-          LOCAL_VERSION=$(node -p "require('./packages/zero-native/package.json').version")
+          LOCAL_VERSION=$(node -p "require('./packages/native-sdk/package.json').version")
           echo "Local version: $LOCAL_VERSION"
 
-          NPM_VERSION=$(npm view zero-native version 2>/dev/null || echo "0.0.0")
+          NPM_VERSION=$(npm view @native-sdk/cli version 2>/dev/null || echo "0.0.0")
           echo "npm version: $NPM_VERSION"
 
           if [ "$LOCAL_VERSION" != "$NPM_VERSION" ]; then
@@ -51,14 +51,14 @@ jobs:
             missing=0
             for asset in \
               CHECKSUMS.txt \
-              zero-native-darwin-arm64 \
-              zero-native-darwin-x64 \
-              zero-native-linux-arm64 \
-              zero-native-linux-x64 \
-              zero-native-linux-musl-arm64 \
-              zero-native-linux-musl-x64 \
-              zero-native-win32-arm64.exe \
-              zero-native-win32-x64.exe
+              native-sdk-darwin-arm64 \
+              native-sdk-darwin-x64 \
+              native-sdk-linux-arm64 \
+              native-sdk-linux-x64 \
+              native-sdk-linux-musl-arm64 \
+              native-sdk-linux-musl-x64 \
+              native-sdk-win32-arm64.exe \
+              native-sdk-win32-x64.exe
             do
               if ! printf '%s\n' "$EXISTING_ASSETS" | grep -Fx "$asset" >/dev/null; then
                 echo "Missing release asset: $asset"
@@ -110,7 +110,7 @@ jobs:
 
       - name: Build native release asset
         run: |
-          mkdir -p /tmp/zero-native-release
+          mkdir -p /tmp/native-sdk-release
 
           build_asset() {
             target="$1"
@@ -118,25 +118,25 @@ jobs:
             rm -rf zig-out
             zig build -Dtarget="$target" -Doptimize=ReleaseSmall
 
-            src="zig-out/bin/zero-native"
+            src="zig-out/bin/native"
             case "$name" in
               *.exe) src="${src}.exe" ;;
             esac
 
-            cp "$src" "/tmp/zero-native-release/$name"
-            chmod 755 "/tmp/zero-native-release/$name"
+            cp "$src" "/tmp/native-sdk-release/$name"
+            chmod 755 "/tmp/native-sdk-release/$name"
           }
 
-          build_asset aarch64-macos zero-native-darwin-arm64
-          build_asset x86_64-macos zero-native-darwin-x64
-          build_asset aarch64-linux-gnu zero-native-linux-arm64
-          build_asset x86_64-linux-gnu zero-native-linux-x64
-          build_asset aarch64-linux-musl zero-native-linux-musl-arm64
-          build_asset x86_64-linux-musl zero-native-linux-musl-x64
-          build_asset aarch64-windows zero-native-win32-arm64.exe
-          build_asset x86_64-windows zero-native-win32-x64.exe
+          build_asset aarch64-macos native-sdk-darwin-arm64
+          build_asset x86_64-macos native-sdk-darwin-x64
+          build_asset aarch64-linux-gnu native-sdk-linux-arm64
+          build_asset x86_64-linux-gnu native-sdk-linux-x64
+          build_asset aarch64-linux-musl native-sdk-linux-musl-arm64
+          build_asset x86_64-linux-musl native-sdk-linux-musl-x64
+          build_asset aarch64-windows native-sdk-win32-arm64.exe
+          build_asset x86_64-windows native-sdk-win32-x64.exe
 
-          (cd /tmp/zero-native-release && shasum -a 256 zero-native-* > CHECKSUMS.txt)
+          (cd /tmp/native-sdk-release && shasum -a 256 native-sdk-* > CHECKSUMS.txt)
 
       - name: Create GitHub Release
         run: |
@@ -153,8 +153,8 @@ jobs:
           fi
 
           gh release upload "$TAG" \
-            /tmp/zero-native-release/zero-native-* \
-            /tmp/zero-native-release/CHECKSUMS.txt \
+            /tmp/native-sdk-release/native-sdk-* \
+            /tmp/native-sdk-release/CHECKSUMS.txt \
             --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -183,10 +183,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Check version sync
-        run: npm --prefix packages/zero-native run version:check
+        run: npm --prefix packages/native-sdk run version:check
 
       - name: Check package scripts
-        run: npm --prefix packages/zero-native run scripts:check
+        run: npm --prefix packages/native-sdk run scripts:check
 
       - name: Publish to npm
         run: |
@@ -195,4 +195,4 @@ jobs:
           else
             npm publish --access public
           fi
-        working-directory: packages/zero-native
+        working-directory: packages/native-sdk

@@ -1,22 +1,22 @@
-# zero-native
+# Native SDK
 
-Cross-platform native development inspired by the web. Views are declarative `.zml` markup, styling is a token system, logic is Zig — rendered by zero-native's own engine, not a browser. Tiny binaries. Minimal memory. Instant rebuilds, with hot-reloading views.
+Cross-platform native development inspired by the web. Views are declarative `.zml` markup, styling is a token system, logic is Zig — rendered by Native SDK's own engine, not a browser. Tiny binaries. Minimal memory. Instant rebuilds, with hot-reloading views.
 
-zero-native apps are native-rendered by default: a retained widget tree with flex layout, typed message dispatch, accessibility, and a built-in component catalog, drawn through the platform's GPU surface. WebViews remain a first-class coexisting surface — use one when a feature should stay web-shaped (browser surfaces, rich previews, embedded web apps, third-party content), or build the whole app as a WebView shell with the frontend framework you already use. Native, web, or both.
+Native SDK apps are native-rendered by default: a retained widget tree with flex layout, typed message dispatch, accessibility, and a built-in component catalog, drawn through the platform's GPU surface. WebViews remain a first-class coexisting surface — use one when a feature should stay web-shaped (browser surfaces, rich previews, embedded web apps, third-party content), or build the whole app as a WebView shell with the frontend framework you already use. Native, web, or both.
 
 ## Quick Start
 
 Install the CLI:
 
 ```bash
-npm install -g zero-native
+npm install -g @native-sdk/cli
 ```
 
 Create and run an app:
 
 ```bash
-zero-native init my_app            # native-rendered app (default)
-zero-native init my_app --frontend next   # or a WebView app with a web frontend
+native init my_app            # native-rendered app (default)
+native init my_app --frontend next   # or a WebView app with a web frontend
 cd my_app
 zig build run
 ```
@@ -25,7 +25,7 @@ The default app is native-rendered: a declarative `.zml` view plus Zig logic, wi
 
 Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
 
-## Why zero-native
+## Why Native SDK
 
 ### Model like HTML, logic in a real language
 
@@ -37,7 +37,7 @@ In dev builds the `.zml` file is watched: save it and the window updates in plac
 
 ### Built to be verified
 
-Deterministic rendering, a headless automation harness (drive widgets, read accessibility snapshots, take reference-renderer screenshots), and structural widget ids that stay stable across rebuilds make zero-native apps checkable by tests and AI agents without a human watching the screen.
+Deterministic rendering, a headless automation harness (drive widgets, read accessibility snapshots, take reference-renderer screenshots), and structural widget ids that stay stable across rebuilds make Native SDK apps checkable by tests and AI agents without a human watching the screen.
 
 ### Tiny and fast
 
@@ -53,7 +53,7 @@ Zig calls C directly, which keeps platform SDKs, native libraries, codecs, and l
 
 ## Status
 
-zero-native is pre-release. Native-rendered apps run on macOS 11+ (Metal) and Linux (software presentation); Windows currently covers WebView-shell apps and native window chrome, with canvas support planned. WebView engines: system WebView everywhere, Chromium/CEF on macOS and Linux.
+The Native SDK is pre-release. Native-rendered apps run on macOS 11+ (Metal) and Linux (software presentation); Windows currently covers WebView-shell apps and native window chrome, with canvas support planned. WebView engines: system WebView everywhere, Chromium/CEF on macOS and Linux.
 
 ## Core Concepts
 
@@ -63,7 +63,7 @@ zero-native is pre-release. Native-rendered apps run on macOS 11+ (Metal) and Li
 
 `ShellConfig` declares native-first windows and view trees: toolbars, sidebars, status bars, split panes, stacks, controls, WebViews, GPU surfaces, and future surface kinds.
 
-`canvas.builtin_component_kinds` declares zero-native's built-in component catalog. The defaults follow shadcn's look and feel, use Geist and Geist Mono typography, and render through zero-native's retained canvas/GPU surface.
+`canvas.builtin_component_kinds` declares Native SDK's built-in component catalog. The defaults follow shadcn's look and feel, use Geist and Geist Mono typography, and render through Native SDK's retained canvas/GPU surface.
 
 `WebViewSource` tells the runtime what a WebView should load: inline HTML, a URL, or packaged frontend assets served from a local app origin.
 
@@ -123,7 +123,7 @@ Framework-specific starter examples live in `examples/`:
 - `examples/svelte`
 - `examples/vue`
 
-Each example is a complete zero-native app with `app.zon`, a Zig shell, and a minimal frontend project. Run one with `zig build run` from its directory.
+Each example is a complete Native SDK app with `app.zon`, a Zig shell, and a minimal frontend project. Run one with `zig build run` from its directory.
 
 Native-first examples are available too:
 
@@ -140,6 +140,6 @@ Mobile embedding examples are available too:
 - `examples/ios`
 - `examples/android`
 
-These show how an iOS or Android host app links the zero-native C ABI from `libzero-native.a`.
+These show how an iOS or Android host app links the Native SDK C ABI from `libnative-sdk.a`.
 
 For local framework development, see [CONTRIBUTING.md](./CONTRIBUTING.md).

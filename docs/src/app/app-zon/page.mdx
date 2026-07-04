@@ -6,9 +6,9 @@ The `app.zon` manifest declares app metadata, permissions, bridge policies, secu
 
 ```zig
 .{
-    .id = "dev.zero_native",
-    .name = "zero-native",
-    .display_name = "zero-native",
+    .id = "dev.native_sdk",
+    .name = "native-sdk",
+    .display_name = "native-sdk",
     .version = "0.1.0",
     .icons = .{ "assets/icon.icns", "assets/icon.ico" },
     .platforms = .{ "macos" },
@@ -17,12 +17,12 @@ The `app.zon` manifest declares app metadata, permissions, bridge policies, secu
     .bridge = .{
         .commands = .{
             .{ .name = "native.ping", .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.window.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.command.invoke", .permissions = .{ "command" }, .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.view.list", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.dialog.showMessage", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
-            .{ .name = "zero-native.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.window.create", .permissions = .{ "window" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.command.invoke", .permissions = .{ "command" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.view.list", .permissions = .{ "view" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.dialog.showMessage", .permissions = .{ "dialog" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.clipboard.readText", .permissions = .{ "clipboard" }, .origins = .{ "zero://app" } },
+            .{ .name = "native-sdk.credentials.get", .permissions = .{ "credentials" }, .origins = .{ "zero://app" } },
         },
     },
     .security = .{
@@ -34,7 +34,7 @@ The `app.zon` manifest declares app metadata, permissions, bridge policies, secu
     .web_engine = "system",
     .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
     .windows = .{
-        .{ .label = "main", .title = "zero-native", .width = 720, .height = 480, .restore_state = true },
+        .{ .label = "main", .title = "native-sdk", .width = 720, .height = 480, .restore_state = true },
     },
     .commands = .{
         .{ .id = "command.palette", .title = "Command Palette" },
@@ -62,7 +62,7 @@ The `app.zon` manifest declares app metadata, permissions, bridge policies, secu
         },
     },
     .url_schemes = .{
-        .{ .scheme = "zero-native" },
+        .{ .scheme = "native-sdk" },
     },
 }
 ```
@@ -282,7 +282,7 @@ URL schemes require a lowercase custom `scheme`. Reserved schemes such as `http`
 
 ## `frontend.dev`
 
-The optional `frontend.dev` block configures the managed dev server for `zero-native dev` and `zig build dev`:
+The optional `frontend.dev` block configures the managed dev server for `native dev` and `zig build dev`:
 
 ```zig
 .frontend = .{
@@ -328,6 +328,6 @@ The optional `frontend.dev` block configures the managed dev server for `zero-na
 ## Validation
 
 ```bash
-zero-native validate app.zon
-zero-native doctor --manifest app.zon --strict
+native validate app.zon
+native doctor --manifest app.zon --strict
 ```

@@ -809,7 +809,7 @@ test "compiled avatar image binding matches the interpreter and the hand-written
     const field_avatar = fixture.findByText(compiled.root, .avatar, "CT").?;
     try testing.expectEqual(@as(canvas.ImageId, 7), field_avatar.image_id);
     try testing.expectEqual(canvas.ImageFit.cover, field_avatar.image_fit);
-    try testing.expectEqual(@as(canvas.ImageId, 8), fixture.findByText(compiled.root, .avatar, "ZN").?.image_id);
+    try testing.expectEqual(@as(canvas.ImageId, 8), fixture.findByText(compiled.root, .avatar, "NS").?.image_id);
 
     // 0 keeps the initials fallback in both engines.
     const empty_model = fixture.AvatarModel{};

@@ -1,7 +1,7 @@
 const std = @import("std");
-pub const zero_native = @import("zero-native");
-pub const canvas = zero_native.canvas;
-pub const geometry = zero_native.geometry;
+pub const native_sdk = @import("native_sdk");
+pub const canvas = native_sdk.canvas;
+pub const geometry = native_sdk.geometry;
 
 pub const window_width: f32 = 1180;
 pub const window_height: f32 = 760;
@@ -19,9 +19,9 @@ pub const canvas_content_y: f32 = toolbar_height;
 pub const canvas_content_height: f32 = canvas_height - toolbar_height - statusbar_height;
 pub const default_canvas_size = geometry.SizeF.init(canvas_width, canvas_height);
 pub const max_component_pipelines: usize = 8;
-pub const max_component_commands: usize = zero_native.runtime.max_canvas_commands_per_view;
-pub const max_component_glyphs: usize = zero_native.runtime.max_canvas_glyphs_per_view;
-pub const max_component_widgets: usize = zero_native.runtime.max_canvas_widget_nodes_per_view;
+pub const max_component_commands: usize = native_sdk.runtime.max_canvas_commands_per_view;
+pub const max_component_glyphs: usize = native_sdk.runtime.max_canvas_glyphs_per_view;
+pub const max_component_widgets: usize = native_sdk.runtime.max_canvas_widget_nodes_per_view;
 pub const component_chrome_prefix_commands: usize = 4;
 pub const component_chrome_suffix_commands: usize = 0;
 pub const catalog_grid_columns: usize = 3;

@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.ui_inbox",
+    .id = "dev.native_sdk.ui_inbox",
     .name = "ui-inbox",
     .display_name = "Inbox",
     .version = "0.1.0",
@@ -11,7 +11,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Inbox",
+                .title = "Native SDK Inbox",
                 .width = 720,
                 .height = 520,
                 .restore_state = false,

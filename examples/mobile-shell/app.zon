@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.mobile_shell",
+    .id = "dev.native_sdk.mobile_shell",
     .name = "mobile-shell",
     .display_name = "Mobile Shell",
     .version = "0.1.0",

@@ -1,5 +1,5 @@
 .{
-    .id = "dev.zero_native.canvas_preview",
+    .id = "dev.native_sdk.canvas_preview",
     .name = "canvas-preview",
     .display_name = "Canvas Preview",
     .version = "0.1.0",
@@ -10,7 +10,7 @@
         .windows = .{
             .{
                 .label = "main",
-                .title = "zero-native Canvas Preview",
+                .title = "Native SDK Canvas Preview",
                 .width = 960,
                 .height = 640,
                 .restore_state = false,

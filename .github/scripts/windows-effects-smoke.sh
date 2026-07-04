@@ -35,8 +35,8 @@ set -u
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 app_dir="$repo_root/examples/effects-probe"
-snap="$app_dir/.zig-cache/zero-native-automation/snapshot.txt"
-cli="$repo_root/zig-out/bin/zero-native"
+snap="$app_dir/.zig-cache/native-sdk-automation/snapshot.txt"
+cli="$repo_root/zig-out/bin/native"
 app_log="${TMPDIR:-/tmp}/windows-effects-smoke-app.log"
 
 # Wine needs an X display; when none is present (CI), re-exec the whole
@@ -106,8 +106,8 @@ echo "== wineprefix ready in $((SECONDS - start))s ($WINEPREFIX)"
 
 # ---- launch ---------------------------------------------------------------
 cd "$app_dir" || fail "missing $app_dir"
-rm -rf .zig-cache/zero-native-automation
-mkdir -p .zig-cache/zero-native-automation
+rm -rf .zig-cache/native-sdk-automation
+mkdir -p .zig-cache/native-sdk-automation
 wine zig-out/bin/effects-probe.exe > "$app_log" 2>&1 &
 app_pid=$!
 

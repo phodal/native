@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const default_dir = ".zig-cache/zero-native-automation";
+pub const default_dir = ".zig-cache/native-sdk-automation";
 pub const max_command_bytes: usize = 16 * 1024 + 64;
 
 pub const Error = error{

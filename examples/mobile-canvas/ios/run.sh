@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a zero-native mobile embed static library for the iOS simulator,
+# Build a native-sdk mobile embed static library for the iOS simulator,
 # link it into the minimal ObjC presentation shim (main.m), assemble an
 # .app bundle without an .xcodeproj, then install + launch it on a booted
 # simulator and verify a non-blank screenshot.
@@ -46,7 +46,7 @@ LIB="$(ls "$EXAMPLE_DIR"/zig-out/lib/*.a | head -1)"
 APP_NAME="$(basename "$LIB")"
 APP_NAME="${APP_NAME#lib}"
 APP_NAME="${APP_NAME%.a}"
-BUNDLE_ID="dev.zero-native.${APP_NAME}"
+BUNDLE_ID="dev.native-sdk.${APP_NAME}"
 
 BUILD_DIR="$SCRIPT_DIR/build/$APP_NAME"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"

@@ -1,11 +1,11 @@
 const std = @import("std");
-const zero_native = @import("zero-native");
+const native_sdk = @import("native_sdk");
 const model = @import("model.zig");
 const scene = @import("scene.zig");
 
-const canvas = zero_native.canvas;
+const canvas = native_sdk.canvas;
 const canvas_width = model.window_width;
-const geometry = zero_native.geometry;
+const geometry = native_sdk.geometry;
 
 const canvas_label = model.canvas_label;
 const canvas_sidebar_width = model.canvas_sidebar_width;
@@ -18,39 +18,39 @@ const rect = model.rect;
 
 const componentFrameStatus = scene.componentFrameStatus;
 
-pub fn componentSnapshotWidget(snapshot: zero_native.automation.snapshot.Input, id: u64) ?zero_native.automation.snapshot.Widget {
+pub fn componentSnapshotWidget(snapshot: native_sdk.automation.snapshot.Input, id: u64) ?native_sdk.automation.snapshot.Widget {
     for (snapshot.widgets) |widget| {
         if (widget.id == id and std.mem.eql(u8, widget.view_label, canvas_label)) return widget;
     }
     return null;
 }
 
-pub fn componentStatusText(runtime: *const zero_native.Runtime) ![]const u8 {
+pub fn componentStatusText(runtime: *const native_sdk.Runtime) ![]const u8 {
     const layout = try runtime.canvasWidgetLayout(1, canvas_label);
     const node = layout.findById(canvas_status_text_id) orelse return error.TestUnexpectedResult;
     return node.widget.text;
 }
 
-pub fn expectComponentStatusContains(runtime: *const zero_native.Runtime, text: []const u8) !void {
+pub fn expectComponentStatusContains(runtime: *const native_sdk.Runtime, text: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, try componentStatusText(runtime), text) != null);
 }
 
-pub fn resetComponentDirty(runtime: *zero_native.Runtime) void {
+pub fn resetComponentDirty(runtime: *native_sdk.Runtime) void {
     runtime.invalidated = false;
     runtime.dirty_region_count = 0;
 }
 
-pub fn componentWidgetCenter(runtime: *const zero_native.Runtime, id: canvas.ObjectId) !geometry.PointF {
+pub fn componentWidgetCenter(runtime: *const native_sdk.Runtime, id: canvas.ObjectId) !geometry.PointF {
     const layout = try runtime.canvasWidgetLayout(1, canvas_label);
     const node = layout.findById(id) orelse return error.TestUnexpectedResult;
     return node.frame.center();
 }
 
-pub fn dispatchComponentPointerClick(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId) !void {
+pub fn dispatchComponentPointerClick(runtime: *native_sdk.Runtime, app: native_sdk.App, id: canvas.ObjectId) !void {
     try dispatchComponentPointerClickAtTimestamp(runtime, app, id, 0);
 }
 
-pub fn dispatchComponentPointerClickAtTimestamp(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, timestamp_ns: u64) !void {
+pub fn dispatchComponentPointerClickAtTimestamp(runtime: *native_sdk.Runtime, app: native_sdk.App, id: canvas.ObjectId, timestamp_ns: u64) !void {
     const point = try componentWidgetCenter(runtime, id);
     try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
@@ -72,7 +72,7 @@ pub fn dispatchComponentPointerClickAtTimestamp(runtime: *zero_native.Runtime, a
     } });
 }
 
-pub fn dispatchComponentPointerWheel(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, delta_y: f32) !void {
+pub fn dispatchComponentPointerWheel(runtime: *native_sdk.Runtime, app: native_sdk.App, id: canvas.ObjectId, delta_y: f32) !void {
     const point = try componentWidgetCenter(runtime, id);
     try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
@@ -84,7 +84,7 @@ pub fn dispatchComponentPointerWheel(runtime: *zero_native.Runtime, app: zero_na
     } });
 }
 
-pub fn dispatchComponentPointerDrag(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, start_ratio: f32, end_ratio: f32) !void {
+pub fn dispatchComponentPointerDrag(runtime: *native_sdk.Runtime, app: native_sdk.App, id: canvas.ObjectId, start_ratio: f32, end_ratio: f32) !void {
     const layout = try runtime.canvasWidgetLayout(1, canvas_label);
     const node = layout.findById(id) orelse return error.TestUnexpectedResult;
     const start = geometry.PointF.init(node.frame.x + node.frame.width * start_ratio, node.frame.center().y);
@@ -92,12 +92,12 @@ pub fn dispatchComponentPointerDrag(runtime: *zero_native.Runtime, app: zero_nat
     try dispatchComponentPointerDragPoints(runtime, app, start, end);
 }
 
-pub fn dispatchComponentPointerDragByDelta(runtime: *zero_native.Runtime, app: zero_native.App, id: canvas.ObjectId, delta_x: f32) !void {
+pub fn dispatchComponentPointerDragByDelta(runtime: *native_sdk.Runtime, app: native_sdk.App, id: canvas.ObjectId, delta_x: f32) !void {
     const point = try componentWidgetCenter(runtime, id);
     try dispatchComponentPointerDragPoints(runtime, app, point, geometry.PointF.init(point.x + delta_x, point.y));
 }
 
-pub fn dispatchComponentPointerDragPoints(runtime: *zero_native.Runtime, app: zero_native.App, start: geometry.PointF, end: geometry.PointF) !void {
+pub fn dispatchComponentPointerDragPoints(runtime: *native_sdk.Runtime, app: native_sdk.App, start: geometry.PointF, end: geometry.PointF) !void {
     try runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,

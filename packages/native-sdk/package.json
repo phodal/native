@@ -1,0 +1,34 @@
+{
+  "name": "@native-sdk/cli",
+  "version": "0.3.0",
+  "description": "The Native SDK: a Zig native app framework with secure WebView surfaces, native controls, and OS capabilities",
+  "type": "module",
+  "bin": {
+    "native": "bin/native.js"
+  },
+  "types": "./native-sdk.d.ts",
+  "files": [
+    "bin",
+    "skill-data",
+    "skills",
+    "scripts",
+    "src",
+    "native-sdk.d.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vercel-labs/zero-native.git"
+  },
+  "homepage": "https://zero-native.dev",
+  "scripts": {
+    "version": "npm run version:sync && git add ../../tools/native-sdk/main.zig",
+    "version:sync": "node scripts/sync-version.js",
+    "version:check": "node scripts/check-version-sync.js",
+    "scripts:check": "node --check bin/native.js && node --check scripts/postinstall.js && node --check scripts/copy-native.js && node --check scripts/copy-framework.js && node --check scripts/sync-version.js && node --check scripts/check-version-sync.js && node --check scripts/check-framework-sync.js && node --check scripts/check-runtime-types.js && node scripts/copy-framework.js && node scripts/check-framework-sync.js && node scripts/check-runtime-types.js",
+    "build:native": "npm run version:sync && cd ../.. && zig build && node packages/native-sdk/scripts/copy-native.js",
+    "prepack": "node scripts/copy-framework.js",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "license": "Apache-2.0"
+}

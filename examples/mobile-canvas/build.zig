@@ -1,6 +1,6 @@
 const std = @import("std");
-const zero_native = @import("zero_native");
+const native_sdk = @import("native_sdk");
 
 pub fn build(b: *std.Build) void {
-    zero_native.addMobileLib(b, b.dependency("zero_native", .{}), .{ .name = "mobile-canvas" });
+    native_sdk.addMobileLib(b, b.dependency("native_sdk", .{}), .{ .name = "mobile-canvas" });
 }

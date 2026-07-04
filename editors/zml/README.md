@@ -7,9 +7,9 @@ for the language itself):
   names, strings, comments, and `{...}` binding expressions get their own
   scopes; `on-*` event attributes and `for`/`if`/`else` structure tags are
   scoped distinctly.
-- **Language server** — `zero-native markup lsp` speaks LSP over stdio:
+- **Language server** — `native markup lsp` speaks LSP over stdio:
   - diagnostics on open/change (the same parser + validator as
-    `zero-native markup check`, with line/column teaching messages),
+    `native markup check`, with line/column teaching messages),
   - completion for element names after `<` and attribute/event names
     inside a tag,
   - hover docs for element and attribute names.
@@ -27,10 +27,10 @@ for the language itself):
 ## Build the server
 
 ```bash
-zig build            # produces zig-out/bin/zero-native
+zig build            # produces zig-out/bin/native
 ```
 
-Any editor below just needs `zero-native markup lsp` to be runnable — put
+Any editor below just needs `native markup lsp` to be runnable — put
 `zig-out/bin` on PATH or point your editor at the absolute path.
 
 ## VS Code
@@ -38,15 +38,15 @@ Any editor below just needs `zero-native markup lsp` to be runnable — put
 Install by symlinking this folder into your extensions directory:
 
 ```bash
-ln -s /path/to/zero-native/editors/zml ~/.vscode/extensions/zero-native.zml-0.1.0
+ln -s /path/to/native-sdk/editors/zml ~/.vscode/extensions/native-sdk.zml-0.1.0
 ```
 
-Then reload VS Code and open a `.zml` file. If `zero-native` is not on
+Then reload VS Code and open a `.zml` file. If `native` is not on
 PATH, set the server path in settings:
 
 ```json
 {
-  "zml.serverPath": "/path/to/zero-native/zig-out/bin/zero-native"
+  "zml.serverPath": "/path/to/native-sdk/zig-out/bin/native"
 }
 ```
 
@@ -62,7 +62,7 @@ avoids needing `vsce`/npm entirely.)
 
 ```toml
 [language-server.zml-lsp]
-command = "zero-native"
+command = "native"
 args = ["markup", "lsp"]
 
 [[language]]
@@ -90,7 +90,7 @@ vim.api.nvim_create_autocmd("FileType", {
   callback = function(args)
     vim.lsp.start({
       name = "zml-lsp",
-      cmd = { "zero-native", "markup", "lsp" },
+      cmd = { "native", "markup", "lsp" },
       root_dir = vim.fs.dirname(vim.fs.find({ "build.zig", ".git" }, { upward = true })[1]),
     }, { bufnr = args.buf })
   end,
@@ -108,5 +108,5 @@ Content-Length framing — initialize, didOpen with a broken document — and
 asserts a `publishDiagnostics` notification with the right line/column:
 
 ```bash
-python3 editors/zml/scripts/lsp-smoke.py zig-out/bin/zero-native
+python3 editors/zml/scripts/lsp-smoke.py zig-out/bin/native
 ```

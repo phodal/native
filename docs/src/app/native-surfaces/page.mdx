@@ -1,6 +1,6 @@
 # Native Surfaces
 
-Native surfaces are the app-owned regions that zero-native composes inside a platform window. A surface can be a WebView, native chrome, a native utility panel, or a specialized drawing region. The key model is that WebView content is one surface in the window, not the whole app.
+Native surfaces are the app-owned regions that the Native SDK composes inside a platform window. A surface can be a WebView, native chrome, a native utility panel, or a specialized drawing region. The key model is that WebView content is one surface in the window, not the whole app.
 
 ## Surface Types
 
@@ -46,7 +46,7 @@ Native surfaces are the app-owned regions that zero-native composes inside a pla
 Use `App.scene_fn` when a window should start with native structure around WebView content:
 
 ```zig
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "toolbar", .kind = .toolbar, .edge = .top, .height = 52 },
     .{ .label = "refresh", .kind = .button, .parent = "toolbar", .accessibility_label = "Refresh workspace", .text = "Refresh", .command = "app.refresh" },
     .{ .label = "body", .kind = .split, .fill = true, .axis = .row },
@@ -55,7 +55,7 @@ const shell_views = [_]zero_native.ShellView{
     .{ .label = "status", .kind = .statusbar, .edge = .bottom, .height = 32, .text = "Ready" },
 };
 
-const shell_windows = [_]zero_native.ShellWindow{.{
+const shell_windows = [_]native_sdk.ShellWindow{.{
     .label = "main",
     .title = "Acme",
     .width = 1100,
@@ -71,7 +71,7 @@ This creates native chrome and controls in the platform host while the `main` We
 A canvas-first `UiApp` can host a live webview next to its native-rendered widgets — the "native, web, or both per window" composition. The scene declares the webview shell view (parent it to the canvas view so frames share the canvas coordinate space), and `UiApp.Options.web_panes` keeps it snapped to a canvas widget's layout frame and drives navigation from the model:
 
 ```zig
-const shell_views = [_]zero_native.ShellView{
+const shell_views = [_]native_sdk.ShellView{
     .{ .label = "preview-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
     .{ .label = "preview", .kind = .webview, .parent = "preview-canvas", .url = "https://example.com/", .x = 240, .y = 76, .width = 704, .height = 548 },
 };
@@ -154,7 +154,7 @@ if (runtime.supports(.gpu_surfaces)) {
     try runtime.createView(.{
         .label = "canvas",
         .kind = .gpu_surface,
-        .frame = zero_native.geometry.RectF.init(0, 0, 480, 320),
+        .frame = native_sdk.geometry.RectF.init(0, 0, 480, 320),
         .gpu_surface = .{
             .backend = .metal,
             .pixel_format = .bgra8_unorm,

@@ -207,7 +207,7 @@ fn envRecords(env_map: *std.process.Environ.Map, buffers: *ReportBuffers) []cons
 }
 
 fn addLogPathCheck(buffers: *ReportBuffers, env_map: *std.process.Environ.Map) !void {
-    const paths = debug.resolveLogPaths(&buffers.log_paths, "dev.zero_native.app", debug.envFromMap(env_map), env_map.get("ZERO_NATIVE_LOG_DIR")) catch |err| {
+    const paths = debug.resolveLogPaths(&buffers.log_paths, "dev.native_sdk.app", debug.envFromMap(env_map), env_map.get("NATIVE_SDK_LOG_DIR")) catch |err| {
         return buffers.add("log-path", .missing, "log directory could not be resolved: {s}", .{@errorName(err)});
     };
     try buffers.add("log-path", .available, "runtime logs will be written to {s}", .{paths.log_file});
@@ -266,7 +266,7 @@ fn addCefLayoutCheck(buffers: *ReportBuffers, io: std.Io, probe: Probe, platform
             return buffers.add("webview-chromium", .missing, "CEF path is too long under {s}", .{cef_dir});
         };
         if (!probe.pathExists(io, path)) {
-            return buffers.add("webview-chromium", .missing, "CEF is missing {s}; run `zero-native cef install --dir {s}`", .{ entry.path, cef_dir });
+            return buffers.add("webview-chromium", .missing, "CEF is missing {s}; run `native cef install --dir {s}`", .{ entry.path, cef_dir });
         }
     }
     try buffers.add("webview-chromium", .available, "CEF layout is ready at {s}", .{cef_dir});

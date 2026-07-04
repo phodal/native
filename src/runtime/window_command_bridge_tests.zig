@@ -105,7 +105,7 @@ test "runtime handles built-in JavaScript window bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.window.create\",\"payload\":{\"label\":\"palette\",\"title\":\"Palette\",\"width\":320,\"height\":240}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.window.create\",\"payload\":{\"label\":\"palette\",\"title\":\"Palette\",\"width\":320,\"height\":240}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -114,7 +114,7 @@ test "runtime handles built-in JavaScript window bridge commands" {
     try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.lastBridgeResponseWindowId());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"duplicate\",\"command\":\"zero-native.window.create\",\"payload\":{\"label\":\"palette\"}}",
+        .bytes = "{\"id\":\"duplicate\",\"command\":\"native-sdk.window.create\",\"payload\":{\"label\":\"palette\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -122,7 +122,7 @@ test "runtime handles built-in JavaScript window bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "already exists") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"bad-frame\",\"command\":\"zero-native.window.create\",\"payload\":{\"label\":\"bad-frame\",\"width\":0,\"height\":240}}",
+        .bytes = "{\"id\":\"bad-frame\",\"command\":\"native-sdk.window.create\",\"payload\":{\"label\":\"bad-frame\",\"width\":0,\"height\":240}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -132,14 +132,14 @@ test "runtime handles built-in JavaScript window bridge commands" {
     try std.testing.expectEqual(@as(usize, 2), harness.runtime.listWindows(&invalid_frame_windows).len);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.window.list\",\"payload\":null}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.window.list\",\"payload\":null}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"palette\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"missing\",\"command\":\"zero-native.window.focus\",\"payload\":{\"label\":\"missing\"}}",
+        .bytes = "{\"id\":\"missing\",\"command\":\"native-sdk.window.focus\",\"payload\":{\"label\":\"missing\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -147,14 +147,14 @@ test "runtime handles built-in JavaScript window bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "Window was not found") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"3\",\"command\":\"zero-native.window.focus\",\"payload\":{\"label\":\"palette\"}}",
+        .bytes = "{\"id\":\"3\",\"command\":\"native-sdk.window.focus\",\"payload\":{\"label\":\"palette\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"4\",\"command\":\"zero-native.window.close\",\"payload\":{\"label\":\"palette\"}}",
+        .bytes = "{\"id\":\"4\",\"command\":\"native-sdk.window.close\",\"payload\":{\"label\":\"palette\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -198,7 +198,7 @@ test "runtime handles built-in JavaScript command bridge commands" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"name\":\"app.save\"}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.command.invoke\",\"payload\":{\"name\":\"app.save\"}}",
         .origin = "zero://inline",
         .window_id = 1,
         .webview_label = "main",
@@ -213,7 +213,7 @@ test "runtime handles built-in JavaScript command bridge commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"source\":\"bridge\"") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"id\":\"app.open\"}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.command.invoke\",\"payload\":{\"id\":\"app.open\"}}",
         .origin = "zero://inline",
         .window_id = 1,
         .webview_label = "toolbar",
@@ -244,7 +244,7 @@ test "runtime lists command catalog through built-in JavaScript command API" {
     try harness.start(app_state.app());
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.command.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.command.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
         .webview_label = "main",
@@ -286,7 +286,7 @@ test "runtime gates JavaScript command API with command permission" {
     var app_state: TestApp = .{};
     try allowed.start(app_state.app());
     try allowed.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"allowed\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"name\":\"app.save\"}}",
+        .bytes = "{\"id\":\"allowed\",\"command\":\"native-sdk.command.invoke\",\"payload\":{\"name\":\"app.save\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -296,7 +296,7 @@ test "runtime gates JavaScript command API with command permission" {
     const commands = [_]Command{.{ .id = "app.save", .title = "Save" }};
     allowed.runtime.options.commands = &commands;
     try allowed.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"list\",\"command\":\"zero-native.command.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"list\",\"command\":\"native-sdk.command.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -309,14 +309,14 @@ test "runtime gates JavaScript command API with command permission" {
     denied.runtime.options.security.permissions = &filesystem_only;
     try denied.start(app_state.app());
     try denied.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"denied\",\"command\":\"zero-native.command.invoke\",\"payload\":{\"name\":\"app.open\"}}",
+        .bytes = "{\"id\":\"denied\",\"command\":\"native-sdk.command.invoke\",\"payload\":{\"name\":\"app.open\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, denied.null_platform.lastBridgeResponse(), "\"permission_denied\"") != null);
 
     try denied.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"denied-list\",\"command\":\"zero-native.command.list\",\"payload\":{}}",
+        .bytes = "{\"id\":\"denied-list\",\"command\":\"native-sdk.command.list\",\"payload\":{}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -341,7 +341,7 @@ test "runtime handles built-in JavaScript platform support commands" {
     try std.testing.expect(!harness.runtime.supports(.gpu_surfaces));
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"1\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"native_views\"}}",
+        .bytes = "{\"id\":\"1\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"native_views\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -349,35 +349,35 @@ test "runtime handles built-in JavaScript platform support commands" {
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"name-selector\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"name\":\"recentDocuments\"}}",
+        .bytes = "{\"id\":\"name-selector\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"name\":\"recentDocuments\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"controls\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"nativeControlCommands\"}}",
+        .bytes = "{\"id\":\"controls\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"nativeControlCommands\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"drops\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"fileDrops\"}}",
+        .bytes = "{\"id\":\"drops\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"fileDrops\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"activation\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"appActivationEvents\"}}",
+        .bytes = "{\"id\":\"activation\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"appActivationEvents\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"gpu\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"gpuSurfaces\"}}",
+        .bytes = "{\"id\":\"gpu\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"gpuSurfaces\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
@@ -387,14 +387,14 @@ test "runtime handles built-in JavaScript platform support commands" {
     harness.runtime.options.platform = chromium_platform.platform();
     try std.testing.expect(!harness.runtime.supports(.tray));
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"2\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"tray\"}}",
+        .bytes = "{\"id\":\"2\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"tray\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });
     try std.testing.expect(std.mem.indexOf(u8, chromium_platform.lastBridgeResponse(), "\"result\":false") != null);
 
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
-        .bytes = "{\"id\":\"bad\",\"command\":\"zero-native.platform.supports\",\"payload\":{\"feature\":\"missing\"}}",
+        .bytes = "{\"id\":\"bad\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"missing\"}}",
         .origin = "zero://inline",
         .window_id = 1,
     } });

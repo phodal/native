@@ -242,6 +242,11 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 const previous_state = self.views[view_index].canvasWidgetRenderState();
                 self.views[view_index].canvas_widget_focused_id = target.id;
                 self.views[view_index].canvas_widget_focus_visible_id = target.id;
+                // A focus change repaints; record the automation input so
+                // the completing frame publishes (same contract as select
+                // and text edits). Callers that dispatch a follow-up input
+                // event simply overwrite this with their own timestamp.
+                self.views[view_index].recordGpuSurfaceInputTimestamp(automationInputTimestampNs());
                 try CanvasWidgetEventMethods().invalidateForCanvasWidgetRenderStateChange(self, view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
             }
         }
@@ -264,6 +269,16 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 try focusAutomationCanvasWidget(self, view_index, id);
             }
             const dirty = try self.views[view_index].setCanvasWidgetSelected(id, true) orelse return;
+            // Record the automation input so the frame this repaint
+            // presents resolves it into an input latency and republishes
+            // observable state (dispatchGpuSurfaceFrame invalidates on a
+            // recorded latency; steady-state completions stay quiet).
+            // Without this, the snapshot's gpu_frame only advanced when a
+            // PREVIOUS interaction happened to leave a dangling pending
+            // input for this frame to resolve — a timing accident that a
+            // loaded CI runner loses ("menu item automation select did
+            // not request a GPU frame").
+            self.views[view_index].recordGpuSurfaceInputTimestamp(automationInputTimestampNs());
             try CanvasWidgetEventMethods().invalidateForCanvasWidgetDirty(self, view_index, dirty);
         }
 
@@ -316,6 +331,10 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             try focusAutomationCanvasWidget(self, view_index, id);
             if (!self.views[view_index].canEditCanvasWidgetText(id)) return error.InvalidCommand;
             const dirty = try self.views[view_index].applyCanvasWidgetTextEdit(id, edit) orelse return;
+            // Same observability contract as selectAutomationCanvasWidget:
+            // the repaint this edit triggers must publish its completing
+            // frame, so record the automation input it resolves.
+            self.views[view_index].recordGpuSurfaceInputTimestamp(automationInputTimestampNs());
             try CanvasWidgetEventMethods().invalidateForCanvasWidgetDirty(self, view_index, dirty);
         }
 

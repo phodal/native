@@ -19,6 +19,7 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             var enriched_frame_event = frame_event;
             if (runtimeFindViewIndex(self, frame_event.window_id, frame_event.label)) |index| {
                 const had_pending_input = self.views[index].gpu_pending_input_timestamp_ns != 0;
+                const first_frame_latency_was_recorded = self.views[index].gpu_first_frame_latency_recorded;
                 if (!sizesEqual(self.views[index].gpu_size, frame_event.size) or self.views[index].gpu_scale_factor != frame_event.scale_factor) {
                     self.views[index].presented_canvas_valid = false;
                 }
@@ -32,13 +33,24 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 try CanvasWidgetDisplayMethods().advanceCanvasWidgetKineticScrollForFrame(self, index, frame_event.frame_interval_ns, had_pending_input);
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
                 // Observable snapshots (automation, bridge state) only
-                // republish when the runtime is invalidated. The first
-                // nonblank presentation on an idle boot has no other
-                // invalidation source — no resize, no input — so a change
-                // in the host-reported nonblank fact must invalidate here
-                // or the published snapshot stays stale at nonblank=false
-                // until the first input arrives.
-                if (self.views[index].gpu_frame_nonblank != frame_event.nonblank) {
+                // republish when the runtime is invalidated, and a frame
+                // completion carrying a NEW discrete fact may have no
+                // other invalidation source, leaving the published
+                // snapshot stale forever. Three such facts invalidate:
+                //   - the host-reported nonblank verdict changed (the
+                //     first nonblank presentation on an idle boot has no
+                //     resize and no input to piggyback on);
+                //   - this frame resolved a pending input into a recorded
+                //     input latency (friction #79: an occluded window's
+                //     click otherwise never publishes the latency the
+                //     perf harness waits on);
+                //   - this frame recorded the first-frame latency.
+                // Steady-state frames carry no new fact and stay quiet —
+                // a timer-mode surface must not republish observable
+                // state 60 times a second.
+                const input_latency_recorded = had_pending_input and self.views[index].gpu_pending_input_timestamp_ns == 0;
+                const first_frame_latency_recorded = !first_frame_latency_was_recorded and self.views[index].gpu_first_frame_latency_recorded;
+                if (self.views[index].gpu_frame_nonblank != frame_event.nonblank or input_latency_recorded or first_frame_latency_recorded) {
                     self.invalidateFor(.state, self.views[index].frame);
                 }
                 self.views[index].gpu_frame_nonblank = frame_event.nonblank;

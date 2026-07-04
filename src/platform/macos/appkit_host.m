@@ -307,6 +307,7 @@ static NSMutableDictionary *ZeroNativeCredentialQuery(NSString *service, NSStrin
 @property(nonatomic, assign) BOOL hasCanvasTexture;
 @property(nonatomic, assign) BOOL retainedFrameRequestPending;
 @property(nonatomic, assign) uint64_t retainedFrameLastEmitNs;
+@property(nonatomic, assign) BOOL glassFlushPending;
 @property(nonatomic, assign) BOOL pointerMotionInputPending;
 @property(nonatomic, assign) NSInteger pendingPointerMotionKind;
 @property(nonatomic, assign) NSPoint pendingPointerMotionPoint;
@@ -1719,6 +1720,12 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     _metalLayer.framebufferOnly = NO;
     _metalLayer.opaque = YES;
     _metalLayer.contentsGravity = kCAGravityTopLeft;
+    // Never block the main thread waiting for a drawable: an occluded or
+    // otherwise non-composited window stops recycling its drawable pool,
+    // and the default 1s nextDrawable timeout would stall every frame
+    // (friction #79). A nil drawable takes the retained-completion path
+    // in renderFrame instead.
+    _metalLayer.allowsNextDrawableTimeout = NO;
 
     self.wantsLayer = YES;
     self.layer = _metalLayer;
@@ -1777,6 +1784,25 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     self.window.acceptsMouseMovedEvents = YES;
     [self updateDrawableSize];
     [self updateSurfaceTrackingArea];
+    // Re-present retained content once the window is composited again
+    // after occlusion (friction #79): frames completed logically while
+    // occluded (renderFrame's nil-drawable path) still owe the glass
+    // their latest retained pixels.
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:NSWindowDidChangeOcclusionStateNotification object:nil];
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(windowOcclusionStateChanged:)
+                                                     name:NSWindowDidChangeOcclusionStateNotification
+                                                   object:self.window];
+    }
+}
+
+- (void)windowOcclusionStateChanged:(NSNotification *)notification {
+    NSWindow *window = notification.object;
+    if (window != self.window) return;
+    if (!self.glassFlushPending) return;
+    if ((window.occlusionState & NSWindowOcclusionStateVisible) == 0) return;
+    [self renderFrame];
 }
 
 - (void)viewDidChangeBackingProperties {
@@ -2176,8 +2202,44 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
     [self updateDrawableSize];
 
     id<CAMetalDrawable> drawable = [self.metalLayer nextDrawable];
-    if (!drawable) return;
-
+    if (!drawable) {
+        // Occluded/unfocused windows are not composited, so the layer
+        // stops vending drawables. Dropping the frame here silently was
+        // friction #79: the present-completion event drives the runtime's
+        // frame loop (input latency recording, canvas animations,
+        // automation snapshot refresh), so an occluded window went dead —
+        // frames requested by the runtime never completed. The content is
+        // already retained (canvasTexture holds the latest canvas pixels),
+        // so complete the frame logically instead: advance the frame
+        // index and emit the completion event from retained state, paced
+        // at the display's refresh interval exactly like retained frame
+        // requests (a successful present is vsync-paced by drawable
+        // availability; without pacing an occluded animation loop would
+        // spin unthrottled). The retained content flushes to the glass
+        // when the window is next composited (occlusion observer below).
+        // Policy: a frame requested by the runtime always completes
+        // regardless of window visibility; only the physical glass flush
+        // is deferred to visibility.
+        self.glassFlushPending = YES;
+        const NSUInteger completedFrameIndex = self.frameIndex;
+        self.frameIndex += 1;
+        const uint64_t now = ZeroNativeTimestampNanoseconds();
+        const uint64_t frameIntervalNs = ZeroNativeRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+        uint64_t delayNs = 0;
+        if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
+            delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
+        }
+        __weak ZeroNativeMetalSurfaceView *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
+            ZeroNativeMetalSurfaceView *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf.retainedFrameLastEmitNs = ZeroNativeTimestampNanoseconds();
+            const BOOL nonblank = strongSelf.verifiedNonblankFrame || strongSelf.hasCanvasTexture;
+            const uint32_t sampleColor = strongSelf.verifiedNonblankFrame ? strongSelf.lastSampleColor : 0;
+            [strongSelf emitFrameEventWithFrameIndex:completedFrameIndex sampleColor:sampleColor nonblank:nonblank];
+        });
+        return;
+    }
     const double phase = (double)(self.frameIndex % 360) / 360.0;
     const double red = self.hasCanvasTexture ? 0.965 : 0.10 + 0.08 * sin(phase * 6.283185307179586);
     const double green = self.hasCanvasTexture ? 0.973 : 0.18 + 0.10 * sin((phase + 0.33) * 6.283185307179586);
@@ -2251,6 +2313,7 @@ static BOOL ZeroNativePacketDrawCommand(NSDictionary *command, CGContextRef cont
         });
     }];
 
+    self.glassFlushPending = NO;
     [commandBuffer presentDrawable:drawable];
     [commandBuffer commit];
 

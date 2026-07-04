@@ -144,6 +144,9 @@ fn sendCommand(allocator: std.mem.Allocator, io: std.Io, action: []const u8, val
     // classically, the wrong cwd — and silently do nothing. Refuse
     // loudly instead, naming the dir we looked at.
     try requireAutomationDir(io);
+    // A live publisher already on another protocol makes the queue write
+    // provably useless (or worse, misread) — refuse before writing (#103).
+    try requireCompatibleSnapshotIfPresent(allocator, io);
     var command_path: [256]u8 = undefined;
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path(&command_path, "command.txt"), .data = line });
     var dir_buffer: [1024]u8 = undefined;
@@ -214,14 +217,13 @@ fn printFile(io: std.Io, name: []const u8) !void {
 const Liveness = enum { live, no_pid, dead_publisher };
 const WaitPolicy = enum { require_live_publisher, any_publisher };
 
-/// `publisher_pid=<n>` from the snapshot header, if present.
-fn publisherPid(bytes: []const u8) ?u32 {
-    const marker = "publisher_pid=";
+/// A numeric `<marker><n>` field from the snapshot header. Only accepts
+/// the header field, not e.g. widget text echoing it: it must start a
+/// line or follow a space.
+fn headerField(bytes: []const u8, marker: []const u8) ?u32 {
     var search: usize = 0;
     while (std.mem.indexOfPos(u8, bytes, search, marker)) |index| {
         search = index + marker.len;
-        // Only accept the header field, not e.g. widget text echoing it:
-        // it must start a line or follow a space.
         if (index > 0 and bytes[index - 1] != ' ' and bytes[index - 1] != '\n') continue;
         var end = search;
         while (end < bytes.len and std.ascii.isDigit(bytes[end])) end += 1;
@@ -229,6 +231,85 @@ fn publisherPid(bytes: []const u8) ?u32 {
         return std.fmt.parseUnsigned(u32, bytes[search..end], 10) catch continue;
     }
     return null;
+}
+
+/// `publisher_pid=<n>` from the snapshot header, if present.
+fn publisherPid(bytes: []const u8) ?u32 {
+    return headerField(bytes, "publisher_pid=");
+}
+
+// ---------------------------------------------- protocol handshake (#103)
+//
+// A stale `native` binary beside a fresh app (or the reverse) can drive
+// the wrong dropbox name, misread the snapshot format, or speak an old
+// command vocabulary — and every failure mode is SILENT (a days-old
+// snapshot reads as plausible state; #103 cost a misdiagnosis round).
+// Both binaries bake `protocol.version` at their own build time and the
+// app stamps its copy into every snapshot header; any read that would
+// interpret snapshot state first proves both sides speak the same
+// version, and refuses loudly — naming both versions — otherwise.
+
+const ProtocolSkew = union(enum) {
+    ok,
+    /// The publisher stamps no `protocol=` field: it predates the
+    /// handshake (or this CLI is from the future relative to the app).
+    missing,
+    /// The publisher's version, when it differs from this binary's.
+    mismatch: u32,
+};
+
+/// `protocol=<n>` from the snapshot header, checked against this
+/// binary's own baked-in `protocol.version`.
+fn protocolSkew(bytes: []const u8) ProtocolSkew {
+    const published = headerField(bytes, "protocol=") orelse return .missing;
+    if (published == protocol.version) return .ok;
+    return .{ .mismatch = published };
+}
+
+fn describeProtocolSkew(skew: ProtocolSkew, io: std.Io) void {
+    var dir_buffer: [1024]u8 = undefined;
+    const dir = automationDirDescription(io, &dir_buffer);
+    switch (skew) {
+        .ok => {},
+        .mismatch => |published| std.debug.print(
+            "error: automation protocol mismatch at {s}/snapshot.txt\n" ++
+                "       the running app publishes protocol v{d} but this native binary speaks v{d} -\n" ++
+                "       one of them is stale; rebuild the native CLI (zig build) and/or relaunch\n" ++
+                "       the freshly built app so both share one protocol (compare `native version`\n" ++
+                "       against your framework checkout, and delete stale zig-out binaries)\n",
+            .{ dir, published, protocol.version },
+        ),
+        .missing => std.debug.print(
+            "error: the automation snapshot at {s}/snapshot.txt carries no protocol version\n" ++
+                "       its publisher predates the protocol handshake, so this native binary\n" ++
+                "       (protocol v{d}) may misread it - rebuild and relaunch the app against the\n" ++
+                "       current framework; if the app IS current, this native binary is the stale\n" ++
+                "       side (an old zig-out copy?) - rebuild it and check `native version`\n",
+            .{ dir, protocol.version },
+        ),
+    }
+}
+
+/// Refuse snapshot-interpreting reads when the publisher speaks a
+/// different protocol than this binary. Only meaningful on a LIVE
+/// publisher — stale files already fail the pid guard first.
+fn requireProtocolMatch(bytes: []const u8, io: std.Io) error{AutomationCommandFailed}!void {
+    const skew = protocolSkew(bytes);
+    if (skew == .ok) return;
+    describeProtocolSkew(skew, io);
+    return error.AutomationCommandFailed;
+}
+
+/// Command-queue guard: sends stay permissive when no snapshot exists
+/// yet (the app may still be starting) and when the publisher is dead
+/// (the next read screams), but a LIVE publisher on another protocol is
+/// a proven binary/dropbox skew.
+fn requireCompatibleSnapshotIfPresent(allocator: std.mem.Allocator, io: std.Io) error{AutomationCommandFailed}!void {
+    var file_path: [256]u8 = undefined;
+    const bytes = readFile(allocator, io, path(&file_path, "snapshot.txt")) catch return;
+    defer allocator.free(bytes);
+    if (snapshotLiveness(bytes, pidIsAlive) != .live) return;
+    try requireProtocolMatch(bytes, io);
 }
 
 /// Classify a snapshot's publisher against the live process table via
@@ -280,7 +361,7 @@ fn requireLiveSnapshotFile(allocator: std.mem.Allocator, io: std.Io) !void {
     const bytes = readFile(allocator, io, path(&file_path, "snapshot.txt")) catch return;
     defer allocator.free(bytes);
     const liveness = snapshotLiveness(bytes, pidIsAlive);
-    if (liveness == .live) return;
+    if (liveness == .live) return requireProtocolMatch(bytes, io);
     describeStaleness(liveness, io);
     return error.AutomationCommandFailed;
 }
@@ -303,6 +384,9 @@ fn waitForFile(allocator: std.mem.Allocator, io: std.Io, name: []const u8, marke
             last_liveness = if (policy == .require_live_publisher) snapshotLiveness(bytes, pidIsAlive) else .live;
             if (last_liveness == .live) {
                 defer allocator.free(bytes);
+                // A LIVE publisher speaking the wrong protocol never gets
+                // better by polling: fail fast, naming both versions.
+                if (policy == .require_live_publisher) try requireProtocolMatch(bytes, io);
                 return emitPayload(io, &.{bytes});
             }
         }
@@ -426,6 +510,9 @@ fn runAssert(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8)
         var file_path: [256]u8 = undefined;
         snapshot = readFile(allocator, io, path(&file_path, "snapshot.txt")) catch null;
         if (snapshot) |bytes| {
+            // A live publisher on the wrong protocol can neither satisfy
+            // nor refute assertions, and polling never fixes it (#103).
+            if (snapshotLiveness(bytes, pidIsAlive) == .live) try requireProtocolMatch(bytes, io);
             // A stale dropbox (dead or pid-less publisher) can neither
             // satisfy nor refute assertions — keep polling for live state.
             if (snapshotLiveness(bytes, pidIsAlive) == .live and assertSatisfied(bytes, spec.patterns, spec.absent)) {
@@ -765,6 +852,21 @@ test "publisherPid parses the header field only" {
     try testing.expectEqual(@as(?u32, null), publisherPid("name=\"xpublisher_pid=9\""));
     try testing.expectEqual(@as(?u32, 9), publisherPid("text a\nname x publisher_pid=9\n"));
     try testing.expectEqual(@as(?u32, null), publisherPid("publisher_pid=abc\n"));
+}
+
+test "protocolSkew matches this binary's version and names the skew" {
+    var ok_buffer: [64]u8 = undefined;
+    const ok_snapshot = try std.fmt.bufPrint(&ok_buffer, "ready=true protocol={d} publisher_pid=4242\n", .{protocol.version});
+    try testing.expectEqual(ProtocolSkew.ok, protocolSkew(ok_snapshot));
+
+    var skewed_buffer: [64]u8 = undefined;
+    const skewed_snapshot = try std.fmt.bufPrint(&skewed_buffer, "ready=true protocol={d} publisher_pid=4242\n", .{protocol.version + 1});
+    try testing.expectEqual(ProtocolSkew{ .mismatch = protocol.version + 1 }, protocolSkew(skewed_snapshot));
+
+    // Pre-handshake publishers stamp no protocol field at all.
+    try testing.expectEqual(ProtocolSkew.missing, protocolSkew("ready=true frame=3 publisher_pid=4242\n"));
+    // Widget text echoing the token mid-word is not the header field.
+    try testing.expectEqual(ProtocolSkew.missing, protocolSkew("name=\"xprotocol=9\"\n"));
 }
 
 test "snapshotLiveness classifies both directions" {

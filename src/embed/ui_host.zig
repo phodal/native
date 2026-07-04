@@ -108,7 +108,12 @@ pub fn UiAppHost(comptime AppDef: type) type {
             self.automation_dir_len = 0;
             self.automation_io = null;
             self.text_measure = .{};
-            self.ui = MobileUi.init(allocator, AppDef.initModel(), options);
+            // In-place init + pointer-targeted model assignment (#101):
+            // `initModel()`'s result writes straight into the heap
+            // struct via result-location semantics, so a multi-MB Model
+            // never materializes on this stack frame.
+            MobileUi.initInPlace(&self.ui, allocator, options);
+            self.ui.model = AppDef.initModel();
             self.inner_app = self.ui.app();
             self.embedded.initInPlace(.{
                 .context = self,

@@ -3,6 +3,21 @@ const std = @import("std");
 pub const default_dir = ".zig-cache/native-sdk-automation";
 pub const max_command_bytes: usize = 16 * 1024 + 64;
 
+/// CLI <-> app dropbox protocol version (#103). Both binaries bake this
+/// constant at THEIR build time: the app stamps it into every snapshot
+/// header (`protocol=N`), the CLI refuses a snapshot whose version is not
+/// its own — so a stale `native` binary driving a freshly built app (or
+/// the reverse) fails loudly, naming both versions, instead of silently
+/// reading yesterday's state. Bump on ANY shape change a stale binary
+/// would misread: the dropbox directory name, the snapshot header/format,
+/// or the command vocabulary.
+///
+/// History: 1 = the first stamped version (post-rename dropbox
+/// `.zig-cache/native-sdk-automation`, publisher_pid liveness, stdout
+/// payloads). Snapshots without a `protocol=` field predate the
+/// handshake entirely.
+pub const version: u32 = 1;
+
 pub const Error = error{
     InvalidCommand,
     CommandTooLarge,

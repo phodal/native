@@ -259,10 +259,11 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
         \\}
         \\
         \\pub fn main(init: std.process.Init) !void {
-        \\    // The app struct is multi-MB: heap-allocate it, never on the stack.
-        \\    const app_state = try std.heap.page_allocator.create(CounterApp);
-        \\    defer std.heap.page_allocator.destroy(app_state);
-        \\    app_state.* = CounterApp.init(std.heap.page_allocator, initialModel(), .{
+        \\    // The app struct (and any real Model) is multi-MB: `create`
+        \\    // heap-allocates and constructs everything in place, so neither
+        \\    // ever rides the stack. Mutate `app_state.model` through the
+        \\    // pointer before running if boot state is not the default.
+        \\    const app_state = try CounterApp.create(std.heap.page_allocator, .{
         \\        .name =
     );
     try out.appendSlice(allocator, " ");
@@ -274,7 +275,9 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
         \\        .update = update,
         \\        .markup = .{ .source = app_markup, .watch_path = "src/app.zml", .io = init.io },
         \\    });
-        \\    defer app_state.deinit();
+        \\    defer app_state.destroy();
+        \\    app_state.model = initialModel();
+        \\
         \\    try runner.runWithOptions(app_state.app(), .{
         \\        .app_name =
     );

@@ -3,6 +3,8 @@ const automation_cli = @import("automation.zig");
 const markup_cli = @import("markup.zig");
 const skills_cli = @import("skills.zig");
 const tooling = @import("tooling");
+const automation_protocol = @import("automation_protocol");
+const cli_build_info = @import("cli_build_info");
 
 const version = "0.3.0";
 
@@ -17,9 +19,12 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
         // Payload, not a diagnostic: scripts parse `native version`, so it
         // belongs on stdout (see automation.zig's emitPayload contract).
-        var stdout_buffer: [64]u8 = undefined;
+        // Commit + automation protocol make binary/framework skew a
+        // one-command check (#103: a stale zig-out `native` binary
+        // silently drove a days-old dropbox).
+        var stdout_buffer: [128]u8 = undefined;
         var stdout_writer = std.Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
-        try stdout_writer.interface.print("native {s}\n", .{version});
+        try stdout_writer.interface.print("native {s} (commit {s}, automation protocol v{d})\n", .{ version, cli_build_info.build_commit, automation_protocol.version });
         try stdout_writer.interface.flush();
     } else if (std.mem.eql(u8, command, "init")) {
         const destination = positionalArg(args[2..]) orelse ".";

@@ -22,9 +22,11 @@ Start a new app by copying `examples/habits/` (smallest) or `examples/ui-inbox/`
 const HabitsApp = native_sdk.UiApp(Model, Msg);
 
 pub fn main(init: std.process.Init) !void {
-    const app_state = try std.heap.page_allocator.create(HabitsApp); // multi-MB struct: never on the stack
-    defer std.heap.page_allocator.destroy(app_state);
-    app_state.* = HabitsApp.init(std.heap.page_allocator, initialModel(), .{
+    // `create` heap-allocates the multi-MB app struct and constructs the
+    // Model in place — neither ever rides the stack (avoid `App.init(alloc,
+    // model, ...)`: its by-value Model is a stack-overflow trap once the
+    // Model grows).
+    const app_state = try HabitsApp.create(std.heap.page_allocator, .{
         .name = "habits",
         .scene = shell_scene,             // one window, one gpu_surface view
         .canvas_label = "habits-canvas",  // must match the ShellView label
@@ -35,10 +37,13 @@ pub fn main(init: std.process.Init) !void {
             .io = init.io,
         },
     });
-    defer app_state.deinit();
+    defer app_state.destroy();
+    app_state.model = initialModel(); // boot state: assign through the pointer
     try runner.runWithOptions(app_state.app(), .{ ... }, init);
 }
 ```
+
+(`create` requires every Model field to carry a default; the model starts as `.{}` and boot state is assigned through the returned pointer. Tests that instantiate the app per fixture should use `create`/`destroy` too — a runtime-built Model passed to `init` by value crashes the test stack once models get large.)
 
 The runtime owns the loop: install on first GPU frame, presentation, resize, pointer/keyboard dispatch into `update` + rebuild. With `watch_path` set, editing the `.zml` while the app runs hot-reloads the view within ~2s, preserving model state and widget ids; parse failures keep the last good view and set `app_state.markup_diagnostic` (line/column/message).
 

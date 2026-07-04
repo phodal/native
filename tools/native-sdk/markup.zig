@@ -47,6 +47,7 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
     var parser = ui_markup.Parser.init(arena_state.allocator(), source);
     const document = parser.parse() catch |err| {
         std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, parser.diagnostic.line, parser.diagnostic.column, parser.diagnostic.message });
+        printStaleBinaryHint(parser.diagnostic.message);
         return err;
     };
     if (ui_markup.validate(document)) |info| {
@@ -59,9 +60,28 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
             }
         }
         std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, info.line, info.column, info.message });
+        printStaleBinaryHint(info.message);
         return error.MarkupInvalid;
     }
     std.debug.print("{s}: ok\n", .{file_path});
+}
+
+/// #103's markup-vocabulary case: "unknown element/attribute" from an OLD
+/// `native` binary checking NEW syntax looks exactly like an authoring
+/// mistake — a stale zig-out binary cost a misdiagnosis round this way.
+/// When the diagnosis is a vocabulary miss, say the other explanation
+/// out loud.
+fn printStaleBinaryHint(message: []const u8) void {
+    const vocabulary_miss = std.mem.startsWith(u8, message, "unknown element") or
+        std.mem.startsWith(u8, message, "unknown attribute") or
+        std.mem.startsWith(u8, message, "unknown event attribute");
+    if (!vocabulary_miss) return;
+    std.debug.print(
+        "       (if this syntax is newer than this binary, your `native` binary may be\n" ++
+            "        stale - rebuild it from the current framework checkout and compare\n" ++
+            "        `native version`)\n",
+        .{},
+    );
 }
 
 const FoundCodepoint = struct { bytes: []const u8, codepoint: u21 };

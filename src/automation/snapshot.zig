@@ -1,6 +1,7 @@
 const std = @import("std");
 const geometry = @import("geometry");
 const platform = @import("../platform/root.zig");
+const protocol = @import("protocol.zig");
 
 pub const max_windows: usize = platform.max_windows;
 pub const max_views: usize = platform.max_windows + platform.max_views + platform.max_webviews;
@@ -181,7 +182,12 @@ pub const Input = struct {
 };
 
 pub fn writeText(input: Input, writer: anytype) !void {
-    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d} dispatch_errors={d} dropped_trace_records={d} publisher_pid={d}\n", .{
+    // `protocol=` is the CLI/app handshake (#103): the publishing app
+    // stamps ITS baked-in protocol version so a stale `native` binary
+    // (or a stale app) is refused loudly instead of silently driving
+    // yesterday's dropbox shape.
+    try writer.print("ready=true protocol={d} frame={d} commands={d} runtime_uptime_ns={d} dispatch_errors={d} dropped_trace_records={d} publisher_pid={d}\n", .{
+        protocol.version,
         input.diagnostics.frame_index,
         input.diagnostics.command_count,
         input.diagnostics.runtime_uptime_ns,
@@ -621,6 +627,9 @@ test "snapshot emits window and source" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ready=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "runtime_uptime_ns=42") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "publisher_pid=4242") != null);
+    var protocol_field_buffer: [32]u8 = undefined;
+    const protocol_field = try std.fmt.bufPrint(&protocol_field_buffer, "protocol={d} ", .{protocol.version});
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), protocol_field) != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "@w1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "view @w1/main kind=webview") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "accessibility_label=\"\"") != null);

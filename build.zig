@@ -169,11 +169,18 @@ pub fn build(b: *std.Build) void {
     automation_cli_mod.addImport("automation_protocol", automation_protocol_mod);
     const automation_cli_tests = testArtifact(b, automation_cli_mod);
 
+    // #103: `native version` names the commit the binary was built from,
+    // so binary/framework skew ("your native binary may be stale") is a
+    // one-command check. Falls back to "unknown" outside a git checkout.
+    const cli_build_info = b.addOptions();
+    cli_build_info.addOption([]const u8, "build_commit", cliBuildCommit(b));
+
     const cli_mod = module(b, target, optimize, "tools/native-sdk/main.zig");
     cli_mod.addImport("tooling", tooling_mod);
     cli_mod.addImport("automation_protocol", automation_protocol_mod);
     cli_mod.addImport("ui_markup", ui_markup_mod);
     cli_mod.addImport("markup_lsp", markup_lsp_mod);
+    cli_mod.addOptions("cli_build_info", cli_build_info);
     const cli_exe = b.addExecutable(.{
         .name = "native",
         .root_module = cli_mod,
@@ -206,6 +213,7 @@ pub fn build(b: *std.Build) void {
     host_cli_mod.addImport("automation_protocol", host_automation_protocol_mod);
     host_cli_mod.addImport("ui_markup", host_ui_markup_mod);
     host_cli_mod.addImport("markup_lsp", host_markup_lsp_mod);
+    host_cli_mod.addOptions("cli_build_info", cli_build_info);
     const host_cli_exe = b.addExecutable(.{
         .name = "native",
         .root_module = host_cli_mod,
@@ -1742,6 +1750,17 @@ fn module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
         .target = target,
         .optimize = optimize,
     });
+}
+
+/// The short commit hash of the framework checkout the CLI is built
+/// from, for `native version` staleness checks (#103). "unknown" when
+/// git is unavailable (e.g. building from a package tarball).
+fn cliBuildCommit(b: *std.Build) []const u8 {
+    var code: u8 = undefined;
+    const output = b.runAllowFail(&.{ "git", "rev-parse", "--short", "HEAD" }, &code, .ignore) catch return "unknown";
+    const trimmed = std.mem.trim(u8, output, " \n\r\t");
+    if (trimmed.len == 0) return "unknown";
+    return trimmed;
 }
 
 fn testArtifact(b: *std.Build, mod: *std.Build.Module) *std.Build.Step.Compile {

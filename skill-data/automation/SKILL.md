@@ -174,7 +174,7 @@ The default directory is `.zig-cache/native-sdk-automation/`, resolved against t
 
 Files:
 
-- `snapshot.txt`: app name, readiness, source kind, source size, window metadata, accessibility summary. The `ready=true` line also carries `dispatch_errors=<total>` and `dropped_trace_records=<total>`, and recent degraded handler/update errors appear as `  error event=<tag> name=<ErrorName> timestamp_ns=...` lines — a handler error no longer exits the app, so grep these to notice one happened.
+- `snapshot.txt`: app name, readiness, source kind, source size, window metadata, accessibility summary. The `ready=true` line also carries `protocol=<n>` (the CLI/app handshake: the CLI refuses snapshots — and command queues to a live app — whose protocol version is not its own, naming both versions; the fix is rebuilding whichever binary is stale and comparing `native version`), `dispatch_errors=<total>` and `dropped_trace_records=<total>`, and recent degraded handler/update errors appear as `  error event=<tag> name=<ErrorName> timestamp_ns=...` lines — a handler error no longer exits the app, so grep these to notice one happened.
 - `windows.txt`: window list.
 - `command.txt`: command input written by CLI and consumed by runtime.
 - `bridge-response.txt`: last bridge response.
@@ -192,6 +192,8 @@ If `native automate wait` times out:
 4. Check `.zig-cache/native-sdk-automation/snapshot.txt`.
 5. Delete stale files in `.zig-cache/native-sdk-automation/` and restart the app.
 6. Run with more tracing, for example `zig build run -Dtrace=all`.
+
+If the CLI reports an automation protocol mismatch (or a snapshot with no protocol version): the `native` binary and the app were built from different framework versions — rebuild the older side (stale `zig-out/bin` copies of the CLI are the classic cause; `native version` prints the commit the binary was built from).
 
 If `snapshot` says no app connected:
 

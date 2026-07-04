@@ -85,6 +85,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// functions returning slices (optionally taking an arena).
         const item_types = collectItemTypes(ModelT);
 
+        /// #100: shared eval-branch budget for this view's Model/Msg
+        /// scaled comptime walks (`inline for` over model fields/decls,
+        /// msg variants, and `item_types`); see `typeScanQuota`.
+        const scan_quota = typeScanQuota(ModelT) + typeScanQuota(MsgT);
+
         /// A named value in scope: a `for` loop item (typed pointer tagged
         /// into `item_types`), a slice-valued template arg (iterable by a
         /// `for each` inside the template), or a scalar template arg
@@ -275,6 +280,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// structure) is appended to `out`. Returns the item count so the
         /// caller can render a trailing `<else>` for the empty case.
         fn buildFor(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!usize {
+            @setEvalBranchQuota(scan_quota);
             const each = node.attr("each") orelse return self.failVoid(node, "for requires an each attribute");
             const as_name = node.attr("as") orelse return self.failVoid(node, "for requires an as attribute");
             const key_field = node.attr("key");
@@ -322,6 +328,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// in scope, or on the model a field, a public array declaration,
         /// or a public function (with or without arena).
         fn iterateItems(self: *Self, ui: *Ui, comptime Item: type, comptime type_index: usize, scope: *Scope, each: []const u8) BuildError!?[]const Item {
+            @setEvalBranchQuota(scan_quota);
             _ = self;
             if (scope.lookup(each)) |entry| {
                 switch (entry.payload) {
@@ -624,6 +631,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// Msg constructor for markdown link presses: the tag must name a
         /// `[]const u8` variant (mirrors `Ui.linkMsg`).
         fn linkConstructor(tag: []const u8) ?Ui.LinkMsgFn {
+            @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (field.type == []const u8) {
                     if (std.mem.eql(u8, field.name, tag)) {
@@ -637,6 +645,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// Msg constructor for markdown details toggles: the tag must name
         /// a `usize` variant (mirrors `Markdown(Msg).detailsMsg`).
         fn detailsConstructor(tag: []const u8) ?*const fn (index: usize) MsgT {
+            @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (field.type == usize) {
                     if (std.mem.eql(u8, field.name, tag)) {
@@ -651,6 +660,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// same sources `for each` accepts (scope slice args shadow model
         /// fields, pub decls, and fns).
         fn boolItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const bool {
+            @setEvalBranchQuota(scan_quota);
             inline for (item_types, 0..) |Item, type_index| {
                 if (comptime (Item == bool)) {
                     if (try self.iterateItems(ui, bool, type_index, scope, path)) |items| {
@@ -669,6 +679,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// through the parent chain at the expansion site, exactly as if
         /// the body were written inline.
         fn buildUse(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            @setEvalBranchQuota(scan_quota);
             const template_name = node.attr("template") orelse {
                 return self.failNode(node, markup.use_template_attr_message);
             };
@@ -729,6 +740,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// `for each`) binds as a slice; anything else evaluates to a
         /// `Value` at the use site.
         fn argPayload(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, raw: []const u8) BuildError!ScopeEntry.Payload {
+            @setEvalBranchQuota(scan_quota);
             const expression = markup.parseAttrExpression(raw) orelse {
                 return self.failPayload(node, markup.invalid_expression_message);
             };
@@ -766,6 +778,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn itemKey(self: *Self, comptime Item: type, item: *const Item, node: markup.MarkupNode, field: []const u8) BuildError!canvas.UiKey {
+            @setEvalBranchQuota(scan_quota);
             // Keys stay identity-stable data: fields and zero-arg methods
             // only, never arena-computed values.
             const value = resolveOn(Item, item, field, null) orelse {
@@ -993,6 +1006,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn constructMessage(self: *Self, scope: *Scope, node: markup.MarkupNode, expression: markup.MessageExpression) BuildError!MsgT {
+            @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (std.mem.eql(u8, field.name, expression.tag)) {
                     if (field.type == void) {
@@ -1041,6 +1055,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn inputConstructor(tag: []const u8) ?Ui.InputMsgFn {
+            @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (field.type == canvas.TextInputEvent) {
                     if (std.mem.eql(u8, field.name, tag)) {
@@ -1052,6 +1067,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn scrollConstructor(tag: []const u8) ?Ui.ScrollMsgFn {
+            @setEvalBranchQuota(scan_quota);
             inline for (@typeInfo(MsgT).@"union".fields) |field| {
                 if (field.type == canvas.ScrollState) {
                     if (std.mem.eql(u8, field.name, tag)) {
@@ -1086,6 +1102,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         /// is — text interpolation, attribute values, message payloads —
         /// except inside `{a == b}` equality).
         fn evalBinding(self: *Self, scope: *Scope, node: markup.MarkupNode, path: []const u8, allow_arena: bool) BuildError!Value {
+            @setEvalBranchQuota(scan_quota);
             const head = pathHead(path);
             const arena: ?std.mem.Allocator = if (allow_arena) scope.arena else null;
             if (scope.lookup(head)) |entry| {
@@ -1228,8 +1245,29 @@ pub const color_style_attr_fields: []const AttrName = &.{
     .{ .markup = "focus-ring", .zig = "focus_ring" },
 };
 
+/// #100: comptime walks over an app's Model and Msg scale with the type's
+/// field/decl count, and the default 1000-backwards-branch quota dies at
+/// real app sizes (ovation: ~200 pub decls) — inside framework code the
+/// app never asked to run, before it uses any markup. Every Model/Msg
+/// shaped comptime walk in both markup engines derives its quota from the
+/// scanned type instead of relying on the default: generous linear
+/// headroom per field/decl (name compares, fn-signature checks,
+/// `sliceElement` recursion) plus the item-type dedupe's worst-case
+/// quadratic accumulation. Apps never raise the quota for framework
+/// scans; `ui_markup_huge_model_tests.zig` is the compile-cost guard.
+pub fn typeScanQuota(comptime T: type) u32 {
+    const entries: u32 = switch (@typeInfo(T)) {
+        .@"struct" => |info| @intCast(info.fields.len + info.decls.len),
+        .@"union" => |info| @intCast(info.fields.len + info.decls.len),
+        .@"enum" => |info| @intCast(info.fields.len + info.decls.len),
+        else => 0,
+    };
+    return 2000 + entries * 64 + entries * entries;
+}
+
 fn collectItemTypes(comptime Model: type) []const type {
     comptime {
+        @setEvalBranchQuota(typeScanQuota(Model));
         var types: []const type = &.{};
         for (@typeInfo(Model).@"struct".fields) |field| {
             if (sliceElement(field.type)) |Element| {
@@ -1304,6 +1342,7 @@ pub fn asSlice(comptime Item: type, value: anytype) []const Item {
 /// `field_count`-style pair is the author's job; the resolver only follows
 /// what exists).
 fn resolveOn(comptime T: type, value: *const T, path: []const u8, arena: ?std.mem.Allocator) ?Value {
+    @setEvalBranchQuota(comptime typeScanQuota(T));
     const head = pathHead(path);
     const tail = pathTail(path);
     switch (@typeInfo(T)) {

@@ -343,10 +343,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// returned slices outlive the apply.
         tray_scratch: StatusItemScratch = .{},
 
+        /// By-value construction. The Model parameter and the returned
+        /// app both ride the caller's stack unless result-location
+        /// semantics happen to elide them — at multi-MB Model sizes that
+        /// is a stack-overflow trap (#101, the #14/#62 family: fine in
+        /// `main`, deadly in tests that keep any sizable local). Prefer
+        /// `create`/`destroy`, which never materialize the Model or the
+        /// app outside the heap allocation.
         pub fn init(backing: std.mem.Allocator, model: ModelT, options: Options) Self {
-            std.debug.assert(options.view != null or options.markup != null);
-            std.debug.assert((options.update != null) != (options.update_fx != null));
-            if (comptime !features.runtime_markup) std.debug.assert(options.markup == null);
+            assertOptions(options);
             return .{
                 .model = model,
                 .options = options,
@@ -361,6 +366,66 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 },
                 .effects = Effects.init(backing),
             };
+        }
+
+        /// #101: heap-allocate the app and construct every field — the
+        /// Model included — in place, so nothing app-sized ever rides
+        /// the stack. The Model starts as its default value; set fields
+        /// through the returned pointer before the app runs
+        /// (`app.model.count = 1`, `app.model.addTask(...)`). Pair with
+        /// `destroy`.
+        pub fn create(backing: std.mem.Allocator, options: Options) error{OutOfMemory}!*Self {
+            comptime {
+                for (@typeInfo(ModelT).@"struct".fields) |field| {
+                    if (field.default_value_ptr == null) @compileError(
+                        "UiApp.create default-initializes the Model in place, but Model field '" ++ field.name ++
+                            "' has no default value - give every Model field a default, or use initInPlace and assign app.model through the pointer yourself",
+                    );
+                }
+            }
+            const self = try backing.create(Self);
+            initInPlace(self, backing, options);
+            self.model = .{};
+            return self;
+        }
+
+        /// Counterpart to `create`: deinit and free the heap allocation.
+        /// Only for apps obtained from `create`.
+        pub fn destroy(self: *Self) void {
+            const backing = self.backing;
+            self.deinit();
+            backing.destroy(self);
+        }
+
+        /// In-place construction of everything BUT the Model, which is
+        /// left undefined: the seam for callers that produce the model
+        /// separately. Assign `self.model` immediately after — through
+        /// the pointer (`app.model = loadModel()` writes straight into
+        /// the app struct via result-location semantics, no stack copy
+        /// of the framework's making). Prefer `create` when the Model is
+        /// default-initializable.
+        pub fn initInPlace(self: *Self, backing: std.mem.Allocator, options: Options) void {
+            assertOptions(options);
+            self.* = .{
+                .model = undefined,
+                .options = options,
+                .backing = backing,
+                .arenas = .{
+                    std.heap.ArenaAllocator.init(backing),
+                    std.heap.ArenaAllocator.init(backing),
+                },
+                .markup_arenas = .{
+                    std.heap.ArenaAllocator.init(backing),
+                    std.heap.ArenaAllocator.init(backing),
+                },
+                .effects = Effects.init(backing),
+            };
+        }
+
+        fn assertOptions(options: Options) void {
+            std.debug.assert(options.view != null or options.markup != null);
+            std.debug.assert((options.update != null) != (options.update_fx != null));
+            if (comptime !features.runtime_markup) std.debug.assert(options.markup == null);
         }
 
         pub fn deinit(self: *Self) void {

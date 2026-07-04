@@ -158,6 +158,12 @@ pub const WidgetEventRouteEntry = struct {
 
 pub const WidgetEventRoute = struct {
     target: ?WidgetHit = null,
+    /// Where a press on `target` actually lands: the deepest widget on the
+    /// hit path that claims presses (`widgetClaimsPress`). Equal to
+    /// `target` for interactive widgets; the nearest pressable ancestor
+    /// when the raw hit is plain text/decoration; null when nothing on the
+    /// path is pressable.
+    press_target: ?WidgetHit = null,
     entries: []const WidgetEventRouteEntry = &.{},
 };
 

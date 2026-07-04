@@ -162,13 +162,16 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
-            // Handlers on non-hit-target kinds can never fire (the engine
-            // hit-tests through layout/decoration widgets); reject instead
-            // of silently accepting a dead handler. Mirrors the validator
+            // Value/text handlers on non-hit-target kinds can never fire
+            // (the element has no control or text behavior); reject
+            // instead of silently accepting a dead handler. on-press and
+            // on-toggle are exempt: a bound press handler makes any
+            // element a hit target, and presses on non-interactive
+            // content inside it fall through to it. Mirrors the validator
             // and the compiled engine's compile error.
             if (!canvas.widgetKindHitTarget(kind)) {
                 for (node.attrs) |attribute| {
-                    if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                    if (std.mem.startsWith(u8, attribute.name, "on-") and markup.deadHandlerOnNonHitTarget(attribute.name)) {
                         return self.failNode(node, markup.non_hit_target_handler_message);
                     }
                 }

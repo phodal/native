@@ -53,8 +53,46 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .view_label = self.views[index].label,
                 .pointer = pointer,
                 .target = route.target,
+                .press_target = canvasWidgetPressTargetForRoute(self, index, pointer, route),
                 .route = route.entries,
             };
+        }
+
+        /// The press target a routed pointer event dispatches to, with the
+        /// press-vs-drag disambiguation applied: a release that ends a
+        /// static-text selection drag is a selection gesture, not a click,
+        /// so it presses no one (the selection it made stays live for
+        /// copy). A plain click collapses the selection on `.down`, so it
+        /// reaches `.up` collapsed and the press lands normally.
+        fn canvasWidgetPressTargetForRoute(
+            self: *const Runtime,
+            view_index: usize,
+            pointer: canvas.WidgetPointerEvent,
+            route: canvas.WidgetEventRoute,
+        ) ?canvas.WidgetHit {
+            const press_target = route.press_target orelse return null;
+            if (pointer.phase != .up) return press_target;
+            const raw = route.target orelse return press_target;
+            if (raw.kind != .text) return press_target;
+            if (self.views[view_index].canvas_widget_selected_text_id != raw.id) return press_target;
+            const node = self.views[view_index].widgetLayoutTree().findById(raw.id) orelse return press_target;
+            const selection = node.widget.text_selection orelse return press_target;
+            if (selection.isCollapsed(node.widget.text.len)) return press_target;
+            return null;
+        }
+
+        /// Resolve the view's stored (raw) pressed widget id through the
+        /// press fall-through walk, so control activation compares the
+        /// same resolved ids the press target carries.
+        fn canvasWidgetResolvedPressedId(self: *const Runtime, view_index: usize, pressed_id: canvas.ObjectId) canvas.ObjectId {
+            if (pressed_id == 0) return 0;
+            const layout = self.views[view_index].widgetLayoutTree();
+            for (layout.nodes, 0..) |node, node_index| {
+                if (node.widget.id != pressed_id) continue;
+                const press_index = canvas.widgetPressTargetIndexFromNode(layout, node_index) orelse return 0;
+                return layout.nodes[press_index].widget.id;
+            }
+            return 0;
         }
 
         pub fn routeCanvasWidgetKeyboardInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetKeyboardEvent {
@@ -152,7 +190,12 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
 
-            const next_focus_id: canvas.ObjectId = if (pointer_event.target) |target| blk: {
+            // Focus follows the resolved press target (the row a press on
+            // plain text lands on), not the raw hit: clicking a list
+            // item's label focuses the item, and clicking an editable
+            // field (which claims its own presses) focuses the field
+            // exactly as before.
+            const next_focus_id: canvas.ObjectId = if (pointer_event.press_target) |target| blk: {
                 if (self.views[index].widgetLayoutTree().focusTargetById(target.id) != null) break :blk target.id;
                 break :blk 0;
             } else 0;
@@ -400,15 +443,22 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
 
+            // Control activation resolves through the press fall-through:
+            // the target is the claiming widget (a press on a list item's
+            // text activates the item) and the stored raw pressed id is
+            // resolved through the same walk so the two compare equal for
+            // one gesture. For controls hit directly (checkbox, slider,
+            // chip) both resolve to themselves — behavior is unchanged.
+            const resolved_pressed_id = canvasWidgetResolvedPressedId(self, index, self.views[index].canvas_widget_pressed_id);
             const toggle_animation = self.views[index].canvasWidgetToggleAnimationForPointer(
                 pointer_event.pointer,
-                pointer_event.target,
-                self.views[index].canvas_widget_pressed_id,
+                pointer_event.press_target,
+                resolved_pressed_id,
             );
             const dirty = try self.views[index].applyCanvasWidgetControlPointer(
                 pointer_event.pointer,
-                pointer_event.target,
-                self.views[index].canvas_widget_pressed_id,
+                pointer_event.press_target,
+                resolved_pressed_id,
             ) orelse return;
             if (toggle_animation) |animation| try runtime_canvas_widget_display.RuntimeCanvasWidgetDisplay(Runtime).scheduleCanvasWidgetToggleAnimation(self, index, animation);
             if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
@@ -488,21 +538,33 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
             const target = pointer_event.target orelse return;
+            // Engine-owned command dispatch fires on the resolved press
+            // target, so a `command` list item/data cell activates when
+            // its text children are pressed. The gesture discipline stays
+            // on the raw hit (the same widget must start and end the
+            // press); the release may land anywhere within the claiming
+            // widget's bounds or the raw target's own bounds.
+            const press = pointer_event.press_target orelse return;
             switch (pointer_event.pointer.phase) {
                 .down => {
-                    if (!canvasWidgetCommandFiresOnPointerDown(target.kind)) return;
-                    if (!target.bounds.normalized().containsPoint(pointer_event.pointer.point)) return;
-                    try dispatchCanvasWidgetCommandForId(self, app, index, target.id);
+                    if (!canvasWidgetCommandFiresOnPointerDown(press.kind)) return;
+                    if (!canvasWidgetPressReleaseInBounds(press, target, pointer_event.pointer.point)) return;
+                    try dispatchCanvasWidgetCommandForId(self, app, index, press.id);
                 },
                 .up => {
-                    if (canvasWidgetCommandFiresOnPointerDown(target.kind)) return;
+                    if (canvasWidgetCommandFiresOnPointerDown(press.kind)) return;
                     const pressed_id = if (pointer_event.pointer.captured_id != 0) pointer_event.pointer.captured_id else self.views[index].canvas_widget_pressed_id;
                     if (pressed_id != target.id) return;
-                    if (!target.bounds.normalized().containsPoint(pointer_event.pointer.point)) return;
-                    try dispatchCanvasWidgetCommandForId(self, app, index, target.id);
+                    if (!canvasWidgetPressReleaseInBounds(press, target, pointer_event.pointer.point)) return;
+                    try dispatchCanvasWidgetCommandForId(self, app, index, press.id);
                 },
                 .hover, .move, .cancel, .wheel => return,
             }
+        }
+
+        fn canvasWidgetPressReleaseInBounds(press: canvas.WidgetHit, target: canvas.WidgetHit, point: geometry.PointF) bool {
+            if (press.bounds.normalized().containsPoint(point)) return true;
+            return press.id != target.id and target.bounds.normalized().containsPoint(point);
         }
 
         pub fn dispatchCanvasWidgetCommandFromKeyboard(self: *Runtime, app: runtime_api.App(Runtime), keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {

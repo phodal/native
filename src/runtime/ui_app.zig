@@ -1007,10 +1007,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             if (self.installed) try self.rebuild(runtime, resize_event.window_id);
         }
 
+        /// Typed press dispatch resolves through the press target — the
+        /// deepest widget on the hit path that claims presses — so a press
+        /// on a pressable row's plain text children lands on the row's
+        /// `on_press`, and a release that ended a text-selection drag
+        /// (press_target = null) presses nothing.
         fn handlePointer(self: *Self, runtime: *Runtime, pointer_event: core.CanvasWidgetPointerEvent) anyerror!void {
             if (!std.mem.eql(u8, pointer_event.view_label, self.options.canvas_label)) return;
             const tree = self.tree orelse return;
-            const target = pointer_event.target orelse return;
+            const target = pointer_event.press_target orelse return;
             if (tree.msgForPointer(target.id, pointer_event.pointer.phase)) |msg| {
                 try self.dispatch(runtime, pointer_event.window_id, msg);
             }

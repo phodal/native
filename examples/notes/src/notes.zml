@@ -29,26 +29,18 @@
       <column width="216" gap="8" padding="10" background="surface">
         <text size="sm" foreground="text_muted">Folders</text>
         <column gap="2">
-          <!-- Pressable rows use the framework's hotspot idiom (the same
-               one timeline items use): the panel is the visual, and an
-               empty text leaf stacked over it carries the press handler,
-               so a click anywhere on the row dispatches — hit testing
-               resolves the deepest widget, which is this overlay. -->
+          <!-- Pressable rows are just pressable panels: the handler on
+               the panel makes it the press target, and clicks on the
+               plain text, icon, and badge inside fall through to it
+               (dragging still selects the text). -->
           <for each="folderRows" key="id" as="f">
-            <stack>
-              <panel selected="{f.selected}" padding="8">
-                <row gap="8" cross="center">
-                  <!-- The folder icon the registry finally has (the notes
-                       build authored it as an app SVG first). Icons are
-                       never hit-tested, so the row's hotspot overlay
-                       still receives every click. -->
-                  <icon name="folder" width="14" height="14" foreground="text_muted" />
-                  <text grow="1">{f.name}</text>
-                  <badge variant="secondary">{f.count}</badge>
-                </row>
-              </panel>
-              <text on-press="select_folder:{f.id}" selected="{f.selected}" role="listitem" label="{f.label}"></text>
-            </stack>
+            <panel on-press="select_folder:{f.id}" selected="{f.selected}" padding="8" role="listitem" label="{f.label}">
+              <row gap="8" cross="center">
+                <icon name="folder" width="14" height="14" foreground="text_muted" />
+                <text grow="1">{f.name}</text>
+                <badge variant="secondary">{f.count}</badge>
+              </row>
+            </panel>
           </for>
         </column>
         <spacer grow="1" />
@@ -66,18 +58,15 @@
         <scroll grow="1" label="Note list">
           <column gap="4">
             <for each="noteRows" key="id" as="n">
-              <stack>
-                <panel selected="{n.active}" padding="10">
-                  <column gap="4">
-                    <text>{n.title}</text>
-                    <row gap="8" cross="center">
-                      <text size="sm" foreground="text_muted" width="36">{n.time}</text>
-                      <text size="sm" foreground="text_muted" grow="1">{n.snippet}</text>
-                    </row>
-                  </column>
-                </panel>
-                <text on-press="open_note:{n.id}" selected="{n.active}" role="listitem" label="{n.title}"></text>
-              </stack>
+              <panel on-press="open_note:{n.id}" selected="{n.active}" padding="10" role="listitem" label="{n.title}">
+                <column gap="4">
+                  <text>{n.title}</text>
+                  <row gap="8" cross="center">
+                    <text size="sm" foreground="text_muted" width="36">{n.time}</text>
+                    <text size="sm" foreground="text_muted" grow="1">{n.snippet}</text>
+                  </row>
+                </column>
+              </panel>
             </for>
             <else>
               <panel padding="14" label="Empty note list">

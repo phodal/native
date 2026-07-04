@@ -52,6 +52,15 @@ pub const CanvasWidgetPointerEvent = struct {
     view_label: []const u8,
     pointer: canvas.WidgetPointerEvent,
     target: ?canvas.WidgetHit = null,
+    /// Where a press on `target` actually lands: the deepest widget on the
+    /// hit path that claims presses — equal to `target` for interactive
+    /// widgets, the nearest pressable ancestor when the raw hit is plain
+    /// text/decoration, and null when nothing on the path is pressable OR
+    /// when this `.up` ended a text-selection drag (dragging selects,
+    /// clicking presses). Press-family dispatch (typed `on_press`, engine
+    /// `command`s, control activation) resolves through this; hover,
+    /// cursor, and text selection stay on `target`.
+    press_target: ?canvas.WidgetHit = null,
     route: []const canvas.WidgetEventRouteEntry = &.{},
 };
 

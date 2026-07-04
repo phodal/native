@@ -80,6 +80,29 @@ fn widgetHitFromNode(node: WidgetLayoutNode, index: usize) WidgetHit {
     };
 }
 
+/// The widget a press that hit `hit` actually lands on: the deepest
+/// widget on the hit path (the target itself, then its ancestors) that
+/// claims presses (`widgetClaimsPress`). Plain text, icons, decorations,
+/// and layout containers let the press fall through; interactive kinds,
+/// editable text, scroll containers, overlay surfaces, and any widget
+/// with a bound press/toggle handler stop the walk. Returns null when
+/// nothing on the path claims — the press dispatches to no one, exactly
+/// like a click on dead space.
+pub fn widgetPressTargetIndexFromNode(layout: anytype, node_index: usize) ?usize {
+    var current: ?usize = node_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return null;
+        if (widget_access.widgetClaimsPress(layout.nodes[index].widget)) return index;
+        current = layout.nodes[index].parent_index;
+    }
+    return null;
+}
+
+pub fn widgetPressTargetForHit(layout: anytype, hit: WidgetHit) ?WidgetHit {
+    const index = widgetPressTargetIndexFromNode(layout, hit.index) orelse return null;
+    return widgetHitFromNode(layout.nodes[index], index);
+}
+
 fn isPointVisibleInWidgetAncestors(layout: anytype, node_index: usize, point: geometry.PointF) bool {
     var current = layout.nodes[node_index].parent_index;
     while (current) |parent_index| {
@@ -108,7 +131,11 @@ pub fn routeWidgetPointerEvent(layout: anytype, event: WidgetPointerEvent, token
         break :blk capturedWidgetPointerTarget(layout, event) orelse return .{ .entries = output[0..0] };
     } else hitTestWidgetLayout(layout, event.point, tokens) orelse return .{ .entries = output[0..0] };
     const entries = try routeWidgetEventPath(layout, target.index, output);
-    return .{ .target = target, .entries = entries };
+    return .{
+        .target = target,
+        .press_target = widgetPressTargetForHit(layout, target),
+        .entries = entries,
+    };
 }
 
 fn eventUsesPointerCapture(event: WidgetPointerEvent) bool {

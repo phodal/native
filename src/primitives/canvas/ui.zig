@@ -814,16 +814,19 @@ pub fn Ui(comptime Msg: type) type {
             /// Hairline connector from the indicator toward the next item;
             /// authors clear it on the last item.
             connector: bool = true,
-            /// Whole-item press: adds a trailing chevron and a full-area
-            /// press hotspot (the paragraph-link overlay pattern), focusable
-            /// with role `listitem`.
+            /// Whole-item press: adds a trailing chevron and binds the
+            /// press to the item's root, focusable with role `listitem`.
+            /// A click anywhere on the item dispatches — presses on the
+            /// title/description/meta text fall through to the root
+            /// (dragging still selects the text).
             on_press: ?Msg = null,
             selected: bool = false,
         };
 
         /// One timeline/ledger item: leading status indicator (plus
         /// connector), a title/description/meta content column, and — when
-        /// pressable — a trailing chevron and a full-area press overlay.
+        /// pressable — a trailing chevron with `on_press` bound to the
+        /// item's root (presses on the content fall through to it).
         pub fn timelineItem(self: *Self, options: TimelineItemOptions) Node {
             const dot = options.indicator.len == 0;
             const indicator = self.el(.badge, .{
@@ -874,26 +877,18 @@ pub fn Ui(comptime Msg: type) type {
             }
             const row_node = self.el(.row, .{ .gap = 10, .padding = 8 }, .{row_children[0..row_len]});
 
-            if (options.on_press == null) {
-                return self.el(.stack, .{
-                    .key = options.key,
-                    .global_key = options.global_key,
-                    .selected = options.selected,
-                    .semantics = item_semantics,
-                }, .{row_node});
-            }
-            // The full-area press hotspot rides an empty text leaf over
-            // the content — the same convention paragraph link hotspots
-            // use — so a click anywhere on the item dispatches on_press.
-            const overlay = self.el(.text, .{
-                .on_press = options.on_press,
-                .selected = options.selected,
-                .semantics = item_semantics,
-            }, .{});
+            // The press binds to the item's root: a bound handler makes
+            // the stack a hit target, and presses on the plain
+            // title/description/meta text fall through to it (dragging
+            // still selects the text). No overlay, no duplicated
+            // handlers.
             return self.el(.stack, .{
                 .key = options.key,
                 .global_key = options.global_key,
-            }, .{ row_node, overlay });
+                .selected = options.selected,
+                .semantics = item_semantics,
+                .on_press = options.on_press,
+            }, .{row_node});
         }
 
         pub const NavOptions = struct {

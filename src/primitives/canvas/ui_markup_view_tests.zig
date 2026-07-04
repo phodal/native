@@ -526,7 +526,7 @@ test "markup build failures carry position and message" {
         "<column>\n  <button on-press=\"toggle\">X</button>\n</column>",
         "<column>\n  <for each=\"nope\" as=\"t\"><text>{t}</text></for>\n</column>",
         "<column bogus-attr=\"1\" />",
-        "<column on-press=\"add\">\n  <text>dead handler</text>\n</column>",
+        "<column on-input=\"draft\">\n  <text>dead handler</text>\n</column>",
     };
     for (cases) |source| {
         var view = try InboxMarkup.init(arena, source);
@@ -537,17 +537,17 @@ test "markup build failures carry position and message" {
     }
 }
 
-test "handlers on non-hit-target elements fail the build with the teaching message" {
+test "dead value handlers on non-hit-target elements fail the build with the teaching message" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const model = Model{};
 
-    // Both a pointer handler on a layout container and a toggle handler on
-    // a row container are dead — the engine never hit-tests those kinds.
+    // Value/text handlers on layout containers are dead — the element has
+    // no control or text behavior to bind.
     const sources = [_][]const u8{
-        "<column>\n  <row on-press=\"add\">\n    <text>press me</text>\n  </row>\n</column>",
-        "<column>\n  <toggle-group on-toggle=\"add\">\n    <toggle-button>A</toggle-button>\n  </toggle-group>\n</column>",
+        "<column>\n  <row on-change=\"add\">\n    <text>press me</text>\n  </row>\n</column>",
+        "<column>\n  <toggle-group on-submit=\"add\">\n    <toggle-button>A</toggle-button>\n  </toggle-group>\n</column>",
     };
     for (sources) |source| {
         var view = try InboxMarkup.init(arena, source);
@@ -561,6 +561,28 @@ test "handlers on non-hit-target elements fail the build with the teaching messa
     var view = try InboxMarkup.init(arena, "<column>\n  <list-item on-press=\"add\">press me</list-item>\n</column>");
     var ui = InboxUi.init(arena);
     _ = try view.build(&ui, &model);
+}
+
+test "press handlers on layout elements build and stamp the press action" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    // A pressable row with plain text children: the bound handler makes
+    // the row a widget-level hit target (semantics.actions.press) and the
+    // press fall-through routes clicks on the text to it.
+    var view = try InboxMarkup.init(arena, "<column>\n  <row on-press=\"add\" gap=\"8\">\n    <text>press me</text>\n  </row>\n</column>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const row = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.row, row.kind);
+    try testing.expect(row.semantics.actions.press);
+    try testing.expect(canvas.widgetIsHitTarget(row));
+    try testing.expect(canvas.widgetClaimsPress(row));
+    try testing.expectEqual(Msg.add, tree.msgForPointer(row.id, .up).?);
+    // The plain text child stays fall-through: no press claim of its own.
+    try testing.expect(!canvas.widgetClaimsPress(row.children[0]));
 }
 
 test "gap on stacking containers fails the build with the teaching message" {
@@ -1511,10 +1533,12 @@ test "catalog elements build the hand-written tree and dispatch typed messages" 
     const active_step = findByRoleLabel(markup_tree.root, .listitem, "Review · 1 (active)").?;
     try testing.expect(active_step.state.selected);
     try testing.expect(findByRoleLabel(markup_tree.root, .listitem, "Work (completed)") != null);
-    // Composite timeline: an item press dispatches from the full-area
-    // overlay carrying the item's payload.
-    const ledger_overlay = findByRoleLabel(markup_tree.root, .listitem, "Pears").?;
-    try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(ledger_overlay.id, .up).?.pick_row);
+    // Composite timeline: an item press dispatches from the item's root
+    // (the bound handler makes it a hit target; presses on the content
+    // fall through to it).
+    const ledger_item = findByRoleLabel(markup_tree.root, .listitem, "Pears").?;
+    try testing.expect(canvas.widgetClaimsPress(ledger_item));
+    try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(ledger_item.id, .up).?.pick_row);
     const prev_button = findByText(markup_tree.root, .button, "Prev").?;
     try testing.expectEqual(@as(u32, 0), markup_tree.msgForPointer(prev_button.id, .up).?.set_page);
 

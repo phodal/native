@@ -1783,3 +1783,177 @@ test "ui app dispatches native context menu selections as typed messages" {
     try std.testing.expectEqual(@as(u32, 1), app_state.model.deleted);
     try std.testing.expectEqual(@as(u32, 0), app_state.model.completed);
 }
+
+// ------------------------------------------------- press fall-through fixture
+
+const RowsModel = struct {
+    picked: u32 = 0,
+    picks: u32 = 0,
+    button_hits: u32 = 0,
+};
+
+const RowsMsg = union(enum) {
+    pick: u32,
+    button_hit,
+};
+
+const RowsApp = ui_app_model.UiApp(RowsModel, RowsMsg);
+
+fn rowsUpdate(model: *RowsModel, msg: RowsMsg) void {
+    switch (msg) {
+        .pick => |id| {
+            model.picked = id;
+            model.picks += 1;
+        },
+        .button_hit => model.button_hits += 1,
+    }
+}
+
+fn rowsView(ui: *RowsApp.Ui, model: *const RowsModel) RowsApp.Ui.Node {
+    _ = model;
+    // The showcase row shape the press fall-through exists for: pressable
+    // panels whose visible content is plain (selectable) text — no
+    // empty-text overlays, no duplicated handlers on the text leaves.
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.panel(.{ .on_press = RowsMsg{ .pick = 1 }, .height = 48 }, .{
+            ui.row(.{ .gap = 8, .padding = 8 }, .{
+                ui.text(.{ .grow = 1 }, "Alpha row label"),
+            }),
+        }),
+        ui.panel(.{ .on_press = RowsMsg{ .pick = 2 }, .height = 48 }, .{
+            ui.row(.{ .gap = 8, .padding = 8 }, .{
+                ui.text(.{ .grow = 1 }, "Beta row label"),
+                ui.button(.{ .on_press = .button_hit }, "Open"),
+            }),
+        }),
+    });
+}
+
+fn rowsOptions() RowsApp.Options {
+    return .{
+        .name = "ui-app-rows",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = rowsUpdate,
+        .view = rowsView,
+    };
+}
+
+fn rowsWidgetCenter(runtime: *core.Runtime, id: canvas.ObjectId) !geometry.PointF {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    return layout.findById(id).?.frame.normalized().center();
+}
+
+fn rowsPointer(kind: zero_platform.GpuSurfaceInputKind, point: geometry.PointF, timestamp_ns: u64) zero_platform.Event {
+    return .{ .gpu_surface_input = .{
+        .label = canvas_label,
+        .kind = kind,
+        .timestamp_ns = timestamp_ns,
+        .x = point.x,
+        .y = point.y,
+    } };
+}
+
+fn rowsTextSelection(runtime: *core.Runtime, id: canvas.ObjectId) !?canvas.TextSelection {
+    const layout = try runtime.canvasWidgetLayout(1, canvas_label);
+    return layout.findById(id).?.widget.text_selection;
+}
+
+test "presses on a pressable row's plain text land on the row, live and via automation" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(RowsApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = RowsApp.init(std.heap.page_allocator, .{}, rowsOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    const tree = app_state.tree.?;
+    const alpha_row_id = tree.root.children[0].id;
+    const alpha_text_id = findIn(tree.root, .text, "Alpha row label").?;
+    const button_id = findIn(tree.root, .button, "Open").?;
+
+    // A live click on the row's plain text lands on the row's on_press.
+    const text_center = try rowsWidgetCenter(&harness.runtime, alpha_text_id);
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_down, text_center, 2_000_000));
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_up, text_center, 2_100_000));
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.picks);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.picked);
+
+    // A button inside a pressable row claims its own press — the button
+    // wins, the row does not fire.
+    const button_center = try rowsWidgetCenter(&harness.runtime, button_id);
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_down, button_center, 3_000_000));
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_up, button_center, 3_100_000));
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.button_hits);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.picks);
+
+    // The automation click path agrees with the live hit test: clicking
+    // the row id (whose center is covered by its text) and clicking the
+    // text id both land on the row.
+    var command_buffer: [96]u8 = undefined;
+    const row_click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, alpha_row_id });
+    try harness.runtime.dispatchAutomationCommand(app, row_click);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.picks);
+    var text_command_buffer: [96]u8 = undefined;
+    const text_click = try std.fmt.bufPrint(&text_command_buffer, "widget-click {s} {d}", .{ canvas_label, alpha_text_id });
+    try harness.runtime.dispatchAutomationCommand(app, text_click);
+    try std.testing.expectEqual(@as(u32, 3), app_state.model.picks);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.button_hits);
+}
+
+test "selection drag inside a pressable row selects without pressing; a click still presses" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(RowsApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = RowsApp.init(std.heap.page_allocator, .{}, rowsOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+
+    const alpha_text_id = findIn(app_state.tree.?.root, .text, "Alpha row label").?;
+    const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    const text_frame = layout.findById(alpha_text_id).?.frame.normalized();
+    const start = geometry.PointF.init(text_frame.x + 2, text_frame.center().y);
+    const end = geometry.PointF.init(text_frame.x + text_frame.width * 0.7, text_frame.center().y);
+
+    // Down + drag + up: the gesture selects text within the row and
+    // presses NOTHING — dragging selects, clicking presses.
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_down, start, 2_000_000));
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_drag, end, 2_050_000));
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_up, end, 2_100_000));
+    const selection = (try rowsTextSelection(&harness.runtime, alpha_text_id)).?;
+    try std.testing.expect(!selection.isCollapsed("Alpha row label".len));
+    try std.testing.expectEqual(@as(u32, 0), app_state.model.picks);
+
+    // A plain click on the same text collapses the selection on the way
+    // down and the press lands on the row.
+    const center = try rowsWidgetCenter(&harness.runtime, alpha_text_id);
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_down, center, 3_000_000));
+    try harness.runtime.dispatchPlatformEvent(app, rowsPointer(.pointer_up, center, 3_100_000));
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.picks);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.picked);
+}

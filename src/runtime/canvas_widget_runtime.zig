@@ -241,11 +241,11 @@ pub fn canvasWidgetClipsContent(widget: canvas.Widget) bool {
 }
 
 pub fn canvasWidgetRuntimeHitTarget(widget: canvas.Widget) bool {
-    if (widget.id == 0 or widget.state.disabled) return false;
-    // Kind-level hit-target-ness lives in one place (canvas
-    // widget_access.zig) so the runtime, the engines' hit test, and the
-    // markup validation of pointer handlers can never drift.
-    return canvas.widgetKindHitTarget(widget.kind);
+    // Widget-level hit-target-ness lives in one place (canvas
+    // widget_access.zig: kind predicate plus bound press/toggle handlers)
+    // so the runtime, the engines' hit test, and the markup validation of
+    // pointer handlers can never drift.
+    return canvas.widgetIsHitTarget(widget);
 }
 
 pub fn canvasWidgetDismissibleSurfaceKind(kind: canvas.WidgetKind) bool {

@@ -553,13 +553,16 @@ pub const known_events = [_][]const u8{ "press", "toggle", "change", "submit", "
 pub const on_scroll_element_message = "on-scroll is only supported on scroll - the runtime emits scroll offsets for scroll containers, so the handler belongs on the scroll element itself";
 pub const on_scroll_payload_message = "on-scroll takes a bare Msg tag whose payload is the post-scroll state (a canvas.ScrollState variant, like activity_scrolled: canvas.ScrollState)";
 
-/// Elements whose widget kind the engine never hit-tests: layout and
-/// decoration only, so pointer events pass through them and an `on-*`
-/// handler on one can never fire. The validator rejects handlers here
-/// instead of letting them silently do nothing. Derived from the engine's
-/// hit-target predicate (`canvas.widgetKindHitTarget` in
-/// widget_access.zig); a test in ui_markup_view_tests.zig keeps this name
-/// list and that predicate in lockstep so drift is impossible.
+/// Elements whose widget KIND the engine never hit-tests: layout and
+/// decoration only. A bound `on-press`/`on-toggle` makes any element a
+/// hit target (widget-level: the handler stamps the press/toggle action,
+/// and presses on non-interactive content inside it fall through to it),
+/// so those two are legal everywhere; the remaining value/text handlers
+/// (`on-change`/`on-submit`/`on-input`) have no behavior to bind to on
+/// these elements and stay validation errors. Derived from the engine's
+/// kind predicate (`canvas.widgetKindHitTarget` in widget_access.zig); a
+/// test in ui_markup_view_tests.zig keeps this name list and that
+/// predicate in lockstep so drift is impossible.
 pub const known_non_hit_target_element_names = [_][]const u8{
     "row",        "column",      "stack",     "spacer",       "grid",
     "list",       "table",       "table-row", "breadcrumb",   "button-group",
@@ -568,7 +571,17 @@ pub const known_non_hit_target_element_names = [_][]const u8{
     "icon",
 };
 
-pub const non_hit_target_handler_message = "on-* handlers never fire here: this element is layout/decoration and is never a hit target - put the handler on a leaf like list-item or text, or on a control (button, checkbox) inside it";
+/// The handlers that stay dead on layout/decoration elements: press and
+/// toggle make any element pressable, scroll has its own element-scoped
+/// rule (`on_scroll_element_message`), and these three bind control/text
+/// behavior the element does not have.
+pub fn deadHandlerOnNonHitTarget(attr_name: []const u8) bool {
+    return std.mem.eql(u8, attr_name, "on-change") or
+        std.mem.eql(u8, attr_name, "on-submit") or
+        std.mem.eql(u8, attr_name, "on-input");
+}
+
+pub const non_hit_target_handler_message = "on-change/on-submit/on-input never fire here: this element has no control or text behavior - put them on a control (input, checkbox, slider) inside it (on-press/on-toggle are fine anywhere: a bound press handler makes any element pressable, and clicks on plain text or icons inside it fall through to it)";
 
 /// Elements whose widget kind layers its children on top of each other
 /// (every child gets the full content box), so `gap` can never space
@@ -977,7 +990,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         if (!std.mem.eql(u8, node.name, "scroll")) {
                             return .{ .line = attribute.line, .column = attribute.column, .message = on_scroll_element_message };
                         }
-                    } else if (nameInList(node.name, &known_non_hit_target_element_names)) {
+                    } else if (nameInList(node.name, &known_non_hit_target_element_names) and deadHandlerOnNonHitTarget(attribute.name)) {
                         return .{ .line = attribute.line, .column = attribute.column, .message = non_hit_target_handler_message };
                     }
                     if (parseMessageExpression(attribute.value) == null) {

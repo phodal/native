@@ -66,13 +66,15 @@ pub fn isDragSource(widget: Widget) bool {
         (widget.semantics.actions.drag or defaultSemanticActions(widget).drag);
 }
 
-/// Widget kinds the engine hit-tests. Kinds listed `false` are layout and
+/// Widget KINDS the engine hit-tests. Kinds listed `false` are layout and
 /// decoration only: pointer events pass through them to whatever they
-/// contain, so `on_press`-style handlers on them can never fire. This is
-/// THE single source of truth for hit-target-ness — the runtime's
+/// contain. This is the kind-level half of hit-target-ness — the runtime's
 /// `canvasWidgetRuntimeHitTarget`, both markup engines, and (via a name
 /// list kept in sync by a test in ui_markup_view_tests.zig) the markup
-/// validator all derive from it.
+/// validator all derive from it. The widget-level predicate is
+/// `isHitTarget`: a bound press/toggle handler (stamped into
+/// `semantics.actions` by the builder and both markup engines) makes ANY
+/// widget a hit target, so `on_press` on a row/stack/icon works.
 pub fn widgetKindHitTarget(kind: WidgetKind) bool {
     return switch (kind) {
         .row, .column, .grid, .data_grid, .table, .data_row, .list, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .stack, .tooltip, .icon, .image, .avatar, .badge, .separator, .skeleton, .spinner => false,
@@ -82,7 +84,63 @@ pub fn widgetKindHitTarget(kind: WidgetKind) bool {
 
 pub fn isHitTarget(widget: Widget) bool {
     if (widget.id == 0 or widget.state.disabled) return false;
+    if (widget.semantics.actions.press or widget.semantics.actions.toggle) return true;
     return widgetKindHitTarget(widget.kind);
+}
+
+/// Widget KINDS that stop (claim) a press gesture themselves: interactive
+/// controls, editable text (a click places the caret, never activates the
+/// row around it), scroll containers, and dismissible overlay surfaces (a
+/// click inside a dialog must never activate what it covers). Hit-target
+/// decorations — plain text, panel, card, alert, bubble, status_bar,
+/// progress — are deliberately NOT here: presses fall through them to the
+/// nearest claiming ancestor (`widgetPressTargetForHit`).
+pub fn widgetKindClaimsPress(kind: WidgetKind) bool {
+    return switch (kind) {
+        .button,
+        .toggle_button,
+        .icon_button,
+        .select,
+        .menu_item,
+        .list_item,
+        .data_cell,
+        .segmented_control,
+        .checkbox,
+        .radio,
+        .switch_control,
+        .toggle,
+        .accordion,
+        .slider,
+        .resizable,
+        .input,
+        .text_field,
+        .search_field,
+        .combobox,
+        .textarea,
+        .scroll_view,
+        .dialog,
+        .drawer,
+        .sheet,
+        .popover,
+        .menu_surface,
+        .dropdown_menu,
+        => true,
+        else => false,
+    };
+}
+
+/// Whether a press gesture stops at this widget instead of falling
+/// through to the nearest claiming ancestor: an interactive kind
+/// (`widgetKindClaimsPress`), or ANY widget with a bound press/toggle
+/// handler (`on_press`/`on_toggle` stamp `semantics.actions`, and
+/// engine-owned `command` dispatch only exists on kinds already claiming).
+/// Disabled widgets never claim — the hit test skips them too, so a press
+/// on a disabled control keeps today's behavior of landing on whatever is
+/// around it.
+pub fn widgetClaimsPress(widget: Widget) bool {
+    if (widget.id == 0 or widget.state.disabled) return false;
+    if (widget.semantics.actions.press or widget.semantics.actions.toggle) return true;
+    return widgetKindClaimsPress(widget.kind);
 }
 
 pub fn booleanControlSelected(widget: Widget) bool {

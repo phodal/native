@@ -55,7 +55,7 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `status-bar` | status bar | content only, no children |
 | `separator`, `spacer` | separator, flexible space | `separator` is axis-aware — a horizontal rule in a `column`, a thin vertical divider in a `row`; give `spacer` a `grow` |
 | `skeleton`, `spinner` | loading leaves | size `skeleton` with `width`/`height` |
-| `icon` | built-in vector icon leaf | `name` picks one of the curated Lucide-style icons (literal, compile-checked; 41 names — transport, files/folders, arrows/chevrons, theming, GitHub vocabulary); tint with `foreground`, size with `width`/`height`; never a hit target — decoration inside pressable rows passes clicks through |
+| `icon` | built-in vector icon leaf | `name` picks one of the curated Lucide-style icons (literal, compile-checked; 41 names — transport, files/folders, arrows/chevrons, theming, GitHub vocabulary); tint with `foreground`, size with `width`/`height`; never a press target — decoration inside pressable rows passes clicks through to the row (give the icon its own `on-press` to make it an icon hotspot) |
 | `markdown` | rendered markdown | leaf; `source` is one `{binding}` — see [Rich text](#rich-text-inline-spans-and-markdown) |
 | `stepper` > `step` | stage stepper | `active="{index}"` derives each step's completed/active/pending state; steps are text leaves joined by connectors — see [Pipeline components](#pipeline-components-stepper-timeline-and-nav) |
 | `timeline` > `timeline-item` | ledger/timeline list | items are leaves whose `title`/`description`/`meta`/`indicator` attributes carry the content; `on-press` makes the whole item pressable |
@@ -155,7 +155,7 @@ draft: canvas.TextBuffer(64) = .{},
 
 `on-scroll` (on the `scroll` element; `Ui.scrollMsg(.tag)` on `on_scroll` in Zig views) names a variant whose payload is `canvas.ScrollState`: after every user scroll — wheel, kinetic momentum, keyboard, accessibility — the runtime delivers the post-scroll `offset`, `viewport_extent`, and `content_extent`, so long content can page or lazy-load a bounded window that follows the scrollbar. The payload carries the offset the runtime already applied: store it in the model and echo it back through the scroll's `value`, and rebuilds never fight live scrolling.
 
-Handlers belong on hit-target elements only. Layout containers (`row`, `column`, `stack`, `grid`, `tabs`, `toggle-group`, ...) and decoration leaves (`badge`, `avatar`, `tooltip`, `separator`, ...) are never hit-tested, so an `on-*` on one could never fire — the validator, both engines, and the LSP reject it with a teaching error instead of accepting a dead handler. Put the handler on a leaf like `list-item` or `text`, or on a control inside the container.
+Presses follow one rule: a click lands on the nearest pressable widget under the pointer — plain text, icons, images, badges, and layout containers let it fall through to their closest pressable ancestor, and dragging still selects text. Any element with a bound `on-press`/`on-toggle` is pressable (the handler makes it a hit target), so a pressable row is just `<panel on-press="open:{id}">` — or `<row on-press=...>` — with plain text children: no overlays, no duplicated handlers. Nested pressables resolve to the deepest one (a button inside a pressable row wins); editable text fields, scroll containers, and modal surfaces always claim their own presses. Value/text handlers (`on-change`, `on-submit`, `on-input`) still belong on controls only — the validator, both engines, and the LSP reject them on layout/decoration elements with a teaching error.
 
 ## Native scrolling and context menus
 
@@ -335,7 +335,7 @@ A **timeline** is a ledger list (shadcn timeline conventions: indicator + separa
 </timeline>
 ```
 
-The leading badge is a small dot colored by `variant` (map run outcomes: `primary` for done, `destructive` for errors, `outline` for stopped, ...) or carries `indicator` text ("✓"); `connector="false"` ends the rail on the last item. With `on-press`, the item grows a trailing chevron and a full-area press hotspot (the same overlay convention paragraph links use), focusable with role `listitem` — a click anywhere on the item dispatches the message. There is no built-in hover fill or line-clamping on the description in v1.
+The leading badge is a small dot colored by `variant` (map run outcomes: `primary` for done, `destructive` for errors, `outline` for stopped, ...) or carries `indicator` text ("✓"); `connector="false"` ends the rail on the last item. With `on-press`, the item grows a trailing chevron and the press binds to the item's root, focusable with role `listitem` — clicks on the title/description/meta fall through to it, so a click anywhere on the item dispatches the message (dragging still selects the text). There is no built-in hover fill or line-clamping on the description in v1.
 
 A **nav** container is the within-pane navigation stack (ledger item → step transcript, back button pops). Zig-only for now — markup swaps views with `<if>`:
 

@@ -681,7 +681,7 @@ test "stepper derives completed/active/pending states from the active index" {
     try testing.expect(findSemanticsLabel(tree2.root, "Ready (completed)") != null);
 }
 
-test "timeline items compose indicator, content, chevron, and a press overlay" {
+test "timeline items compose indicator, content, chevron, and a root press" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -706,15 +706,20 @@ test "timeline items compose indicator, content, chevron, and a press overlay" {
 
     try testing.expectEqual(canvas.WidgetRole.list, tree.root.semantics.role);
     const first = tree.root.children[0];
-    // Pressable: press overlay is the last stack child, focusable, and
-    // dispatches the item's message from anywhere on the item.
-    const overlay = first.children[first.children.len - 1];
-    try testing.expectEqual(canvas.WidgetKind.text, overlay.kind);
-    try testing.expectEqual(canvas.WidgetRole.listitem, overlay.semantics.role);
-    try testing.expect(overlay.semantics.focusable);
-    try testing.expectEqualStrings("Coder finished", overlay.semantics.label);
-    const msg = tree.msgForPointer(overlay.id, .up).?;
+    // Pressable: the press binds to the item's root stack (no overlay, no
+    // duplicated handlers) — the bound handler makes the stack a hit
+    // target and presses on the content fall through to it.
+    try testing.expectEqual(canvas.WidgetKind.stack, first.kind);
+    try testing.expectEqual(canvas.WidgetRole.listitem, first.semantics.role);
+    try testing.expect(first.semantics.focusable);
+    try testing.expect(first.semantics.actions.press);
+    try testing.expect(canvas.widgetIsHitTarget(first));
+    try testing.expect(canvas.widgetClaimsPress(first));
+    try testing.expectEqualStrings("Coder finished", first.semantics.label);
+    const msg = tree.msgForPointer(first.id, .up).?;
     try testing.expectEqual(@as(u32, 7), msg.toggle);
+    // No empty-text press overlay remains anywhere in the item.
+    try testing.expectEqual(@as(usize, 1), first.children.len);
 
     // Indicator dot badge, connector separator, muted description + meta,
     // trailing chevron.
@@ -730,7 +735,7 @@ test "timeline items compose indicator, content, chevron, and a press overlay" {
     const meta = findTextContaining(first, "claude · sonnet");
     try testing.expectEqual(canvas.TextSpanColor.text_muted, meta.?.spans[0].color.?);
 
-    // Non-pressable: no overlay, no chevron, no connector.
+    // Non-pressable: not a press claimer, no chevron, no connector.
     const second = tree.root.children[1];
     try testing.expectEqual(@as(usize, 1), second.children.len);
     try testing.expectEqual(canvas.WidgetRole.listitem, second.semantics.role);
@@ -829,4 +834,137 @@ test "gap on a stacking container warns in Debug but never fails the build" {
     try testing.expectEqual(canvas.WidgetKind.panel, tree.root.kind);
     try testing.expectEqual(@as(f32, 8), tree.root.layout.gap);
     try testing.expectEqual(@as(usize, 2), tree.root.children.len);
+}
+
+// ------------------------------------------------- press fall-through
+
+fn layoutCenterById(layout: canvas.WidgetLayoutTree, id: canvas.ObjectId) geometry.PointF {
+    const node = layout.findById(id).?;
+    return node.frame.normalized().center();
+}
+
+test "presses on plain text fall through to the nearest pressable ancestor" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var ui = InboxUi.init(arena_state.allocator());
+
+    // The notes/soundboard row shape: a pressable panel whose visible
+    // content is plain text. No empty-text overlay, no duplicated
+    // handlers — the press falls through the text to the panel.
+    const tree = try ui.finalize(ui.column(.{ .gap = 8 }, .{
+        ui.panel(.{ .on_press = Msg{ .toggle = 1 }, .height = 48 }, .{
+            ui.row(.{ .gap = 8, .padding = 8 }, .{
+                ui.text(.{ .grow = 1 }, "Ship the IR"),
+                ui.button(.{ .on_press = Msg{ .toggle = 99 } }, "Go"),
+            }),
+        }),
+        // Nested pressables: the deepest pressable wins.
+        ui.panel(.{ .on_press = Msg{ .toggle = 2 }, .height = 48 }, .{
+            ui.panel(.{ .on_press = Msg{ .toggle = 3 }, .height = 24 }, .{
+                ui.text(.{}, "Inner"),
+            }),
+        }),
+    }));
+
+    var layout_nodes: [64]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 400, 300), &layout_nodes);
+
+    const outer_row_panel = tree.root.children[0];
+    const text_id = findByKind(outer_row_panel, .text).?.id;
+    const button_id = findByKind(outer_row_panel, .button).?.id;
+    const inner_panel = tree.root.children[1].children[0];
+    const inner_text_id = findByKind(inner_panel, .text).?.id;
+
+    // 1. A press on the plain text lands on the pressable row panel.
+    const text_hit = layout.hitTest(layoutCenterById(layout, text_id)).?;
+    try testing.expectEqual(text_id, text_hit.id);
+    const row_press = canvas.widgetPressTargetForHit(layout, text_hit).?;
+    try testing.expectEqual(outer_row_panel.id, row_press.id);
+    try testing.expectEqual(@as(u32, 1), tree.msgForPointer(row_press.id, .up).?.toggle);
+
+    // 2. A button inside the row claims its own press — the button wins.
+    const button_hit = layout.hitTest(layoutCenterById(layout, button_id)).?;
+    try testing.expectEqual(button_id, button_hit.id);
+    const button_press = canvas.widgetPressTargetForHit(layout, button_hit).?;
+    try testing.expectEqual(button_id, button_press.id);
+    try testing.expectEqual(@as(u32, 99), tree.msgForPointer(button_press.id, .up).?.toggle);
+
+    // 3. Nested pressables: the deepest pressable ancestor wins.
+    const inner_hit = layout.hitTest(layoutCenterById(layout, inner_text_id)).?;
+    const inner_press = canvas.widgetPressTargetForHit(layout, inner_hit).?;
+    try testing.expectEqual(inner_panel.id, inner_press.id);
+    try testing.expectEqual(@as(u32, 3), tree.msgForPointer(inner_press.id, .up).?.toggle);
+}
+
+test "editable text and overlay surfaces stop the press fall-through" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var ui = InboxUi.init(arena_state.allocator());
+
+    const tree = try ui.finalize(ui.column(.{ .gap = 8 }, .{
+        // A text field inside a pressable panel: a click places the
+        // caret; it must never activate the panel.
+        ui.panel(.{ .on_press = Msg{ .toggle = 1 }, .height = 56 }, .{
+            ui.textField(.{ .placeholder = "Type here", .grow = 1 }),
+        }),
+        // A dialog inside a pressable panel: clicks inside the surface
+        // must never activate what it covers.
+        ui.panel(.{ .on_press = Msg{ .toggle = 2 }, .height = 96 }, .{
+            ui.el(.dialog, .{ .height = 64 }, .{
+                ui.text(.{}, "Body copy"),
+            }),
+        }),
+    }));
+
+    var layout_nodes: [64]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 400, 300), &layout_nodes);
+
+    const field_id = findByKind(tree.root, .text_field).?.id;
+    const field_hit = layout.hitTest(layoutCenterById(layout, field_id)).?;
+    const field_press = canvas.widgetPressTargetForHit(layout, field_hit).?;
+    try testing.expectEqual(field_id, field_press.id);
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(field_press.id, .up));
+
+    const body_id = findByKind(tree.root.children[1], .text).?.id;
+    const body_hit = layout.hitTest(layoutCenterById(layout, body_id)).?;
+    const body_press = canvas.widgetPressTargetForHit(layout, body_hit).?;
+    try testing.expectEqual(canvas.WidgetKind.dialog, body_press.kind);
+    try testing.expectEqual(@as(?Msg, null), tree.msgForPointer(body_press.id, .up));
+}
+
+test "a bound press handler makes layout containers hit targets" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var ui = InboxUi.init(arena_state.allocator());
+
+    // The timeline-item shape: a pressable stack/row without panel
+    // chrome. The bound handler makes the container a widget-level hit
+    // target, so both bare-container clicks and fall-through clicks on
+    // its text land on it.
+    const tree = try ui.finalize(ui.column(.{}, .{
+        ui.row(.{ .on_press = Msg{ .toggle = 7 }, .height = 40, .gap = 8 }, .{
+            ui.text(.{}, "Row label"),
+        }),
+    }));
+
+    const row = tree.root.children[0];
+    try testing.expect(row.semantics.actions.press);
+    try testing.expect(canvas.widgetIsHitTarget(row));
+    try testing.expect(canvas.widgetClaimsPress(row));
+
+    var layout_nodes: [16]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 400, 300), &layout_nodes);
+
+    // Click on the label: falls through to the row.
+    const text_id = findByKind(row, .text).?.id;
+    const text_hit = layout.hitTest(layoutCenterById(layout, text_id)).?;
+    try testing.expectEqual(row.id, canvas.widgetPressTargetForHit(layout, text_hit).?.id);
+
+    // Click on the bare row area (right of the text): hits the row
+    // directly now that the handler made it a hit target.
+    const row_frame = layout.findById(row.id).?.frame.normalized();
+    const bare_point = geometry.PointF.init(row_frame.maxX() - 4, row_frame.center().y);
+    const bare_hit = layout.hitTest(bare_point).?;
+    try testing.expectEqual(row.id, bare_hit.id);
+    try testing.expectEqual(@as(u32, 7), tree.msgForPointer(row.id, .up).?.toggle);
 }

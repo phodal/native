@@ -954,3 +954,60 @@ test "compiled text-alignment and grid columns match the interpreter and the han
     try testing.expectEqual(@as(usize, 4), compiled.root.children[1].layout.columns);
     try testing.expectEqual(@as(usize, 3), compiled.root.children[2].layout.columns);
 }
+
+// --------------------------------- pressable rows (press fall-through)
+
+const pressable_rows_markup =
+    \\<column gap="4">
+    \\  <for each="entries" as="e" key="id">
+    \\    <panel on-press="open_entry:{e.id}" padding="8" role="listitem" label="{e.label}">
+    \\      <row gap="8" cross="center">
+    \\        <text grow="1">{e.label}</text>
+    \\        <badge>#{e.id}</badge>
+    \\      </row>
+    \\    </panel>
+    \\  </for>
+    \\  <row on-press="refresh" gap="8">
+    \\    <text>Refresh feed</text>
+    \\  </row>
+    \\</column>
+;
+
+const PressableRowsCompiled = canvas.CompiledMarkupView(EntriesModel, EntriesMsg, pressable_rows_markup);
+
+test "compiled pressable rows (panel and layout containers) match the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const entries = [_]Entry{
+        .{ .id = 7, .label = "Ship the IR" },
+        .{ .id = 9, .label = "Write decisions" },
+    };
+    const model = EntriesModel{ .entries = &entries };
+
+    var view = try EntriesInterpreter.init(arena, pressable_rows_markup);
+    var interpreter_ui = EntriesUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try view.build(&interpreter_ui, &model));
+    var compiled_ui = EntriesUi.init(arena);
+    const compiled = try compiled_ui.finalize(PressableRowsCompiled.build(&compiled_ui, &model));
+    try expectSameTree(EntriesMsg, interpreted, compiled);
+
+    // Both engines make the pressable panel row a press claimer that
+    // dispatches the payload-carrying Msg, with its text falling through.
+    const first_row = fixture.findByKind(compiled.root, .panel).?;
+    try testing.expectEqualStrings("Ship the IR", first_row.semantics.label);
+    try testing.expect(canvas.widgetClaimsPress(first_row));
+    try testing.expectEqual(@as(u32, 7), compiled.msgForPointer(first_row.id, .up).?.open_entry);
+    try testing.expect(!canvas.widgetClaimsPress(first_row.children[0].children[0]));
+
+    // A LAYOUT container with on-press is a widget-level hit target in
+    // both engines — the handler stamps the press action.
+    var pressable_row: ?canvas.Widget = null;
+    for (compiled.root.children) |child| {
+        if (child.kind == .row and child.semantics.actions.press) pressable_row = child;
+    }
+    try testing.expect(pressable_row != null);
+    try testing.expect(canvas.widgetIsHitTarget(pressable_row.?));
+    try testing.expectEqual(EntriesMsg.refresh, compiled.msgForPointer(pressable_row.?.id, .up).?);
+}

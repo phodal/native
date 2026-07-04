@@ -718,7 +718,7 @@ pub const avatar_attr_docs = [_]Doc{
 };
 
 pub const event_docs = [_]Doc{
-    .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Hit-target elements only — never on layout containers (row, column, stack, ...); put it on a leaf like list-item or text, or on a control." },
+    .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Legal on any element — a bound press handler makes it pressable, and presses on plain text/icons inside it fall through to it (dragging still selects text)." },
     .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}. Hit-target elements only (checkbox, toggle, toggle-button, switch, accordion, ...)." },
     .{ .name = "on-change", .doc = "Dispatch a Msg on change: tag or tag:{payload}. Hit-target elements only (slider, ...)." },
     .{ .name = "on-submit", .doc = "Dispatch a Msg on enter in a text field: tag or tag:{payload}." },
@@ -899,12 +899,14 @@ test "analyze reports parser and validation findings with positions" {
     try testing.expectEqual(@as(usize, 2), missing_source.line);
     try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><markdown source=\"{body}\" /></row>"));
 
-    // A handler on a non-hit-target element gets the teaching diagnostic,
-    // positioned at the attribute.
-    const dead_handler = analyze(arena, "<column>\n  <row on-press=\"select\">\n    <text>x</text>\n  </row>\n</column>").?;
+    // A dead value handler on a non-hit-target element gets the teaching
+    // diagnostic, positioned at the attribute; on-press is legal there (a
+    // bound press handler makes any element pressable).
+    const dead_handler = analyze(arena, "<column>\n  <row on-change=\"select\">\n    <text>x</text>\n  </row>\n</column>").?;
     try testing.expectEqualStrings(ui_markup.non_hit_target_handler_message, dead_handler.message);
     try testing.expectEqual(@as(usize, 2), dead_handler.line);
     try testing.expectEqual(@as(usize, 8), dead_handler.column);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<column>\n  <row on-press=\"select\">\n    <text>x</text>\n  </row>\n</column>"));
     try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><list-item on-press=\"select\">x</list-item></row>"));
 
     // gap on a stacking container gets the teaching diagnostic at the

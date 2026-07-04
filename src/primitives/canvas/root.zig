@@ -477,8 +477,22 @@ pub const cursorForWidgetHit = widget_runtime.cursorForWidgetHit;
 pub const cursorForWidgetTarget = widget_runtime.cursorForWidgetTarget;
 /// Whether the engine hit-tests widgets of this kind (widget_access.zig —
 /// the single source of truth the runtime, both markup engines, and the
-/// markup validator's element list all derive from).
+/// markup validator's element list all derive from). Kind-level only: the
+/// widget-level predicate is `widgetIsHitTarget`, which also admits any
+/// widget carrying a bound press/toggle handler.
 pub const widgetKindHitTarget = @import("widget_access.zig").widgetKindHitTarget;
+/// Widget-level hit-target-ness: kind-level `widgetKindHitTarget` plus
+/// any widget with a bound press/toggle handler (stamped into
+/// `semantics.actions` by the builder and both markup engines).
+pub const widgetIsHitTarget = @import("widget_access.zig").isHitTarget;
+/// Press-claiming predicates (widget_access.zig): where a press gesture
+/// stops instead of falling through to the nearest pressable ancestor.
+pub const widgetKindClaimsPress = @import("widget_access.zig").widgetKindClaimsPress;
+pub const widgetClaimsPress = @import("widget_access.zig").widgetClaimsPress;
+/// The press fall-through walk (widget_routing.zig): the deepest widget on
+/// a hit path that claims presses.
+pub const widgetPressTargetForHit = @import("widget_routing.zig").widgetPressTargetForHit;
+pub const widgetPressTargetIndexFromNode = @import("widget_routing.zig").widgetPressTargetIndexFromNode;
 /// Whether widgets of this kind layer their children on top of each other
 /// (widget_layout.zig — the source of truth the builder's Debug gap
 /// diagnostic, both markup engines, and the markup validator's

@@ -266,10 +266,10 @@ test "structural validation reports positions for grammar misuse" {
         .{ .source = "<column bogus=\"1\" />", .message = "unknown attribute" },
         .{ .source = "<row>\n  <button on-press=\"a + b\">X</button>\n</row>", .message = "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")" },
         .{ .source = "<row>\n  <button on-hover=\"x\">X</button>\n</row>", .message = "unknown event attribute" },
-        .{ .source = "<column>\n  <row on-press=\"select\">\n    <text>press me</text>\n  </row>\n</column>", .message = markup.non_hit_target_handler_message },
-        .{ .source = "<column on-press=\"add\">\n  <text>x</text>\n</column>", .message = markup.non_hit_target_handler_message },
-        .{ .source = "<table>\n  <table-row on-press=\"pick\">\n    <table-cell>x</table-cell>\n  </table-row>\n</table>", .message = markup.non_hit_target_handler_message },
-        .{ .source = "<row>\n  <badge on-press=\"x\">3</badge>\n</row>", .message = markup.non_hit_target_handler_message },
+        .{ .source = "<column>\n  <row on-change=\"select\">\n    <text>press me</text>\n  </row>\n</column>", .message = markup.non_hit_target_handler_message },
+        .{ .source = "<column on-input=\"draft\">\n  <text>x</text>\n</column>", .message = markup.non_hit_target_handler_message },
+        .{ .source = "<table>\n  <table-row on-submit=\"pick\">\n    <table-cell>x</table-cell>\n  </table-row>\n</table>", .message = markup.non_hit_target_handler_message },
+        .{ .source = "<row>\n  <badge on-change=\"x\">3</badge>\n</row>", .message = markup.non_hit_target_handler_message },
         .{ .source = "<row gap=\"{a + b}\" />", .message = "invalid expression: values are a literal, one {binding}, or one {a == b} equality - no other operators or calls (put logic in a model function)" },
         .{ .source = "<column>\n  <for as=\"t\"><text>x</text></for>\n</column>", .message = "for requires an each attribute" },
         .{ .source = "<column>\n  <if><text>x</text></if>\n</column>", .message = "if requires a test attribute" },
@@ -285,7 +285,7 @@ test "structural validation reports positions for grammar misuse" {
         .{ .source = "<row>\n  <icon name=\"{binding}\" />\n</row>", .message = markup.icon_name_message },
         .{ .source = "<row>\n  <badge name=\"search\">3</badge>\n</row>", .message = markup.icon_name_element_message },
         .{ .source = "<row>\n  <icon name=\"search\"><text>x</text></icon>\n</row>", .message = markup.icon_children_message },
-        .{ .source = "<row>\n  <icon name=\"search\" on-press=\"go\" />\n</row>", .message = markup.non_hit_target_handler_message },
+        .{ .source = "<row>\n  <icon name=\"search\" on-change=\"go\" />\n</row>", .message = markup.non_hit_target_handler_message },
         // Button icon attr: closed literal vocabulary, button-scoped.
         .{ .source = "<row>\n  <button icon=\"sparkle-pony\">Save</button>\n</row>", .message = markup.button_icon_message },
         .{ .source = "<row>\n  <button icon=\"{binding}\">Save</button>\n</row>", .message = markup.button_icon_message },
@@ -326,22 +326,43 @@ test "for accepts multiple element children and a trailing else for the empty ca
     try testing.expectEqualStrings(markup.else_placement_message, info.message);
 }
 
-test "a handler on a non-hit-target element reports the attribute position" {
+test "a dead handler on a non-hit-target element reports the attribute position" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
-    const source = "<column>\n  <row gap=\"8\" on-press=\"select\">\n    <text>press me</text>\n  </row>\n</column>";
+    const source = "<column>\n  <row gap=\"8\" on-change=\"select\">\n    <text>press me</text>\n  </row>\n</column>";
     var parser = markup.Parser.init(arena_state.allocator(), source);
     const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings(markup.non_hit_target_handler_message, info.message);
     try testing.expectEqual(@as(usize, 2), info.line);
-    // The diagnostic points at the on-press attribute, not the element.
+    // The diagnostic points at the on-change attribute, not the element.
     try testing.expectEqual(@as(usize, 16), info.column);
 
-    // The same handler on a hit-target leaf inside the row validates clean.
-    const fixed = "<column>\n  <row gap=\"8\">\n    <list-item on-press=\"select\">press me</list-item>\n  </row>\n</column>";
+    // The same handler on a control inside the row validates clean.
+    const fixed = "<column>\n  <row gap=\"8\">\n    <checkbox on-change=\"select\">press me</checkbox>\n  </row>\n</column>";
     var fixed_parser = markup.Parser.init(arena_state.allocator(), fixed);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try fixed_parser.parse()));
+}
+
+test "press and toggle handlers are legal on layout elements (press fall-through makes them pressable)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    // A pressable row with plain text children is THE shape the press
+    // fall-through exists for: the handler makes the row a hit target and
+    // clicks on the text land on it — no empty-text overlay, no
+    // duplicated handlers.
+    const sources = [_][]const u8{
+        "<column>\n  <row on-press=\"select\" gap=\"8\">\n    <text>press me</text>\n  </row>\n</column>",
+        "<column on-press=\"add\">\n  <text>x</text>\n</column>",
+        "<column>\n  <stack on-toggle=\"flip\">\n    <text>x</text>\n  </stack>\n</column>",
+        "<row>\n  <icon name=\"search\" on-press=\"go\" />\n</row>",
+        "<row>\n  <badge on-press=\"open\">3</badge>\n</row>",
+    };
+    for (sources) |source| {
+        var parser = markup.Parser.init(arena_state.allocator(), source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
 }
 
 test "gap on stacking containers is rejected with the teaching error" {

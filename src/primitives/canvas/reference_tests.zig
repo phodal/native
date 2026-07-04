@@ -1074,13 +1074,14 @@ test "reference renderer advances proxy text by utf8 scalars" {
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 4, 1);
 }
 
-test "reference renderer centers mono glyph ink inside the fixed pitch cell" {
-    // No mono face is bundled: mono runs charge a fixed 0.6 em cell and
-    // ink the bundled SANS outline. Left-aligned ink read as clumps with
-    // stray gaps ("i nl i ne"); real mono faces center narrow glyphs in
-    // the cell, so the reference render must too. At size 20 the cell is
-    // 12 px; sans 'i' ink is ~4.5 px wide, so centered ink starts ~3 px in
-    // and ends ~3 px short — never hugging either cell edge.
+test "reference renderer inks mono runs with the bundled mono face" {
+    // Mono runs ink the bundled Geist Mono outlines at the 0.6 em pitch
+    // layout charges. Before the mono face landed, mono ids borrowed the
+    // proportional sans outlines centered in the cell: narrow 'i' floated
+    // in gulfs while wide 'M' (~0.83 em) overflowed its cell into the
+    // next glyph. At size 20 the cell is 12 px; the mono 'i' is designed
+    // for the cell (serif base, ~9.6 px of ink) and 'M' stays inside its
+    // own 12 px column.
     const size: f32 = 20;
     const cell: usize = 12; // 0.6 em at size 20
     const commands = [_]CanvasCommand{.{ .draw_text = .{
@@ -1089,7 +1090,7 @@ test "reference renderer centers mono glyph ink inside the fixed pitch cell" {
         .size = size,
         .origin = geometry.PointF.init(0, 20),
         .color = Color.rgb8(255, 0, 0),
-        .text = "il",
+        .text = "iM",
     } }};
 
     var render_commands: [1]RenderCommand = undefined;
@@ -1120,6 +1121,7 @@ test "reference renderer centers mono glyph ink inside the fixed pitch cell" {
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
     // Per-cell ink extents: any red coverage in a column marks it inked.
+    var ink_width: [2]usize = .{ 0, 0 };
     for (0..2) |cell_index| {
         const cell_start = cell_index * cell;
         var first_ink: ?usize = null;
@@ -1137,11 +1139,19 @@ test "reference renderer centers mono glyph ink inside the fixed pitch cell" {
                 last_ink = x - cell_start;
             }
         }
-        // Ink exists and sits centered: at least 2 px of cell padding on
-        // each side (left-aligned ink starts at column 0/1 and fails).
         const first = first_ink orelse return error.TestUnexpectedResult;
-        try std.testing.expect(first >= 2);
-        try std.testing.expect(last_ink <= cell - 3);
+        ink_width[cell_index] = last_ink + 1 - first;
+    }
+    // The mono 'i' fills most of its fixed cell (the centered sans 'i'
+    // inked ~4.5 px; the mono design carries a serif base of ~9.6 px).
+    try std.testing.expect(ink_width[0] >= 8);
+    // 'M' inks wide but INSIDE its own cell: with the sans outlines it
+    // overflowed 0.83 em of ink into the pixels past both cells.
+    try std.testing.expect(ink_width[1] >= 8);
+    for (2 * cell..26) |x| {
+        for (0..24) |y| {
+            try std.testing.expectEqual(@as(u8, 0), pixels[(y * 26 + x) * 4]);
+        }
     }
 }
 

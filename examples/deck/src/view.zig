@@ -21,6 +21,7 @@
 const std = @import("std");
 const native_sdk = @import("native_sdk");
 const model_mod = @import("model.zig");
+const theme = @import("theme.zig");
 
 const canvas = native_sdk.canvas;
 
@@ -39,9 +40,27 @@ pub const window_height = layout.window_height;
 pub const playlist_width = layout.playlist_width;
 pub const playlist_height = layout.playlist_height;
 
+/// Every mono scale in the deck is pitch-snapped: the mono advance is
+/// `canvas.mono_advance_em` (0.6 em), and at an arbitrary scale each
+/// glyph's pen lands on a different subpixel phase — the anti-aliasing
+/// then renders every stamp a little differently and the spacing reads
+/// as bad kerning. Snapping the scale so the pitch is a whole pixel at
+/// 1x keeps every glyph on the same phase at 1x AND at every integer
+/// display scale, so the stampings come out even and deliberate.
+fn monoScale(comptime target: f32) f32 {
+    const em = canvas.mono_advance_em * theme.body_size;
+    return @round(em * target) / em;
+}
+
 /// Engraved caption scale: uppercase mono at reduced size, everywhere a
-/// panel is stamped. One scale, so the stampings read as one process.
-const caption_scale: f32 = 0.72;
+/// panel is stamped. One scale, so the stampings read as one process
+/// (5 px pitch at the 12 px body).
+const caption_scale: f32 = monoScale(0.72);
+/// Readout scale for mono numerals and short labels (the VFD's channel
+/// line, VOL, ledger numbers and durations): 6 px pitch.
+const readout_scale: f32 = monoScale(0.8);
+/// The marquee's full-size mono: 7 px pitch.
+const marquee_scale: f32 = monoScale(1.0);
 
 // ------------------------------------------------------------ player root
 
@@ -117,14 +136,14 @@ fn vfdPanel(ui: *Ui, model: *const Model) Ui.Node {
             ui.el(.stack, .{ .width = layout.segment_area_width, .semantics = .{ .label = "Segment readout" } }, .{}),
             ui.column(.{ .gap = 4, .grow = 1, .main = .center }, .{
                 ui.paragraph(.{ .semantics = .{ .label = "Marquee" } }, &.{
-                    .{ .text = model.marqueeText(ui.arena), .monospace = true, .weight = .bold, .scale = 1.0, .color = if (model.idle()) .text_muted else .accent },
+                    .{ .text = model.marqueeText(ui.arena), .monospace = true, .weight = .bold, .scale = marquee_scale, .color = if (model.idle()) .text_muted else .accent },
                 }),
                 ui.paragraph(.{ .semantics = .{ .label = "Channel" } }, &.{
                     .{ .text = ui.fmt("{s}  {s} / {s}", .{
                         model.channelLabel(ui.arena),
                         model.elapsedLabel(ui.arena),
                         model.durationLabel(ui.arena),
-                    }), .monospace = true, .color = .text_muted, .scale = 0.8 },
+                    }), .monospace = true, .color = .text_muted, .scale = readout_scale },
                 }),
             }),
         }),
@@ -260,7 +279,7 @@ fn transportRow(ui: *Ui, model: *const Model) Ui.Node {
 
 fn monoCaption(ui: *Ui, text: []const u8, width: f32, alignment: canvas.TextAlign) Ui.Node {
     var node = ui.paragraph(.{ .width = width }, &.{
-        .{ .text = text, .monospace = true, .color = .text_muted, .scale = 0.86 },
+        .{ .text = text, .monospace = true, .color = .text_muted, .scale = readout_scale },
     });
     node.widget.text_alignment = alignment;
     return node;
@@ -268,8 +287,10 @@ fn monoCaption(ui: *Ui, text: []const u8, width: f32, alignment: canvas.TextAlig
 
 // ---------------------------------------------------------- playlist root
 
-/// The playlist rack unit: a second model-declared window. No chrome
-/// pass reaches secondary windows, so the rack look here is widgets and
+/// The playlist rack unit: a second model-declared window. ONE flat
+/// list of every song — no album rail, no sub-collections; search
+/// narrows it and the cue strip carries the queue. No chrome pass
+/// reaches secondary windows, so the rack look here is widgets and
 /// tokens only — the carbon-weave texture rides an `image` leaf behind
 /// the content (the same registered-image channel the chrome uses), and
 /// the machining is panel plates and hairline separators.
@@ -286,11 +307,7 @@ pub fn playlistView(ui: *Ui, model: *const Model) Ui.Node {
         ui.column(.{ .grow = 1 }, .{
             playlistHeader(ui),
             ui.el(.separator, .{ .height = 1 }, .{}),
-            ui.row(.{ .grow = 1 }, .{
-                railView(ui, model),
-                ui.el(.separator, .{ .width = 1 }, .{}),
-                ledgerView(ui, model),
-            }),
+            ledgerView(ui, model),
             cueStrip(ui, model),
             CompiledStatusBarView.build(ui, model),
         }),
@@ -317,67 +334,18 @@ fn playlistHeader(ui: *Ui) Ui.Node {
     });
 }
 
-/// The channel bank: one plate per album (plus ALL), never
-/// search-filtered (the rail is the machine's channel bank; search
-/// narrows the ledger).
-fn railView(ui: *Ui, model: *const Model) Ui.Node {
-    const cells = model.railCells(ui.arena);
-    return ui.column(.{ .width = layout.rail_width, .padding = layout.rack_pad, .gap = 6 }, .{
-        engravedCaption(ui, "CHANNEL BANK"),
-        ui.el(.list, .{
-            .gap = 2,
-            .semantics = .{ .role = .list, .label = "Channel bank" },
-        }, ui.each(cells, railKey, railCell)),
-        ui.spacer(1),
-        // The spec engraving block: dense chassis stamping where a lesser
-        // machine would leave whitespace.
-        ui.column(.{ .gap = 3 }, .{
-            engravedCaption(ui, "MK-48 // 1U"),
-            engravedCaption(ui, "SN 0048-1979"),
-        }),
-    });
-}
-
-fn railKey(cell: *const model_mod.RailCell) canvas.UiKey {
-    return canvas.uiKey(@as(u32, cell.id));
-}
-
-fn railCell(ui: *Ui, cell: *const model_mod.RailCell) Ui.Node {
-    return ui.panel(.{
-        .height = layout.rail_row_height,
-        .padding = 6,
-        .on_press = Msg{ .select_album = cell.id },
-        // Machined plates on the weave; the selected channel lights its
-        // edge.
-        .style_tokens = if (cell.selected)
-            .{ .background = .surface_subtle, .border_color = .accent, .radius = .sm }
-        else
-            .{ .background = .surface, .radius = .sm },
-        .semantics = .{ .role = .listitem, .label = cell.title },
-    }, ui.row(.{ .gap = 6, .cross = .center }, .{
-        ui.paragraph(.{ .width = 18 }, &.{
-            .{ .text = cell.number, .monospace = true, .color = if (cell.selected) .accent else .text_muted, .scale = 0.82 },
-        }),
-        ui.text(.{ .grow = 1, .size = .sm, .style_tokens = if (cell.selected) .{ .foreground = .text } else .{ .foreground = .text_muted } }, cell.title),
-        if (cell.live)
-            ui.icon(.{ .width = 9, .height = 9, .style_tokens = .{ .foreground = .accent } }, "circle-dot")
-        else
-            ui.el(.stack, .{}, .{}),
-    }));
-}
-
-/// The track ledger: a dense text table, no cards, no covers. Each row is
-/// pressable (load/toggle) and carries the native context menu. The
-/// caption row's fixed height keeps the scroll viewport folding on a
-/// whole row (the layout table's comptime assert holds it).
+/// The track ledger: ONE flat list of every song — a dense text table,
+/// no cards, no covers. Each row is pressable (load/toggle) and carries
+/// the native context menu. The caption row's fixed height keeps the
+/// scroll viewport folding on a whole row (the layout table's comptime
+/// assert holds it).
 fn ledgerView(ui: *Ui, model: *const Model) Ui.Node {
     // The ledger is glass — the playlist IS a display on this machine —
     // so it fills with the case black.
     const rows = model.visibleTracks(ui.arena);
-    const bank = if (model.selected_album == 0) "ALL" else upper(ui, model_mod.albumById(model.selected_album).title);
     return ui.column(.{ .grow = 1, .padding = layout.rack_pad, .gap = layout.gap, .style_tokens = .{ .background = .background } }, .{
         ui.row(.{ .height = layout.ledger_caption_height, .cross = .center, .gap = 8 }, .{
-            engravedCaption(ui, ui.fmt("TRACKS // {s}", .{bank})),
+            engravedCaption(ui, "TRACKS // LIBRARY"),
             ui.spacer(1),
             engravedCaption(ui, ui.fmt("{d} TRK", .{rows.len})),
         }),
@@ -413,21 +381,21 @@ fn ledgerRow(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
             .{ .radius = .sm },
         .semantics = .{ .role = .listitem, .label = row.title },
     }, ui.row(.{ .gap = 8, .cross = .center }, .{
-        ui.row(.{ .width = 16, .cross = .center }, .{
+        ui.row(.{ .width = layout.ledger_number_width, .cross = .center }, .{
             if (row.now and row.playing)
                 ui.icon(.{ .width = 11, .height = 11, .style_tokens = .{ .foreground = .accent } }, "play")
             else if (row.now)
                 ui.icon(.{ .width = 11, .height = 11, .style_tokens = .{ .foreground = .text_muted } }, "pause")
             else
                 ui.paragraph(.{}, &.{
-                    .{ .text = row.number, .monospace = true, .color = .text_muted, .scale = 0.82 },
+                    .{ .text = row.number, .monospace = true, .color = .text_muted, .scale = readout_scale },
                 }),
         }),
         ui.text(.{ .grow = 1, .size = .sm, .style_tokens = if (row.now) .{ .foreground = .accent } else .{} }, row.title),
-        ui.text(.{ .width = 96, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, row.artist),
+        ui.text(.{ .width = layout.ledger_artist_width, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, row.artist),
         // A fixed cue slot keeps the artist and duration columns aligned
         // whether or not the amber Q plate is present.
-        ui.row(.{ .width = 20, .cross = .center, .main = .end }, .{
+        ui.row(.{ .width = layout.ledger_cue_width, .cross = .center, .main = .end }, .{
             if (row.queued)
                 ui.el(.badge, .{
                     .text = "Q",
@@ -436,7 +404,10 @@ fn ledgerRow(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
             else
                 ui.el(.stack, .{}, .{}),
         }),
-        monoCaption(ui, row.duration, 34, .end),
+        monoCaption(ui, row.duration, layout.ledger_duration_width, .end),
+        // The overlay scrollbar's lane: keeps the duration digits clear
+        // of the thumb (the plate itself stays full width).
+        ui.el(.stack, .{ .width = layout.ledger_scroll_lane }, .{}),
     }));
 }
 

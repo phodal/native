@@ -273,35 +273,27 @@ test "copy title spawns pbcopy with the track title on stdin" {
     try testing.expect(app_state.model.copy_failed);
 }
 
-test "the rail and the search both narrow the ledger through typed dispatch" {
+test "the rack is one flat song list; search narrows it through typed dispatch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The library moved into the playlist rack: these trees are the
+    // The library lives in the playlist rack: these trees are the
     // secondary window's view, dispatched through the same typed path.
+    // ONE flat list — every track is a ledger row, no album rail.
     var model = Model{};
     var tree = try buildPlaylistTree(arena, &model);
-    // 9 rail cells (ALL + 8 albums) + 48 ledger rows.
-    try testing.expectEqual(@as(usize, model_mod.albums.len + 1 + model_mod.tracks.len), countListItems(tree.root));
-
-    // Select an album channel: the ledger narrows to the record.
-    const channel = findByLabel(tree.root, "Glass Horizon").?;
-    apply(&model, tree.msgForPointer(channel.id, .up).?);
-    try testing.expectEqual(@as(u8, 2), model.selected_album);
-    tree = try buildPlaylistTree(arena, &model);
-    try testing.expectEqual(@as(usize, model_mod.albums.len + 1 + model_mod.tracks_per_album), countListItems(tree.root));
+    try testing.expectEqual(@as(usize, model_mod.tracks.len), countListItems(tree.root));
     try testing.expect(findByLabel(tree.root, "Sea of Static") != null);
+    try testing.expect(findByLabel(tree.root, "Channel bank") == null);
 
     // Type into the status-strip search field (the markup-declared
     // on-input handler): matches narrow across title/artist/album.
-    apply(&model, .{ .select_album = 0 });
-    tree = try buildPlaylistTree(arena, &model);
     const field = findByKind(tree.root, .search_field).?;
     apply(&model, tree.msgForTextEdit(field.id, .{ .insert_text = "velvet" }).?);
     try testing.expectEqualStrings("velvet", model.search());
     tree = try buildPlaylistTree(arena, &model);
-    try testing.expectEqual(@as(usize, model_mod.albums.len + 1 + model_mod.tracks_per_album), countListItems(tree.root));
+    try testing.expectEqual(@as(usize, model_mod.tracks_per_album), countListItems(tree.root));
 
     // The markup clear button (icon-only) resets the query.
     const clear = findByLabel(tree.root, "Clear search").?;
@@ -700,10 +692,11 @@ test "both windows lay out within their fixed canvases and the widget budget" {
         _ = arena_state.reset(.retain_capacity);
     }
 
-    // The playlist rack: full ledger and narrowed, at 460x440.
-    const albums = [_]u8{ 0, 2 };
-    for (albums) |album| {
-        model.selected_album = album;
+    // The playlist rack: the full flat ledger and a narrowed one, at
+    // 460x440.
+    const queries = [_][]const u8{ "", "velvet" };
+    for (queries) |query| {
+        model.search_buffer = canvas.TextBuffer(model_mod.max_search).init(query);
         const tree = try buildPlaylistTree(arena_state.allocator(), &model);
         var nodes: [1024]canvas.WidgetLayoutNode = undefined;
         const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, view_mod.playlist_width, view_mod.playlist_height), &nodes);
@@ -782,7 +775,6 @@ test "render homepage screenshots (env-gated)" {
     try live.dispatch(.{ .queue_track = 12 });
     const seek_id = try live.widgetIdByLabel(main.canvas_label, 1, .slider, "Seek");
     for (0..8) |_| try live.widgetAction(main.canvas_label, seek_id, "increment");
-    try live.dispatch(.{ .select_album = 0 });
     try presentShotFrame(live, 2);
     live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/deck-dark-artifacts", "Deck");
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");

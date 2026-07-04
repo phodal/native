@@ -105,16 +105,26 @@ pub const playlist_header_height: f32 = 28;
 /// `on_chrome` insets reach the MAIN canvas only (secondary windows have
 /// no inset hook yet), so this is the compact-titlebar constant.
 pub const playlist_chrome_leading: f32 = 62;
-pub const rail_width: f32 = 152;
-/// Rack padding: the rail, the ledger, the cue strip's leading edge, and
-/// the status strip all inset content by this much.
+/// Rack padding: the ledger, the cue strip's leading edge, and the
+/// status strip all inset content by this much.
 pub const rack_pad: f32 = 8;
 pub const statusbar_height: f32 = 39; // 38 strip + 1 separator
 pub const cue_strip_height: f32 = 24;
 pub const ledger_caption_height: f32 = 16;
 pub const ledger_row_height: f32 = 27;
 pub const ledger_row_gap: f32 = 1;
-pub const rail_row_height: f32 = 28;
+
+/// Ledger columns (the rack is ONE flat song list at full width): the
+/// track number slot, the growing title, then artist, the fixed cue
+/// slot (the amber Q plate), and the right-aligned duration.
+pub const ledger_number_width: f32 = 16;
+pub const ledger_artist_width: f32 = 120;
+pub const ledger_cue_width: f32 = 20;
+pub const ledger_duration_width: f32 = 36;
+/// Trailing in-row slot reserving the overlay scrollbar's lane (density
+/// inset 3 + ~5.5 thickness): with the row gap it keeps the duration
+/// digits clear of the thumb while the plates keep their full width.
+pub const ledger_scroll_lane: f32 = 2;
 
 /// The ledger's scroll viewport, derived the way the playlist column
 /// stacks: header, hairline, ledger (rack_pad + caption + gap + rows +

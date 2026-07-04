@@ -38,15 +38,29 @@ pub const max_composite_depth: usize = 4;
 pub const max_composite_components: usize = 8;
 
 /// The bundled Geist Regular face (OFL), embedded so the reference
-/// renderer paints real text without any platform font machinery. The
-/// same outlines currently serve all reserved font ids (mono and the
-/// weight/italic span variants included) at their estimator advances;
-/// additional faces can be bundled later without changing callers.
+/// renderer paints real text without any platform font machinery. It
+/// serves the sans font ids (weight/italic span variants included) at
+/// their estimator advances; additional faces can be bundled without
+/// changing callers.
 pub const geist_regular_bytes: []const u8 = @embedFile("fonts/Geist-Regular.ttf");
 
 /// Comptime-validated view over the bundled face. Using a comptime
 /// constant means table presence and offsets are proven at build time.
 pub const geist_regular = Face.parse(geist_regular_bytes) catch @compileError("bundled Geist-Regular.ttf failed to parse");
+
+/// The bundled Geist Mono Regular face (OFL, same family): mono runs
+/// ink real fixed-pitch outlines. Before this face landed, mono font
+/// ids borrowed the proportional sans outlines centered inside the
+/// 0.6 em mono cell, which read as broken letterspacing at caption
+/// sizes — wide caps (M, W: ~0.83 em) overflowed the cell into their
+/// neighbors while narrow glyphs (I: ~0.27 em) floated in gulfs. Every
+/// covered glyph in this face advances exactly 600/1000 units, the
+/// same 0.6 em pitch the deterministic estimator has always charged
+/// for mono runs, so text layout metrics are unchanged — only the ink.
+pub const geist_mono_bytes: []const u8 = @embedFile("fonts/GeistMono-Regular.ttf");
+
+/// Comptime-validated view over the bundled mono face.
+pub const geist_mono = Face.parse(geist_mono_bytes) catch @compileError("bundled GeistMono-Regular.ttf failed to parse");
 
 /// Offsets and metrics for one parsed TrueType face. Holds a slice of
 /// the raw bytes; all glyph reads are bounds-checked at call time.

@@ -19,6 +19,10 @@ const native_sdk = @import("native_sdk");
 const canvas = native_sdk.canvas;
 const Color = canvas.Color;
 
+/// Paragraph base size (the typography token below): public because the
+/// views derive their pitch-snapped mono scales from it.
+pub const body_size: f32 = 12;
+
 pub fn tokens(high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
     var out = canvas.DesignTokens.theme(.{
         // Dark-only: the brief's faceplate has no light mode, so the OS
@@ -35,7 +39,7 @@ pub fn tokens(high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
     // Machined corners: nothing rounder than a chamfer.
     out.radius = .{ .sm = 1, .md = 2, .lg = 3, .xl = 4 };
     // Dense faceplate type; readouts go mono through paragraph spans.
-    out.typography.body_size = 12;
+    out.typography.body_size = body_size;
     out.typography.label_size = 11;
     out.typography.title_size = 15;
     out.typography.button_size = 12;

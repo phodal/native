@@ -489,17 +489,16 @@ pub const ReferenceRenderSurface = struct {
         baseline: f32,
         cell_advance: f32,
     ) bool {
-        const face = &font_ttf.geist_regular;
+        const face = referenceFaceForFontId(value.font_id);
         const glyph = face.glyphIndex(codepoint);
         if (glyph == 0) return false;
 
         // Center the outline's natural advance inside its layout cell when
-        // the cell is wider — mono runs charge a fixed 0.6 em pitch while
-        // the bundled sans outlines keep proportional ink, and left-aligned
-        // ink read as clumps with stray gaps ("i nl i ne"). Real mono faces
-        // center narrow glyphs in the fixed cell, so the reference render
-        // does the same. Sans cells equal their natural advance (inset 0),
-        // keeping every proportional golden byte-identical.
+        // the cell is wider. With the bundled mono face this is the
+        // identity for every covered glyph (natural advance == the 0.6 em
+        // cell layout charges, so inset 0), and sans cells equal their
+        // natural advance too — the inset stays for any future face whose
+        // ink runs narrower than its layout cell.
         const natural_advance = value.size * (face.advance(glyph) / face.units_per_em);
         const cell_inset = @max(0, (cell_advance - natural_advance) * 0.5);
 
@@ -657,6 +656,15 @@ fn referenceSampleFill(fill: Fill, transform: Affine, point: geometry.PointF) Co
 
 fn isReferenceTextSpace(byte: u8) bool {
     return byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ';
+}
+
+/// The bundled face a run's font id inks with: the mono face for the
+/// reserved mono id, the sans face for everything else (the weight and
+/// italic span variants keep the regular outlines at their estimator
+/// advances, exactly as before).
+fn referenceFaceForFontId(font_id: canvas.FontId) *const font_ttf.Face {
+    if (font_id == canvas.default_mono_font_id) return &font_ttf.geist_mono;
+    return &font_ttf.geist_regular;
 }
 
 /// Decode the first codepoint of the cluster `text[start..start+len]`;

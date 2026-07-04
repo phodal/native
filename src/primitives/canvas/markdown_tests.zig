@@ -420,7 +420,16 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // mono table cells read as monospace ("gh  aut h  l ogi n" ->
 // "gh auth login"); spot-reviewed the requirements bullet and the
 // command-table band before/after — no overlap, no clipping.
-const dev2_readme_reference_signature: u64 = 10642772447876144228;
+// Regenerated for the bundled mono face (2026-07-04): 2.66% of pixels
+// moved, all inside mono runs — mono ids now ink real Geist Mono
+// outlines instead of centered sans outlines, so fixed-pitch text stops
+// colliding on wide caps and gapping on narrow ones ("Mbdels" ->
+// "Models", "st ream-j son" -> "stream-json"); layout metrics are
+// unchanged (the mono face's advance is exactly the 0.6 em the
+// estimator always charged) and sans-only bands are byte-identical;
+// spot-reviewed the sandbox steps and file-table bands before/after —
+// no overlap, no clipping.
+const dev2_readme_reference_signature: u64 = 3343703635343987888;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

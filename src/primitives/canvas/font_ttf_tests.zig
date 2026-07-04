@@ -172,6 +172,37 @@ test "glyph rasterization is deterministic and pinned" {
     try std.testing.expectEqual(@as(u64, 12321457692853131437), first.signature());
 }
 
+test "bundled Geist Mono face parses and holds the fixed 0.6 em pitch" {
+    const face = &font_ttf.geist_mono;
+    try std.testing.expectEqual(@as(f32, 1000), face.units_per_em);
+    try std.testing.expect(face.num_glyphs > 0);
+    // Full printable-ASCII coverage at exactly the estimator's mono
+    // pitch: layout charges 0.6 em per mono cluster, and these are the
+    // outlines the reference renderer inks into those cells.
+    var codepoint: u21 = 0x20;
+    while (codepoint < 0x7F) : (codepoint += 1) {
+        const glyph = face.glyphIndex(codepoint);
+        try std.testing.expect(glyph != 0);
+        try std.testing.expectEqual(@as(f32, 600), face.advance(glyph));
+    }
+}
+
+test "mono outlines rasterize within the vector budgets" {
+    const face = &font_ttf.geist_mono;
+    // The densest ASCII glyphs (@, %, &, digits) must stay inside the
+    // fixed point/contour budgets so mono captions never degrade to
+    // block fallbacks mid-word.
+    const probe = "@%&MW08ilj·";
+    var iterator = std.unicode.Utf8Iterator{ .bytes = probe, .i = 0 };
+    while (iterator.nextCodepoint()) |codepoint| {
+        const glyph = face.glyphIndex(codepoint);
+        try std.testing.expect(glyph != 0);
+        var builder = vector.PathBuilder(256){};
+        try face.glyphOutline(glyph, Affine.identity(), &builder);
+        try std.testing.expect(builder.slice().len > 0);
+    }
+}
+
 test "corrupt font bytes fail to parse without crashing" {
     try std.testing.expectError(error.FontParseFailed, font_ttf.Face.parse(&.{}));
     try std.testing.expectError(error.FontParseFailed, font_ttf.Face.parse(font_ttf.geist_regular_bytes[0..64]));

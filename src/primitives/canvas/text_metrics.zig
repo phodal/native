@@ -81,12 +81,23 @@ pub fn estimateTextWidthForFont(font_id: FontId, text: []const u8, size: f32) f3
     return width;
 }
 
-/// Design pitch for the reserved mono id. The repo bundles no mono
-/// face, so this stays a constant rather than a derived metric: 0.6 em
-/// is Geist Mono's actual advance (600/1000 units in every published
-/// weight), so the estimator, the live Geist Mono provider path, and
-/// SF Mono (0.6 em) all agree on the pitch.
-const mono_advance_em: f32 = 0.6;
+/// Design pitch for the reserved mono id: 0.6 em, Geist Mono's advance
+/// (600/1000 units in every published weight), so the estimator, the
+/// bundled mono outlines, the live Geist Mono provider path, and
+/// SF Mono (0.6 em) all agree. The comptime check below holds the
+/// bundled mono face to the constant — a bundle swap that changes the
+/// pitch is a compile error, not a silent layout/ink drift. Public
+/// (re-exported as `canvas.mono_advance_em`) so apps that pitch-snap
+/// their mono sizes to whole pixels derive from the same constant the
+/// engine measures and inks with.
+pub const mono_advance_em: f32 = 0.6;
+
+comptime {
+    const face = &font_ttf.geist_mono;
+    const zero_advance = face.advance(face.glyphIndex('0')) / face.units_per_em;
+    if (zero_advance != mono_advance_em)
+        @compileError("bundled mono face pitch drifted from the estimator's mono advance");
+}
 
 /// The bundled face's `.notdef` advance in em units (0.6 em in Geist).
 /// This is the width the face itself declares for "I do not have this

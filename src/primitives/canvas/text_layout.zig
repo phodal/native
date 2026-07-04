@@ -27,6 +27,7 @@ pub const TextLayoutCacheActionKind = text_layout_cache.TextLayoutCacheActionKin
 pub const TextLayoutCacheAction = text_layout_cache.TextLayoutCacheAction;
 pub const TextLayoutCachePlan = text_layout_cache.TextLayoutCachePlan;
 pub const TextLayoutCachePlanner = text_layout_cache.TextLayoutCachePlanner;
+pub const mono_advance_em = text_metrics.mono_advance_em;
 pub const estimateTextWidth = text_metrics.estimateTextWidth;
 pub const estimateTextWidthForFont = text_metrics.estimateTextWidthForFont;
 pub const estimateTextAdvanceForBytes = text_metrics.estimateTextAdvanceForBytes;

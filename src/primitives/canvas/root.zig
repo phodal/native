@@ -115,6 +115,8 @@ pub const TextLayoutOptions = text_model.TextLayoutOptions;
 pub const TextMeasureProvider = text_model.TextMeasureProvider;
 pub const measureTextWidthForFont = text_model.measureTextWidthForFont;
 pub const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
+/// The fixed pitch (em units) mono runs measure and ink at.
+pub const mono_advance_em = text_model.mono_advance_em;
 pub const TextLine = text_model.TextLine;
 pub const TextLayout = text_model.TextLayout;
 pub const TextLayoutKey = text_model.TextLayoutKey;

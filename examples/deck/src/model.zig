@@ -140,8 +140,9 @@ pub const tick_ms: u32 = 500;
 pub const spectrum_bands = 32;
 /// Marquee geometry: visible window in mono characters, and how much
 /// playback time advances the scroll by one character. 22 characters of
-/// bold mono at scale 1.0 fill the VFD's text column with clear glass to
-/// spare on both sides (24 ran flush against the right bevel).
+/// bold mono at the view's pitch-snapped marquee scale (7 px pitch) fill
+/// the VFD's text column with clear glass to spare on both sides (24 ran
+/// flush against the right bevel).
 pub const marquee_window = 22;
 pub const marquee_step_ms: u32 = 500;
 
@@ -152,8 +153,6 @@ pub const copy_key: u64 = 2;
 // ------------------------------------------------------------------- model
 
 pub const Msg = union(enum) {
-    /// Album rail selection; 0 selects the whole library.
-    select_album: u8,
     /// The PL key (and `primary+L`): the playlist window's open flag
     /// flips, and the windows_fn reconcile creates or closes the window.
     toggle_playlist,
@@ -191,8 +190,6 @@ pub const Model = struct {
     /// The playlist window's visibility channel: `windows_fn` declares
     /// the window exactly while this is set (presence IS visibility).
     playlist_open: bool = false,
-    /// Album rail selection; 0 = the whole library.
-    selected_album: u8 = 0,
     appearance: native_sdk.Appearance = .{},
     /// Chrome overlay insets (hidden-inset titlebar): the cap band pads
     /// its leading edge by this so the brand engraving clears the
@@ -345,38 +342,12 @@ pub const Model = struct {
         return std.math.clamp(mean * std.math.clamp(model.volume_fraction, 0, 1) * 1.6, 0, 1);
     }
 
-    /// Album cells for the rail (never search-filtered: the rail is the
-    /// machine's channel bank; search narrows the ledger).
-    pub fn railCells(model: *const Model, arena: std.mem.Allocator) []const RailCell {
-        const out = arena.alloc(RailCell, albums.len + 1) catch return &.{};
-        out[0] = .{
-            .id = 0,
-            .number = "00",
-            .title = "ALL TRACKS",
-            .meta = std.fmt.allocPrint(arena, "{d}", .{tracks.len}) catch "",
-            .selected = model.selected_album == 0,
-            .live = model.playingAlbum() != 0,
-        };
-        for (&albums, 1..) |*album, slot| {
-            out[slot] = .{
-                .id = album.id,
-                .number = std.fmt.allocPrint(arena, "{d:0>2}", .{album.id}) catch "",
-                .title = album.title,
-                .meta = std.fmt.allocPrint(arena, "{d}", .{album.year}) catch "",
-                .selected = model.selected_album == album.id,
-                .live = model.playingAlbum() == album.id,
-            };
-        }
-        return out;
-    }
-
-    /// Ledger rows: the selected album's tracks (or the whole library),
-    /// narrowed by the search query, derived into the build arena.
+    /// Ledger rows: the whole library as ONE flat list, narrowed by the
+    /// search query, derived into the build arena.
     pub fn visibleTracks(model: *const Model, arena: std.mem.Allocator) []const TrackRow {
-        const source = if (model.selected_album == 0) tracks[0..] else albumTracks(model.selected_album);
-        const out = arena.alloc(TrackRow, source.len) catch return &.{};
+        const out = arena.alloc(TrackRow, tracks.len) catch return &.{};
         var count: usize = 0;
-        for (source) |*track| {
+        for (&tracks) |*track| {
             if (!model.trackMatches(track)) continue;
             out[count] = model.trackRow(arena, track);
             count += 1;
@@ -391,11 +362,6 @@ pub const Model = struct {
             out[slot] = model.trackRow(arena, trackById(id));
         }
         return out;
-    }
-
-    pub fn playingAlbum(model: *const Model) u8 {
-        const track = model.nowTrack() orelse return 0;
-        return if (model.playing) track.album else 0;
     }
 
     fn trackMatches(model: *const Model, track: *const Track) bool {
@@ -451,15 +417,6 @@ pub const Model = struct {
     }
 };
 
-pub const RailCell = struct {
-    id: u8,
-    number: []const u8,
-    title: []const u8,
-    meta: []const u8,
-    selected: bool,
-    live: bool,
-};
-
 pub const TrackRow = struct {
     id: u8,
     number: []const u8,
@@ -501,7 +458,6 @@ fn upperTo(buffer: []u8, source: []const u8) []const u8 {
 
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
-        .select_album => |id| model.selected_album = id,
         .toggle_playlist => model.playlist_open = !model.playlist_open,
         .playlist_closed => model.playlist_open = false,
         .set_appearance => |appearance| model.appearance = appearance,

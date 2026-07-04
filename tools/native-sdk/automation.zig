@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const protocol = @import("automation_protocol");
 
 const automation_dir = protocol.default_dir;
@@ -7,8 +8,12 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
     if (args.len == 0) return usage();
     const command = args[0];
     if (std.mem.eql(u8, command, "list")) {
+        // windows.txt has no pid of its own; the snapshot in the same
+        // dropbox vouches for (or condemns) the whole directory.
+        try requireLiveSnapshotFile(allocator, io);
         try printFile(io, "windows.txt");
     } else if (std.mem.eql(u8, command, "snapshot")) {
+        try requireLiveSnapshotFile(allocator, io);
         try printFile(io, "snapshot.txt");
     } else if (std.mem.eql(u8, command, "screenshot")) {
         if (args.len < 2 or args.len > 3) return usage();
@@ -82,14 +87,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         if (args.len != 1) return usage();
         try sendCommand(allocator, io, "focus-previous", "");
     } else if (std.mem.eql(u8, command, "wait")) {
-        try waitForFile(allocator, io, "snapshot.txt", "ready=true");
+        try waitForFile(allocator, io, "snapshot.txt", "ready=true", .require_live_publisher);
     } else if (std.mem.eql(u8, command, "assert")) {
         try runAssert(allocator, io, args[1..]);
     } else if (std.mem.eql(u8, command, "bridge")) {
         if (args.len < 2) return usage();
         deleteAutomationFile(io, "bridge-response.txt");
         try sendCommand(allocator, io, "bridge", args[1]);
-        try waitForFile(allocator, io, "bridge-response.txt", "");
+        try waitForFile(allocator, io, "bridge-response.txt", "", .any_publisher);
     } else {
         return usage();
     }
@@ -192,10 +197,95 @@ fn printFile(io: std.Io, name: []const u8) !void {
     try emitPayload(io, &.{bytes});
 }
 
-fn waitForFile(allocator: std.mem.Allocator, io: std.Io, name: []const u8, marker: []const u8) !void {
+// -------------------------------------------------- publisher liveness
+//
+// Dropbox files persist across builds and runs, so "a snapshot exists"
+// never means "an app is publishing": an app rebuilt WITHOUT
+// -Dautomation happily coexists with days-old files from an earlier
+// run, and serving those as live state cost a full misdiagnosis round
+// (friction #93). Every snapshot the framework writes carries the
+// publisher's pid in its header; reads refuse the file loudly when
+// that pid is gone (or the header predates the pid stamp).
+
+const Liveness = enum { live, no_pid, dead_publisher };
+const WaitPolicy = enum { require_live_publisher, any_publisher };
+
+/// `publisher_pid=<n>` from the snapshot header, if present.
+fn publisherPid(bytes: []const u8) ?u32 {
+    const marker = "publisher_pid=";
+    var search: usize = 0;
+    while (std.mem.indexOfPos(u8, bytes, search, marker)) |index| {
+        search = index + marker.len;
+        // Only accept the header field, not e.g. widget text echoing it:
+        // it must start a line or follow a space.
+        if (index > 0 and bytes[index - 1] != ' ' and bytes[index - 1] != '\n') continue;
+        var end = search;
+        while (end < bytes.len and std.ascii.isDigit(bytes[end])) end += 1;
+        if (end == search) continue;
+        return std.fmt.parseUnsigned(u32, bytes[search..end], 10) catch continue;
+    }
+    return null;
+}
+
+/// Classify a snapshot's publisher against the live process table via
+/// an injectable probe (tests pass their own).
+fn snapshotLiveness(bytes: []const u8, alive: *const fn (u32) bool) Liveness {
+    const pid = publisherPid(bytes) orelse return .no_pid;
+    if (pid == 0) return .no_pid;
+    return if (alive(pid)) .live else .dead_publisher;
+}
+
+/// True when `pid` names a running process. Signal 0 probes without
+/// delivering; EPERM still proves existence. Pid reuse can in principle
+/// vouch for the wrong process — accepted, the window is tiny and the
+/// failure mode is the pre-#93 status quo. Windows has no cheap probe
+/// from here; never false-alarm there.
+fn pidIsAlive(pid: u32) bool {
+    if (builtin.os.tag == .windows) return true;
+    if (pid == 0) return false;
+    std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| return err == error.PermissionDenied;
+    return true;
+}
+
+fn describeStaleness(liveness: Liveness, io: std.Io) void {
+    var dir_buffer: [1024]u8 = undefined;
+    const dir = automationDirDescription(io, &dir_buffer);
+    switch (liveness) {
+        .live => {},
+        .dead_publisher => std.debug.print(
+            "error: stale automation snapshot at {s}/snapshot.txt\n" ++
+                "       its publisher is no longer running, so the file is left over from an\n" ++
+                "       earlier run - relaunch the app built with -Dautomation=true (a live\n" ++
+                "       publisher rewrites the snapshot with its own pid on every presented frame)\n",
+            .{dir},
+        ),
+        .no_pid => std.debug.print(
+            "error: stale automation snapshot at {s}/snapshot.txt\n" ++
+                "       it carries no publisher_pid, so it predates the current publisher -\n" ++
+                "       rebuild and relaunch the app with -Dautomation=true\n",
+            .{dir},
+        ),
+    }
+}
+
+/// Refuse a read command outright when the dropbox's snapshot has no
+/// live publisher. A missing snapshot falls through: the caller's own
+/// no-app error (which names the directory) stays the message for that.
+fn requireLiveSnapshotFile(allocator: std.mem.Allocator, io: std.Io) !void {
+    var file_path: [256]u8 = undefined;
+    const bytes = readFile(allocator, io, path(&file_path, "snapshot.txt")) catch return;
+    defer allocator.free(bytes);
+    const liveness = snapshotLiveness(bytes, pidIsAlive);
+    if (liveness == .live) return;
+    describeStaleness(liveness, io);
+    return error.AutomationCommandFailed;
+}
+
+fn waitForFile(allocator: std.mem.Allocator, io: std.Io, name: []const u8, marker: []const u8, policy: WaitPolicy) !void {
     // 30s to match the assert default: `wait` gates on a cold app start,
     // and a GTK/software-EGL launch on a loaded shared CI runner routinely
     // needs more than the 5s this used to allow.
+    var last_liveness: Liveness = .live;
     var attempts: usize = 0;
     while (attempts < 300) : (attempts += 1) {
         var file_path: [256]u8 = undefined;
@@ -204,12 +294,18 @@ fn waitForFile(allocator: std.mem.Allocator, io: std.Io, name: []const u8, marke
             continue;
         };
         if (marker.len == 0 or std.mem.indexOf(u8, bytes, marker) != null) {
-            defer allocator.free(bytes);
-            return emitPayload(io, &.{bytes});
+            // A marker match in a stale file is yesterday's app looking
+            // ready; keep polling for a live publisher instead.
+            last_liveness = if (policy == .require_live_publisher) snapshotLiveness(bytes, pidIsAlive) else .live;
+            if (last_liveness == .live) {
+                defer allocator.free(bytes);
+                return emitPayload(io, &.{bytes});
+            }
         }
         allocator.free(bytes);
         try std.Io.sleep(io, std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
     }
+    describeStaleness(last_liveness, io);
     return fail("timed out waiting for automation");
 }
 
@@ -326,7 +422,9 @@ fn runAssert(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8)
         var file_path: [256]u8 = undefined;
         snapshot = readFile(allocator, io, path(&file_path, "snapshot.txt")) catch null;
         if (snapshot) |bytes| {
-            if (assertSatisfied(bytes, spec.patterns, spec.absent)) {
+            // A stale dropbox (dead or pid-less publisher) can neither
+            // satisfy nor refute assertions — keep polling for live state.
+            if (snapshotLiveness(bytes, pidIsAlive) == .live and assertSatisfied(bytes, spec.patterns, spec.absent)) {
                 std.debug.print("assert ok: {d} pattern(s) {s} after {d}ms\n", .{
                     spec.patterns.len,
                     if (spec.absent) "absent" else "matched",
@@ -344,6 +442,11 @@ fn runAssert(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8)
     // and the snapshot tail so CI logs carry the evidence.
     std.debug.print("error: automate assert failed after {d}ms\n", .{spec.timeout_ms});
     if (snapshot) |bytes| {
+        const liveness = snapshotLiveness(bytes, pidIsAlive);
+        if (liveness != .live) {
+            describeStaleness(liveness, io);
+            return error.AutomationCommandFailed;
+        }
         for (spec.patterns) |pattern| {
             const matched = matchesPattern(pattern, bytes) catch false;
             if (spec.absent and matched) {
@@ -637,6 +740,43 @@ test "parseAssertArgs: flags and patterns in any order" {
     try testing.expectError(error.NoPatterns, parseAssertArgs(&.{"--absent"}, &buffer));
     try testing.expectError(error.MissingFlagValue, parseAssertArgs(&.{ "x", "--timeout-ms" }, &buffer));
     try testing.expectError(error.InvalidTimeout, parseAssertArgs(&.{ "x", "--timeout-ms", "soon" }, &buffer));
+}
+
+fn alwaysAlive(pid: u32) bool {
+    _ = pid;
+    return true;
+}
+
+fn neverAlive(pid: u32) bool {
+    _ = pid;
+    return false;
+}
+
+test "publisherPid parses the header field only" {
+    try testing.expectEqual(@as(?u32, 4242), publisherPid("ready=true frame=3 publisher_pid=4242\nwindow @w1\n"));
+    try testing.expectEqual(@as(?u32, 7), publisherPid("publisher_pid=7\n"));
+    // Pre-#93 snapshots carry no pid at all.
+    try testing.expectEqual(@as(?u32, null), publisherPid("ready=true frame=3 runtime_uptime_ns=42\n"));
+    // Widget text echoing the token mid-word is not the header field.
+    try testing.expectEqual(@as(?u32, null), publisherPid("name=\"xpublisher_pid=9\""));
+    try testing.expectEqual(@as(?u32, 9), publisherPid("text a\nname x publisher_pid=9\n"));
+    try testing.expectEqual(@as(?u32, null), publisherPid("publisher_pid=abc\n"));
+}
+
+test "snapshotLiveness classifies both directions" {
+    const live_snapshot = "ready=true publisher_pid=4242\n";
+    try testing.expectEqual(Liveness.live, snapshotLiveness(live_snapshot, alwaysAlive));
+    try testing.expectEqual(Liveness.dead_publisher, snapshotLiveness(live_snapshot, neverAlive));
+    try testing.expectEqual(Liveness.no_pid, snapshotLiveness("ready=true frame=3\n", alwaysAlive));
+    // pid 0 means the platform could not stamp one — unverifiable is stale.
+    try testing.expectEqual(Liveness.no_pid, snapshotLiveness("ready=true publisher_pid=0\n", alwaysAlive));
+}
+
+test "pidIsAlive: own process is alive, pid 0 is not" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return;
+    const own: u32 = @intCast(@max(0, std.posix.system.getpid()));
+    try testing.expect(pidIsAlive(own));
+    try testing.expect(!pidIsAlive(0));
 }
 
 test "textTail keeps the last lines only" {

@@ -242,6 +242,7 @@ pub const NullPlatform = struct {
     tray_item_count: usize = 0,
     tray_create_count: usize = 0,
     tray_update_count: usize = 0,
+    tray_title_update_count: usize = 0,
     tray_remove_count: usize = 0,
     window_event_window_id: WindowId = 0,
     window_event_name: [max_window_event_name_bytes]u8 = undefined,
@@ -391,6 +392,7 @@ pub const NullPlatform = struct {
                 .delete_credential_fn = deleteCredential,
                 .create_tray_fn = createTray,
                 .update_tray_menu_fn = updateTrayMenu,
+                .update_tray_title_fn = updateTrayTitle,
                 .remove_tray_fn = removeTray,
                 .open_external_url_fn = openExternalUrl,
                 .reveal_path_fn = revealPath,
@@ -848,6 +850,13 @@ pub const NullPlatform = struct {
         for (items, 0..) |item, index| self.tray_items[index] = item;
         self.tray_item_count = items.len;
         self.tray_update_count += 1;
+    }
+
+    fn updateTrayTitle(context: ?*anyopaque, title: []const u8) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        self.tray_title = undefined;
+        self.tray_title_len = (try copyInto(&self.tray_title, title)).len;
+        self.tray_title_update_count += 1;
     }
 
     fn removeTray(context: ?*anyopaque) anyerror!void {
@@ -1385,6 +1394,10 @@ pub const NullPlatform = struct {
 
     pub fn trayUpdateCount(self: *const NullPlatform) usize {
         return self.tray_update_count;
+    }
+
+    pub fn trayTitleUpdateCount(self: *const NullPlatform) usize {
+        return self.tray_title_update_count;
     }
 
     pub fn trayRemoveCount(self: *const NullPlatform) usize {

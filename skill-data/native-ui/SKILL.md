@@ -86,6 +86,24 @@ URL changes navigate; bumping `reload_token` reloads the same URL (the CenterPan
 } },
 ```
 
+For a LIVE menu-bar extra (an open-count badge in the title, a latest-items dropdown), add `Options.status_item_fn` — the `web_panes` pattern: consulted on install and after every rebuild, re-applied only when its output changed (title and menu patch independently; the static `status_item` keeps icon/tooltip). Format derived strings into the provided scratch; item `command`s dispatch through `on_command` exactly like static items:
+
+```zig
+fn statusItem(model: *const Model, scratch: *App.StatusItemScratch) App.StatusItemState {
+    const title = std.fmt.bufPrint(&scratch.title_buffer, "ZN {d}", .{model.open_count}) catch "ZN";
+    scratch.items[0] = .{ .id = 1, .label = "Refresh", .command = "app.refresh" };
+    var count: usize = 1;
+    for (model.latest(), 0..) |issue, i| { // per-row commands: map "issue.select.N" in on_command
+        scratch.items[count] = .{ .id = @intCast(10 + i), .label = issue.title, .command = issue.select_command };
+        count += 1;
+    }
+    return .{ .title = title, .items = scratch.items[0..count] };
+}
+// options: .status_item_fn = statusItem,
+```
+
+Title updates retitle the live `NSStatusItem` button without re-creating it; platforms without a tray-title seam keep menu updates and log the title gap once.
+
 ### Native scrolling (macOS)
 
 Zero app code: on macOS every non-virtualized `scroll` region is driven by an invisible `NSScrollView` — OS momentum, rubber-band overscroll, and the system overlay scrollbar — while the engine renders the content. `widget.value` stays the offset of record, so the rebuild reconcile rule ("user offset survives rebuilds until the source offset changes"), automation snapshot offsets (`scroll=[offset=..]`), and `Options.sync` all work exactly as before; the engine-drawn scrollbar simply stops painting for natively driven regions. Programmatic scrolls still work: change the source offset (or scroll via keyboard/automation) and the runtime pushes it into the native scroller. GTK/Win32 and mobile embeds keep the engine's wheel physics unchanged. Nested-scroll saturation handoff (inner region exhausted, outer continues) is per-region native today: the inner region rubber-bands at its edge like a standalone scroller.

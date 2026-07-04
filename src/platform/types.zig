@@ -1522,6 +1522,7 @@ pub const PlatformServices = struct {
     clear_recent_documents_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     create_tray_fn: ?*const fn (context: ?*anyopaque, options: TrayOptions) anyerror!void = null,
     update_tray_menu_fn: ?*const fn (context: ?*anyopaque, items: []const TrayMenuItem) anyerror!void = null,
+    update_tray_title_fn: ?*const fn (context: ?*anyopaque, title: []const u8) anyerror!void = null,
     remove_tray_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     configure_security_policy_fn: ?*const fn (context: ?*anyopaque, policy: security.Policy) anyerror!void = null,
     configure_menus_fn: ?*const fn (context: ?*anyopaque, menus: []const Menu) anyerror!void = null,
@@ -1794,6 +1795,15 @@ pub const PlatformServices = struct {
     pub fn updateTrayMenu(self: PlatformServices, items: []const TrayMenuItem) anyerror!void {
         const update_fn = self.update_tray_menu_fn orelse return error.UnsupportedService;
         return update_fn(self.context, items);
+    }
+
+    /// Retitle the live status-bar button without re-creating the item
+    /// (re-creating flickers and can reshuffle the macOS menu bar). Added
+    /// for model-driven tray state (friction #90, e.g. an open-count badge
+    /// in the title).
+    pub fn updateTrayTitle(self: PlatformServices, title: []const u8) anyerror!void {
+        const title_fn = self.update_tray_title_fn orelse return error.UnsupportedService;
+        return title_fn(self.context, title);
     }
 
     pub fn removeTray(self: PlatformServices) anyerror!void {

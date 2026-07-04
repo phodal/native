@@ -443,6 +443,7 @@ pub const Runtime = struct {
     pub const deleteCredential = SystemServiceMethods.deleteCredential;
     pub const createTray = SystemServiceMethods.createTray;
     pub const updateTrayMenu = SystemServiceMethods.updateTrayMenu;
+    pub const updateTrayTitle = SystemServiceMethods.updateTrayTitle;
     pub const removeTray = SystemServiceMethods.removeTray;
     const trayCommandNameForItem = SystemServiceMethods.trayCommandNameForItem;
     const supportsFeatureFromJson = SystemServiceMethods.supportsFeatureFromJson;

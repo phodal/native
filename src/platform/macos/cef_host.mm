@@ -2274,6 +2274,24 @@ void native_sdk_appkit_update_tray_menu(native_sdk_appkit_host_t *host, const ui
     }
 }
 
+void native_sdk_appkit_update_tray_title(native_sdk_appkit_host_t *host, const char *title, size_t title_len) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    @autoreleasepool {
+        if (!object.statusItem) return;
+        BOOL hasTitle = title != NULL && title_len > 0;
+        NSString *value = hasTitle ? ([[NSString alloc] initWithBytes:title length:title_len encoding:NSUTF8StringEncoding] ?: @"") : @"";
+        object.statusItem.button.title = value;
+        if (!object.statusItem.button.image && value.length == 0) {
+            // Same fallback as create: a bare status item must still show
+            // SOMETHING to stay clickable.
+            object.statusItem.button.title = object.appName.length > 0 ? [object.appName substringToIndex:MIN(1, object.appName.length)] : @"Z";
+        }
+        // Titled extras need variable width; icon-only ones keep the
+        // classic square well (mirrors create's length choice).
+        object.statusItem.length = object.statusItem.button.title.length > 0 ? NSVariableStatusItemLength : NSSquareStatusItemLength;
+    }
+}
+
 void native_sdk_appkit_remove_tray(native_sdk_appkit_host_t *host) {
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     if (object.statusItem) {

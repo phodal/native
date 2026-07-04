@@ -39,13 +39,15 @@ const CanvasPresentationResult = runtime_api.CanvasPresentationResult;
 const max_canvas_diff_changes_per_view = canvas_limits.max_canvas_diff_changes_per_view;
 const max_canvas_render_animations_per_view = canvas_limits.max_canvas_render_animations_per_view;
 const max_canvas_text_layouts_per_view = canvas_limits.max_canvas_text_layouts_per_view;
+const max_canvas_text_layout_lines_per_view = canvas_limits.max_canvas_text_layout_lines_per_view;
 threadlocal var canvas_frame_text_layout_plans_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutPlan = undefined;
-threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layouts_per_view]canvas.TextLine = undefined;
+threadlocal var canvas_frame_text_layout_lines_scratch: [max_canvas_text_layout_lines_per_view]canvas.TextLine = undefined;
 threadlocal var canvas_frame_text_layout_cache_entries_scratch: [max_canvas_text_layouts_per_view]canvas.TextLayoutCacheEntry = undefined;
 threadlocal var canvas_frame_text_layout_cache_actions_scratch: [max_canvas_text_layouts_per_view * 2]canvas.TextLayoutCacheAction = undefined;
 
 const validateViewLabel = validation.validateViewLabel;
 const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
+const canvas_frame_log = std.log.scoped(.zero_canvas_frame);
 
 /// Result of `renderCanvasScreenshot`: tightly packed RGBA8 pixels sliced
 /// from the caller's buffer.
@@ -593,7 +595,23 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 storage.glyph_atlas_cache_entries,
                 storage.glyph_atlas_cache_actions,
             );
-            const text_layout_plan = try display_list.textLayoutPlan(frame_options.text_layout_options, storage.text_layout_plans, storage.text_layout_lines);
+            const text_layout_plan = display_list.textLayoutPlan(frame_options.text_layout_options, storage.text_layout_plans, storage.text_layout_lines) catch |err| {
+                // Teach the fix at the failure site (#94): the bare error
+                // name kills the frame without saying which budget bound
+                // it or where the headroom telemetry lives.
+                switch (err) {
+                    error.TextLayoutPlanListFull => canvas_frame_log.warn(
+                        "text layout plan capacity exceeded: the per-frame budget is {d} text runs (canvas_limits.max_canvas_text_layouts_per_view) - reduce visible draw_text commands or virtualize long text; snapshots report headroom as text_layout_plans=N/{d}",
+                        .{ canvas_limits.max_canvas_text_layouts_per_view, canvas_limits.max_canvas_text_layouts_per_view },
+                    ),
+                    error.TextLayoutLineListFull => canvas_frame_log.warn(
+                        "text layout line capacity exceeded: the per-frame budget is {d} wrapped lines across all text runs (canvas_limits.max_canvas_text_layout_lines_per_view) - clip or window long wrapped text; snapshots report headroom as text_layout_lines=N/{d}",
+                        .{ canvas_limits.max_canvas_text_layout_lines_per_view, canvas_limits.max_canvas_text_layout_lines_per_view },
+                    ),
+                    else => {},
+                }
+                return err;
+            };
             const text_layout_cache_plan = if (storage.text_layout_cache_entries.len == 0 and storage.text_layout_cache_actions.len == 0)
                 canvas.TextLayoutCachePlan{}
             else

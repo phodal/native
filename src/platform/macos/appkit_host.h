@@ -403,6 +403,11 @@ size_t native_sdk_appkit_show_save_dialog(native_sdk_appkit_host_t *host, const 
 int native_sdk_appkit_show_message_dialog(native_sdk_appkit_host_t *host, const native_sdk_appkit_message_dialog_opts_t *opts);
 void native_sdk_appkit_create_tray(native_sdk_appkit_host_t *host, const char *icon_path, size_t icon_path_len, const char *title, size_t title_len, const char *tooltip, size_t tooltip_len);
 void native_sdk_appkit_update_tray_menu(native_sdk_appkit_host_t *host, const uint32_t *item_ids, const char *const *labels, const size_t *label_lens, const int *separators, const int *enabled_flags, size_t count);
+/* Retitle the live status item's button without re-creating it (create
+ * would flicker and reshuffle the menu bar). Empty title falls back to
+ * the icon-only square well, or the app-name initial when there is no
+ * icon either — the same fallbacks as create. */
+void native_sdk_appkit_update_tray_title(native_sdk_appkit_host_t *host, const char *title, size_t title_len);
 void native_sdk_appkit_remove_tray(native_sdk_appkit_host_t *host);
 void native_sdk_appkit_set_tray_callback(native_sdk_appkit_host_t *host, native_sdk_appkit_tray_callback_t callback, void *context);
 

@@ -1570,6 +1570,126 @@ test "ui app status item installs a tray and dispatches its commands" {
     try std.testing.expectEqual(@as(u32, 1), app_state.model.refresh_count);
 }
 
+// ------------------------------------------- model-driven status item (#90)
+
+const TrayStateModel = struct {
+    open_count: u32 = 3,
+    selected_issue: u32 = 0,
+    issues: [2][]const u8 = .{ "Fix crash on resize", "Adopt the tray seam" },
+};
+
+const TrayStateMsg = union(enum) {
+    refresh,
+    select_issue: u32,
+};
+
+const TrayStateApp = ui_app_model.UiApp(TrayStateModel, TrayStateMsg);
+
+fn trayStateUpdate(model: *TrayStateModel, msg: TrayStateMsg) void {
+    switch (msg) {
+        .refresh => model.open_count += 1,
+        .select_issue => |index| model.selected_issue = index,
+    }
+}
+
+fn trayStateView(ui: *TrayStateApp.Ui, model: *const TrayStateModel) TrayStateApp.Ui.Node {
+    return ui.column(.{ .padding = 12 }, .{
+        ui.text(.{}, ui.fmt("Selected {d}", .{model.selected_issue})),
+    });
+}
+
+fn trayStateCommand(name: []const u8) ?TrayStateMsg {
+    if (std.mem.eql(u8, name, "app.refresh")) return .refresh;
+    if (std.mem.eql(u8, name, "issue.select.0")) return .{ .select_issue = 0 };
+    if (std.mem.eql(u8, name, "issue.select.1")) return .{ .select_issue = 1 };
+    return null;
+}
+
+/// dev-2's menu-bar extra shape: an open-count badge in the title and the
+/// latest issues in the dropdown, each row selecting its issue.
+fn trayStateStatusItem(model: *const TrayStateModel, scratch: *TrayStateApp.StatusItemScratch) TrayStateApp.StatusItemState {
+    const title = std.fmt.bufPrint(&scratch.title_buffer, "ZN {d}", .{model.open_count}) catch "ZN";
+    scratch.items[0] = .{ .id = 1, .label = "Refresh", .command = "app.refresh" };
+    scratch.items[1] = .{ .separator = true };
+    const commands = [_][]const u8{ "issue.select.0", "issue.select.1" };
+    for (model.issues, 0..) |issue_title, index| {
+        scratch.items[2 + index] = .{
+            .id = @intCast(10 + index),
+            .label = issue_title,
+            .command = commands[index],
+            // The selected row reads as such (also exercises menu-change
+            // detection when the selection moves).
+            .enabled = model.selected_issue != index,
+        };
+    }
+    return .{ .title = title, .items = scratch.items[0..4] };
+}
+
+test "ui app status_item_fn drives the tray title and menu from the model" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(TrayStateApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = TrayStateApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-tray-state",
+        .scene = counter_scene,
+        .canvas_label = canvas_label,
+        .update = trayStateUpdate,
+        .view = trayStateView,
+        .on_command = trayStateCommand,
+        .status_item = .{ .tooltip = "issue tracker" },
+        .status_item_fn = trayStateStatusItem,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // The installing frame creates the tray FROM THE MODEL: derived
+    // title, derived dropdown, static tooltip.
+    const frame_event = zero_platform.GpuSurfaceFrameEvent{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = frame_event });
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
+    try std.testing.expectEqualStrings("ZN 3", harness.null_platform.lastTrayTitle());
+    try std.testing.expectEqualStrings("issue tracker", harness.null_platform.lastTrayTooltip());
+    try std.testing.expectEqual(@as(usize, 4), harness.null_platform.trayItems().len);
+    try std.testing.expectEqualStrings("Fix crash on resize", harness.null_platform.trayItems()[2].label);
+    const updates_after_install = harness.null_platform.trayUpdateCount();
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.trayTitleUpdateCount());
+
+    // A model change that only affects the TITLE re-titles the live
+    // button without rebuilding the menu or re-creating the item.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .tray_action = 1 });
+    try std.testing.expectEqual(@as(u32, 4), app_state.model.open_count);
+    try std.testing.expectEqualStrings("ZN 4", harness.null_platform.lastTrayTitle());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayTitleUpdateCount());
+    try std.testing.expectEqual(updates_after_install, harness.null_platform.trayUpdateCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
+
+    // Selecting a dropdown row closes the loop: tray action -> command ->
+    // Msg -> model, and the menu (not the title) re-applies.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .tray_action = 11 });
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.selected_issue);
+    try std.testing.expectEqual(updates_after_install + 1, harness.null_platform.trayUpdateCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayTitleUpdateCount());
+    try std.testing.expect(!harness.null_platform.trayItems()[3].enabled);
+
+    // A rebuild whose tray output is unchanged touches nothing (the
+    // repeat selection Msg still rebuilds the view).
+    try harness.runtime.dispatchPlatformEvent(app, .{ .tray_action = 11 });
+    try std.testing.expectEqual(updates_after_install + 1, harness.null_platform.trayUpdateCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayTitleUpdateCount());
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.trayCreateCount());
+}
+
 const TaskModel = struct {
     completed: u32 = 0,
     deleted: u32 = 0,

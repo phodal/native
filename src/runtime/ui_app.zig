@@ -123,6 +123,26 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             items: []const platform.TrayMenuItem = &.{},
         };
 
+        /// Model-derived status-item state returned by
+        /// `Options.status_item_fn`: the live button title and menu.
+        /// Slices may point at the scratch the fn received, the model, or
+        /// static strings — they only need to outlive the apply (the
+        /// runtime and platform copy what they keep).
+        pub const StatusItemState = struct {
+            title: []const u8 = "",
+            items: []const platform.TrayMenuItem = &.{},
+        };
+
+        /// Scratch handed to `status_item_fn` so a derived title
+        /// (`std.fmt.bufPrint(&scratch.title_buffer, "{d} open", ...)`)
+        /// and a built-up item list need no model-side storage. Lives on
+        /// the app struct, so returned slices stay valid until the next
+        /// apply.
+        pub const StatusItemScratch = struct {
+            title_buffer: [platform.max_tray_title_bytes]u8 = undefined,
+            items: [platform.max_tray_items]platform.TrayMenuItem = undefined,
+        };
+
         pub const MarkupOptions = struct {
             /// Markup source embedded into the binary: parsed on the first
             /// build when no `view` is set, and otherwise the baseline the
@@ -231,6 +251,19 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// macOS-proven (`NSStatusItem`); platforms without a
             /// status-bar service log a warning and continue.
             status_item: ?StatusItemOptions = null,
+            /// Model-derived status-item title and menu (friction #90:
+            /// an open-count badge in the menu bar, a latest-items
+            /// dropdown), the `web_panes` pattern: consulted on install
+            /// and after every rebuild, re-applied only when the output
+            /// actually changed. Selections dispatch each item's
+            /// `command` through `on_command` with source `.tray` —
+            /// exactly the window-menu shape. With `status_item` also
+            /// set, the static options provide the icon and tooltip
+            /// (and the pre-install defaults); this fn owns title and
+            /// items from the installing frame on. Platforms without a
+            /// tray title seam keep the menu updates and log the title
+            /// gap once.
+            status_item_fn: ?*const fn (model: *const ModelT, scratch: *StatusItemScratch) StatusItemState = null,
         };
 
         /// Last-navigated webview pane state, tracked per shell label so
@@ -294,8 +327,21 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// shell label.
         web_pane_states: [max_web_panes]WebPaneState = [_]WebPaneState{.{}} ** max_web_panes,
         web_pane_state_count: usize = 0,
-        /// Exactly-once guard for `Options.status_item`.
+        /// Exactly-once guard for `Options.status_item`/`status_item_fn`.
         status_item_installed: bool = false,
+        /// True once `createTray` succeeded — the gate for model-driven
+        /// tray updates (`status_item_fn`).
+        tray_created: bool = false,
+        /// The platform reported no tray-title seam; stop retrying (menu
+        /// updates keep flowing).
+        tray_title_unsupported: bool = false,
+        /// Hashes of the last APPLIED model-derived tray state, so
+        /// rebuilds only touch the platform when the output changed.
+        tray_title_hash: u64 = 0,
+        tray_menu_hash: u64 = 0,
+        /// Scratch handed to `status_item_fn`; on the app struct so the
+        /// returned slices outlive the apply.
+        tray_scratch: StatusItemScratch = .{},
 
         pub fn init(backing: std.mem.Allocator, model: ModelT, options: Options) Self {
             std.debug.assert(options.view != null or options.markup != null);
@@ -445,6 +491,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             self.arena_index = next_index;
             try self.scheduleAnimations(runtime, window_id);
             self.applyWebPanes(runtime, window_id, layout);
+            self.applyStatusItem(runtime);
         }
 
         /// Re-apply the model-derived webview panes against the freshly
@@ -680,19 +727,66 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Install the menu-bar extra once, on the installing frame.
         /// Selecting one of its items dispatches the item's `command`
         /// through the ordinary `on_command` path (source `.tray`).
-        /// Unsupported platforms degrade to a logged warning.
+        /// Unsupported platforms degrade to a logged warning. With a
+        /// `status_item_fn`, the model's derived title/items win from
+        /// the very first frame (the static options keep icon+tooltip).
         fn installStatusItem(self: *Self, runtime: *Runtime) void {
-            const status_item = self.options.status_item orelse return;
             if (self.status_item_installed) return;
+            if (self.options.status_item == null and self.options.status_item_fn == null) return;
             self.status_item_installed = true;
+            const static = self.options.status_item orelse StatusItemOptions{};
+            var title = static.title;
+            var items = static.items;
+            if (self.options.status_item_fn) |state_fn| {
+                const state = state_fn(&self.model, &self.tray_scratch);
+                title = state.title;
+                items = state.items;
+            }
             runtime.createTray(.{
-                .title = status_item.title,
-                .icon_path = status_item.icon_path,
-                .tooltip = status_item.tooltip,
-                .items = status_item.items,
+                .title = title,
+                .icon_path = static.icon_path,
+                .tooltip = static.tooltip,
+                .items = items,
             }) catch |err| {
                 ui_app_log.warn("status item install failed: {s}", .{@errorName(err)});
+                return;
             };
+            self.tray_created = true;
+            self.tray_title_hash = hashTrayTitle(title);
+            self.tray_menu_hash = hashTrayMenu(items);
+        }
+
+        /// Re-derive the tray state from the model after a rebuild and
+        /// patch only what changed — the `web_panes` shape for the menu
+        /// bar (#90). Failures degrade to a logged warning; a rejected
+        /// state is remembered so a static model does not warn per frame.
+        fn applyStatusItem(self: *Self, runtime: *Runtime) void {
+            const state_fn = self.options.status_item_fn orelse return;
+            if (!self.tray_created) return;
+            const state = state_fn(&self.model, &self.tray_scratch);
+
+            const title_hash = hashTrayTitle(state.title);
+            if (title_hash != self.tray_title_hash) {
+                self.tray_title_hash = title_hash;
+                if (!self.tray_title_unsupported) {
+                    runtime.updateTrayTitle(state.title) catch |err| {
+                        if (err == error.UnsupportedService) {
+                            self.tray_title_unsupported = true;
+                            ui_app_log.warn("status item title updates unsupported on this platform: the menu keeps updating, the button title stays \"{s}\"-era static", .{state.title});
+                        } else {
+                            ui_app_log.warn("status item title update failed: {s}", .{@errorName(err)});
+                        }
+                    };
+                }
+            }
+
+            const menu_hash = hashTrayMenu(state.items);
+            if (menu_hash != self.tray_menu_hash) {
+                self.tray_menu_hash = menu_hash;
+                runtime.updateTrayMenu(state.items) catch |err| {
+                    ui_app_log.warn("status item menu update failed: {s} (items must carry unique non-zero ids and validated command names)", .{@errorName(err)});
+                };
+            }
         }
 
         fn sceneFn(context: *anyopaque) anyerror!app_manifest.ShellConfig {
@@ -882,6 +976,29 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         fn normalizedSurfaceScale(scale_factor: f32) f32 {
             if (!std.math.isFinite(scale_factor) or scale_factor <= 0) return 1;
             return scale_factor;
+        }
+
+        /// Change-detection hashes for the model-derived tray state
+        /// (#90): field lengths are folded in so adjacent slices can
+        /// never alias across boundaries.
+        fn hashTrayTitle(title: []const u8) u64 {
+            var hasher = std.hash.Wyhash.init(0x7261795f7469746c); // "ray_titl"
+            hasher.update(title);
+            return hasher.final();
+        }
+
+        fn hashTrayMenu(items: []const platform.TrayMenuItem) u64 {
+            var hasher = std.hash.Wyhash.init(0x7261795f6d656e75); // "ray_menu"
+            hasher.update(std.mem.asBytes(&items.len));
+            for (items) |item| {
+                hasher.update(std.mem.asBytes(&item.id));
+                hasher.update(std.mem.asBytes(&item.label.len));
+                hasher.update(item.label);
+                hasher.update(std.mem.asBytes(&item.command.len));
+                hasher.update(item.command);
+                hasher.update(&.{ @intFromBool(item.separator), @intFromBool(item.enabled) });
+            }
+            return hasher.final();
         }
 
         fn handleResize(self: *Self, runtime: *Runtime, resize_event: platform.GpuSurfaceResizeEvent) anyerror!void {

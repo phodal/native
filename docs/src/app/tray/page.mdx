@@ -140,3 +140,20 @@ app.* = PreviewApp.init(allocator, .{}, .{
 ```
 
 macOS (`NSStatusItem`) is the proven host; platforms without a status-bar service log a warning and continue. See `examples/canvas-preview` for the live composition.
+
+## Model-driven title and menu
+
+For a live menu-bar extra — an open-count badge in the title, the latest items in the dropdown — add `UiApp.Options.status_item_fn`. It is consulted on install and after every rebuild, and the runtime re-applies only what actually changed: a title-only change retitles the live status button (no flicker, no menu rebuild), a menu change updates the dropdown. The static `status_item` still provides the icon and tooltip.
+
+```zig
+fn statusItem(model: *const Model, scratch: *App.StatusItemScratch) App.StatusItemState {
+    const title = std.fmt.bufPrint(&scratch.title_buffer, "ZN {d}", .{model.open_count}) catch "ZN";
+    scratch.items[0] = .{ .id = 1, .label = "Refresh", .command = "app.refresh" };
+    scratch.items[1] = .{ .separator = true };
+    scratch.items[2] = .{ .id = 10, .label = model.latest_title, .command = "issue.select.latest" };
+    return .{ .title = title, .items = scratch.items[0..3] };
+}
+// options: .status_item_fn = statusItem,
+```
+
+Selections dispatch each item's `command` through `on_command` with source `.tray`, the same shape as window menus. Platforms without a tray-title seam keep the menu updates and log the missing title support once.

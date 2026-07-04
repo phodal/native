@@ -25,6 +25,7 @@ const validateRevealPath = validation.validateRevealPath;
 const validateSaveDialogOptions = validation.validateSaveDialogOptions;
 const validateTrayMenuItems = validation.validateTrayMenuItems;
 const validateTrayOptions = validation.validateTrayOptions;
+const validateTrayTitle = validation.validateTrayTitle;
 
 pub fn RuntimeSystemServices(comptime Runtime: type) type {
     return struct {
@@ -117,6 +118,14 @@ pub fn RuntimeSystemServices(comptime Runtime: type) type {
             try validateTrayMenuItems(items);
             try self.options.platform.services.updateTrayMenu(items);
             try storeTrayItems(self, items);
+        }
+
+        /// Retitle the live status-bar button (friction #90: a model-driven
+        /// badge like "3 open" in the menu bar). Platforms without the
+        /// title seam report `UnsupportedService`; the menu keeps working.
+        pub fn updateTrayTitle(self: *Runtime, title: []const u8) anyerror!void {
+            try validateTrayTitle(title);
+            try self.options.platform.services.updateTrayTitle(title);
         }
 
         pub fn removeTray(self: *Runtime) anyerror!void {

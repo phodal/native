@@ -35,7 +35,31 @@ pub const max_canvas_resources_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_resource_cache_actions_per_view: usize = max_canvas_resources_per_view * 2;
 pub const max_canvas_visual_effects_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_visual_effect_cache_actions_per_view: usize = max_canvas_visual_effects_per_view * 2;
-pub const max_canvas_text_layouts_per_view: usize = 512;
+// Text layout plans per frame. Raised for friction #94: a real agent
+// transcript (long wrapped chat turns in a 380px pane) put >512 draw_text
+// commands in one frame and killed renders with TextLayoutPlanListFull,
+// invisible outside one log line. Every plan is born from exactly one
+// `draw_text` command in a display list bounded by the command budget, so
+// deriving this from `max_canvas_commands_per_view` makes plan-list
+// overflow structurally unreachable — the command budget fails first,
+// loudly, at build time. Memory is scratch + per-view cache: the
+// per-frame planning arrays are threadlocal (TextLayoutPlan 96 B x 2048 =
+// 192 KiB, cache entries 96 B x 2048 = 192 KiB, cache actions 96 B x
+// 4096 = 384 KiB — ~0.8 MiB once per thread, was ~0.2 MiB), and each
+// RuntimeView retains one cache-entry array (96 B x 2048 = 192 KiB x 32
+// view slots = 6 MiB fixed address space, was 1.5 MiB; pages touch only
+// as views lay out text).
+pub const max_canvas_text_layouts_per_view: usize = max_canvas_commands_per_view;
+// Wrapped text lines across all of a frame's layout plans (the plan
+// arrays above index into one shared line pool). Sized with #94's shape
+// in mind: plans grow with COMMAND count, lines grow with WRAP count — a
+// 32 KiB frame-text budget wrapped at ~50 chars/line in a narrow pane is
+// ~650 lines, so 8192 (matching the frame glyph budget: a rendered line
+// costs at least one glyph) gives >10x headroom over the worst measured
+// real view. TextLine is 56 B: 56 B x 8192 = 448 KiB of threadlocal
+// scratch (was 28 KiB at the old shared 512 cap). Overflow stays a loud
+// `TextLayoutLineListFull` with a teaching diagnostic naming this budget.
+pub const max_canvas_text_layout_lines_per_view: usize = 8192;
 
 // Runtime-registered canvas images: decoded RGBA pixel buffers apps
 // register under a caller-chosen ImageId and reference from image/icon/

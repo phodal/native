@@ -1,3 +1,5 @@
+const std = @import("std");
+const builtin = @import("builtin");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
 const automation = @import("../automation/root.zig");
@@ -33,6 +35,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                     .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
                     .widget_semantics_budget = canvas_limits.max_canvas_widget_semantics_per_view,
                     .widget_context_menu_item_budget = canvas_limits.max_canvas_widget_context_menu_items_per_view,
+                    .text_layout_plan_budget = canvas_limits.max_canvas_text_layouts_per_view,
+                    .text_layout_line_budget = canvas_limits.max_canvas_text_layout_lines_per_view,
                 };
             }
             var view_count: usize = 0;
@@ -60,6 +64,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .widget_node_budget = canvas_limits.max_canvas_widget_nodes_per_view,
                 .widget_semantics_budget = canvas_limits.max_canvas_widget_semantics_per_view,
                 .widget_context_menu_item_budget = canvas_limits.max_canvas_widget_context_menu_items_per_view,
+                .text_layout_plan_budget = canvas_limits.max_canvas_text_layouts_per_view,
+                .text_layout_line_budget = canvas_limits.max_canvas_text_layout_lines_per_view,
             };
         }
 
@@ -72,6 +78,18 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
                 .runtime_uptime_ns = uptime_ns,
                 .dispatch_error_count = self.dispatch_error_total,
                 .dropped_trace_records = self.dropped_trace_records,
+                .publisher_pid = currentProcessId(),
+            };
+        }
+
+        /// The publishing process's pid, stamped into every snapshot so
+        /// the automation CLI can refuse dropbox files whose publisher is
+        /// gone (friction #93). 0 on platforms without a process table.
+        fn currentProcessId() u32 {
+            return switch (builtin.os.tag) {
+                .windows => std.os.windows.GetCurrentProcessId(),
+                .wasi => 0,
+                else => @intCast(@max(0, std.posix.system.getpid())),
             };
         }
 

@@ -78,8 +78,17 @@ meta_changed=false
 affected_examples=""   # space-separated example dir names
 mobile_affected=false
 
-# Examples with a root `test-example-<name>` step (see build.zig).
-registered_examples="calculator canvas-preview capabilities command-app effects-probe gpu-components gpu-dashboard gpu-surface habits kanban markdown-viewer native-panels native-shell next notes react soundboard svelte system-monitor ui-inbox vue"
+# Examples with a root `test-example-<name>` step, derived from build.zig's
+# `addExampleTestStep(...)` registrations so this script is never a second
+# registry that drifts (it did, twice in one day — soundboard/calculator/
+# notes were silently skipped). Layout/file-contains checks register other
+# `test-example-*` names via different helpers and are deliberately not
+# example suites, so the match is keyed on the helper name.
+registered_examples="$(sed -n 's/.*addExampleTestStep([^"]*"test-example-\([A-Za-z0-9-]*\)".*/\1/p' build.zig | sort -u | tr '\n' ' ')"
+if [ -z "$registered_examples" ]; then
+  echo "gate: derived no registered examples from build.zig (addExampleTestStep pattern matched nothing — helper renamed?)" >&2
+  exit 2
+fi
 # Examples whose suite is their own in-dir `zig build test`.
 indir_examples="browser hello webview"
 # Mobile example projects, covered as a group by test-examples-mobile.

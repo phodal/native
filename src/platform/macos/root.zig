@@ -289,6 +289,7 @@ extern fn native_sdk_appkit_show_save_dialog(host: *AppKitHost, opts: *const App
 extern fn native_sdk_appkit_show_message_dialog(host: *AppKitHost, opts: *const AppKitMessageDialogOpts) c_int;
 extern fn native_sdk_appkit_create_tray(host: *AppKitHost, icon_path: [*]const u8, icon_path_len: usize, title: [*]const u8, title_len: usize, tooltip: [*]const u8, tooltip_len: usize) void;
 extern fn native_sdk_appkit_update_tray_menu(host: *AppKitHost, item_ids: [*]const u32, labels: [*]const [*]const u8, label_lens: [*]const usize, separators: [*]const c_int, enabled_flags: [*]const c_int, count: usize) void;
+extern fn native_sdk_appkit_update_tray_title(host: *AppKitHost, title: [*]const u8, title_len: usize) void;
 extern fn native_sdk_appkit_remove_tray(host: *AppKitHost) void;
 extern fn native_sdk_appkit_set_tray_callback(host: *AppKitHost, callback: AppKitTrayCallback, context: ?*anyopaque) void;
 
@@ -375,6 +376,7 @@ pub const MacPlatform = struct {
                 .clear_recent_documents_fn = clearRecentDocuments,
                 .create_tray_fn = createTray,
                 .update_tray_menu_fn = updateTrayMenu,
+                .update_tray_title_fn = updateTrayTitle,
                 .remove_tray_fn = removeTray,
                 .configure_security_policy_fn = configureSecurityPolicy,
                 .configure_menus_fn = configureMenus,
@@ -1524,6 +1526,11 @@ fn updateTrayMenu(context: ?*anyopaque, items: []const platform_mod.TrayMenuItem
         enabled_flags[i] = if (item.enabled) 1 else 0;
     }
     native_sdk_appkit_update_tray_menu(self.host, &ids, &labels, &label_lens, &separators, &enabled_flags, count);
+}
+
+fn updateTrayTitle(context: ?*anyopaque, title: []const u8) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_appkit_update_tray_title(self.host, title.ptr, title.len);
 }
 
 fn removeTray(context: ?*anyopaque) anyerror!void {

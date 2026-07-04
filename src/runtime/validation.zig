@@ -123,6 +123,10 @@ pub fn validateTrayOptions(options: platform.TrayOptions) !void {
     try validateTrayMenuItems(options.items);
 }
 
+pub fn validateTrayTitle(title: []const u8) !void {
+    try validateTrayField(title, platform.max_tray_title_bytes);
+}
+
 pub fn validateTrayMenuItems(items: []const platform.TrayMenuItem) !void {
     if (items.len > platform.max_tray_items) return error.InvalidTrayOptions;
     for (items, 0..) |item, index| {

@@ -22,6 +22,13 @@ pub const Diagnostics = struct {
     frame_index: u64 = 0,
     command_count: usize = 0,
     runtime_uptime_ns: u64 = 0,
+    /// Pid of the publishing app. Dropbox files persist across builds
+    /// and runs, so the CLI checks this against the live process table
+    /// before trusting a snapshot: a dead (or absent) publisher means
+    /// the file is a leftover — served loudly as "stale", never as
+    /// current state (friction #93). 0 means the platform exposes no
+    /// pid; the CLI treats that as unverifiable-and-stale too.
+    publisher_pid: u32 = 0,
     /// Lifetime count of handler/update errors dispatch caught and
     /// degraded instead of terminating the app; the most recent ones
     /// ride in `Input.errors`.
@@ -139,6 +146,12 @@ pub const Input = struct {
     widget_node_budget: usize = 0,
     widget_semantics_budget: usize = 0,
     widget_context_menu_item_budget: usize = 0,
+    /// Per-frame text-layout budgets (`canvas_limits.max_canvas_text_
+    /// layouts_per_view` / `..._lines_per_view`), stamped by the runtime
+    /// so gpu_surface view lines report `text_layout_plans=current/budget`
+    /// headroom (#94).
+    text_layout_plan_budget: usize = 0,
+    text_layout_line_budget: usize = 0,
     /// The most recent degraded dispatch errors, oldest first (bounded
     /// ring; `diagnostics.dispatch_error_count` is the lifetime total).
     errors: []const DispatchError = &.{},
@@ -146,12 +159,13 @@ pub const Input = struct {
 };
 
 pub fn writeText(input: Input, writer: anytype) !void {
-    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d} dispatch_errors={d} dropped_trace_records={d}\n", .{
+    try writer.print("ready=true frame={d} commands={d} runtime_uptime_ns={d} dispatch_errors={d} dropped_trace_records={d} publisher_pid={d}\n", .{
         input.diagnostics.frame_index,
         input.diagnostics.command_count,
         input.diagnostics.runtime_uptime_ns,
         input.diagnostics.dispatch_error_count,
         input.diagnostics.dropped_trace_records,
+        input.diagnostics.publisher_pid,
     });
     for (input.windows) |window| {
         try writer.print(
@@ -302,6 +316,17 @@ pub fn writeText(input: Input, writer: anytype) !void {
                 input.widget_semantics_budget,
                 view.widget_context_menu_item_count,
                 input.widget_context_menu_item_budget,
+            });
+            // Text-layout plan headroom (#94): the last planned frame's
+            // text runs and wrapped lines against the per-frame budgets,
+            // so a growing transcript shows the cliff here before a frame
+            // dies with TextLayoutPlanListFull/TextLayoutLineListFull (a
+            // failed plan also lands in the dispatch-error ring above).
+            try writer.print(" text_layout_plans={d}/{d} text_layout_lines={d}/{d}", .{
+                view.canvas_frame_text_layout_count,
+                input.text_layout_plan_budget,
+                view.canvas_frame_text_layout_line_count,
+                input.text_layout_line_budget,
             });
             if (view.canvas_frame_dirty_bounds) |dirty| {
                 try writer.print(" canvas_frame_dirty=({d},{d} {d}x{d})", .{ dirty.x, dirty.y, dirty.width, dirty.height });
@@ -553,11 +578,12 @@ test "snapshot emits window and source" {
     try writeText(.{
         .windows = &windows,
         .views = &views,
-        .diagnostics = .{ .runtime_uptime_ns = 42 },
+        .diagnostics = .{ .runtime_uptime_ns = 42, .publisher_pid = 4242 },
         .source = platform.WebViewSource.html("<h1>Hello</h1>"),
     }, &writer);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "ready=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "runtime_uptime_ns=42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "publisher_pid=4242") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "@w1") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "view @w1/main kind=webview") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "accessibility_label=\"\"") != null);
@@ -693,6 +719,8 @@ test "snapshot emits GPU surface frame proof" {
         .windows = &windows,
         .views = &views,
         .widget_context_menu_item_budget = 512,
+        .text_layout_plan_budget = 2048,
+        .text_layout_line_budget = 8192,
     }, &writer);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_size=320x180") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "gpu_scale=2") != null);
@@ -770,6 +798,8 @@ test "snapshot emits GPU surface frame proof" {
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_surface_area=57600") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "canvas_frame_profile_dirty_area=32000") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "context_menu_items=124/512") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "text_layout_plans=2/2048") != null);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "text_layout_lines=4/8192") != null);
     try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "widget_cursor=text") != null);
 }
 

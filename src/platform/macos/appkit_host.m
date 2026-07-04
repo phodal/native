@@ -3808,6 +3808,14 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
                                                    styleMask:styleMask
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
+    // The host's `windows` dictionary owns the window's lifetime under
+    // ARC. NSWindow's releasedWhenClosed defaults to YES, which sends
+    // an extra ARC-invisible release on close — fatal for the
+    // model-declared secondary windows that close mid-run (user close
+    // or reconcile close both over-released the window and crashed the
+    // next autorelease-pool drain; the main window only ever closes at
+    // shutdown, which is why this stayed hidden until windows_fn).
+    window.releasedWhenClosed = NO;
     [window setTitle:(title.length > 0 ? title : self.appName)];
     if (titlebarStyle == 1) {
         window.titlebarAppearsTransparent = YES;

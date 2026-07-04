@@ -2201,8 +2201,12 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     self.selectedTextRange = NSMakeRange(0, 0);
 
     [self updateDrawableSize];
-    _displayTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0) target:self selector:@selector(renderFrame) userInfo:nil repeats:YES];
+    // Common modes: default-mode timers stall inside AppKit tracking
+    // runloops (live window resize, menu tracking), freezing frames for
+    // the whole gesture.
+    _displayTimer = [NSTimer timerWithTimeInterval:(1.0 / 60.0) target:self selector:@selector(renderFrame) userInfo:nil repeats:YES];
     _displayTimer.tolerance = 1.0 / 240.0;
+    [[NSRunLoop mainRunLoop] addTimer:_displayTimer forMode:NSRunLoopCommonModes];
     [self renderFrame];
     return self;
 }
@@ -5129,11 +5133,15 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
 
 - (void)scheduleFrame {
     if (self.timer) return;
-    self.timer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0)
-                                                 target:self
-                                               selector:@selector(emitFrame)
-                                               userInfo:nil
-                                                repeats:NO];
+    // Common modes so frames keep pumping during live resize and menu
+    // tracking (default-mode timers do not fire in tracking runloops).
+    NSTimer *frame_timer = [NSTimer timerWithTimeInterval:(1.0 / 60.0)
+                                                   target:self
+                                                 selector:@selector(emitFrame)
+                                                 userInfo:nil
+                                                  repeats:NO];
+    [[NSRunLoop mainRunLoop] addTimer:frame_timer forMode:NSRunLoopCommonModes];
+    self.timer = frame_timer;
 }
 
 - (void)setAutomationFramePolling:(BOOL)enabled {
@@ -5143,11 +5151,13 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
         return;
     }
     if (self.automationFrameTimer) return;
-    self.automationFrameTimer = [NSTimer scheduledTimerWithTimeInterval:NativeSdkAutomationFramePollInterval
-                                                                 target:self
-                                                               selector:@selector(emitAutomationFramePoll)
-                                                               userInfo:nil
-                                                                repeats:YES];
+    NSTimer *poll_timer = [NSTimer timerWithTimeInterval:NativeSdkAutomationFramePollInterval
+                                                  target:self
+                                                selector:@selector(emitAutomationFramePoll)
+                                                userInfo:nil
+                                                 repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:poll_timer forMode:NSRunLoopCommonModes];
+    self.automationFrameTimer = poll_timer;
 }
 
 - (void)emitAutomationFramePoll {
@@ -5173,11 +5183,15 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     NSNumber *key = @(timerId);
     [self.appTimers[key] invalidate];
     NSTimeInterval interval = (NSTimeInterval)intervalNs / (NSTimeInterval)NativeSdkNanosecondsPerSecond;
-    self.appTimers[key] = [NSTimer scheduledTimerWithTimeInterval:interval
-                                                           target:self
-                                                         selector:@selector(appTimerFired:)
-                                                         userInfo:@{ @"id": key, @"repeats": @(repeats) }
-                                                          repeats:repeats];
+    // Common modes: an app's fx timer (a live sampler, a debounce) must
+    // fire while the user holds a menu open or live-resizes the window.
+    NSTimer *app_timer = [NSTimer timerWithTimeInterval:interval
+                                                 target:self
+                                               selector:@selector(appTimerFired:)
+                                               userInfo:@{ @"id": key, @"repeats": @(repeats) }
+                                                repeats:repeats];
+    [[NSRunLoop mainRunLoop] addTimer:app_timer forMode:NSRunLoopCommonModes];
+    self.appTimers[key] = app_timer;
 }
 
 - (void)cancelAppTimerWithId:(uint64_t)timerId {

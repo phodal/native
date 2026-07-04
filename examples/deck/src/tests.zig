@@ -759,10 +759,12 @@ test "render deck screenshots (env-gated)" {
 
 // Env-gated homepage screenshot renderer (skipped by default, never in
 // CI): renders the docs-homepage showcase state OFFSCREEN through the
-// deterministic reference renderer — the library face with a track playing
-// mid-song and one queued cue. Deck is dark-only by design, so unlike the
-// other homepage shots there is exactly one capture. PNG lands in
-// /tmp/homepage-shots/deck-dark-artifacts/. To use:
+// deterministic reference renderer — the chassis with a track playing
+// mid-song and one queued cue, then the playlist rack racked in through
+// the real PL toggle. Deck is dark-only by design, so unlike the other
+// homepage shots there is exactly one capture per window. PNGs land in
+// /tmp/homepage-shots/deck-dark-artifacts/ and
+// /tmp/homepage-shots/deck-playlist-dark-artifacts/. To use:
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
@@ -772,9 +774,9 @@ test "render homepage screenshots (env-gated)" {
     const live = try LiveApp.start(true);
     defer live.stop();
 
-    // The hero state: the full ledger, a track playing mid-song, one
-    // queued cue. The mid-song position comes from REAL seek steps on
-    // the fader (the widget keyboard path), so the fader, the VFD
+    // The hero state: a track playing mid-song, one queued cue, the full
+    // ledger selected. The mid-song position comes from REAL seek steps
+    // on the fader (the widget keyboard path), so the fader, the VFD
     // progress strip, and the timecode all agree.
     try live.dispatch(.{ .play_track = 7 });
     try live.dispatch(.{ .queue_track = 12 });
@@ -784,6 +786,17 @@ test "render homepage screenshots (env-gated)" {
     try presentShotFrame(live, 2);
     live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/deck-dark-artifacts", "Deck");
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
+
+    // The playlist rack in the same state, racked in through the real
+    // toggle — the homepage shows it stacked under the chassis as the
+    // expanded state.
+    try live.dispatch(.toggle_playlist);
+    const info = live.playlistWindowInfo() orelse return error.TestUnexpectedResult;
+    try live.installPlaylistCanvas(info.id, 3);
+    try presentShotFrame(live, 4);
+    try live.installPlaylistCanvas(info.id, 5);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/deck-playlist-dark-artifacts", "Deck");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot playlist-canvas 2");
 }
 
 fn presentShotFrame(live: LiveApp, frame_index: u64) !void {

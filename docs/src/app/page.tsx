@@ -96,9 +96,19 @@ function CodePane({ title, lang, code }: { title: string; lang: string; code: st
   );
 }
 
-function AppWindow({ title, children }: { title: string; children: React.ReactNode }) {
+function AppWindow({
+  title,
+  className = "",
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="overflow-hidden rounded-md border border-gray-alpha-400 bg-background-200 shadow-[0_24px_48px_-24px_rgba(0,0,0,0.18)] dark:bg-gray-alpha-100 dark:shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7)]">
+    <div
+      className={`overflow-hidden rounded-md border border-gray-alpha-400 bg-background-200 shadow-[0_24px_48px_-24px_rgba(0,0,0,0.18)] dark:bg-gray-alpha-100 dark:shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7)] ${className}`}
+    >
       <div className="flex items-center gap-1.5 border-b border-gray-alpha-400 px-4 py-2.5">
         <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
         <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
@@ -152,7 +162,7 @@ function InlineCode({ children }: { children: React.ReactNode }) {
 // the app's src/ markup + Zig, tests excluded.
 const stats = [
   {
-    value: "2.4 MB",
+    value: "2.5 MB",
     label: "The whole calculator — engine, widgets, renderer — as one static release binary.",
   },
   {
@@ -327,10 +337,13 @@ export default function HomePage() {
           </SectionLede>
           {/* The proof: soundboard and deck are the same player — same
               library, transport, queue, and search — separated only by
-              design tokens and a chrome pass. Soundboard follows the site
-              theme; deck is dark by design, so it never swaps. */}
+              design tokens and a chrome pass. Soundboard is a full app
+              window; deck is a fixed 460x180 chassis shown at natural
+              scale, so the size contrast is part of the point. Soundboard
+              follows the site theme; deck is dark by design, so it never
+              swaps. */}
           <figure className="mt-12">
-            <div className="grid items-start gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 lg:grid-cols-2">
               <AppWindow title="examples/soundboard">
                 {(["light", "dark"] as const).map((scheme) => (
                   <Image
@@ -346,15 +359,17 @@ export default function HomePage() {
                   />
                 ))}
               </AppWindow>
-              <AppWindow title="examples/deck">
-                <Image
-                  src="/home/deck-dark.webp"
-                  alt="The Deck example app rendered by the Native SDK engine: the same music player restyled as a rack-mount hardware unit with a phosphor readout and spectrum analyzer, dark by design"
-                  width={1920}
-                  height={1280}
-                  quality={90}
-                  className="block h-auto w-full"
-                />
+              <AppWindow title="examples/deck" className="flex flex-col">
+                <div className="flex flex-1 items-center justify-center px-6 py-10 sm:px-10">
+                  <Image
+                    src="/home/deck-dark.webp"
+                    alt="The Deck example app rendered by the Native SDK engine: the same music player rebuilt as a fixed 460 by 180 hardware chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design"
+                    width={920}
+                    height={360}
+                    quality={90}
+                    className="block h-auto w-full max-w-[460px]"
+                  />
+                </div>
               </AppWindow>
             </div>
             <figcaption className="mx-auto mt-6 max-w-3xl text-center">
@@ -364,7 +379,8 @@ export default function HomePage() {
               <p className="mt-2 copy-14 text-gray-900">
                 Every difference between <InlineCode>examples/soundboard</InlineCode> and{" "}
                 <InlineCode>examples/deck</InlineCode> is design tokens and a chrome pass — same
-                widgets, same engine. Soundboard follows the site theme; deck is dark by design.
+                widgets, same engine. One is an airy app window that follows the site theme; the
+                other is a dense 460×180 hardware chassis, dark by design.
               </p>
             </figcaption>
           </figure>
@@ -538,12 +554,12 @@ export default function HomePage() {
             <Terminal title="examples — release builds">
               <Prompt>zig build -Doptimize=ReleaseFast</Prompt>
               <Prompt>ls -lh */zig-out/bin</Prompt>
-              <Muted>2.4M calculator</Muted>
-              <Muted>2.6M deck</Muted>
-              <Muted>2.4M markdown-viewer</Muted>
-              <Muted>2.4M notes</Muted>
-              <Muted>4.5M soundboard</Muted>
-              <Muted>2.5M system-monitor</Muted>
+              <Muted>2.5M calculator</Muted>
+              <Muted>3.2M deck</Muted>
+              <Muted>2.6M markdown-viewer</Muted>
+              <Muted>2.5M notes</Muted>
+              <Muted>4.6M soundboard</Muted>
+              <Muted>2.7M system-monitor</Muted>
             </Terminal>
           </div>
         </div>

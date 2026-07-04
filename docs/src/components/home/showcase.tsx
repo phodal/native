@@ -15,6 +15,11 @@ interface ShowcaseApp {
   portrait?: boolean;
   /** Dark-only apps ship one capture that shows in both site themes. */
   darkOnly?: boolean;
+  /**
+   * Multi-window apps (deck) present their fixed-size windows stacked at
+   * natural scale on a padded stage instead of one edge-to-edge capture.
+   */
+  stack?: { src: string; alt: string; width: number; height: number }[];
 }
 
 // Every number below is measured from the repository: line counts are the
@@ -28,8 +33,8 @@ const apps: ShowcaseApp[] = [
     detail:
       "Headings, tables, task lists, links, and blockquotes on the right are ordinary widgets rendered live from the editor on the left — keystroke for keystroke, with no WebView and no HTML.",
     facts: [
-      { label: "App source", value: "701 lines" },
-      { label: "Binary", value: "2.4 MB" },
+      { label: "App source", value: "779 lines" },
+      { label: "Binary", value: "2.6 MB" },
     ],
     width: 2400,
     height: 1520,
@@ -42,7 +47,7 @@ const apps: ShowcaseApp[] = [
       "Album covers are PNGs decoded and registered by the engine itself. Playback runs on effect timers, the seek bar mirrors runtime state, and queueing a track is a native context menu.",
     facts: [
       { label: "App source", value: "1,155 lines" },
-      { label: "Binary", value: "4.5 MB" },
+      { label: "Binary", value: "4.6 MB" },
     ],
     width: 2160,
     height: 1440,
@@ -50,16 +55,30 @@ const apps: ShowcaseApp[] = [
   {
     id: "deck",
     name: "Deck",
-    tagline: "Soundboard’s twin, restyled as rack-mount hardware.",
+    tagline: "Soundboard’s twin, rebuilt as classic rack hardware.",
     detail:
-      "The same library, transport, queue, and search — a different identity from design tokens and a custom chrome pass alone. The spectrum analyzer is a real chart widget driven by the playback clock, and the skin is dark-only by design.",
+      "The same library, transport, queue, and search in two fixed windows: a 460×180 player chassis and a playlist rack the PL key docks beneath it. The chassis — bevels, screws, seven-segment timecode — is a custom chrome pass over the same widgets, dark-only by design.",
     facts: [
-      { label: "App source", value: "1,868 lines" },
-      { label: "Binary", value: "2.6 MB" },
+      { label: "App source", value: "2,148 lines" },
+      { label: "Binary", value: "3.2 MB" },
     ],
-    width: 1920,
-    height: 1280,
+    width: 920,
+    height: 360,
     darkOnly: true,
+    stack: [
+      {
+        src: "/home/deck-dark.webp",
+        alt: "The Deck example app rendered by the Native SDK engine: a fixed 460 by 180 hardware player chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design",
+        width: 920,
+        height: 360,
+      },
+      {
+        src: "/home/deck-playlist-dark.webp",
+        alt: "Deck's playlist rack window: a matching 460 by 440 rack unit with a channel bank, the full track ledger with the playing row highlighted, and a search field",
+        width: 920,
+        height: 880,
+      },
+    ],
   },
   {
     id: "notes",
@@ -68,8 +87,8 @@ const apps: ShowcaseApp[] = [
     detail:
       "The list re-sorts by edit time, the first line of a note becomes its title, and everything persists across launches through the same typed file effects the app uses for export.",
     facts: [
-      { label: "App source", value: "1,426 lines" },
-      { label: "Binary", value: "2.4 MB" },
+      { label: "App source", value: "1,432 lines" },
+      { label: "Binary", value: "2.5 MB" },
     ],
     width: 2360,
     height: 1520,
@@ -81,8 +100,8 @@ const apps: ShowcaseApp[] = [
     detail:
       "Process spawns run off the loop on a 2-second cadence and land back in update as plain messages. Sort, filter, pause, and send SIGTERM from a native confirmation dialog.",
     facts: [
-      { label: "App source", value: "1,575 lines" },
-      { label: "Binary", value: "2.5 MB" },
+      { label: "App source", value: "1,633 lines" },
+      { label: "Binary", value: "2.7 MB" },
     ],
     width: 2288,
     height: 1440,
@@ -95,7 +114,7 @@ const apps: ShowcaseApp[] = [
       "Every keypad face dispatches a typed message, the keyboard routes through real focus and text-input events, and the whole app — engine, widgets, renderer — is one small static binary.",
     facts: [
       { label: "App source", value: "918 lines" },
-      { label: "Binary", value: "2.4 MB" },
+      { label: "Binary", value: "2.5 MB" },
     ],
     width: 640,
     height: 992,
@@ -143,24 +162,43 @@ export function Showcase() {
             examples/{active.id}
           </span>
         </div>
-        <div className={`relative ${active.portrait ? "flex justify-center bg-gray-100 py-8" : ""}`}>
-          {(active.darkOnly ? (["dark"] as const) : (["light", "dark"] as const)).map((scheme) => (
-            <Image
-              key={`${active.id}-${scheme}`}
-              src={`/home/${active.id}-${scheme}.webp`}
-              alt={`The ${active.name} example app rendered by the Native SDK engine ${
-                active.darkOnly ? "(dark by design)" : `(${scheme} theme)`
-              }`}
-              width={active.width}
-              height={active.height}
-              quality={90}
-              loading="eager"
-              className={`h-auto ${active.portrait ? "w-64 rounded-md border border-gray-alpha-400 shadow-modal sm:w-72" : "w-full"} ${
-                active.darkOnly ? "" : scheme === "light" ? "dark:hidden" : "hidden dark:block"
-              }`}
-            />
-          ))}
-        </div>
+        {active.stack ? (
+          // Fixed-size windows at natural scale on a padded stage — never
+          // stretched to fill the tile.
+          <div className="flex flex-col items-center gap-2 bg-gray-100 px-6 py-10">
+            {active.stack.map((window) => (
+              <Image
+                key={window.src}
+                src={window.src}
+                alt={window.alt}
+                width={window.width}
+                height={window.height}
+                quality={90}
+                loading="eager"
+                className="block h-auto w-full max-w-[460px]"
+              />
+            ))}
+          </div>
+        ) : (
+          <div className={`relative ${active.portrait ? "flex justify-center bg-gray-100 py-8" : ""}`}>
+            {(active.darkOnly ? (["dark"] as const) : (["light", "dark"] as const)).map((scheme) => (
+              <Image
+                key={`${active.id}-${scheme}`}
+                src={`/home/${active.id}-${scheme}.webp`}
+                alt={`The ${active.name} example app rendered by the Native SDK engine ${
+                  active.darkOnly ? "(dark by design)" : `(${scheme} theme)`
+                }`}
+                width={active.width}
+                height={active.height}
+                quality={90}
+                loading="eager"
+                className={`h-auto ${active.portrait ? "w-64 rounded-md border border-gray-alpha-400 shadow-modal sm:w-72" : "w-full"} ${
+                  active.darkOnly ? "" : scheme === "light" ? "dark:hidden" : "hidden dark:block"
+                }`}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Caption */}

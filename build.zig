@@ -445,7 +445,12 @@ pub fn build(b: *std.Build) void {
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-load-frames", "Verify AppKit GPU packet presenter handles retained load frames", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "canvasPacketPixels" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[loadAction isEqualToString:@\"load\"]" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self.canvasPacketPixels mutableCopy]" },
+        // Retained-backing discipline: dirty updates require the validity
+        // flag, and every present that mutates the backing clears it until
+        // the draw succeeds — a failed draw can never leak stale pixels
+        // around a later scissor.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "!self.canvasPacketPixelsValid" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "self.canvasPacketPixelsValid = YES" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "hasDirtyRect:uploadDirtyRect" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-packet-blur-effects", "Verify AppKit GPU packet presenter applies blur effects", &.{
@@ -1150,6 +1155,39 @@ pub fn build(b: *std.Build) void {
         \\if [ "$input_timestamp" -le 0 ]; then echo "dashboard GPU input timestamp was not recorded" >&2; exit 1; fi
         \\input_latency="$(printf '%s\n' "$snapshot" | sed -n 's/.*view @w1\/dashboard-canvas kind=gpu_surface.* gpu_input_latency_ns=\([0-9][0-9]*\).*/\1/p')"
         \\case "$input_latency" in ''|*[!0-9]*) echo "dashboard GPU input latency was missing after widget interaction" >&2; exit 1 ;; esac
+        \\# --- Incremental pixel equivalence: relaunch under the host's verify
+        \\# mode, where every scissored dirty update is byte-compared against a
+        \\# from-scratch full redraw of the retained command list. Clicks, the
+        \\# live-pulse animation, and a mid-animation resize drive scissored
+        \\# patches; the verify counters must show checks with zero mismatches.
+        \\stop_app
+        \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/command.txt"
+        \\verify_log=".zig-cache/native-sdk-gpu-dashboard-verify.log"
+        \\NATIVE_SDK_GPU_VERIFY_INCREMENTAL=1 "$app" > "$verify_log" 2>&1 &
+        \\pid=$!
+        \\ready="$("$cli" automate wait 2>&1)"
+        \\case "$ready" in *"ready=true"*) ;; *) echo "gpu-dashboard verify relaunch was not ready" >&2; exit 1 ;; esac
+        \\snapshot="$(cat "$automation_dir/snapshot.txt" 2>/dev/null || true)"
+        \\switch_id="$(printf '%s\n' "$snapshot" | sed -n 's/.*widget @w1\/dashboard-canvas#\([0-9][0-9]*\) role=switch name="Auto refresh".*/\1/p' | head -1)"
+        \\live_id="$(printf '%s\n' "$snapshot" | sed -n 's/.*widget @w1\/dashboard-canvas#\([0-9][0-9]*\) role=button name="Live render status".*/\1/p' | head -1)"
+        \\case "$switch_id" in ''|*[!0-9]*) echo "dashboard verify switch id was missing" >&2; exit 1 ;; esac
+        \\case "$live_id" in ''|*[!0-9]*) echo "dashboard verify live button id was missing" >&2; exit 1 ;; esac
+        \\"$cli" automate widget-click dashboard-canvas "$switch_id" >/dev/null 2>&1
+        \\sleep 0.4
+        \\"$cli" automate widget-click dashboard-canvas "$live_id" >/dev/null 2>&1
+        \\sleep 0.3
+        \\"$cli" automate resize 1120 700 >/dev/null 2>&1
+        \\sleep 0.5
+        \\"$cli" automate widget-click dashboard-canvas "$live_id" >/dev/null 2>&1
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ]; do
+        \\  if grep -q "gpu incremental verify view=dashboard-canvas checks=" "$verify_log" 2>/dev/null; then break; fi
+        \\  attempts=$((attempts + 1))
+        \\  sleep 0.1
+        \\done
+        \\if ! grep -q "gpu incremental verify view=dashboard-canvas checks=" "$verify_log" 2>/dev/null; then echo "dashboard verify mode recorded no incremental checks" >&2; exit 1; fi
+        \\if grep -q "verify MISMATCH" "$verify_log" 2>/dev/null; then echo "dashboard incremental present diverged from a full redraw:" >&2; grep "verify MISMATCH" "$verify_log" >&2; exit 1; fi
+        \\if grep "gpu incremental verify view=dashboard-canvas checks=" "$verify_log" | grep -qv "mismatches=0"; then echo "dashboard incremental verify reported mismatches" >&2; exit 1; fi
         \\echo "gpu-dashboard smoke ok"
         ,
         "sh",

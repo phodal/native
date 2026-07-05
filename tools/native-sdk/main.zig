@@ -33,8 +33,23 @@ pub fn main(init: std.process.Init) !void {
         const shape: tooling.templates.Shape = if (flagBool(args, "--full")) .full else .slim;
         const app_name, const free_app_name = try initAppName(allocator, init.io, destination);
         defer if (free_app_name) allocator.free(app_name);
-        const framework_path, const free_framework_path = try initFrameworkPath(allocator, init.io);
+        const explicit_framework = try flagValue(args, "--framework");
+        const framework_path, const free_framework_path = if (explicit_framework) |value|
+            .{ value, false }
+        else
+            try initFrameworkPath(allocator, init.io);
         defer if (free_framework_path) allocator.free(framework_path);
+        if (!try hasFrameworkRoot(allocator, init.io, framework_path)) {
+            if (explicit_framework) |value| {
+                std.debug.print("error: --framework {s} is not a Native SDK checkout (no src/root.zig there)\n", .{value});
+            } else {
+                std.debug.print("error: could not locate the Native SDK framework from this `native` binary's location\n" ++
+                    "  `native init` records where the framework lives so the new app can build against it.\n" ++
+                    "  Run the `native` built inside an SDK checkout (zig-out/bin/native) or installed via npm,\n" ++
+                    "  or pass --framework <path to the Native SDK repo>.\n", .{});
+            }
+            std.process.exit(1);
+        }
         try tooling.templates.writeDefaultApp(allocator, init.io, destination, .{ .app_name = app_name, .framework_path = framework_path, .frontend = frontend, .shape = shape });
         std.debug.print("created Native SDK app at {s} ({s})\n", .{ destination, frontend_str });
         printInitNextSteps(destination, frontend, shape);
@@ -71,9 +86,17 @@ pub fn main(init: std.process.Init) !void {
         try markup_cli.run(allocator, init.io, args[2..]);
     } else if (std.mem.eql(u8, command, "validate")) {
         const path = if (args.len >= 3) args[2] else "app.zon";
-        const result = try tooling.manifest.validateFile(allocator, init.io, path);
+        const result = tooling.manifest.validateFile(allocator, init.io, path) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("error: {s} not found - run this from your app's root (the folder containing app.zon), or pass a path: native validate <path/to/app.zon>\n", .{path});
+                std.process.exit(1);
+            },
+            else => return err,
+        };
         tooling.manifest.printDiagnostic(result);
-        if (!result.ok) return error.InvalidManifest;
+        // Exit directly: the diagnostic above is the whole story, and a
+        // returned error would bury it under the CLI's own return trace.
+        if (!result.ok) std.process.exit(1);
     } else if (std.mem.eql(u8, command, "bundle-assets")) {
         const manifest_path = if (args.len >= 3) args[2] else "app.zon";
         const metadata = try tooling.manifest.readMetadata(allocator, init.io, manifest_path);
@@ -83,7 +106,13 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("bundled {d} assets into {s}\n", .{ stats.asset_count, output_dir });
     } else if (std.mem.eql(u8, command, "package")) {
         const manifest_path = try flagValue(args, "--manifest") orelse "app.zon";
-        const metadata = try tooling.manifest.readMetadata(allocator, init.io, manifest_path);
+        const metadata = tooling.manifest.readMetadata(allocator, init.io, manifest_path) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("error: {s} not found - run this from your app's root (the folder containing app.zon), or pass --manifest <path/to/app.zon>\n", .{manifest_path});
+                std.process.exit(1);
+            },
+            else => return err,
+        };
         const target_name = try flagValue(args, "--target") orelse "macos";
         const target = tooling.package.PackageTarget.parse(target_name) orelse fail("invalid package target");
         const web_engine_override = if (try flagValue(args, "--web-engine")) |value|
@@ -97,8 +126,17 @@ pub fn main(init: std.process.Init) !void {
         });
         const signing_name = try flagValue(args, "--signing") orelse "none";
         const signing = tooling.package.SigningMode.parse(signing_name) orelse fail("invalid signing mode");
-        const output_dir = try flagValue(args, "--output") orelse if (args.len >= 3 and args[2].len > 0 and args[2][0] != '-') args[2] else "zig-out/package/native-sdk-local.app";
+        const default_output = switch (target) {
+            .macos => try std.fmt.allocPrint(allocator, "zig-out/package/{s}.app", .{metadata.name}),
+            else => try std.fmt.allocPrint(allocator, "zig-out/package/{s}-{s}", .{ metadata.name, target_name }),
+        };
+        const output_dir = try flagValue(args, "--output") orelse if (args.len >= 3 and args[2].len > 0 and args[2][0] != '-') args[2] else default_output;
         const archive = flagBool(args, "--archive");
+        const binary_path = try flagValue(args, "--binary") orelse try discoverAppBinary(allocator, init.io, metadata.name, target);
+        if (binary_path == null) {
+            std.debug.print("warning[package.no-binary]: no app binary at zig-out/bin/{s} and no --binary flag - the package will not contain an executable\n" ++
+                "  build the app first (`zig build`) or pass --binary <path>\n", .{metadata.name});
+        }
         if (web_engine.engine == .chromium and web_engine.cef_auto_install) {
             try tooling.cef.run(allocator, init.io, init.environ_map, &.{ "install", "--dir", web_engine.cef_dir });
         }
@@ -107,7 +145,7 @@ pub fn main(init: std.process.Init) !void {
             .target = target,
             .optimize = try flagValue(args, "--optimize") orelse "Debug",
             .output_path = output_dir,
-            .binary_path = try flagValue(args, "--binary"),
+            .binary_path = binary_path,
             .assets_dir = try flagValue(args, "--assets") orelse if (metadata.frontend) |frontend| frontend.dist else "assets",
             .frontend = metadata.frontend,
             .web_engine = web_engine.engine,
@@ -194,7 +232,7 @@ fn usage() void {
         \\usage: native <command>
         \\
         \\commands:
-        \\  init [path] [--frontend <native|next|vite|react|svelte|vue>] [--full]   (default: native)
+        \\  init [path] [--frontend <native|next|vite|react|svelte|vue>] [--framework <sdk path>] [--full]   (default: native)
         \\  dev [dir] [--yes] [-D... zig build flags]      build and run the app (hot reload)
         \\  build [dir] [--yes] [-D... zig build flags]    build a ReleaseFast binary into zig-out/bin/
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
@@ -379,6 +417,21 @@ fn initAppName(allocator: std.mem.Allocator, io: std.Io, destination: []const u8
     return .{ try allocator.dupe(u8, basename), true };
 }
 
+/// `native package` without --binary: the scaffolded build installs the
+/// app binary at zig-out/bin/<manifest name>, so look there before
+/// falling back to a binaryless bundle.
+fn discoverAppBinary(allocator: std.mem.Allocator, io: std.Io, app_name: []const u8, target: tooling.package.PackageTarget) !?[]const u8 {
+    const suffix: []const u8 = if (target == .windows) ".exe" else "";
+    const candidate = try std.fmt.allocPrint(allocator, "zig-out/bin/{s}{s}", .{ app_name, suffix });
+    var file = std.Io.Dir.cwd().openFile(io, candidate, .{}) catch {
+        allocator.free(candidate);
+        return null;
+    };
+    file.close(io);
+    std.debug.print("info[package.binary]: using zig-out/bin/{s}\n", .{app_name});
+    return candidate;
+}
+
 fn initFrameworkPath(allocator: std.mem.Allocator, io: std.Io) !struct { []const u8, bool } {
     if (try frameworkRootFromExecutable(allocator, io)) |path| return .{ path, true };
     return .{ ".", false };
@@ -436,6 +489,7 @@ fn positionalArg(args: []const []const u8) ?[]const u8 {
         }
         if (std.mem.startsWith(u8, arg, "--")) {
             if (std.mem.eql(u8, arg, "--frontend") or
+                std.mem.eql(u8, arg, "--framework") or
                 std.mem.eql(u8, arg, "--manifest") or
                 std.mem.eql(u8, arg, "--target") or
                 std.mem.eql(u8, arg, "--output") or

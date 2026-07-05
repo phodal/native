@@ -1303,11 +1303,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 if (self.markup_view) |*view| {
                     return view.build(ui, &self.model) catch |err| {
                         if (err == error.MarkupBuild) {
-                            self.markup_diagnostic = .{
+                            self.recordMarkupDiagnostic(.{
                                 .line = view.diagnostic.line,
                                 .column = view.diagnostic.column,
                                 .message = view.diagnostic.message,
-                            };
+                            });
                         }
                         return err;
                     };
@@ -1328,13 +1328,32 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const owned_source = try arena.dupe(u8, source);
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
             const view = MarkupView.initDiagnostic(arena, owned_source, &diagnostic) catch |err| {
-                if (err == error.MarkupSyntax) self.markup_diagnostic = diagnostic;
+                if (err == error.MarkupSyntax) self.recordMarkupDiagnostic(diagnostic);
                 return err;
             };
             self.markup_view = view;
             self.markup_arena_index = next_index;
             self.markup_source_hash = std.hash.Wyhash.hash(0, source);
             self.markup_diagnostic = null;
+        }
+
+        /// Store a markup diagnostic and say it out loud once per distinct
+        /// failure: build errors recur every frame, and a view that fails
+        /// on its FIRST build has no last-good fallback - without a log
+        /// line the developer faces a blank window and silence.
+        fn recordMarkupDiagnostic(self: *Self, info: canvas.ui_markup.MarkupErrorInfo) void {
+            const already_reported = if (self.markup_diagnostic) |current|
+                current.line == info.line and current.column == info.column and std.mem.eql(u8, current.message, info.message)
+            else
+                false;
+            if (!already_reported) {
+                // std.debug.print, not std.log: the default scaffold app is
+                // ReleaseFast (std.log only passes .err there), while
+                // logged errors fail test suites that exercise bad markup
+                // on purpose. Direct stderr is visible in both.
+                std.debug.print("markup view failed to build ({d}:{d}): {s}\n", .{ info.line, info.column, info.message });
+            }
+            self.markup_diagnostic = info;
         }
 
         /// Dev-mode hot reload: start the repeating runtime timer that polls

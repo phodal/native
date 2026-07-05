@@ -226,6 +226,30 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
+    // `zig build package`: bundle the built binary through the `native`
+    // CLI (built from the native_sdk dependency), so a scaffolded app can
+    // package itself without locating the CLI by hand.
+    const host_os = b.graph.host.result.os.tag;
+    const package_target: ?[]const u8 = switch (host_os) {
+        .macos => "macos",
+        .linux => "linux",
+        .windows => "windows",
+        else => null,
+    };
+    if (package_target) |package_target_name| {
+        const package_run = b.addRunArtifact(dep.artifact("native"));
+        package_run.addArgs(&.{ "package", "--target", package_target_name, "--manifest", "app.zon", "--output" });
+        package_run.addArg(if (host_os == .macos)
+            b.fmt("zig-out/package/{s}.app", .{app_options.name})
+        else
+            b.fmt("zig-out/package/{s}", .{package_target_name}));
+        package_run.addArg("--binary");
+        package_run.addFileArg(exe.getEmittedBin());
+        package_run.has_side_effects = true;
+        const package_step = b.step("package", "Create a distributable package via the native CLI");
+        package_step.dependOn(&package_run.step);
+    }
+
     return .{ .exe = exe, .tests = tests, .install = install, .run = run };
 }
 

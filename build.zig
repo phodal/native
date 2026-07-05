@@ -60,8 +60,11 @@ pub fn build(b: *std.Build) void {
     const signing_mode = b.option(SigningMode, "signing", "Signing mode: none, adhoc, identity") orelse .none;
     const package_version = packageVersion(b);
     const optimize_name = @tagName(optimize);
-    const app_web_engine = web_engine_tool.readManifestConfig(b.allocator, b.graph.io, "app.zon") catch |err| {
-        std.debug.panic("failed to read app.zon web engine config: {s}", .{@errorName(err)});
+    // Resolve against THIS build's root: as a dependency of a user app the
+    // build runner's cwd is the app project, and a cwd-relative "app.zon"
+    // would read (and panic on) the user's manifest instead of ours.
+    const app_web_engine = web_engine_tool.readManifestConfig(b.allocator, b.graph.io, b.pathFromRoot("app.zon")) catch |err| {
+        std.debug.panic("failed to read the framework's own app.zon web engine config: {s}", .{@errorName(err)});
     };
     const resolved_web_engine = web_engine_tool.resolve(app_web_engine, .{
         .web_engine = if (web_engine_override) |value| webEngineFromBuildOption(value) else null,

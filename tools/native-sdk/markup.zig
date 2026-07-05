@@ -21,7 +21,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
             failures += 1;
         };
     }
-    if (failures > 0) return error.MarkupCheckFailed;
+    // Exit directly: the diagnostics above are the whole story, and a
+    // returned error would bury them under the CLI's own return trace.
+    if (failures > 0) std.process.exit(1);
 }
 
 fn runLsp(allocator: std.mem.Allocator, io: std.Io) !void {
@@ -59,11 +61,97 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
                 return error.MarkupInvalid;
             }
         }
+        // A vocabulary miss teaches best when it names the token and its
+        // nearest valid spelling: the validator's message is a static
+        // string, but the checker holds the source and the position.
+        if (vocabularySuggestion(source, info)) |extra| {
+            std.debug.print("{s}:{d}:{d}: error: {s} \"{s}\"", .{ file_path, info.line, info.column, info.message, extra.token });
+            if (extra.suggestion) |suggestion| {
+                std.debug.print(" (did you mean \"{s}\"?)\n", .{suggestion});
+            } else {
+                std.debug.print("\n", .{});
+            }
+            printStaleBinaryHint(info.message);
+            return error.MarkupInvalid;
+        }
         std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, info.line, info.column, info.message });
         printStaleBinaryHint(info.message);
         return error.MarkupInvalid;
     }
     std.debug.print("{s}: ok\n", .{file_path});
+}
+
+const VocabularySuggestion = struct { token: []const u8, suggestion: ?[]const u8 };
+
+fn vocabularySuggestion(source: []const u8, info: ui_markup.MarkupErrorInfo) ?VocabularySuggestion {
+    const names: []const []const u8 = if (std.mem.eql(u8, info.message, "unknown attribute"))
+        &ui_markup.known_option_attrs
+    else if (std.mem.eql(u8, info.message, "unknown element"))
+        &ui_markup.known_element_names
+    else
+        return null;
+    const token = tokenAt(source, info.line, info.column) orelse return null;
+    return .{ .token = token, .suggestion = nearestName(token, names) };
+}
+
+/// The identifier ([a-z0-9-_]) starting at a 1-based line/column.
+fn tokenAt(source: []const u8, line: usize, column: usize) ?[]const u8 {
+    if (line == 0 or column == 0) return null;
+    var current_line: usize = 1;
+    var index: usize = 0;
+    while (index < source.len and current_line < line) : (index += 1) {
+        if (source[index] == '\n') current_line += 1;
+    }
+    if (current_line != line) return null;
+    var start = index + (column - 1);
+    if (start >= source.len) return null;
+    // Element positions point at the "<" itself; the name starts after it.
+    if (source[start] == '<') start += 1;
+    if (start >= source.len) return null;
+    var end = start;
+    while (end < source.len) : (end += 1) {
+        const c = source[end];
+        const identifier = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-' or c == '_';
+        if (!identifier) break;
+    }
+    if (end == start) return null;
+    return source[start..end];
+}
+
+/// Closest vocabulary name within edit distance 2 - close enough to be a
+/// typo, far enough to avoid nonsense suggestions.
+fn nearestName(token: []const u8, names: []const []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_distance: usize = 3;
+    for (names) |name| {
+        const distance = editDistance(token, name) orelse continue;
+        if (distance < best_distance) {
+            best_distance = distance;
+            best = name;
+        }
+    }
+    return best;
+}
+
+/// Bounded Levenshtein distance; null when either side is too long for
+/// the fixed buffer (vocabulary names are short).
+fn editDistance(a: []const u8, b: []const u8) ?usize {
+    if (b.len > 63) return null;
+    var previous: [64]usize = undefined;
+    var current: [64]usize = undefined;
+    for (0..b.len + 1) |j| previous[j] = j;
+    for (a, 0..) |a_char, i| {
+        current[0] = i + 1;
+        for (b, 0..) |b_char, j| {
+            const substitution_cost: usize = if (a_char == b_char) 0 else 1;
+            current[j + 1] = @min(
+                previous[j] + substitution_cost,
+                @min(current[j] + 1, previous[j + 1] + 1),
+            );
+        }
+        @memcpy(previous[0 .. b.len + 1], current[0 .. b.len + 1]);
+    }
+    return previous[b.len];
 }
 
 /// The stale-binary markup-vocabulary case: "unknown element/attribute" from an OLD

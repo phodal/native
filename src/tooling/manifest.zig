@@ -311,7 +311,10 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     const source = try readFile(allocator, io, path);
     defer allocator.free(source);
 
-    const metadata = parseText(allocator, source) catch return .{ .ok = false, .message = "app.zon metadata could not be parsed" };
+    const metadata = parseText(allocator, source) catch return .{
+        .ok = false,
+        .message = zonParseFailureMessage(allocator, source) orelse "app.zon metadata could not be parsed",
+    };
     defer metadata.deinit(allocator);
 
     validateIconPaths(metadata.icons) catch return .{ .ok = false, .message = "app.zon icons are invalid" };
@@ -365,6 +368,29 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     };
     app_manifest.validateManifest(manifest) catch return .{ .ok = false, .message = "manifest fields failed semantic validation" };
     return .{ .ok = true, .message = "app.zon is valid" };
+}
+
+/// Re-parse a failed manifest with std.zon diagnostics enabled so the
+/// message names the line and column instead of a bare "could not be
+/// parsed". Returns null when no diagnostic could be produced; the
+/// (allocated) message intentionally lives until process exit.
+fn zonParseFailureMessage(allocator: std.mem.Allocator, source: []const u8) ?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    const source_z = scratch.dupeZ(u8, source) catch return null;
+    var diag: std.zon.parse.Diagnostics = .{};
+    defer diag.deinit(scratch);
+    @setEvalBranchQuota(2000);
+    if (std.zon.parse.fromSliceAlloc(RawManifest, scratch, source_z, &diag, .{})) |_| {
+        return null;
+    } else |_| {
+        const rendered = std.fmt.allocPrint(scratch, "{f}", .{&diag}) catch return null;
+        const first_line_end = std.mem.indexOfScalar(u8, rendered, '\n') orelse rendered.len;
+        const first_line = std.mem.trim(u8, rendered[0..first_line_end], " \n");
+        if (first_line.len == 0) return null;
+        return std.fmt.allocPrint(allocator, "app.zon could not be parsed - {s}", .{first_line}) catch null;
+    }
 }
 
 pub fn readMetadata(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Metadata {
@@ -649,7 +675,7 @@ pub fn parseVersion(value: []const u8) !app_manifest.Version {
 
 pub fn printDiagnostic(result: ValidationResult) void {
     const severity: diagnostics.Severity = if (result.ok) .info else .@"error";
-    var buffer: [256]u8 = undefined;
+    var buffer: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
     diagnostics.formatShort(.{ .severity = severity, .code = diagnostics.code("manifest", if (result.ok) "valid" else "invalid"), .message = result.message }, &writer) catch return;
     std.debug.print("{s}\n", .{writer.buffered()});

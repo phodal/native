@@ -14,6 +14,8 @@ Install the `native` CLI:
 npm install -g @native-sdk/cli
 ```
 
+Or build it from a source checkout of the SDK: `zig build` in the repo root produces `zig-out/bin/native`, ready to use from anywhere.
+
 ## Create an app
 
 ```bash
@@ -139,10 +141,12 @@ Build with automation enabled and the running app publishes an accessibility sna
 
 ```bash
 zig build -Dautomation=true
-./zig-out/bin/my_app &
+./zig-out/bin/my-app &
 native automate wait
 native automate assert 'role=button name="Reset"' 'count: 0'
 ```
+
+(The binary is the app name with underscores dashed: `native init my_app` builds `zig-out/bin/my-app`.)
 
 The generated CI workflow runs exactly this flow headless under Xvfb on Linux — see [Testing in CI](/testing/ci).
 
@@ -157,7 +161,7 @@ zig build package
 native doctor --manifest app.zon --strict
 ```
 
-See [Packaging](/packaging) for platform targets and [Code Signing](/packaging/signing) for distribution.
+The bundle lands at `zig-out/package/<name>.app`. See [Packaging](/packaging) for platform targets and [Code Signing](/packaging/signing) for distribution.
 
 ## Apps with web content
 
@@ -174,6 +178,6 @@ Frontend options: `next`, `vite`, `react`, `svelte`, `vue`. This is a secondary 
 - [App Model](/app-model) — the model/message/update loop, wiring, and hot reload
 - [Native UI](/native-ui) — every element, attribute, and pattern in the markup
 - [State & Data Flow](/state) — derive-don't-store, bindings, and text editing state
-- [Built-in Components](/built-in-components) — the component catalog
+- [Components](/components) — the component catalog
 - [Automation](/automation) — snapshots, assertions, and scripted interaction
 - [Platform Support](/platform-support) — what each host supports today

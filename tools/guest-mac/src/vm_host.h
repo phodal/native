@@ -99,6 +99,12 @@ size_t guest_mac_vm_mac_address(guest_mac_vm_host_t *host, char *buffer, size_t 
 // `Runtime.adoptViewSurface`/`native_sdk_appkit_adopt_view_surface`.
 void *guest_mac_vm_display_view(guest_mac_vm_host_t *host);
 
+// Write a brand-new VZMacMachineIdentifier's dataRepresentation to `path`
+// (atomic). The clone verb's identity break: a copied bundle must never
+// share its source's machine identifier. Standalone — needs no host.
+// Returns 1 on success.
+int guest_mac_vm_write_fresh_machine_identifier(const char *path, size_t path_len);
+
 // Headless run loop for CLI verbs (CFRunLoopRun on the main thread);
 // returns after guest_mac_vm_interrupt_run_loop. SIGTERM/SIGINT installed
 // by the caller should request a stop and interrupt once stopped.

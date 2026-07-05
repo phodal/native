@@ -24,6 +24,24 @@ pub fn build(b: *std.Build) void {
     app_mod.addCSourceFile(.{ .file = b.path("src/vm_host.m"), .flags = flags });
     app_mod.linkFramework("Virtualization", .{});
 
+    // The test binary reaches the engine bindings through the app's real
+    // dispatch paths (no VM is ever created in tests), so it links the
+    // same engine. Tests run Debug while the exe runs ReleaseFast, so
+    // this is usually a distinct module — guard against double-adding.
+    const test_mod = artifacts.tests.root_module;
+    if (test_mod != app_mod) {
+        test_mod.addCSourceFile(.{ .file = b.path("src/vm_host.m"), .flags = flags });
+        if (b.sysroot) |sysroot| {
+            test_mod.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
+            // -L is sysroot-prefixed when --sysroot is set, so this
+            // resolves to <sdk>/usr/lib (where libobjc.tbd lives).
+            test_mod.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+        }
+        test_mod.linkFramework("Virtualization", .{});
+        test_mod.linkFramework("Foundation", .{});
+        test_mod.linkSystemLibrary("objc", .{});
+    }
+
     const sign = b.addSystemCommand(&.{ "codesign", "--force", "--sign", "-", "--entitlements" });
     sign.addFileArg(b.path("entitlements.plist"));
     sign.addFileArg(artifacts.exe.getEmittedBin());

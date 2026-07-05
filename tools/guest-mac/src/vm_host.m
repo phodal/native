@@ -488,6 +488,13 @@ void *guest_mac_vm_display_view(guest_mac_vm_host_t *host) {
     return (__bridge void *)object.displayView;
 }
 
+int guest_mac_vm_write_fresh_machine_identifier(const char *path, size_t path_len) {
+    NSString *target = GuestMacString(path, path_len);
+    if (target.length == 0) return 0;
+    VZMacMachineIdentifier *identifier = [[VZMacMachineIdentifier alloc] init];
+    return [identifier.dataRepresentation writeToFile:target.stringByExpandingTildeInPath atomically:YES] ? 1 : 0;
+}
+
 void guest_mac_vm_run_main_loop(void) {
     CFRunLoopRun();
 }

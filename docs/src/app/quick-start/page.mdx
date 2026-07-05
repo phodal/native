@@ -1,32 +1,21 @@
 # Quick Start
 
-Native SDK is the complete toolkit for building beautiful native desktop and mobile applications: declarative markup, a predictable message-based state model, a modern component library, a native renderer, and tooling for building, running, and packaging apps — no browser or WebView in the binary. This page takes you from a source checkout to a running, tested app.
+Native SDK is the complete toolkit for building beautiful native desktop and mobile applications: declarative markup, a predictable message-based state model, a modern component library, a native renderer, and tooling for building, running, and packaging apps — no browser or WebView in the binary. This page takes you from install to a running, tested app.
 
 ## Prerequisites
 
-- [Zig 0.16.0+](https://ziglang.org/download/) — needed once, to build the CLI itself
 - macOS 11 or newer, Linux, or Windows
 
 ## Get the CLI
 
-The `native` CLI is not on a package registry yet. Build it from a source checkout of the SDK:
-
 ```bash
-git clone https://github.com/vercel-labs/zero-native.git
-cd zero-native
-zig build
-```
-
-That produces `zig-out/bin/native`. Put it on your PATH for the rest of this page:
-
-```bash
-export PATH="$PWD/zig-out/bin:$PATH"
+npm install -g @native-sdk/cli
 native version
 ```
 
-Two things this binary carries with it, so you never configure them:
+Two things the CLI handles for you, so you never configure them:
 
-- **The SDK location.** Apps build against the checkout the CLI was built in — `native init` records the path automatically (override with `--framework <sdk path>`).
+- **The SDK location.** Apps build against the SDK the CLI ships with — `native init` records the path automatically (override with `--framework <sdk path>`).
 - **The Zig toolchain.** `native dev|build|test` use the Zig on your PATH when its version is compatible, and otherwise offer to download the pinned version into `~/.native/toolchains/` (checksum-verified; pass `--yes` to skip the prompt in scripts).
 
 ## Create an app

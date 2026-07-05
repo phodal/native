@@ -5,15 +5,12 @@ import { Showcase } from "@/components/home/showcase";
 import { CopyCommand } from "@/components/home/copy-command";
 import { HeroWindow } from "@/components/home/hero-window";
 import { HeroPointer } from "@/components/home/hero-pointer";
-import { githubUrl, siteName } from "@/lib/site";
+import { githubUrl, npmCli, siteName } from "@/lib/site";
 
 // ---------------------------------------------------------------- samples
 // Both excerpts are real source from examples/ui-inbox in this repository.
 
-// The honest install path today: the CLI builds from a source checkout
-// (`zig build` emits zig-out/bin/native). Swap back to the npm one-liner
-// when @native-sdk/cli is actually published.
-const installCommands = [`git clone ${githubUrl}.git`, "cd zero-native && zig build"];
+const installCommands = [`npm install -g ${npmCli}`];
 
 const zmlSample = `<column gap="12" padding="16">
   <row gap="8" cross="center">

@@ -429,8 +429,11 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
 
     // Review artifacts for deliberate golden updates: set
     // CHART_GOLDEN_DUMP=1 to write both themes as PNGs into
-    // /tmp/chart-shots/ before pinning new signatures.
-    if (std.c.getenv("CHART_GOLDEN_DUMP") != null) {
+    // /tmp/chart-shots/ before pinning new signatures. `std.c.getenv`
+    // needs libc, which this module's test build only links on macOS;
+    // the dump gate compiles away elsewhere and the golden assertions
+    // below run everywhere.
+    if (goldenDumpRequested()) {
         try dumpGoldenPng("/tmp/chart-shots/golden-light.png", &pixels);
     }
 
@@ -438,7 +441,7 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
     try renderGoldenCharts(dark, &pixels);
     const dark_signature = support.referenceSurfaceSignature(&pixels);
     try testing.expect(light_signature != dark_signature);
-    if (std.c.getenv("CHART_GOLDEN_DUMP") != null) {
+    if (goldenDumpRequested()) {
         try dumpGoldenPng("/tmp/chart-shots/golden-dark.png", &pixels);
     }
 
@@ -457,6 +460,11 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
 // neutral scale; geometry is unchanged.
 const golden_light_signature: u64 = 8077067691017829510;
 const golden_dark_signature: u64 = 6697849663957189366;
+
+fn goldenDumpRequested() bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv("CHART_GOLDEN_DUMP") != null;
+}
 
 fn dumpGoldenPng(path: []const u8, pixels: []const u8) !void {
     const io = testing.io;

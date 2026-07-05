@@ -778,7 +778,7 @@ test "both windows lay out within their fixed canvases and the widget budget" {
 //
 //   DECK_SHOTS=1 zig build test
 test "render deck screenshots (env-gated)" {
-    if (std.c.getenv("DECK_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("DECK_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     const live = try LiveApp.start(true);
@@ -826,7 +826,7 @@ test "render deck screenshots (env-gated)" {
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
-    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("HOMEPAGE_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     const live = try LiveApp.start(true);
@@ -865,4 +865,12 @@ fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
         .timestamp_ns = frame_index * 1_000_000,
         .nonblank = true,
     } });
+}
+
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
 }

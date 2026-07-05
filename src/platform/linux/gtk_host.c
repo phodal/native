@@ -12,6 +12,7 @@
 
 #define NATIVE_SDK_MAX_WINDOWS 16
 #define NATIVE_SDK_MAX_WEBVIEWS 16
+#define NATIVE_SDK_MAX_TIMERS 64
 #define NATIVE_SDK_MAX_NATIVE_VIEWS 32
 #define NATIVE_SDK_MAX_SHORTCUTS 64
 #define NATIVE_SDK_MAX_MENU_ITEMS 128
@@ -109,6 +110,14 @@ typedef struct native_sdk_gtk_native_view {
     char *gpu_preedit_text;
 } native_sdk_gtk_native_view_t;
 
+typedef struct native_sdk_gtk_app_timer {
+    uint64_t id;
+    guint source;
+    int repeats;
+    struct native_sdk_gtk_host *host;
+    int in_use;
+} native_sdk_gtk_app_timer_t;
+
 typedef struct native_sdk_gtk_window {
     uint64_t id;
     GtkWindow *gtk_window;
@@ -130,6 +139,20 @@ typedef struct native_sdk_gtk_window {
     double emitted_width;
     double emitted_height;
     double emitted_scale;
+    /* The window WebView's z-position among the overlay children. 0 is
+     * the classic bottom-most main child; apps that layer native views
+     * UNDER the WebView (or the WebView over a canvas) set it through
+     * the same layer channel the child views use. */
+    int main_webview_layer;
+    /* Last pointer press on a gpu_surface view, in window coordinates —
+     * what an interactive window move begins from. The device/time pair
+     * comes from the originating event; a zero time means no press has
+     * been recorded yet. */
+    GdkDevice *last_press_device;
+    guint32 last_press_time;
+    int last_press_button;
+    double last_press_x;
+    double last_press_y;
     native_sdk_gtk_webview_t webviews[NATIVE_SDK_MAX_WEBVIEWS];
     int webview_count;
     native_sdk_gtk_native_view_t native_views[NATIVE_SDK_MAX_NATIVE_VIEWS];
@@ -145,6 +168,12 @@ struct native_sdk_gtk_host {
     char *window_label;
     double init_x, init_y, init_width, init_height;
     int restore_frame;
+    /* Startup-window options applied when on_activate creates @w1 (the
+     * window does not exist yet when the host is created). */
+    int init_resizable;
+    int init_titlebar_style;
+    double init_min_width;
+    double init_min_height;
 
     native_sdk_gtk_event_callback_t callback;
     void *callback_context;
@@ -153,6 +182,8 @@ struct native_sdk_gtk_host {
 
     native_sdk_gtk_window_t windows[NATIVE_SDK_MAX_WINDOWS];
     int window_count;
+    /* App timers (runtime `startTimer`) on the GLib main loop. */
+    native_sdk_gtk_app_timer_t timers[NATIVE_SDK_MAX_TIMERS];
     int did_shutdown;
     int app_active;
     guint frame_timer;
@@ -797,6 +828,23 @@ static void native_sdk_gpu_pointer_pressed(GtkGestureClick *gesture, int n_press
     view->gpu_pointer_y = y;
     const int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) - 1;
     const uint32_t modifiers = native_sdk_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+    /* Stash the press for the widget `window_drag` channel: an
+     * interactive window move must begin from the originating device,
+     * button, position, and event time. */
+    if (view->window) {
+        GdkEvent *event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
+        graphene_point_t window_point = { (float)x, (float)y };
+        graphene_point_t translated;
+        if (view->window->gtk_window &&
+            gtk_widget_compute_point(view->widget, GTK_WIDGET(view->window->gtk_window), &window_point, &translated)) {
+            window_point = translated;
+        }
+        view->window->last_press_device = event ? gdk_event_get_device(event) : NULL;
+        view->window->last_press_time = event ? gdk_event_get_time(event) : GDK_CURRENT_TIME;
+        view->window->last_press_button = button < 0 ? 0 : button + 1;
+        view->window->last_press_x = window_point.x;
+        view->window->last_press_y = window_point.y;
+    }
     native_sdk_emit_gpu_surface_input(view, NATIVE_SDK_GTK_GPU_INPUT_POINTER_DOWN, x, y, button < 0 ? 0 : button, 0, 0, "", "", modifiers);
 }
 
@@ -1058,12 +1106,14 @@ static void native_sdk_reorder_overlays(native_sdk_gtk_window_t *win) {
     if (!win || !win->stack_root) return;
     int placed[NATIVE_SDK_MAX_WEBVIEWS] = {0};
     int native_placed[NATIVE_SDK_MAX_NATIVE_VIEWS] = {0};
-    /* Keep the overlay's main child (the window WebView) as the first
-     * sibling: GTK picks and paints later siblings on top, so overlays
-     * inserted before it would render below the WebView and never receive
-     * pointer input. */
-    GtkWidget *previous = win->web_view ? GTK_WIDGET(win->web_view) : NULL;
-    int total = win->webview_count + win->native_view_count;
+    /* GTK picks and paints later siblings on top, so ascending layer =
+     * ascending sibling order. The window WebView participates with
+     * `main_webview_layer` (default 0) and wins ties, keeping it the
+     * bottom-most sibling for the classic overlays-above-main layout
+     * while letting apps sink it under (or float it over) child views. */
+    GtkWidget *previous = NULL;
+    int main_placed = win->web_view ? 0 : 1;
+    int total = win->webview_count + win->native_view_count + (main_placed ? 0 : 1);
     for (int pass = 0; pass < total; pass++) {
         int best_webview = -1;
         int best_native = -1;
@@ -1080,7 +1130,16 @@ static void native_sdk_reorder_overlays(native_sdk_gtk_window_t *win) {
         }
 
         GtkWidget *next = NULL;
-        if (best_webview >= 0 && best_native >= 0) {
+        if (!main_placed) {
+            int take_main = 1;
+            if (best_webview >= 0 && win->webviews[best_webview].layer < win->main_webview_layer) take_main = 0;
+            if (best_native >= 0 && win->native_views[best_native].layer < win->main_webview_layer) take_main = 0;
+            if (take_main) {
+                next = GTK_WIDGET(win->web_view);
+                main_placed = 1;
+            }
+        }
+        if (!next && best_webview >= 0 && best_native >= 0) {
             if (win->webviews[best_webview].layer <= win->native_views[best_native].layer) {
                 next = GTK_WIDGET(win->webviews[best_webview].web_view);
                 placed[best_webview] = 1;
@@ -1088,15 +1147,14 @@ static void native_sdk_reorder_overlays(native_sdk_gtk_window_t *win) {
                 next = win->native_views[best_native].widget;
                 native_placed[best_native] = 1;
             }
-        } else if (best_webview >= 0) {
+        } else if (!next && best_webview >= 0) {
             next = GTK_WIDGET(win->webviews[best_webview].web_view);
             placed[best_webview] = 1;
-        } else if (best_native >= 0) {
+        } else if (!next && best_native >= 0) {
             next = win->native_views[best_native].widget;
             native_placed[best_native] = 1;
-        } else {
-            break;
         }
+        if (!next) break;
 
         gtk_widget_insert_after(next, GTK_WIDGET(win->stack_root), previous);
         previous = next;
@@ -1673,10 +1731,75 @@ static void native_sdk_emit_app_active_if_changed(native_sdk_gtk_host_t *host) {
     });
 }
 
-static void native_sdk_emit_window_frame(native_sdk_gtk_host_t *host, native_sdk_gtk_window_t *win, int open) {
-    if (!win || !win->gtk_window) return;
+/* Current window content size, falling back to the pending default size
+ * while the widget is not yet allocated. `notify::default-width` fires
+ * before the first allocation, and reporting that transient 0x0 as truth
+ * would poison the runtime's window bounds right when startup shell
+ * layout runs (hosts with synchronous window creation always report the
+ * real initial frame). */
+static void native_sdk_window_content_size(native_sdk_gtk_window_t *win, int *out_width, int *out_height) {
     int w = gtk_widget_get_width(GTK_WIDGET(win->gtk_window));
     int h = gtk_widget_get_height(GTK_WIDGET(win->gtk_window));
+    if (w <= 0 || h <= 0) {
+        int default_w = 0, default_h = 0;
+        gtk_window_get_default_size(win->gtk_window, &default_w, &default_h);
+        if (w <= 0) w = default_w;
+        if (h <= 0) h = default_h;
+    }
+    *out_width = w;
+    *out_height = h;
+}
+
+/* Appearance from the toolkit settings: the application dark preference
+ * (or a theme whose name says dark), disabled animations as the reduce-
+ * motion signal, and a high-contrast theme name. Emitted once after
+ * START and again whenever any of those settings change. */
+static void native_sdk_emit_appearance(native_sdk_gtk_host_t *host) {
+    GtkSettings *settings = gtk_settings_get_default();
+    if (!settings) return;
+    gboolean prefer_dark = FALSE;
+    gboolean enable_animations = TRUE;
+    char *theme_name = NULL;
+    g_object_get(settings,
+                 "gtk-application-prefer-dark-theme", &prefer_dark,
+                 "gtk-enable-animations", &enable_animations,
+                 "gtk-theme-name", &theme_name,
+                 NULL);
+    int dark = prefer_dark ? 1 : 0;
+    int high_contrast = 0;
+    if (theme_name) {
+        char *lower = g_ascii_strdown(theme_name, -1);
+        if (strstr(lower, "dark")) dark = 1;
+        if (strstr(lower, "highcontrast") || strstr(lower, "high-contrast")) high_contrast = 1;
+        g_free(lower);
+        g_free(theme_name);
+    }
+    native_sdk_emit(host, (native_sdk_gtk_event_t){
+        .kind = NATIVE_SDK_GTK_EVENT_APPEARANCE,
+        .color_scheme = dark,
+        .reduce_motion = enable_animations ? 0 : 1,
+        .high_contrast = high_contrast,
+    });
+}
+
+static void native_sdk_on_appearance_setting_changed(GObject *settings, GParamSpec *pspec, gpointer data) {
+    (void)settings;
+    (void)pspec;
+    native_sdk_emit_appearance((native_sdk_gtk_host_t *)data);
+}
+
+static void native_sdk_watch_appearance(native_sdk_gtk_host_t *host) {
+    GtkSettings *settings = gtk_settings_get_default();
+    if (!settings) return;
+    g_signal_connect(settings, "notify::gtk-application-prefer-dark-theme", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
+    g_signal_connect(settings, "notify::gtk-theme-name", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
+    g_signal_connect(settings, "notify::gtk-enable-animations", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
+}
+
+static void native_sdk_emit_window_frame(native_sdk_gtk_host_t *host, native_sdk_gtk_window_t *win, int open) {
+    if (!win || !win->gtk_window) return;
+    int w = 0, h = 0;
+    native_sdk_window_content_size(win, &w, &h);
     GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
     double scale = surface ? gdk_surface_get_scale_factor(surface) : 1.0;
     int focused = gtk_window_is_active(win->gtk_window) ? 1 : 0;
@@ -1697,8 +1820,8 @@ static void native_sdk_emit_window_frame(native_sdk_gtk_host_t *host, native_sdk
 
 static void native_sdk_emit_resize(native_sdk_gtk_host_t *host, native_sdk_gtk_window_t *win) {
     if (!win || !win->gtk_window) return;
-    int w = gtk_widget_get_width(GTK_WIDGET(win->gtk_window));
-    int h = gtk_widget_get_height(GTK_WIDGET(win->gtk_window));
+    int w = 0, h = 0;
+    native_sdk_window_content_size(win, &w, &h);
     GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
     double scale = surface ? gdk_surface_get_scale_factor(surface) : 1.0;
     native_sdk_emit(host, (native_sdk_gtk_event_t){
@@ -2008,7 +2131,7 @@ static void native_sdk_setup_bridge(native_sdk_gtk_window_t *win) {
     webkit_user_script_unref(script);
 }
 
-static native_sdk_gtk_window_t *native_sdk_create_window_internal(native_sdk_gtk_host_t *host, uint64_t window_id, const char *title, const char *label, double x, double y, double width, double height, int restore_frame) {
+static native_sdk_gtk_window_t *native_sdk_create_window_internal(native_sdk_gtk_host_t *host, uint64_t window_id, const char *title, const char *label, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height) {
     if (native_sdk_find_window(host, window_id)) return NULL;
 
     int slot = -1;
@@ -2041,6 +2164,11 @@ static native_sdk_gtk_window_t *native_sdk_create_window_internal(native_sdk_gtk
     win->gtk_window = GTK_WINDOW(gtk_application_window_new(host->app));
     gtk_window_set_title(win->gtk_window, win->title);
     gtk_window_set_default_size(win->gtk_window, (int)width, (int)height);
+    gtk_window_set_resizable(win->gtk_window, resizable ? TRUE : FALSE);
+    /* The hidden titlebar styles mean the app draws its own chrome (drag
+     * regions, close affordances); the toolkit equivalent is an
+     * undecorated window. */
+    if (titlebar_style >= 1) gtk_window_set_decorated(win->gtk_window, FALSE);
 
     win->content_manager = webkit_user_content_manager_new();
     WebKitWebView *wv = WEBKIT_WEB_VIEW(
@@ -2055,6 +2183,15 @@ static native_sdk_gtk_window_t *native_sdk_create_window_internal(native_sdk_gtk
     native_sdk_setup_bridge(win);
 
     win->root_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    /* Declared content min-size floor: the size request on the content
+     * box floors user resizes without inflating the default size (the
+     * AppKit side expresses the same floor as contentMinSize). Axes
+     * <= 0 keep the natural minimum. */
+    if (min_width > 0 || min_height > 0) {
+        gtk_widget_set_size_request(win->root_box,
+                                    min_width > 0 ? (int)min_width : -1,
+                                    min_height > 0 ? (int)min_height : -1);
+    }
     win->menu_bar = gtk_popover_menu_bar_new_from_model(host->menu_model);
     gtk_widget_set_visible(win->menu_bar, host->menu_model != NULL);
     gtk_box_append(GTK_BOX(win->root_box), win->menu_bar);
@@ -2089,13 +2226,16 @@ static void on_activate(GtkApplication *app, gpointer data) {
         host->init_x, host->init_y,
         host->init_width > 0 ? host->init_width : 720,
         host->init_height > 0 ? host->init_height : 480,
-        host->restore_frame);
+        host->restore_frame, host->init_resizable, host->init_titlebar_style,
+        host->init_min_width, host->init_min_height);
     if (!win) return;
 
     gtk_window_present(win->gtk_window);
     native_sdk_emit_app_active_if_changed(host);
 
     native_sdk_emit(host, (native_sdk_gtk_event_t){ .kind = NATIVE_SDK_GTK_EVENT_START });
+    native_sdk_emit_appearance(host);
+    native_sdk_watch_appearance(host);
     native_sdk_emit_resize(host, win);
     native_sdk_emit_window_frame(host, win, 1);
 
@@ -2109,7 +2249,8 @@ native_sdk_gtk_host_t *native_sdk_gtk_create(
     const char *icon_path, size_t icon_path_len,
     const char *window_label, size_t window_label_len,
     double x, double y, double width, double height,
-    int restore_frame)
+    int restore_frame, int resizable, int titlebar_style,
+    double min_width, double min_height)
 {
     native_sdk_gtk_host_t *host = calloc(1, sizeof(native_sdk_gtk_host_t));
     if (!host) return NULL;
@@ -2124,6 +2265,10 @@ native_sdk_gtk_host_t *native_sdk_gtk_create(
     host->init_width = width;
     host->init_height = height;
     host->restore_frame = restore_frame;
+    host->init_resizable = resizable;
+    host->init_titlebar_style = titlebar_style;
+    host->init_min_width = min_width;
+    host->init_min_height = min_height;
 
     host->allowed_origins = NULL;
     host->allowed_origins_count = 0;
@@ -2138,6 +2283,10 @@ native_sdk_gtk_host_t *native_sdk_gtk_create(
 void native_sdk_gtk_destroy(native_sdk_gtk_host_t *host) {
     if (!host) return;
     if (host->frame_timer) g_source_remove(host->frame_timer);
+    for (int i = 0; i < NATIVE_SDK_MAX_TIMERS; i++) {
+        if (host->timers[i].in_use && host->timers[i].source) g_source_remove(host->timers[i].source);
+        host->timers[i].in_use = 0;
+    }
     for (int i = 0; i < host->window_count; i++) {
         native_sdk_clear_window(&host->windows[i]);
     }
@@ -2502,15 +2651,81 @@ void native_sdk_gtk_set_shortcuts(native_sdk_gtk_host_t *host, const char *const
     }
 }
 
-int native_sdk_gtk_create_window(native_sdk_gtk_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+int native_sdk_gtk_create_window(native_sdk_gtk_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height) {
     char *title = window_title_len > 0 ? native_sdk_strndup(window_title, window_title_len) : NULL;
     char *label = window_label_len > 0 ? native_sdk_strndup(window_label, window_label_len) : NULL;
-    native_sdk_gtk_window_t *win = native_sdk_create_window_internal(host, window_id, title, label, x, y, width, height, restore_frame);
+    native_sdk_gtk_window_t *win = native_sdk_create_window_internal(host, window_id, title, label, x, y, width, height, restore_frame, resizable, titlebar_style, min_width, min_height);
     free(title);
     free(label);
     if (!win) return 0;
 
     gtk_window_present(win->gtk_window);
+    return 1;
+}
+
+static gboolean native_sdk_app_timer_tick(gpointer data) {
+    native_sdk_gtk_app_timer_t *slot = data;
+    if (!slot || !slot->in_use || !slot->host) return G_SOURCE_REMOVE;
+    const uint64_t timer_id = slot->id;
+    const int repeats = slot->repeats;
+    /* A non-repeating timer frees its slot BEFORE emitting so the
+     * handler may re-arm the same id (same contract as the AppKit
+     * host's app timers). */
+    if (!repeats) {
+        slot->in_use = 0;
+        slot->source = 0;
+    }
+    native_sdk_emit(slot->host, (native_sdk_gtk_event_t){
+        .kind = NATIVE_SDK_GTK_EVENT_TIMER,
+        .timer_id = timer_id,
+        .timestamp_ns = native_sdk_gpu_timestamp_ns(),
+    });
+    return repeats ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+}
+
+void native_sdk_gtk_start_timer(native_sdk_gtk_host_t *host, uint64_t timer_id, uint64_t interval_ns, int repeats) {
+    if (!host) return;
+    native_sdk_gtk_cancel_timer(host, timer_id);
+    native_sdk_gtk_app_timer_t *slot = NULL;
+    for (int i = 0; i < NATIVE_SDK_MAX_TIMERS; i++) {
+        if (!host->timers[i].in_use) {
+            slot = &host->timers[i];
+            break;
+        }
+    }
+    if (!slot) return;
+    guint interval_ms = (guint)(interval_ns / 1000000u);
+    if (interval_ms == 0) interval_ms = 1;
+    slot->id = timer_id;
+    slot->repeats = repeats;
+    slot->host = host;
+    slot->in_use = 1;
+    slot->source = g_timeout_add(interval_ms, native_sdk_app_timer_tick, slot);
+}
+
+void native_sdk_gtk_cancel_timer(native_sdk_gtk_host_t *host, uint64_t timer_id) {
+    if (!host) return;
+    for (int i = 0; i < NATIVE_SDK_MAX_TIMERS; i++) {
+        if (host->timers[i].in_use && host->timers[i].id == timer_id) {
+            if (host->timers[i].source) g_source_remove(host->timers[i].source);
+            host->timers[i].in_use = 0;
+            host->timers[i].source = 0;
+        }
+    }
+}
+
+int native_sdk_gtk_start_window_drag(native_sdk_gtk_host_t *host, uint64_t window_id) {
+    native_sdk_gtk_window_t *win = native_sdk_find_window(host, window_id);
+    if (!win || !win->gtk_window) return 0;
+    /* No recorded press (synthetic automation input, or a drag request
+     * outside any pointer gesture): succeed as a no-op — only an unknown
+     * window is an error, matching the AppKit host. */
+    if (!win->last_press_device || win->last_press_time == 0) return 1;
+    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
+    if (!surface || !GDK_IS_TOPLEVEL(surface)) return 1;
+    gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), win->last_press_device,
+                            win->last_press_button > 0 ? win->last_press_button : 1,
+                            win->last_press_x, win->last_press_y, win->last_press_time);
     return 1;
 }
 
@@ -2918,7 +3133,9 @@ int native_sdk_gtk_set_webview_layer(native_sdk_gtk_host_t *host, uint64_t windo
     char *label_copy = label_len > 0 ? native_sdk_strndup(label, label_len) : NULL;
     if (label_copy && strcmp(label_copy, "main") == 0 && win && win->web_view) {
         free(label_copy);
-        return 0;
+        win->main_webview_layer = layer;
+        native_sdk_reorder_overlays(win);
+        return 1;
     }
     native_sdk_gtk_webview_t *webview = native_sdk_find_webview(win, label_copy);
     free(label_copy);

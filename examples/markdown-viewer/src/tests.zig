@@ -555,7 +555,7 @@ test "a11y audit sweep: every interactive widget is named, reachable, and unambi
 //
 //   ICON_BATCH_SHOTS=1 zig build test
 test "render icon-batch screenshots (env-gated)" {
-    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("ICON_BATCH_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     var h = try Harness.create();
@@ -580,7 +580,7 @@ test "render icon-batch screenshots (env-gated)" {
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
-    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("HOMEPAGE_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     var h = try Harness.create();
@@ -627,4 +627,12 @@ test "the sample picker is a real anchored select: open, pick, and dismiss model
         .key = "escape",
     } });
     try testing.expect(!h.app_state.model.sample_picker_open);
+}
+
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
 }

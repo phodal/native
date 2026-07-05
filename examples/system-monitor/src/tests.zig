@@ -937,7 +937,7 @@ test "the settings window opens by Msg, drives sampling from its own canvas, and
 // PNGs land in /tmp/system-monitor-shots/{dark,light}-artifacts/.
 test "render showcase screenshots from replayed real samples (env-gated)" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
-    if (std.c.getenv("SYSTEM_MONITOR_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("SYSTEM_MONITOR_SHOTS")) return error.SkipZigTest;
     const io = std.testing.io;
 
     const live = try LiveApp.start();
@@ -990,3 +990,10 @@ fn readWholeFile(io: std.Io, path: []const u8) ![]u8 {
     return reader.interface.allocRemaining(testing.allocator, .limited(8 * 1024 * 1024));
 }
 
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
+}

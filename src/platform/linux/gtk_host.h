@@ -26,6 +26,8 @@ typedef enum {
     NATIVE_SDK_GTK_EVENT_GPU_SURFACE_RESIZE = 12,
     NATIVE_SDK_GTK_EVENT_GPU_SURFACE_INPUT = 13,
     NATIVE_SDK_GTK_EVENT_WAKE = 14,
+    NATIVE_SDK_GTK_EVENT_TIMER = 15,
+    NATIVE_SDK_GTK_EVENT_APPEARANCE = 16,
 } native_sdk_gtk_event_kind_t;
 
 typedef struct {
@@ -68,6 +70,11 @@ typedef struct {
     size_t input_text_len;
     int has_composition_cursor;
     size_t composition_cursor;
+    uint64_t timer_id;
+    /* Appearance events: 0 = light, 1 = dark. */
+    int color_scheme;
+    int reduce_motion;
+    int high_contrast;
 } native_sdk_gtk_event_t;
 
 typedef void (*native_sdk_gtk_event_callback_t)(void *context, const native_sdk_gtk_event_t *event);
@@ -116,7 +123,11 @@ typedef struct {
     size_t tertiary_button_len;
 } native_sdk_gtk_message_dialog_opts_t;
 
-native_sdk_gtk_host_t *native_sdk_gtk_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame);
+/* resizable/titlebar_style/min_width/min_height mirror the AppKit host's
+ * window options: titlebar_style 0 = standard decorations, >= 1 = the
+ * hidden styles (the app draws its own chrome, so the window is created
+ * undecorated); min_width/min_height <= 0 leave that axis unfloored. */
+native_sdk_gtk_host_t *native_sdk_gtk_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height);
 void native_sdk_gtk_destroy(native_sdk_gtk_host_t *host);
 void native_sdk_gtk_run(native_sdk_gtk_host_t *host, native_sdk_gtk_event_callback_t callback, void *context);
 void native_sdk_gtk_stop(native_sdk_gtk_host_t *host);
@@ -140,7 +151,16 @@ void native_sdk_gtk_emit_window_event(native_sdk_gtk_host_t *host, uint64_t wind
 void native_sdk_gtk_set_security_policy(native_sdk_gtk_host_t *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action);
 void native_sdk_gtk_set_menus(native_sdk_gtk_host_t *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count);
 void native_sdk_gtk_set_shortcuts(native_sdk_gtk_host_t *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count);
-int native_sdk_gtk_create_window(native_sdk_gtk_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame);
+int native_sdk_gtk_create_window(native_sdk_gtk_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height);
+/* Ask the windowing system to start an interactive move from the last
+ * pointer press (the widget `window_drag` channel). Returns 0 when the
+ * window is unknown or no press has been recorded yet. */
+int native_sdk_gtk_start_window_drag(native_sdk_gtk_host_t *host, uint64_t window_id);
+/* App timers on the GLib main loop: starting an id that is already
+ * scheduled replaces it; a non-repeating timer drops its slot before
+ * emitting so the handler may re-arm the same id. */
+void native_sdk_gtk_start_timer(native_sdk_gtk_host_t *host, uint64_t timer_id, uint64_t interval_ns, int repeats);
+void native_sdk_gtk_cancel_timer(native_sdk_gtk_host_t *host, uint64_t timer_id);
 int native_sdk_gtk_focus_window(native_sdk_gtk_host_t *host, uint64_t window_id);
 int native_sdk_gtk_close_window(native_sdk_gtk_host_t *host, uint64_t window_id);
 int native_sdk_gtk_create_view(native_sdk_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, int kind, const char *parent, size_t parent_len, double x, double y, double width, double height, int layer, int visible, int enabled, const char *role, size_t role_len, const char *accessibility_label, size_t accessibility_label_len, const char *text, size_t text_len, const char *command, size_t command_len);

@@ -3029,6 +3029,17 @@ pub fn Effects(comptime Msg: type) type {
                 if (child.stderr) |stderr_file| collectStderrTail(slot, io, stderr_file);
             }
 
+            // Join the stderr reader BEFORE reaping: `child.wait` closes
+            // the child's pipe files unconditionally, and a reader still
+            // in flight races that close and loses the tail (it reads a
+            // dead — or worse, recycled — descriptor). The join is safe
+            // here: stdout already hit EOF, and stderr EOF arrives when
+            // the child dies whether or not it has been reaped.
+            if (stderr_thread) |thread| {
+                thread.join();
+                stderr_thread = null;
+            }
+
             slot.child_mutex.lock();
             slot.reaping = true;
             slot.child_mutex.unlock();

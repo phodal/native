@@ -892,7 +892,7 @@ test "the note list scroll offset round-trips through the model" {
 //
 //   ICON_BATCH_SHOTS=1 zig build test
 test "render icon-batch screenshots (env-gated)" {
-    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("ICON_BATCH_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     var clock = native_sdk.TestClock{};
@@ -931,7 +931,7 @@ fn presentShotFrame(h: *Harness, frame_index: u64) !void {
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
-    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("HOMEPAGE_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     var clock = native_sdk.TestClock{};
@@ -949,4 +949,10 @@ test "render homepage screenshots (env-gated)" {
     try h.harness.runtime.dispatchAutomationCommand(h.app, "screenshot notes-canvas 2");
 }
 
-
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
+}

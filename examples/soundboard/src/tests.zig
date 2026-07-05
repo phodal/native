@@ -662,7 +662,7 @@ test "a11y audit sweep: every interactive widget is named, reachable, and unambi
 //
 //   ICON_BATCH_SHOTS=1 zig build test
 test "render icon-batch screenshots (env-gated)" {
-    if (std.c.getenv("ICON_BATCH_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("ICON_BATCH_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     const live = try LiveApp.start(true);
@@ -705,7 +705,7 @@ fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
-    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("HOMEPAGE_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     const live = try LiveApp.start(true);
@@ -727,4 +727,12 @@ test "render homepage screenshots (env-gated)" {
     try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
     live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/soundboard-dark-artifacts", "Soundboard");
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+}
+
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
 }

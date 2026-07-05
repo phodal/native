@@ -731,7 +731,7 @@ fn clickSnapshotButton(live: LiveApp, snapshot: *native_sdk.automation.snapshot.
 //
 //   HOMEPAGE_SHOTS=1 zig build test
 test "render homepage screenshots (env-gated)" {
-    if (std.c.getenv("HOMEPAGE_SHOTS") == null) return error.SkipZigTest;
+    if (!envGateSet("HOMEPAGE_SHOTS")) return error.SkipZigTest;
     const io = testing.io;
 
     const live = try LiveApp.start();
@@ -752,4 +752,12 @@ test "render homepage screenshots (env-gated)" {
     try live.harness.runtime.dispatchPlatformEvent(live.app, .{ .appearance_changed = .{ .color_scheme = .dark } });
     live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/homepage-shots/calculator-dark-artifacts", "Calculator");
     try live.harness.runtime.dispatchAutomationCommand(live.app, "screenshot calc-canvas 2");
+}
+
+/// Env-gated dump switch. `std.c.getenv` needs libc, which this test
+/// build only links on targets whose platform layer pulls it in; when
+/// libc is absent the gate reads as unset and the gated test skips.
+fn envGateSet(name: [*:0]const u8) bool {
+    if (comptime !@import("builtin").link_libc) return false;
+    return std.c.getenv(name) != null;
 }

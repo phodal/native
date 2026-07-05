@@ -29,6 +29,8 @@ const GtkEventKind = enum(c_int) {
     gpu_surface_resize = 12,
     gpu_surface_input = 13,
     wake = 14,
+    timer = 15,
+    appearance = 16,
 };
 
 const GtkEvent = extern struct {
@@ -71,6 +73,10 @@ const GtkEvent = extern struct {
     input_text_len: usize,
     has_composition_cursor: c_int,
     composition_cursor: usize,
+    timer_id: u64,
+    color_scheme: c_int,
+    reduce_motion: c_int,
+    high_contrast: c_int,
 };
 
 const GtkCallback = *const fn (context: ?*anyopaque, event: *const GtkEvent) callconv(.c) void;
@@ -82,7 +88,7 @@ const shortcut_modifier_control: u32 = 1 << 2;
 const shortcut_modifier_option: u32 = 1 << 3;
 const shortcut_modifier_shift: u32 = 1 << 4;
 
-extern fn native_sdk_gtk_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) ?*GtkHost;
+extern fn native_sdk_gtk_create(app_name: [*]const u8, app_name_len: usize, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int, titlebar_style: c_int, min_width: f64, min_height: f64) ?*GtkHost;
 extern fn native_sdk_gtk_destroy(host: *GtkHost) void;
 extern fn native_sdk_gtk_run(host: *GtkHost, callback: GtkCallback, context: ?*anyopaque) void;
 extern fn native_sdk_gtk_stop(host: *GtkHost) void;
@@ -98,7 +104,10 @@ extern fn native_sdk_gtk_emit_window_event(host: *GtkHost, window_id: u64, name:
 extern fn native_sdk_gtk_set_security_policy(host: *GtkHost, allowed_origins: [*]const u8, allowed_origins_len: usize, external_urls: [*]const u8, external_urls_len: usize, external_action: c_int) void;
 extern fn native_sdk_gtk_set_menus(host: *GtkHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
 extern fn native_sdk_gtk_set_shortcuts(host: *GtkHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
-extern fn native_sdk_gtk_create_window(host: *GtkHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int) c_int;
+extern fn native_sdk_gtk_create_window(host: *GtkHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int, titlebar_style: c_int, min_width: f64, min_height: f64) c_int;
+extern fn native_sdk_gtk_start_window_drag(host: *GtkHost, window_id: u64) c_int;
+extern fn native_sdk_gtk_start_timer(host: *GtkHost, timer_id: u64, interval_ns: u64, repeats: c_int) void;
+extern fn native_sdk_gtk_cancel_timer(host: *GtkHost, timer_id: u64) void;
 extern fn native_sdk_gtk_focus_window(host: *GtkHost, window_id: u64) c_int;
 extern fn native_sdk_gtk_close_window(host: *GtkHost, window_id: u64) c_int;
 extern fn native_sdk_gtk_create_view(host: *GtkHost, window_id: u64, label: [*]const u8, label_len: usize, kind: c_int, parent: [*]const u8, parent_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, visible: c_int, enabled: c_int, role: [*]const u8, role_len: usize, accessibility_label: [*]const u8, accessibility_label_len: usize, text: [*]const u8, text_len: usize, command: [*]const u8, command_len: usize) c_int;
@@ -195,7 +204,7 @@ pub const LinuxPlatform = struct {
         const window_options = app_info.resolvedMainWindow();
         const window_title = window_options.resolvedTitle(app_info.app_name);
         const frame = window_options.default_frame;
-        const host = native_sdk_gtk_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0) orelse return error.CreateFailed;
+        const host = native_sdk_gtk_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0, if (window_options.resizable) 1 else 0, titlebarStyleInt(window_options.titlebar), minSizeFloor(window_options.min_width), minSizeFloor(window_options.min_height)) orelse return error.CreateFailed;
         return .{
             .host = host,
             .web_engine = web_engine,
@@ -233,6 +242,7 @@ pub const LinuxPlatform = struct {
                 .create_window_fn = createWindow,
                 .focus_window_fn = focusWindow,
                 .close_window_fn = closeWindow,
+                .start_window_drag_fn = startWindowDrag,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -265,6 +275,8 @@ pub const LinuxPlatform = struct {
                 .configure_menus_fn = configureMenus,
                 .configure_shortcuts_fn = configureShortcuts,
                 .emit_window_event_fn = emitWindowEvent,
+                .start_timer_fn = startTimer,
+                .cancel_timer_fn = cancelTimer,
                 .wake_fn = wake,
                 .decode_image_fn = decodeImage,
             },
@@ -429,6 +441,15 @@ fn gtkCallback(context: ?*anyopaque, event: *const GtkEvent) callconv(.c) void {
         } }),
         .gpu_surface_input => state.emit(.{ .gpu_surface_input = gpuSurfaceInputEventFromGtkEvent(event) }),
         .wake => state.emit(.wake),
+        .timer => state.emit(.{ .timer = .{
+            .id = event.timer_id,
+            .timestamp_ns = event.timestamp_ns,
+        } }),
+        .appearance => state.emit(.{ .appearance_changed = .{
+            .color_scheme = if (event.color_scheme == 1) .dark else .light,
+            .reduce_motion = event.reduce_motion != 0,
+            .high_contrast = event.high_contrast != 0,
+        } }),
     }
 }
 
@@ -569,11 +590,25 @@ fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!p
     };
 }
 
+fn titlebarStyleInt(style: platform_mod.WindowTitlebarStyle) c_int {
+    return switch (style) {
+        .standard => 0,
+        .hidden_inset => 1,
+        .hidden_inset_tall => 2,
+    };
+}
+
+/// Zero/negative/non-finite floors are the "no floor" sentinel (the
+/// host leaves that axis at its natural minimum).
+fn minSizeFloor(value: f32) f64 {
+    return if (std.math.isFinite(value) and value > 0) value else 0;
+}
+
 fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyerror!platform_mod.WindowInfo {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     const title = options.resolvedTitle(self.app_info.app_name);
     const frame = options.default_frame;
-    if (native_sdk_gtk_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0) == 0) return error.CreateFailed;
+    if (native_sdk_gtk_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0, if (options.resizable) 1 else 0, titlebarStyleInt(options.titlebar), minSizeFloor(options.min_width), minSizeFloor(options.min_height)) == 0) return error.CreateFailed;
     return .{
         .id = options.id,
         .label = options.label,
@@ -593,6 +628,21 @@ fn focusWindow(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!
 fn closeWindow(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     if (native_sdk_gtk_close_window(self.host, window_id) == 0) return error.CloseFailed;
+}
+
+fn startWindowDrag(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (native_sdk_gtk_start_window_drag(self.host, window_id) == 0) return error.WindowNotFound;
+}
+
+fn startTimer(context: ?*anyopaque, id: u64, interval_ns: u64, repeats: bool) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_gtk_start_timer(self.host, id, interval_ns, if (repeats) 1 else 0);
+}
+
+fn cancelTimer(context: ?*anyopaque, id: u64) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_gtk_cancel_timer(self.host, id);
 }
 
 fn createView(context: ?*anyopaque, options: platform_mod.ViewOptions) anyerror!void {
@@ -756,8 +806,10 @@ fn setWebViewZoom(context: ?*anyopaque, window_id: platform_mod.WindowId, label:
 
 fn setWebViewLayer(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, layer: i32) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
-    if (std.mem.eql(u8, label, "main")) return error.UnsupportedMainWebViewLayer;
-    if (self.web_engine == .chromium) return error.UnsupportedChildWebViews;
+    if (self.web_engine == .chromium) {
+        if (std.mem.eql(u8, label, "main")) return error.UnsupportedMainWebViewLayer;
+        return error.UnsupportedChildWebViews;
+    }
     if (native_sdk_gtk_set_webview_layer(self.host, window_id, label.ptr, label.len, layer) == 0) return error.WebViewNotFound;
 }
 

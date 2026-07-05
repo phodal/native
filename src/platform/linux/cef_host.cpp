@@ -120,12 +120,16 @@ static void destroyChildWebViewsForWindow(Host *host, uint64_t window_id) {
 
 extern "C" {
 
-Host *native_sdk_gtk_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+Host *native_sdk_gtk_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height) {
     (void)bundle_id;
     (void)bundle_id_len;
     (void)icon_path;
     (void)icon_path_len;
     (void)restore_frame;
+    (void)resizable;
+    (void)titlebar_style;
+    (void)min_width;
+    (void)min_height;
     Host *host = new Host();
     host->app_name = slice(app_name, app_name_len);
     host->window_title = slice(window_title, window_title_len);
@@ -246,8 +250,12 @@ void native_sdk_gtk_set_shortcuts(Host *host, const char *const *ids, const size
     (void)count;
 }
 
-int native_sdk_gtk_create_window(Host *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame) {
+int native_sdk_gtk_create_window(Host *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height) {
     (void)restore_frame;
+    (void)resizable;
+    (void)titlebar_style;
+    (void)min_width;
+    (void)min_height;
     if (!host || host->windows.find(window_id) != host->windows.end()) return 0;
     Window window;
     window.id = window_id;
@@ -260,6 +268,27 @@ int native_sdk_gtk_create_window(Host *host, uint64_t window_id, const char *win
     host->windows[window_id] = window;
     emit(host, host->windows[window_id], kWindowFrame);
     return 1;
+}
+
+void native_sdk_gtk_start_timer(Host *host, uint64_t timer_id, uint64_t interval_ns, int repeats) {
+    // Headless CEF tooling host: no main loop to schedule app timers on.
+    (void)host;
+    (void)timer_id;
+    (void)interval_ns;
+    (void)repeats;
+}
+
+void native_sdk_gtk_cancel_timer(Host *host, uint64_t timer_id) {
+    (void)host;
+    (void)timer_id;
+}
+
+int native_sdk_gtk_start_window_drag(Host *host, uint64_t window_id) {
+    // Headless CEF tooling host: no windowing system to move a window
+    // through, so the drag request reports "window not draggable".
+    (void)host;
+    (void)window_id;
+    return 0;
 }
 
 int native_sdk_gtk_focus_window(Host *host, uint64_t window_id) {

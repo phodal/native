@@ -38,6 +38,11 @@ pub fn lap(comptime name: []const u8) void {
 /// that run repeatedly (the first rebuild, the first present record).
 pub fn lapOnce(comptime name: []const u8) void {
     const Once = struct {
+        // The container must REFERENCE the comptime parameter: a nested
+        // struct that ignores it is deduplicated across instantiations,
+        // collapsing every lap name onto one shared `done` flag (only
+        // the first lapOnce in the process would ever fire).
+        const lap_name = name;
         var done: bool = false;
     };
     if (Once.done) return;

@@ -8,6 +8,7 @@ const runtime_view = @import("view.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
+const launch_timing = @import("launch_timing.zig");
 const widget_bridge = @import("widget_bridge.zig");
 
 const CanvasWidgetDisplayListChrome = runtime_api.CanvasWidgetDisplayListChrome;
@@ -317,6 +318,11 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
             // profiling is on.
             const emit_begin = self.frame_profile.begin();
             defer self.frame_profile.end(.emit, emit_begin);
+            // Launch lap (env-gated, once per process): the first
+            // display-list emission closing marks reconcile+emit done on
+            // the startup frame — the gap to `first_plan_begin` is zero,
+            // so `first_view_built` -> this = reconcile + emit.
+            defer launch_timing.lapOnce("first_display_list_emitted");
 
             var commands: [max_canvas_commands_per_view]canvas.CanvasCommand = undefined;
             var chrome_storage = CanvasDisplayListScratch{};

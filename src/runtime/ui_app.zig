@@ -712,6 +712,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             self.effects.bindImages(runtime.canvasImageRegistryBinding());
             self.syncModel(runtime, self.canvas_window_id);
             self.applyMsg(msg);
+            // Before the installing frame there is nothing to render
+            // against: canvas size and scale arrive with the first frame
+            // event, and the installing rebuild renders whatever model
+            // state accumulated here. A pre-install rebuild is discarded
+            // work at a default surface size — and appearance/chrome
+            // events land before the first frame on every launch, so it
+            // used to cost a full view build on the launch path.
+            if (!self.installed) return;
             try self.rebuild(runtime, self.canvas_window_id);
             try self.rebuildWindowSlots(runtime);
             // A Msg dispatched FROM a secondary window still rebuilt the
@@ -1686,6 +1694,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                         self.effects.bindEnviron(runtime.options.environ);
                         self.effects.bindImages(runtime.canvasImageRegistryBinding());
                         init_fx(&self.model, &self.effects);
+                        // Launch lap (env-gated): boot-effect cost (asset
+                        // decode/registration) splits out of the
+                        // scene_loaded -> first_view_built window.
+                        launch_timing.lapOnce("init_fx_done");
                     }
                 }
                 // Chrome insets reach the model BEFORE the first view

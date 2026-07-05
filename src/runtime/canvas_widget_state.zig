@@ -8,6 +8,7 @@ const canvas_limits = @import("canvas_limits.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const runtime_canvas_widget_scroll_drivers = @import("canvas_widget_scroll_drivers.zig");
+const launch_timing = @import("launch_timing.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
 const runtime_automation_widget_dispatch = @import("automation_widget_dispatch.zig");
@@ -39,6 +40,10 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // `emit` stage (stamped at its own choke point) is never
             // double-counted. No-op unless profiling is on.
             const reconcile_begin = self.frame_profile.begin();
+            // Launch lap (env-gated, once per process): the startup
+            // frame's reconcile begins here, splitting view build from
+            // reconcile+emit inside the built -> emitted window.
+            launch_timing.lapOnce("first_reconcile_begin");
 
             // Source-driven autofocus resolves against the PREVIOUS
             // rebuild's flags (edge-triggered) before any state is

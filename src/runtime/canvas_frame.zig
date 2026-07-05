@@ -2,6 +2,7 @@ const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("canvas");
 const canvas_frame_helpers = @import("canvas_frame_helpers.zig");
+const launch_timing = @import("launch_timing.zig");
 const platform = @import("../platform/root.zig");
 
 pub const CanvasPixelSize = canvas_frame_helpers.CanvasPixelSize;
@@ -779,6 +780,13 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             // is on.
             const plan_begin = if (record) self.frame_profile.begin() else 0;
             defer if (record) self.frame_profile.end(.plan, plan_begin);
+            // Launch laps (env-gated, once per process): bracket the
+            // startup frame's render-plan cascade so the launch timeline
+            // splits plan cost (text layout, caches, diff) from the
+            // reconcile/emit segment before it and the encode/present
+            // segment after it.
+            launch_timing.lapOnce("first_plan_begin");
+            defer launch_timing.lapOnce("first_plan_done");
             var frame_options = options;
             if (frame_options.surface_size.isEmpty()) {
                 frame_options.surface_size = if (self.views[index].gpu_size.isEmpty()) self.views[index].frame.size() else self.views[index].gpu_size;

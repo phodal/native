@@ -8,6 +8,7 @@ const runtime_async_bridge = @import("async_bridge.zig");
 const runtime_automation_snapshot = @import("automation_snapshot.zig");
 const runtime_automation_widget_dispatch = @import("automation_widget_dispatch.zig");
 const automation_commands = @import("automation_commands.zig");
+const launch_timing = @import("launch_timing.zig");
 const runtime_clock = @import("clock.zig");
 const shell_layout = @import("shell_layout.zig");
 const runtime_builtin_bridge = @import("builtin_bridge.zig");
@@ -139,15 +140,18 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                     // `app.stop` right after `start` — which reads like a
                     // clean exit while the main window sits blank.
                     errdefer |err| recordDispatchError(self, "app_start", err);
+                    launch_timing.lap("app_start");
                     try reservePrimaryStartupWindow(self);
                     try app.start(self);
                     if (self.options.extensions) |registry| try registry.startAll(extensionContext(self));
                     try dispatchEvent(self, app, .{ .lifecycle = .start });
+                    launch_timing.lap("app_started");
                     if (try app.scene()) |scene| {
                         try loadScene(self, app, scene);
                     } else {
                         try loadStartupWindows(self, app);
                     }
+                    launch_timing.lap("scene_loaded");
                     self.invalidateFor(.startup, null);
                     log(self, "app.start", "app started", &.{trace.string("app", app.name)});
                 },

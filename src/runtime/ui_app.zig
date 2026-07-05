@@ -35,6 +35,7 @@ const platform = @import("../platform/root.zig");
 const core = @import("core.zig");
 const canvas_frame = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
+const launch_timing = @import("launch_timing.zig");
 const runtime_effects = @import("effects.zig");
 
 const Runtime = core.Runtime;
@@ -803,6 +804,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 if (pass >= 2 or !self.virtualWindowsUndercovered(layout)) break;
                 window_source.fresh = layout;
             }
+            launch_timing.lapOnce("first_view_built");
 
             if (self.options.chrome) |chrome| {
                 try self.installChromeDisplayList(runtime, window_id, chrome, layout, tokens);

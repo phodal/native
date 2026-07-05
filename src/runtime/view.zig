@@ -1,6 +1,7 @@
 const geometry = @import("geometry");
 const canvas = @import("canvas");
 const canvas_limits = @import("canvas_limits.zig");
+const launch_timing = @import("launch_timing.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const view_canvas = @import("view_canvas.zig");
 const view_widget_control = @import("view_widget_control.zig");
@@ -656,6 +657,7 @@ pub const RuntimeView = struct {
         if (self.gpu_surface_created_timestamp_ns == 0 or timestamp_ns < self.gpu_surface_created_timestamp_ns) return;
         self.gpu_first_frame_latency_recorded = true;
         self.gpu_first_frame_latency_ns = timestamp_ns - self.gpu_surface_created_timestamp_ns;
+        launch_timing.lapOnce("first_present_recorded");
         self.refreshGpuSurfaceFirstFrameLatencyBudgetStatus();
     }
 

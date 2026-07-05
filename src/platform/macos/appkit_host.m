@@ -58,6 +58,14 @@ static size_t NativeSdkOverflowSize(size_t buffer_len) {
     return buffer_len == SIZE_MAX ? SIZE_MAX : buffer_len + 1;
 }
 
+// Launch-to-glass lap (NATIVE_SDK_WINDOW_TIMING): REALTIME wall-clock so
+// an external harness can difference stamps against a pre-spawn clock.
+// Same format as the engine's `launch_timing` laps.
+static void NativeSdkLaunchLap(const char *name) {
+    if (!getenv("NATIVE_SDK_WINDOW_TIMING")) return;
+    fprintf(stderr, "native-sdk: launch %s wall_ns=%llu\n", name, (unsigned long long)clock_gettime_nsec_np(CLOCK_REALTIME));
+}
+
 static NSString *NativeSdkStringFromBytes(const char *bytes, size_t len) {
     if (!bytes || len == 0) return nil;
     return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
@@ -347,6 +355,11 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
 @property(nonatomic, assign) BOOL retainedFrameRequestPending;
+/// One-shot: the pre-first-present immediate frame request already fired
+/// (see requestRetainedCanvasFrame) — later textureless requests drop
+/// like they always did, so a persistently failing present can't spin
+/// an unpaced request loop.
+@property(nonatomic, assign) BOOL firstCanvasFrameRequestEmitted;
 @property(nonatomic, assign) uint64_t retainedFrameLastEmitNs;
 /* Deferred present-completion emission (paced to the display interval):
  * completions landing while one is queued fold into it — the queued
@@ -492,6 +505,9 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)updateWidgetAccessibilityWithNodes:(const native_sdk_appkit_widget_accessibility_node_t *)nodes count:(NSUInteger)count;
 - (void)stopDisplayTimer;
 - (void)requestRetainedCanvasFrame;
+- (void)flushQueuedFirstCanvasFrameRequestNow;
+- (void)advanceRetainedFramePacingClock;
+- (void)emitFirstCanvasFrameRequest;
 - (void)emitRetainedCanvasFrameRequest;
 - (void)renderFrame;
 - (void)emitPacedCompletionEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
@@ -595,6 +611,7 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)closeWindowWithId:(uint64_t)windowId;
 - (BOOL)startWindowDragWithId:(uint64_t)windowId;
 - (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right buttonsX:(double *)buttonsX buttonsY:(double *)buttonsY buttonsWidth:(double *)buttonsWidth buttonsHeight:(double *)buttonsHeight;
+- (WKWebView *)ensureMainWebViewForWindowId:(uint64_t)windowId;
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId;
 - (WKWebView *)mainWebViewForWindow:(NSWindow *)window;
 - (NativeSdkAssetSchemeHandler *)assetHandlerForWindowId:(uint64_t)windowId;
@@ -791,6 +808,23 @@ static void NativeSdkEmitGpuSurfaceResizes(NSView *view) {
     NSWindow *window = self.host.windows[@(self.windowId)];
     if (window.contentView) NativeSdkEmitGpuSurfaceResizes(window.contentView);
     [self.host scheduleFrame];
+}
+
+// The window is a dragging destination now that the main WebView (whose
+// registration used to catch every drop) is lazy: NSWindow forwards
+// these to its delegate, and the emit path is byte-identical to the
+// WebView's. A present main/child WebView still wins (views outrank the
+// window for registered types), and its handler emits the same event.
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    return NSDragOperationCopy;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pasteboard = sender.draggingPasteboard;
+    NSArray<NSURL *> *urls = [pasteboard readObjectsForClasses:@[ [NSURL class] ]
+                                                       options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
+    return [self.host emitDroppedFileURLs:urls windowId:self.windowId];
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -4493,7 +4527,25 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 }
 
 - (void)requestRetainedCanvasFrame {
-    if (!self.hasCanvasTexture || self.retainedFrameRequestPending) return;
+    if (self.retainedFrameRequestPending) return;
+    if (!self.hasCanvasTexture) {
+        // FIRST canvas frame: nothing is retained and nothing has ever
+        // presented, so there is no drawable pool to protect with pacing.
+        // Dropping the request here (the old behavior) left the first
+        // present waiting for the 60 Hz placeholder timer to tick — a
+        // measured 40+ ms of launch-to-glass latency. Emit the request
+        // immediately instead, once; failures fall back to the timer.
+        if (self.firstCanvasFrameRequestEmitted) return;
+        self.firstCanvasFrameRequestEmitted = YES;
+        self.retainedFrameRequestPending = YES;
+        __weak NativeSdkMetalSurfaceView *weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NativeSdkMetalSurfaceView *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf emitFirstCanvasFrameRequest];
+        });
+        return;
+    }
     self.retainedFrameRequestPending = YES;
     const uint64_t now = NativeSdkTimestampNanoseconds();
     const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
@@ -4509,11 +4561,61 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     });
 }
 
+// Synchronous pre-run flush for a first-frame request queued during the
+// START dispatch: the async main-queue hop only runs once [NSApp run]
+// starts pumping, a measured ~40 ms after launch work is otherwise done.
+// runWithCallback calls this after its start/appearance/resize/frame
+// emits, when the host is between engine dispatches — the same safe
+// re-entry point those emits use.
+- (void)flushQueuedFirstCanvasFrameRequestNow {
+    if (!self.retainedFrameRequestPending || self.hasCanvasTexture) return;
+    [self emitFirstCanvasFrameRequest];
+}
+
+// Advance the pacing clock for an emission that was SCHEDULED at
+// lastEmit + interval: stamping fire-time `now` (the old behavior)
+// folded the dispatch timer's delivery latency into every period, so
+// the paced loop ran at 8.33 ms + ~1.2 ms == ~105 Hz on a 120 Hz panel.
+// Stamping the scheduled deadline keeps the average period exactly one
+// display interval (jitter stays, drift doesn't). A fire more than one
+// interval late resets to `now` — pacing never death-spirals trying to
+// catch up.
+- (void)advanceRetainedFramePacingClock {
+    const uint64_t now = NativeSdkTimestampNanoseconds();
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    const uint64_t scheduledNs = self.retainedFrameLastEmitNs + frameIntervalNs;
+    if (self.retainedFrameLastEmitNs != 0 && now >= scheduledNs && now - scheduledNs < frameIntervalNs) {
+        self.retainedFrameLastEmitNs = scheduledNs;
+    } else {
+        self.retainedFrameLastEmitNs = now;
+    }
+}
+
+- (void)emitFirstCanvasFrameRequest {
+    // Both the queued async fallback and the synchronous pre-run flush
+    // route here; whichever runs first clears the pending flag and the
+    // other no-ops.
+    if (!self.retainedFrameRequestPending) return;
+    self.retainedFrameRequestPending = NO;
+    if (self.hasCanvasTexture) {
+        // A texture landed while the request was queued: the normal
+        // retained path (with its own guards) owns it now.
+        [self emitRetainedCanvasFrameRequest];
+        return;
+    }
+    if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
+    [self updateDrawableSize];
+    self.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
+    const NSUInteger requestedFrameIndex = self.frameIndex;
+    self.frameIndex += 1;
+    [self emitFrameEventWithFrameIndex:requestedFrameIndex sampleColor:0 nonblank:NO];
+}
+
 - (void)emitRetainedCanvasFrameRequest {
     self.retainedFrameRequestPending = NO;
     if (![self isAvailable] || self.hidden || !self.hasCanvasTexture || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
     [self updateDrawableSize];
-    self.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
+    [self advanceRetainedFramePacingClock];
     const NSUInteger requestedFrameIndex = self.frameIndex;
     self.frameIndex += 1;
     const BOOL nonblank = self.verifiedNonblankFrame || self.hasCanvasTexture;
@@ -4544,7 +4646,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         NativeSdkMetalSurfaceView *strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.completionEmissionPending = NO;
-        strongSelf.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
+        [strongSelf advanceRetainedFramePacingClock];
         [strongSelf emitFrameEventWithFrameIndex:strongSelf.pendingCompletionFrameIndex sampleColor:strongSelf.pendingCompletionSampleColor nonblank:strongSelf.pendingCompletionNonblank];
     });
 }
@@ -4585,7 +4687,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
             NativeSdkMetalSurfaceView *strongSelf = weakSelf;
             if (!strongSelf) return;
-            strongSelf.retainedFrameLastEmitNs = NativeSdkTimestampNanoseconds();
+            [strongSelf advanceRetainedFramePacingClock];
             const BOOL nonblank = strongSelf.verifiedNonblankFrame || strongSelf.hasCanvasTexture;
             const uint32_t sampleColor = strongSelf.verifiedNonblankFrame ? strongSelf.lastSampleColor : 0;
             [strongSelf emitFrameEventWithFrameIndex:completedFrameIndex sampleColor:sampleColor nonblank:nonblank];
@@ -5463,9 +5565,12 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         return nil;
     }
 
+    NativeSdkLaunchLap("host_init");
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    NativeSdkLaunchLap("nsapp_ready");
     NativeSdkRegisterBundledFonts();
+    NativeSdkLaunchLap("fonts_registered");
     self.appName = appName.length > 0 ? appName : @"native-sdk";
     self.bundleIdentifier = bundleIdentifier.length > 0 ? bundleIdentifier : @"dev.native_sdk.app";
     self.iconPath = iconPath ?: @"";
@@ -5491,6 +5596,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     self.externalLinkAction = 0;
     self.shortcuts = @[];
     [self configureApplication];
+    NativeSdkLaunchLap("app_configured");
 
     [self createWindowWithId:1 title:(windowTitle.length > 0 ? windowTitle : self.appName) label:self.windowLabel x:x y:y width:width height:height restoreFrame:restoreFrame resizable:resizable titlebarStyle:titlebarStyle showPolicy:showPolicy makeMain:YES];
     self.didShutdown = NO;
@@ -5558,41 +5664,20 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (!restoreFrame) {
         [window center];
     }
+    if (makeMain) NativeSdkLaunchLap("window_chrome_ready");
 
-    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    NativeSdkAssetSchemeHandler *assetSchemeHandler = [[NativeSdkAssetSchemeHandler alloc] init];
-    [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"zero"];
-    WKUserContentController *userContentController = [[WKUserContentController alloc] init];
-    NativeSdkBridgeScriptHandler *bridgeScriptHandler = [[NativeSdkBridgeScriptHandler alloc] init];
-    bridgeScriptHandler.host = self;
-    bridgeScriptHandler.windowId = windowId;
-    bridgeScriptHandler.webViewLabel = @"main";
-    [userContentController addScriptMessageHandler:bridgeScriptHandler name:@"nativeSdkBridge"];
-    WKUserScript *bridgeScript = [[WKUserScript alloc] initWithSource:NativeSdkAppKitBridgeScript()
-                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                     forMainFrameOnly:YES];
-    [userContentController addUserScript:bridgeScript];
-    configuration.userContentController = userContentController;
-    if ([configuration.preferences respondsToSelector:NSSelectorFromString(@"setDeveloperExtrasEnabled:")]) {
-        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
-    }
     NSView *container = [[NSView alloc] initWithFrame:rect];
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    WKWebView *webView = [[NativeSdkWebView alloc] initWithFrame:container.bounds configuration:configuration];
-    ((NativeSdkWebView *)webView).host = self;
-    ((NativeSdkWebView *)webView).windowId = windowId;
-    [webView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
-    webView.wantsLayer = YES;
-    webView.layer.zPosition = 0;
-    webView.layer.backgroundColor = NSColor.clearColor.CGColor;
-    [webView setValue:@NO forKey:@"drawsBackground"];
-    if ([webView respondsToSelector:NSSelectorFromString(@"setInspectable:")]) {
-        [webView setValue:@YES forKey:@"inspectable"];
-    }
-    webView.navigationDelegate = self;
-    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    [container addSubview:webView positioned:NSWindowAbove relativeTo:nil];
     window.contentView = container;
+    // The window's MAIN WebView is created lazily
+    // (`ensureMainWebViewForWindowId:`): a canvas-first app never loads
+    // it, and instantiating WKWebView spins up the whole out-of-process
+    // WebKit stack (~30+ ms of launch latency plus resident helper
+    // processes) for a view that would sit blank under the canvas
+    // forever. File drops used to ride the eager WebView's dragging
+    // destination, so the WINDOW registers now and the delegate forwards
+    // drops to the same host path.
+    [window registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
 
     NativeSdkWindowDelegate *delegate = [[NativeSdkWindowDelegate alloc] init];
     delegate.host = self;
@@ -5607,10 +5692,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     }
 
     self.windows[key] = window;
-    self.webViews[key] = webView;
     self.delegates[key] = delegate;
-    self.bridgeScriptHandlers[key] = bridgeScriptHandler;
-    self.assetSchemeHandlers[key] = assetSchemeHandler;
     self.windowLabels[key] = label.length > 0 ? label : @"main";
     // Present-before-show: a deferred window stays ordered OUT until its
     // first gpu-surface present lands (`showDeferredWindowIfPending`, at
@@ -5620,6 +5702,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     // never as an invisible app.
     if (showPolicy == 1) {
         self.deferredShowWindows[key] = @(NativeSdkTimestampNanoseconds());
+        NativeSdkLaunchLap("window_created");
         __weak NativeSdkAppKitHost *weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             [weakSelf showDeferredWindowIfPending:windowId reason:"fallback-deadline"];
@@ -5627,10 +5710,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     }
     if (makeMain) {
         self.window = window;
-        self.webView = webView;
         self.delegate = delegate;
-        self.bridgeScriptHandler = bridgeScriptHandler;
-        self.assetSchemeHandler = assetSchemeHandler;
         self.windowLabel = label.length > 0 ? label : @"main";
     } else if (showPolicy != 1) {
         [window makeKeyAndOrderFront:nil];
@@ -5651,7 +5731,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (!window) return;
     if (getenv("NATIVE_SDK_WINDOW_TIMING")) {
         const double elapsedMs = (double)(NativeSdkTimestampNanoseconds() - createdNs.unsignedLongLongValue) / 1e6;
-        fprintf(stderr, "native-sdk: window %llu shown (%s) %.1f ms after create\n", (unsigned long long)windowId, reason, elapsedMs);
+        fprintf(stderr, "native-sdk: window %llu shown (%s) %.1f ms after create wall_ns=%llu\n", (unsigned long long)windowId, reason, elapsedMs, (unsigned long long)clock_gettime_nsec_np(CLOCK_REALTIME));
     }
     [window makeKeyAndOrderFront:nil];
     [NSApp activate];
@@ -5792,6 +5872,69 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         *right = (NSMaxX(contentBounds) - NSMinX(cluster)) + (NSMaxX(contentBounds) - NSMaxX(cluster));
     }
     return YES;
+}
+
+// Create-on-first-use for a window's main WebView. Pure peek reads
+// (event emission, bridge completion echoes, reorder passes) keep going
+// through `webViewForWindowId:` and skip absent WebViews — a page that
+// was never created has no listeners to miss. Paths that MATERIALIZE
+// web content (load, navigate, frame/zoom/layer placement) ensure first,
+// so webview-first apps behave exactly as before while canvas-first
+// apps never pay for the WebKit stack.
+- (WKWebView *)ensureMainWebViewForWindowId:(uint64_t)windowId {
+    NSNumber *key = @(windowId);
+    WKWebView *existing = self.webViews[key];
+    if (existing) return existing;
+    NSWindow *window = self.windows[key] ?: (windowId == 1 ? self.window : nil);
+    NSView *container = window.contentView;
+    if (!container) return nil;
+
+    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    NativeSdkAssetSchemeHandler *assetSchemeHandler = [[NativeSdkAssetSchemeHandler alloc] init];
+    [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"zero"];
+    WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+    NativeSdkBridgeScriptHandler *bridgeScriptHandler = [[NativeSdkBridgeScriptHandler alloc] init];
+    bridgeScriptHandler.host = self;
+    bridgeScriptHandler.windowId = windowId;
+    bridgeScriptHandler.webViewLabel = @"main";
+    [userContentController addScriptMessageHandler:bridgeScriptHandler name:@"nativeSdkBridge"];
+    WKUserScript *bridgeScript = [[WKUserScript alloc] initWithSource:NativeSdkAppKitBridgeScript()
+                                                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                     forMainFrameOnly:YES];
+    [userContentController addUserScript:bridgeScript];
+    configuration.userContentController = userContentController;
+    if ([configuration.preferences respondsToSelector:NSSelectorFromString(@"setDeveloperExtrasEnabled:")]) {
+        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+    }
+    WKWebView *webView = [[NativeSdkWebView alloc] initWithFrame:container.bounds configuration:configuration];
+    ((NativeSdkWebView *)webView).host = self;
+    ((NativeSdkWebView *)webView).windowId = windowId;
+    [webView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    webView.wantsLayer = YES;
+    webView.layer.zPosition = 0;
+    webView.layer.backgroundColor = NSColor.clearColor.CGColor;
+    [webView setValue:@NO forKey:@"drawsBackground"];
+    if ([webView respondsToSelector:NSSelectorFromString(@"setInspectable:")]) {
+        [webView setValue:@YES forKey:@"inspectable"];
+    }
+    webView.navigationDelegate = self;
+    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // Bottom of the sibling stack, where the eager create used to put it
+    // (everything later was added above); the zPosition reorder pass
+    // settles the final order exactly like any other webview mutation.
+    [container addSubview:webView positioned:NSWindowBelow relativeTo:nil];
+
+    self.webViews[key] = webView;
+    self.bridgeScriptHandlers[key] = bridgeScriptHandler;
+    self.assetSchemeHandlers[key] = assetSchemeHandler;
+    if (window == self.window) {
+        self.webView = webView;
+        self.bridgeScriptHandler = bridgeScriptHandler;
+        self.assetSchemeHandler = assetSchemeHandler;
+    }
+    [self reorderWebViewsInWindow:windowId];
+    NativeSdkLaunchLap("main_webview_ready");
+    return webView;
 }
 
 - (WKWebView *)webViewForWindowId:(uint64_t)windowId {
@@ -6169,6 +6312,11 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     NSString *key = [self nativeViewKeyForWindow:windowId label:label];
     NSView *view = self.nativeViews[key];
     if (![view isKindOfClass:[NativeSdkMetalSurfaceView class]]) return -1;
+    static BOOL firstPacketLapDone = NO;
+    if (!firstPacketLapDone) {
+        firstPacketLapDone = YES;
+        NativeSdkLaunchLap("first_packet_present_begin");
+    }
     const NSInteger result = [(NativeSdkMetalSurfaceView *)view presentGpuPacketBinaryWithSurfaceWidth:surfaceWidth height:surfaceHeight scale:scale clearR:clearR clearG:clearG clearB:clearB clearA:clearA requiresRender:requiresRender commandCount:commandCount unsupportedCommandCount:unsupportedCommandCount representable:representable packet:packet byteLength:byteLength];
     if (result == 1) {
         [self applyWindowClearColor:windowId red:clearR green:clearG blue:clearB alpha:clearA];
@@ -6460,7 +6608,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (label.length == 0 || width <= 0 || height <= 0 || x < 0 || y < 0) return NO;
     NSWindow *window = self.windows[@(windowId)] ?: (windowId == 1 ? self.window : nil);
     if ([label isEqualToString:@"main"]) {
-        WKWebView *webView = [self webViewForWindowId:windowId];
+        WKWebView *webView = [self ensureMainWebViewForWindowId:windowId];
         if (!window || !webView) return NO;
         webView.autoresizingMask = NSViewNotSizable;
         webView.frame = [self webViewFrameForWindow:window x:x y:y width:width height:height];
@@ -6480,7 +6628,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (label.length == 0 || url.length == 0) return NO;
     NSURL *targetURL = [NSURL URLWithString:url ?: @""];
     if ([label isEqualToString:@"main"]) {
-        WKWebView *webView = [self webViewForWindowId:windowId];
+        WKWebView *webView = [self ensureMainWebViewForWindowId:windowId];
         if (!webView || !targetURL) return NO;
         if (![self allowsNavigationURL:targetURL]) return NO;
         [webView loadRequest:[NSURLRequest requestWithURL:targetURL]];
@@ -6498,7 +6646,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 - (BOOL)setWebViewZoomInWindow:(uint64_t)windowId label:(NSString *)label zoom:(double)zoom {
     if (label.length == 0 || zoom < 0.25 || zoom > 5.0) return NO;
     if ([label isEqualToString:@"main"]) {
-        WKWebView *webView = [self webViewForWindowId:windowId];
+        WKWebView *webView = [self ensureMainWebViewForWindowId:windowId];
         if (!webView) return NO;
         webView.pageZoom = zoom;
         return YES;
@@ -6512,7 +6660,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 - (BOOL)setWebViewLayerInWindow:(uint64_t)windowId label:(NSString *)label layer:(NSInteger)layer {
     if (label.length == 0) return NO;
     if ([label isEqualToString:@"main"]) {
-        WKWebView *webView = [self webViewForWindowId:windowId];
+        WKWebView *webView = [self ensureMainWebViewForWindowId:windowId];
         if (!webView) return NO;
         webView.wantsLayer = YES;
         webView.layer.zPosition = layer;
@@ -6958,11 +7106,20 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
 - (void)configureApplication {
     [[NSProcessInfo processInfo] setProcessName:self.appName];
     [self buildMenuBar];
+    NativeSdkLaunchLap("menu_built");
     if (self.iconPath.length > 0) {
-        NSImage *icon = [[NSImage alloc] initWithContentsOfFile:self.iconPath];
-        if (icon) {
-            [NSApp setApplicationIconImage:icon];
-        }
+        // Decode the dock icon off the launch path: the synchronous
+        // .icns read+decode cost ~25 ms of launch-to-glass. The dock
+        // tile updates a few frames after launch instead — imperceptible,
+        // and identical when the file is missing (no icon either way).
+        NSString *iconPath = self.iconPath;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+            if (!icon) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSApp setApplicationIconImage:icon];
+            });
+        });
     }
 }
 
@@ -7119,6 +7276,17 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     [self emitAppearanceChanged];
     [self emitResize];
     [self emitWindowFrame:YES];
+
+    // First canvas frame, synchronously: a canvas-first startup window's
+    // first frame request was queued during the START dispatch above and
+    // would otherwise wait for [NSApp run]'s first queue pump. Emitting
+    // it here puts first content on the glass before the run loop even
+    // starts.
+    for (NSView *view in self.nativeViews.allValues) {
+        if ([view isKindOfClass:[NativeSdkMetalSurfaceView class]]) {
+            [(NativeSdkMetalSurfaceView *)view flushQueuedFirstCanvasFrameRequestNow];
+        }
+    }
 
     [self scheduleFrame];
     [NSApp run];
@@ -7403,7 +7571,7 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
 }
 
 - (void)loadSource:(NSString *)source kind:(NSInteger)kind assetRoot:(NSString *)assetRoot entry:(NSString *)entry origin:(NSString *)origin spaFallback:(BOOL)spaFallback windowId:(uint64_t)windowId {
-    WKWebView *webView = [self webViewForWindowId:windowId];
+    WKWebView *webView = [self ensureMainWebViewForWindowId:windowId];
     NativeSdkAssetSchemeHandler *assetSchemeHandler = [self assetHandlerForWindowId:windowId];
     if (kind == 1) {
         NSURL *url = [NSURL URLWithString:source];

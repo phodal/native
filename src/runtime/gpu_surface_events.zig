@@ -31,6 +31,17 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 self.views[index].gpu_size = frame_event.size;
                 self.views[index].gpu_scale_factor = frame_event.scale_factor;
                 self.views[index].gpu_frame_index = frame_event.frame_index;
+                // Completion cadence for the frame profile: the MEASURED
+                // gap between consecutive completion-event stamps (the
+                // event's frame_interval_ns is the screen's nominal
+                // interval, useless for drop detection). Profiling-gated;
+                // a dropped frame shows as max >> p50 on this channel.
+                if (self.frame_profile.enabled) {
+                    const previous_timestamp_ns = self.views[index].gpu_timestamp_ns;
+                    if (previous_timestamp_ns > 0 and frame_event.timestamp_ns > previous_timestamp_ns) {
+                        self.frame_profile.recordNs(.interval, frame_event.timestamp_ns - previous_timestamp_ns);
+                    }
+                }
                 self.views[index].gpu_timestamp_ns = frame_event.timestamp_ns;
                 self.views[index].recordGpuSurfaceFrameInterval(frame_event.frame_interval_ns);
                 self.views[index].recordGpuSurfaceFirstFrameLatency(frame_event.timestamp_ns);

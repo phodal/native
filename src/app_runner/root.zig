@@ -320,11 +320,15 @@ fn runNull(app: native_sdk.App, options: RunOptions, init: std.process.Init) !vo
 }
 
 fn runMacos(app: native_sdk.App, options: RunOptions, init: std.process.Init) !void {
+    // Launch-to-glass laps (NATIVE_SDK_WINDOW_TIMING): runner entry is the
+    // first in-process stamp — spawn-to-here is exec + dyld + zig init.
+    native_sdk.runtime.launch_timing.lap("runner_main");
     var buffers: StateBuffers = undefined;
     var app_info = options.appInfo(&buffers);
     const store = prepareStateStore(init.io, init.environ_map, &app_info, &buffers);
     var mac_platform = try native_sdk.platform.macos.MacPlatform.initWithOptions(native_sdk.geometry.SizeF.init(720, 480), webEngine(), app_info);
     defer mac_platform.deinit();
+    native_sdk.runtime.launch_timing.lap("host_ready");
     var trace_sink = StdoutTraceSink{};
     var log_buffers: native_sdk.debug.LogPathBuffers = .{};
     const log_setup = native_sdk.debug.setupLogging(init.io, init.environ_map, app_info.bundle_id, &log_buffers) catch null;
@@ -362,6 +366,7 @@ fn runMacos(app: native_sdk.App, options: RunOptions, init: std.process.Init) !v
         .window_state_store = store,
         .environ = init.minimal.environ,
     });
+    native_sdk.runtime.launch_timing.lap("runtime_ready");
 
     try runtime.run(app);
 }

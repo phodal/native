@@ -50,6 +50,12 @@ pub const FrameProfileStage = enum {
     host_decode,
     /// Host-side packet draw (macOS packet path, host-stamped).
     host_draw,
+    /// Present-completion cadence: the host-reported interval between
+    /// consecutive completion events (`frame_interval_ns`). Not a
+    /// pipeline stage — a delivery-rate channel, so a paced loop's
+    /// refresh-hold (and any dropped frames: max >> p50) is measurable
+    /// from the same snapshot line as the stage costs.
+    interval,
 
     pub fn name(self: FrameProfileStage) []const u8 {
         return @tagName(self);

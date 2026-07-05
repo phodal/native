@@ -366,6 +366,34 @@ const expectRouteEntry = support.expectRouteEntry;
 const expectFillColor = support.expectFillColor;
 const expectGpuPaintColor = support.expectGpuPaintColor;
 
+test "text offset walks always advance through invalid utf8" {
+    // Every scalar loop in the engine (glyph-atlas planning, line wrap,
+    // caret movement) trusts nextTextOffset to make progress. An orphan
+    // continuation byte used to snap the cursor BACK to the previous
+    // lead and return an offset at-or-before the input — an infinite
+    // loop reachable from one stray 0x80 in any rendered text.
+    const hostile_texts = [_][]const u8{
+        "a\x80b", // orphan continuation after ascii
+        "\x80\x80\x80", // continuation-only text
+        "é\x80é", // orphan between multi-byte scalars
+        "a\xc3", // truncated lead at end
+        "\xf0\x9f\x80", // truncated 4-byte lead
+        "\x00\x80\xff\xfe", // NUL + orphan + invalid leads
+        "ok \xed\xa0\x80 end", // CESU surrogate half
+    };
+    for (hostile_texts) |text| {
+        var offset: usize = 0;
+        var steps: usize = 0;
+        while (offset < text.len) {
+            const next = nextTextOffset(text, offset);
+            try std.testing.expect(next > offset);
+            offset = next;
+            steps += 1;
+            try std.testing.expect(steps <= text.len);
+        }
+    }
+}
+
 test "text edit state applies utf8-aware caret insert and delete events" {
     var storage_a: [64]u8 = undefined;
     var storage_b: [64]u8 = undefined;

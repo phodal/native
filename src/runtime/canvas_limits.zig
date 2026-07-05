@@ -138,9 +138,13 @@ pub const max_canvas_widget_context_menu_items_per_view: usize = 512;
 // Chart series and points retained across all `.chart` widgets of a
 // view. `Ui.chart` downsamples every series to
 // `canvas.max_chart_points_per_series` (256) before it reaches the
-// retained tree, so the points pool is sized as 64 maximal series: a
-// dashboard of 16 charts x 3 series x 256 points fills it exactly, and
-// realistic sparkline tiles (60 points) fit hundreds of series. Memory
+// retained tree, so the points pool is sized as 64 maximal line/bar
+// series: a dashboard of 16 charts x 3 series x 256 points fills it
+// exactly, and realistic sparkline tiles (60 points) fit hundreds of
+// series. Band series charge the pool twice (values + low), so 32
+// maximal bands also fill it — the points budget can overflow before
+// the series budget through bands, and the teaching error names the
+// right cliff (pinned in canvas_budget_edge_tests.zig). Memory
 // is fixed-capacity address space: series entries are ~64 B (slices +
 // flags) x 64 = 4 KiB per view, points are 4 B x 16384 = 64 KiB per
 // view, x 32 view slots = ~2.1 MiB total, pages touched only as views

@@ -47,6 +47,47 @@ fn subsliceOffset(outer: []const u8, inner: []const u8) ?usize {
     return offset;
 }
 
+/// Total retained-pool demand of a layout, mirrored charge-for-charge
+/// from `copyWidgetLayoutNode` and its helpers (text/icon/command/label
+/// bytes, span text unless it rebases as a subslice of the widget text,
+/// span links, context-menu labels, chart labels/values/lows). Checked
+/// BEFORE `copyWidgetLayoutTree` resets the pools so a budget overflow
+/// is loud AND atomic — the previous tree stays applied instead of a
+/// torn partial copy.
+fn validateWidgetLayoutPoolBudgets(
+    layout: canvas.WidgetLayoutTree,
+    previous_texts: *const canvas_widget_runtime.CanvasWidgetTextEntryIndex,
+) anyerror!void {
+    var text_len: usize = 0;
+    var span_len: usize = 0;
+    var menu_len: usize = 0;
+    var series_len: usize = 0;
+    var points_len: usize = 0;
+    for (layout.nodes, 0..) |node, node_index| {
+        // The copy loop charges the RECONCILED node (runtime editor text
+        // can outgrow the source's) — mirror the same transform.
+        const widget = canvasWidgetLayoutNodeWithTextReconcileState(node, layout, node_index, previous_texts).widget;
+        text_len += widget.text.len + widget.icon.len + widget.command.len + widget.semantics.label.len;
+        span_len += widget.spans.len;
+        for (widget.spans) |span| {
+            if (subsliceOffset(widget.text, span.text) == null) text_len += span.text.len;
+            text_len += span.link.len;
+        }
+        menu_len += widget.context_menu.len;
+        for (widget.context_menu) |item| text_len += item.label.len;
+        series_len += widget.chart.series.len;
+        for (widget.chart.series) |series| {
+            text_len += series.label.len;
+            points_len += series.values.len + series.low.len;
+        }
+    }
+    if (span_len > canvas_limits.max_canvas_widget_spans_per_view) return error.WidgetSpanLimitReached;
+    if (menu_len > canvas_limits.max_canvas_widget_context_menu_items_per_view) return error.WidgetContextMenuLimitReached;
+    if (series_len > canvas_limits.max_canvas_widget_chart_series_per_view) return error.WidgetChartSeriesLimitReached;
+    if (points_len > canvas_limits.max_canvas_widget_chart_points_per_view) return error.WidgetChartPointsLimitReached;
+    if (text_len > max_canvas_widget_text_bytes_per_view) return error.WidgetTextTooLarge;
+}
+
 pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
     return struct {
         pub fn widgetLayoutTree(self: *const RuntimeView) canvas.WidgetLayoutTree {
@@ -189,6 +230,18 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             index_scratch.source_controls.build(self.widgetSourceControlEntries());
             index_scratch.texts.build(previous_text_states);
             index_scratch.semantics.build(source_semantics);
+
+            // Validate every retained-pool budget BEFORE the pools reset:
+            // the copy loop below is destructive, and a mid-loop overflow
+            // used to leave a TORN retained tree on screen (a partial
+            // node count, interaction state resolved against half a
+            // view) until the next successful dispatch. Charges mirror
+            // the loop exactly — including runtime-reconciled editor
+            // text, which can be longer than the source's. Same teaching
+            // errors as the copy path, which stays as the structural
+            // backstop; the display-list side already follows this
+            // pattern (`copyCanvasDisplayList` counts before it copies).
+            try validateWidgetLayoutPoolBudgets(layout, &index_scratch.texts);
 
             self.widget_layout_node_count = 0;
             self.widget_semantics_node_count = 0;

@@ -74,6 +74,14 @@ pub const max_markdown_details_per_document: usize = 16;
 pub const max_markdown_table_columns: usize = 8;
 /// Rows per table including the header; trailing rows drop deterministically.
 pub const max_markdown_table_rows: usize = 64;
+/// Joined bytes per paragraph or blockquote (consecutive source lines
+/// collapse into one text widget). Sized generously past real GitHub
+/// prose — paragraphs beyond a couple of KiB are pathological input —
+/// and well under the runtime's per-view widget-text budget, so a
+/// hostile megabyte-long "paragraph" truncates deterministically here
+/// instead of ballooning the build arena. The block's remaining lines
+/// are still consumed, so parsing resumes at the next block.
+pub const max_markdown_paragraph_bytes: usize = 8192;
 
 /// Heading scales relative to the body typography token (GitHub's em
 /// ladder), applied through the span `scale` channel so heading pixel
@@ -200,19 +208,80 @@ pub fn Markdown(comptime Msg: type) type {
             }
 
             fn parseParagraph(self: *Builder, lines: *LineIterator) ?Node {
-                var text: []const u8 = &.{};
-                while (lines.peek()) |line| {
-                    const trimmed = std.mem.trim(u8, line, " \t");
-                    if (trimmed.len == 0) break;
-                    // Tables interrupt paragraphs (GFM): a header line
-                    // followed by a matching delimiter row starts a table.
-                    if (text.len > 0 and (startsNewBlock(line) or isTableStart(lines))) break;
-                    _ = lines.next();
-                    text = self.joinLine(text, trimmed);
-                    if (self.ui.failed) return null;
-                }
+                const text = self.collectJoined(lines, .paragraph);
                 if (text.len == 0) return null;
                 return self.paragraphNode(text, .{});
+            }
+
+            const JoinKind = enum { paragraph, blockquote };
+
+            /// The next joined piece of a paragraph or blockquote at
+            /// `lines`' current position, or null when the block ends
+            /// there. `joined_len` is the text joined so far (the
+            /// paragraph break rules only apply once the block has
+            /// content). Tables interrupt paragraphs (GFM): a header
+            /// line followed by a matching delimiter row starts a table.
+            fn joinPiece(lines: *LineIterator, kind: JoinKind, joined_len: usize) ?[]const u8 {
+                const line = lines.peek() orelse return null;
+                const trimmed = std.mem.trim(u8, line, " \t");
+                switch (kind) {
+                    .blockquote => {
+                        if (!std.mem.startsWith(u8, trimmed, ">")) return null;
+                        var inner = trimmed[1..];
+                        if (std.mem.startsWith(u8, inner, " ")) inner = inner[1..];
+                        return std.mem.trim(u8, inner, " \t");
+                    },
+                    .paragraph => {
+                        if (trimmed.len == 0) return null;
+                        if (joined_len > 0 and (startsNewBlock(line) or isTableStart(lines))) return null;
+                        return trimmed;
+                    },
+                }
+            }
+
+            /// Join a block's consecutive lines with single spaces into
+            /// ONE arena allocation. Measuring first keeps hostile input
+            /// linear: re-joining per line is quadratic in both time and
+            /// arena memory (a megabyte-long single paragraph used to
+            /// demand gigabytes). Joined text truncates deterministically
+            /// at `max_markdown_paragraph_bytes`; the block's remaining
+            /// lines are still consumed either way.
+            fn collectJoined(self: *Builder, lines: *LineIterator, kind: JoinKind) []const u8 {
+                // Pass 1: measure the block's extent and joined size.
+                var probe = lines.*;
+                var total: usize = 0;
+                while (joinPiece(&probe, kind, total)) |piece| {
+                    _ = probe.next();
+                    if (total > 0) total += 1;
+                    total += piece.len;
+                }
+                if (total == 0) {
+                    lines.* = probe;
+                    return &.{};
+                }
+
+                const out = self.ui.arena.alloc(u8, @min(total, max_markdown_paragraph_bytes)) catch {
+                    self.ui.failed = true;
+                    lines.* = probe;
+                    return &.{};
+                };
+
+                // Pass 2: identical walk, copying until the cap.
+                var len: usize = 0;
+                var joined: usize = 0;
+                while (joinPiece(lines, kind, joined)) |piece| {
+                    _ = lines.next();
+                    if (joined > 0 and len < out.len) {
+                        out[len] = ' ';
+                        len += 1;
+                    }
+                    if (joined > 0) joined += 1;
+                    joined += piece.len;
+                    const take = @min(piece.len, out.len - len);
+                    @memcpy(out[len..][0..take], piece[0..take]);
+                    len += take;
+                }
+                return out[0..len];
             }
 
             fn paragraphNode(self: *Builder, text: []const u8, base: TextSpan) Node {
@@ -240,16 +309,7 @@ pub fn Markdown(comptime Msg: type) type {
             }
 
             fn parseBlockquote(self: *Builder, lines: *LineIterator) ?Node {
-                var text: []const u8 = &.{};
-                while (lines.peek()) |line| {
-                    const trimmed = std.mem.trim(u8, line, " \t");
-                    if (!std.mem.startsWith(u8, trimmed, ">")) break;
-                    _ = lines.next();
-                    var inner = trimmed[1..];
-                    if (std.mem.startsWith(u8, inner, " ")) inner = inner[1..];
-                    text = self.joinLine(text, std.mem.trim(u8, inner, " \t"));
-                    if (self.ui.failed) return null;
-                }
+                const text = self.collectJoined(lines, .blockquote);
                 if (text.len == 0) return null;
                 return self.ui.row(.{ .gap = 10 }, .{
                     self.ui.el(.separator, .{ .frame = geometry.RectF.init(0, 0, 3, 0) }, .{}),
@@ -442,11 +502,6 @@ pub fn Markdown(comptime Msg: type) type {
                 }
             }
 
-            fn joinLine(self: *Builder, text: []const u8, line: []const u8) []const u8 {
-                if (text.len == 0) return line;
-                return self.ui.fmt("{s} {s}", .{ text, line });
-            }
-
             // ----------------------------------------------------- inlines
 
             /// Scan inline markdown into spans carrying `base` styling
@@ -461,6 +516,7 @@ pub fn Markdown(comptime Msg: type) type {
                 var strike = false;
                 var literal_start: usize = 0;
                 var index: usize = 0;
+                var scan_cache = ScanCache{};
 
                 while (index < text.len) {
                     if (len + 2 >= spans.len) break;
@@ -506,7 +562,7 @@ pub fn Markdown(comptime Msg: type) type {
                             continue;
                         }
                     } else if (rest[0] == '[') {
-                        if (parseLinkAt(rest)) |link| {
+                        if (parseLinkAt(text, index, &scan_cache)) |link| {
                             flushLiteral(spans, &len, text[literal_start..index], base, bold, italic, strike);
                             appendSpan(spans, &len, spanWith(base, .{ .text = link.text, .link = link.target }));
                             index += link.consumed;
@@ -514,7 +570,7 @@ pub fn Markdown(comptime Msg: type) type {
                             continue;
                         }
                     } else if (rest[0] == '!' and rest.len > 1 and rest[1] == '[') {
-                        if (parseLinkAt(rest[1..])) |image| {
+                        if (parseLinkAt(text, index + 1, &scan_cache)) |image| {
                             // Images render as their alt text in v1.
                             flushLiteral(spans, &len, text[literal_start..index], base, bold, italic, strike);
                             appendSpan(spans, &len, spanWith(base, .{ .text = image.text }));
@@ -523,7 +579,7 @@ pub fn Markdown(comptime Msg: type) type {
                             continue;
                         }
                     } else if (rest[0] == '<') {
-                        if (parseAutolinkAt(rest)) |link| {
+                        if (parseAutolinkAt(text, index, &scan_cache)) |link| {
                             flushLiteral(spans, &len, text[literal_start..index], base, bold, italic, strike);
                             appendSpan(spans, &len, spanWith(base, .{ .text = link.text, .link = link.target }));
                             index += link.consumed;
@@ -799,28 +855,96 @@ const InlineLink = struct {
     consumed: usize,
 };
 
-/// Parse `[text](target)` at the start of `rest`; null when malformed
-/// (the caller then treats `[` as literal text).
-fn parseLinkAt(rest: []const u8) ?InlineLink {
+/// Memoized forward scans for one `parseInline` pass. The inline walk
+/// only moves forward, so the next occurrence of a closer (or of the
+/// autolink scheme separator) found from one position stays the answer
+/// for every position up to it — without this, a wall of `[`, `<`, or
+/// `![` rescans to the terminator at every byte, and a kilobyte of
+/// hostile input costs a megabyte of scanning (quadratic; a real
+/// pasted-garbage hang).
+const ScanCache = struct {
+    close_bracket: Slot = .{}, // ']'
+    close_paren: Slot = .{}, // ')'
+    angle_close: Slot = .{}, // '>'
+    /// ' ' queried by autolink target checks (from just past `<`).
+    space: Slot = .{}, // ' '
+    /// ' ' queried by link title-strips (from just past `](`). A
+    /// separate slot: the two query streams sit at different offsets,
+    /// and sharing one memo lets them evict each other back into
+    /// quadratic rescans on interleaved `[`/`<` walls.
+    title_space: Slot = .{}, // ' '
+    scheme_sep: Slot = .{}, // "://"
+
+    const Slot = struct {
+        valid: bool = false,
+        scanned_from: usize = 0,
+        /// Next occurrence at/after `scanned_from`; null when the scan
+        /// proved none remains.
+        pos: ?usize = null,
+    };
+
+    fn nextScalar(slot: *Slot, text: []const u8, from: usize, byte: u8) ?usize {
+        if (cached(slot, from)) |hit| return hit.pos;
+        const found = std.mem.indexOfScalarPos(u8, text, from, byte);
+        slot.* = .{ .valid = true, .scanned_from = from, .pos = found };
+        return found;
+    }
+
+    fn nextPattern(slot: *Slot, text: []const u8, from: usize, pattern: []const u8) ?usize {
+        if (cached(slot, from)) |hit| return hit.pos;
+        const found = std.mem.indexOfPos(u8, text, from, pattern);
+        slot.* = .{ .valid = true, .scanned_from = from, .pos = found };
+        return found;
+    }
+
+    const Hit = struct { pos: ?usize };
+
+    fn cached(slot: *Slot, from: usize) ?Hit {
+        if (!slot.valid or from < slot.scanned_from) return null;
+        if (slot.pos) |pos| {
+            if (from > pos) return null;
+            return .{ .pos = pos };
+        }
+        return .{ .pos = null };
+    }
+};
+
+/// Parse `[text](target)` at `source[index]`; null when malformed (the
+/// caller then treats `[` as literal text). `consumed` is relative to
+/// `index`.
+fn parseLinkAt(source: []const u8, index: usize, cache: *ScanCache) ?InlineLink {
+    const rest = source[index..];
     if (rest.len < 4 or rest[0] != '[') return null;
-    const close_bracket = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+    const close_bracket_abs = ScanCache.nextScalar(&cache.close_bracket, source, index, ']') orelse return null;
+    const close_bracket = close_bracket_abs - index;
     if (close_bracket + 1 >= rest.len or rest[close_bracket + 1] != '(') return null;
-    const close_paren = std.mem.indexOfScalarPos(u8, rest, close_bracket + 2, ')') orelse return null;
+    const close_paren_abs = ScanCache.nextScalar(&cache.close_paren, source, close_bracket_abs + 2, ')') orelse return null;
+    const close_paren = close_paren_abs - index;
     const text = rest[1..close_bracket];
     var target = rest[close_bracket + 2 .. close_paren];
-    // Strip an optional title: [text](url "title").
-    if (std.mem.indexOfScalar(u8, target, ' ')) |space| target = target[0..space];
+    // Strip an optional title: [text](url "title"). Memoized like the
+    // closers: an unbounded target rescanned per failed attempt is the
+    // same quadratic wall.
+    if (ScanCache.nextScalar(&cache.title_space, source, close_bracket_abs + 2, ' ')) |space_abs| {
+        if (space_abs < close_paren_abs) target = target[0 .. space_abs - (close_bracket_abs + 2)];
+    }
     if (text.len == 0 or target.len == 0) return null;
     return .{ .text = text, .target = target, .consumed = close_paren + 1 };
 }
 
-/// Parse `<scheme://...>` autolinks at the start of `rest`.
-fn parseAutolinkAt(rest: []const u8) ?InlineLink {
+/// Parse `<scheme://...>` autolinks at `source[index]`. `consumed` is
+/// relative to `index`.
+fn parseAutolinkAt(source: []const u8, index: usize, cache: *ScanCache) ?InlineLink {
+    const rest = source[index..];
     if (rest.len < 3 or rest[0] != '<') return null;
-    const close = std.mem.indexOfScalar(u8, rest, '>') orelse return null;
+    const close_abs = ScanCache.nextScalar(&cache.angle_close, source, index, '>') orelse return null;
+    const close = close_abs - index;
     const target = rest[1..close];
-    if (std.mem.indexOf(u8, target, "://") == null) return null;
-    if (std.mem.indexOfScalar(u8, target, ' ') != null) return null;
+    const sep_abs = ScanCache.nextPattern(&cache.scheme_sep, source, index + 1, "://") orelse return null;
+    if (sep_abs + "://".len > close_abs) return null;
+    if (ScanCache.nextScalar(&cache.space, source, index + 1, ' ')) |space_abs| {
+        if (space_abs < close_abs) return null;
+    }
     return .{ .text = target, .target = target, .consumed = close + 1 };
 }
 
@@ -845,20 +969,23 @@ fn parseBareUrlAt(rest: []const u8) ?InlineLink {
     else
         return null;
     var end = scheme_len;
+    var balance: isize = 0;
     while (end < rest.len) : (end += 1) {
         const byte = rest[end];
         if (isInlineSpace(byte) or byte == '\n' or byte == '<' or byte == '>') break;
+        if (byte == '(') balance += 1;
+        if (byte == ')') balance -= 1;
     }
+    // Trim trailing punctuation, keeping the paren balance current
+    // incrementally — recomputing it per trimmed ')' is quadratic in the
+    // tail length (a hostile URL ending in a wall of parens used to
+    // hang).
     while (end > scheme_len) {
         const byte = rest[end - 1];
         if (byte == ')') {
-            var balance: isize = 0;
-            for (rest[scheme_len..end]) |candidate| {
-                if (candidate == '(') balance += 1;
-                if (candidate == ')') balance -= 1;
-            }
             if (balance < 0) {
                 end -= 1;
+                balance += 1;
                 continue;
             }
             break;

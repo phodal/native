@@ -301,7 +301,15 @@ pub fn previousTextOffset(text: []const u8, offset: usize) usize {
 pub fn nextTextOffset(text: []const u8, offset: usize) usize {
     const cursor = snapTextOffset(text, offset);
     if (cursor >= text.len) return text.len;
-    return @min(text.len, cursor + utf8SequenceLength(text[cursor]));
+    const next = @min(text.len, cursor + utf8SequenceLength(text[cursor]));
+    // Invalid UTF-8 must never stall or reverse the walk: an orphan
+    // continuation byte at `offset` snaps back to the previous lead,
+    // whose sequence length can land at or before `offset` — and every
+    // scalar loop over this function (glyph-atlas planning, line wrap,
+    // caret movement) would spin forever on one stray 0x80 byte. Such
+    // bytes advance one byte instead: the fallback-scalar rule.
+    if (next <= offset) return @min(text.len, offset + 1);
+    return next;
 }
 
 pub fn previousTextWordOffset(text: []const u8, offset: usize) usize {

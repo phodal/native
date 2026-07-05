@@ -76,6 +76,12 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // emission both see the flag (engine scrollbar + engine clamp
             // stand down; the OS scroller owns them).
             ScrollDriverMethods(Runtime).stampCanvasWidgetNativeScroll(self, reconciled_nodes[0..reconciled_layout.nodes.len]);
+            // Engine-side rebuild clamp AFTER the stamp: natively driven
+            // regions skip it, so a rebuild landing mid-rubber-band keeps
+            // the OS scroller's overscrolled offset instead of clamping it
+            // and force-pushing the clamp into the live bounce (visible
+            // jitter). Non-driver platforms clamp exactly as before.
+            canvas_widget_runtime.clampCanvasWidgetLayoutScrollOffsets(reconciled_nodes[0..reconciled_layout.nodes.len], null);
             const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &self.canvas_widget_invalidations_scratch);
             const previous_render_state = self.views[index].canvasWidgetRenderState();
             const next_render_state = CanvasWidgetEventMethods(Runtime).canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);

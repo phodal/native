@@ -188,20 +188,27 @@ pub fn collectCanvasWidgetScrollOffsetEntries(
 
 /// Scroll offsets follow the text-editing reconcile rule: the runtime-owned
 /// offset (user scrolling) survives rebuilds as long as the SOURCE offset is
-/// unchanged; a source-side change (programmatic scroll) wins.
-pub fn canvasWidgetLayoutNodeWithScrollReconcileState(
-    node: canvas.WidgetLayoutNode,
+/// unchanged; a source-side change (programmatic scroll) wins. Runs as a
+/// staged pass over the laid-out nodes because restoring the offset must
+/// also TRANSLATE the region's descendants: the flex pass laid them out at
+/// the source offset, and a value-only restore would render one whole
+/// rebuild at the wrong scroll position (content snapped to the source
+/// offset while the offset of record — and the scrollbar — stayed put).
+pub fn restoreCanvasWidgetLayoutScrollOffsets(
+    nodes: []canvas.WidgetLayoutNode,
     previous_runtime_offsets: []const CanvasWidgetSourceScrollEntry,
     previous_source_offsets: []const CanvasWidgetSourceScrollEntry,
-) canvas.WidgetLayoutNode {
-    var copy = node;
-    if (copy.widget.kind != .scroll_view or copy.widget.id == 0) return copy;
-    const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, copy.widget.id) orelse return copy;
-    const previous_source = canvasWidgetSourceScrollById(previous_source_offsets, copy.widget.id) orelse return copy;
-    if (copy.widget.value == previous_source) {
-        copy.widget.value = previous_runtime;
+) void {
+    for (nodes, 0..) |node, index| {
+        if (node.widget.kind != .scroll_view or node.widget.id == 0) continue;
+        const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse continue;
+        const previous_source = canvasWidgetSourceScrollById(previous_source_offsets, node.widget.id) orelse continue;
+        if (node.widget.value != previous_source) continue;
+        if (node.widget.value == previous_runtime) continue;
+        const laid_out = node.widget.value;
+        nodes[index].widget.value = previous_runtime;
+        translateCanvasWidgetLayoutScrollDescendants(nodes, index, -(previous_runtime - laid_out));
     }
-    return copy;
 }
 
 pub const CanvasWidgetSourceTextEntry = struct {
@@ -737,6 +744,13 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
         try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, tokens);
     }
 
+    // Scroll restore is staged too (after splits, so translated frames
+    // are final geometry): the retained offset comes back WITH its
+    // descendants translated to match. Engine-side clamping happens at
+    // the caller AFTER native scroll drivers are stamped — a rebuild
+    // mid-rubber-band must not clamp an offset the OS scroller owns.
+    restoreCanvasWidgetLayoutScrollOffsets(staged_nodes, previous_runtime_offsets, previous_source_scroll_entries);
+
     const index_scratch = &canvas_widget_reconcile_index_scratch;
     index_scratch.controls.build(previous_control_states);
     index_scratch.source_controls.build(previous_source_control_entries);
@@ -747,11 +761,9 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     for (staged_nodes, 0..) |node, index| {
         const text_copy = canvasWidgetLayoutNodeWithTextReconcileState(node, staged, index, &index_scratch.texts);
         const control_copy = canvasWidgetLayoutNodeWithControlReconcileState(text_copy, staged, index, &index_scratch.controls, &index_scratch.source_controls);
-        const scroll_copy = canvasWidgetLayoutNodeWithScrollReconcileState(control_copy, previous_runtime_offsets, previous_source_scroll_entries);
-        node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(scroll_copy, &index_scratch.semantics);
+        node_buffer[index] = canvasWidgetLayoutNodeWithSourceSemantics(control_copy, &index_scratch.semantics);
     }
     const reconciled = node_buffer[0..next.nodes.len];
-    clampCanvasWidgetLayoutScrollOffsets(reconciled, null);
     clampCanvasWidgetLayoutTextOffsets(reconciled, tokens);
     return .{ .nodes = reconciled };
 }
@@ -1112,7 +1124,12 @@ pub fn canvasWidgetTreeScopeIndex(layout: canvas.WidgetLayoutTree, node_index: u
     var current = layout.nodes[node_index].parent_index;
     while (current) |index| {
         if (index >= layout.nodes.len) return null;
-        if (layout.nodes[index].widget.kind == .tree) return index;
+        // A `.tree` container, or any container DECLARING the tree role
+        // (a windowed virtual list whose rows are treeitems declares
+        // `role = .tree` on the scroll container — there is no room for
+        // a nested flow container between the virtualized scroll region
+        // and its absolutely-placed rows).
+        if (layout.nodes[index].widget.kind == .tree or layout.nodes[index].widget.semantics.role == .tree) return index;
         current = layout.nodes[index].parent_index;
     }
     return null;

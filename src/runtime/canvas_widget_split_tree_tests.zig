@@ -370,3 +370,69 @@ test "tree keymap walks visible rows, collapses, expands, and selects through re
     try std.testing.expect(after_enter.findById(111).?.widget.state.selected);
     try std.testing.expect(!after_enter.findById(12).?.widget.state.selected);
 }
+
+test "a virtual list declaring the tree role scopes the tree keymap over its rows" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 100),
+    });
+
+    // A windowed virtual list of treeitem rows: the scroll container
+    // itself carries `role = .tree` (rows are placed straight under the
+    // virtualized region — there is no room for a `.tree` flow container
+    // between them), and the keymap must scope to it.
+    const rows = [_]canvas.Widget{
+        treeRowPanel(21, 0, 24, null, &.{}),
+        treeRowPanel(22, 0, 24, null, &.{}),
+        treeRowPanel(23, 0, 24, null, &.{}),
+    };
+    const list = canvas.Widget{
+        .id = 20,
+        .kind = .scroll_view,
+        .layout = .{
+            .virtualized = true,
+            .virtual_item_extent = 24,
+            .virtual_overscan = 1,
+            .virtual_item_count = 3,
+            .virtual_first_index = 0,
+        },
+        .semantics = .{ .role = .tree },
+        .children = &rows,
+    };
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(list, geometry.RectF.init(0, 0, 240, 100), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const view = &harness.runtime.views[0];
+
+    // Focus the first row by pressing it.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_down, .x = 10, .y = 10, .button = 0 } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_up, .x = 10, .y = 10, .button = 0 } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 21), view.canvas_widget_focused_id);
+
+    const key = struct {
+        fn down(h: anytype, a: App, name: []const u8) !void {
+            try h.runtime.dispatchPlatformEvent(a, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .key_down, .key = name } });
+        }
+    };
+
+    // Up/Down walk the mounted rows; Home/End jump the scope's edges.
+    try key.down(harness, app, "arrowdown");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 22), view.canvas_widget_focused_id);
+    try key.down(harness, app, "arrowdown");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 23), view.canvas_widget_focused_id);
+    try key.down(harness, app, "arrowdown");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 23), view.canvas_widget_focused_id);
+    try key.down(harness, app, "home");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 21), view.canvas_widget_focused_id);
+    try key.down(harness, app, "end");
+    try std.testing.expectEqual(@as(canvas.ObjectId, 23), view.canvas_widget_focused_id);
+}

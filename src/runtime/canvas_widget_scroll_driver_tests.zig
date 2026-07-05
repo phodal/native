@@ -450,3 +450,92 @@ test "windowed virtual lists ride the native scroll driver with the full virtual
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expect(!retained.nodes[0].widget.native_scroll);
 }
+
+test "a rebuild mid-overscroll keeps the driver's offset and pushes nothing" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    harness.null_platform.gpu_surface_scroll_drivers = true;
+    var app_state: PassiveApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 180, 72),
+    });
+    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const layout = try scrollFixtureLayout(&nodes, 0);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // The OS scroller is mid-rubber-band above the top: overscroll
+    // passes through so the bounce is visible.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_scroll_driver = .{
+        .window_id = 1,
+        .label = "canvas",
+        .driver_id = 1,
+        .offset_y = -10,
+        .timestamp_ns = 1_000_000_000,
+    } });
+
+    // An elm rebuild lands mid-bounce (a stream tick, a timer) with the
+    // source offset unchanged: the engine must NOT clamp the overscrolled
+    // offset (the OS scroller owns clamping for natively driven regions)
+    // and must NOT force-push the clamp back into the live bounce.
+    var rebuild_nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const rebuild = try scrollFixtureLayout(&rebuild_nodes, 0);
+    const pushes_before = harness.null_platform.scroll_driver_set_offset_count;
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", rebuild);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, -10), retained.nodes[0].widget.value);
+    // The restored offset arrives WITH its translation: the first child
+    // (laid out at y=0 for the source offset 0) sits 10 below the top.
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 10, 180, 32), retained.findById(2).?.frame);
+    try std.testing.expectEqual(pushes_before, harness.null_platform.scroll_driver_set_offset_count);
+}
+
+test "a rebuild restores the retained scroll offset with translated descendants" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    harness.null_platform.gpu_surface_scroll_drivers = true;
+    var app_state: PassiveApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(10, 20, 180, 72),
+    });
+    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const layout = try scrollFixtureLayout(&nodes, 0);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_scroll_driver = .{
+        .window_id = 1,
+        .label = "canvas",
+        .driver_id = 1,
+        .offset_y = 24,
+        .timestamp_ns = 1_000_000_000,
+    } });
+
+    // An UNBOUND scroll region (source stays 0) rebuilt while scrolled:
+    // the retained offset survives AND the children land translated —
+    // value-only restore would paint this whole rebuild at the top while
+    // the scrollbar stayed at 24 (the bug that forced apps to echo every
+    // offset through `value` just to keep rebuilds honest).
+    var rebuild_nodes: [5]canvas.WidgetLayoutNode = undefined;
+    const rebuild = try scrollFixtureLayout(&rebuild_nodes, 0);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", rebuild);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 24), retained.nodes[0].widget.value);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, -24, 180, 32), retained.findById(2).?.frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 20, 180, 32), retained.findById(3).?.frame);
+    try std.testing.expectEqualDeep(geometry.RectF.init(0, 64, 180, 32), retained.findById(4).?.frame);
+}

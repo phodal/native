@@ -170,6 +170,11 @@ pub const RuntimeView = struct {
     /// animation (0 when no caret is showing), so display-list refreshes
     /// can retarget or remove the blink as focus and selection move.
     canvas_widget_caret_blink_id: canvas.ObjectId = 0,
+    /// Arc command ids of the spinners currently carrying the looping
+    /// rotation animation, so display-list refreshes can remove the
+    /// animations of spinners that unmounted (and the view goes idle).
+    canvas_widget_spinner_ids: [canvas_limits.max_canvas_widget_spinner_animations_per_view]canvas.ObjectId = undefined,
+    canvas_widget_spinner_count: usize = 0,
     canvas_render_animation_dirty_bounds: [max_canvas_render_animation_dirty_bounds_per_view]CanvasRenderAnimationDirtyBounds = undefined,
     canvas_render_animation_dirty_bounds_count: usize = 0,
     canvas_frame_render_overrides: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,

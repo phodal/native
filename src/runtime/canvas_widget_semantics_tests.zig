@@ -720,3 +720,84 @@ test "runtime applies source-driven autofocus on the edge, never on the level" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", editing_layout);
     try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_widget_focused_id);
 }
+
+test "runtime keeps programmatic focus quiet on buttons and rings editables" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-programmatic-focus", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    // A window-level default focus landing on a BUTTON (the source's
+    // autofocus channel — the same write the automation `focus` action
+    // performs) takes focus QUIETLY: focused for keyboard dispatch, but
+    // no `focus_visible`, so the ring-offset focus ring never renders on
+    // an idle control. Editable text kinds keep their affordances
+    // however focus arrives (the :focus-visible contract).
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 10, 96, 32), .text = "Comment", .autofocus = true },
+        .{ .id = 3, .kind = .textarea, .frame = geometry.RectF.init(10, 56, 200, 64), .text = "" },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 240), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try std.testing.expect(harness.runtime.views[0].focused);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focus_visible_id);
+
+    var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_button_ring = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == testCanvasWidgetPartId(2, 3)) saw_button_ring = true;
+        }
+    }
+    try std.testing.expect(!saw_button_ring);
+
+    // The automation `focus` action on the editable shows ring + caret
+    // affordances: editable kinds are visible however focus arrives.
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = 3, .action = .focus });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focus_visible_id);
+
+    // The automation `focus` action back on the button is quiet again.
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = 2, .action = .focus });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focus_visible_id);
+
+    // Keyboard focus stays loud: Tab from the quietly-focused button
+    // moves to the textarea with the visible ring.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "tab",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focus_visible_id);
+
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_textarea_ring = false;
+    for (display_list.commands) |command| {
+        if (command.objectId()) |id| {
+            if (id == testCanvasWidgetPartId(3, 7)) saw_textarea_ring = true;
+        }
+    }
+    try std.testing.expect(saw_textarea_ring);
+}

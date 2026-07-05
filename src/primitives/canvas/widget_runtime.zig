@@ -197,6 +197,14 @@ pub fn textCaretCommandId(kind: WidgetKind, id: ObjectId) ObjectId {
     return widget_render.textCaretCommandId(kind, id);
 }
 
+pub fn spinnerWidgetArcCommandId(id: ObjectId) ObjectId {
+    return widget_render.spinnerWidgetArcCommandId(id);
+}
+
+pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometry.PointF {
+    return widget_render.spinnerWidgetRotationCenter(widget, tokens);
+}
+
 pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
     return widget_render.toggleWidgetKnobTravel(widget, tokens);
 }

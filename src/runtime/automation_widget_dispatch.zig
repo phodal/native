@@ -328,10 +328,18 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             if (view_index >= self.view_count) return error.ViewNotFound;
             const target = self.views[view_index].widgetLayoutTree().focusTargetById(id) orelse return error.InvalidCommand;
             try self.focusView(self.views[view_index].window_id, self.views[view_index].label);
-            if (self.views[view_index].canvas_widget_focused_id != target.id or self.views[view_index].canvas_widget_focus_visible_id != target.id) {
+            // Programmatic focus (autofocus, automation `focus`) follows
+            // the pointer contract, not the keyboard one: buttons and
+            // rows take focus QUIETLY (no ring), editable text kinds show
+            // their affordances however focus arrived. A later Tab still
+            // moves focus with the visible ring. Without this gate, a
+            // window-level default focus landing on a button dressed an
+            // idle control in the focus ring.
+            const focus_visible_id: canvas.ObjectId = if (canvas_widget_runtime.canvasWidgetEditableTextKind(target.kind)) target.id else 0;
+            if (self.views[view_index].canvas_widget_focused_id != target.id or self.views[view_index].canvas_widget_focus_visible_id != focus_visible_id) {
                 const previous_state = self.views[view_index].canvasWidgetRenderState();
                 self.views[view_index].canvas_widget_focused_id = target.id;
-                self.views[view_index].canvas_widget_focus_visible_id = target.id;
+                self.views[view_index].canvas_widget_focus_visible_id = focus_visible_id;
                 // A focus change repaints; record the automation input so
                 // the completing frame publishes (same contract as select
                 // and text edits). Callers that dispatch a follow-up input

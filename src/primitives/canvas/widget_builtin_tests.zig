@@ -535,6 +535,47 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
     try std.testing.expect(icon_only_list.findCommandById(widgetPartId(63, 6)) != null);
 }
 
+test "disabled filled buttons mute their border with the fill" {
+    // A disabled primary/destructive button drops to the muted disabled
+    // fill; the border must drop with it. The accent border over the
+    // gray fill read as a focus ring on every idle disabled button (the
+    // "Comment button wearing a blue outline at rest" regression).
+    const tokens = DesignTokens{};
+    const variants = [_]struct { variant: canvas.WidgetVariant, enabled_border: Color }{
+        .{ .variant = .primary, .enabled_border = tokens.colors.accent },
+        .{ .variant = .destructive, .enabled_border = tokens.colors.destructive },
+    };
+    for (variants) |case| {
+        const button = Widget{
+            .id = 71,
+            .kind = WidgetKind.button,
+            .frame = geometry.RectF.init(0, 0, 120, 34),
+            .text = "Comment",
+            .variant = case.variant,
+        };
+        var commands: [8]CanvasCommand = undefined;
+        var builder = Builder.init(&commands);
+        try emitWidgetTree(&builder, button, tokens);
+        switch (builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
+            .stroke_rect => |stroke| try expectFillColor(case.enabled_border, stroke.stroke.fill),
+            else => return error.TestUnexpectedResult,
+        }
+
+        var disabled = button;
+        disabled.state.disabled = true;
+        var disabled_commands: [8]CanvasCommand = undefined;
+        var disabled_builder = Builder.init(&disabled_commands);
+        try emitWidgetTree(&disabled_builder, disabled, tokens);
+        switch (disabled_builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
+            .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
+            else => return error.TestUnexpectedResult,
+        }
+
+        // No focus ring on the idle disabled control either.
+        try std.testing.expect(disabled_builder.displayList().findCommandById(widgetPartId(71, 3)) == null);
+    }
+}
+
 test "list and menu items draw a leading vector icon with the label shifted right" {
     const tokens = DesignTokens{};
     const plain = Widget{
@@ -1641,7 +1682,7 @@ test "built-in component primitive widgets render distinct house chrome" {
     try layout.emitDisplayList(&builder, .{});
 
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 16), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
     try std.testing.expect(display_list.commands[0] == .fill_rounded_rect);
     switch (display_list.commands[1]) {
         .draw_text => |text| try std.testing.expectEqualStrings("NS", text.text),
@@ -1658,8 +1699,20 @@ test "built-in component primitive widgets render distinct house chrome" {
     }
     try std.testing.expect(display_list.commands[6] == .fill_rect);
     try std.testing.expect(display_list.commands[7] == .fill_rounded_rect);
-    for (display_list.commands[8..16]) |command| {
-        try std.testing.expect(command == .draw_line);
+    // The spinner: a muted circular track plus the accent arc segment.
+    switch (display_list.commands[8]) {
+        .stroke_rect => |track| {
+            try expectFillColor(ColorTokens.light().border, track.stroke.fill);
+            try std.testing.expectEqual(track.rect.width * 0.5, track.radius.top_left);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[9]) {
+        .stroke_path => |arc| {
+            try expectFillColor(ColorTokens.light().accent, arc.stroke.fill);
+            try std.testing.expectEqual(@as(f32, 2), arc.stroke.width);
+        },
+        else => return error.TestUnexpectedResult,
     }
 
     const image_avatar = builtinComponentWidget(.avatar, .{

@@ -218,9 +218,21 @@ test "runtime schedules canvas render animations without display list rebuild" {
         .from_transform = canvas.Affine.translate(10, 0),
         .to_transform = canvas.Affine.identity(),
     }};
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
     _ = try harness.runtime.setCanvasRenderAnimations(1, "canvas", &animations);
     try std.testing.expectEqual(@as(usize, 1), (try harness.runtime.canvasRenderAnimations(1, "canvas")).len);
     try std.testing.expect(harness.runtime.invalidated);
+    // Scheduling invalidates the ANIMATED command's extent (its bounds
+    // widened by the from/to transforms), never the whole 40x20 view —
+    // a UiApp rebuild re-bases its animations on every update, and a
+    // full-frame region here silently defeated incremental presentation.
+    const schedule_regions = harness.runtime.pendingDirtyRegions();
+    try std.testing.expect(schedule_regions.len > 0);
+    for (schedule_regions) |region| {
+        try std.testing.expect(region.width <= 20);
+        try std.testing.expect(region.height <= 10);
+    }
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;
@@ -257,6 +269,123 @@ test "runtime schedules canvas render animations without display list rebuild" {
     }, frame_storage);
     try std.testing.expect(!clean_frame.requiresRender());
     try std.testing.expect(clean_frame.dirty_bounds == null);
+}
+
+test "runtime spins visible spinners and parks the view on unmount" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-spinner-rotation", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const spinner = canvas.Widget{
+        .id = 5,
+        .kind = .spinner,
+        .frame = geometry.RectF.init(20, 20, 20, 20),
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{spinner} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    // The visible spinner arms ONE looping rotation animation on its arc
+    // command — never completing, so frame scheduling keeps sampling it.
+    const view = &harness.runtime.views[0];
+    const arc_id = canvas.spinnerWidgetArcCommandId(5);
+    try std.testing.expectEqual(@as(usize, 1), view.canvas_widget_spinner_count);
+    try std.testing.expectEqual(arc_id, view.canvas_widget_spinner_ids[0]);
+    try std.testing.expectEqual(@as(usize, 1), view.canvas_render_animation_count);
+    try std.testing.expect(view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
+
+    // The rotation PUMPS: successive frame timestamps sample different
+    // transforms (a quarter turn apart here), spinning about the arc's
+    // own center so the sampled override moves real geometry.
+    const start_ns = view.canvasRenderAnimations()[0].start_ns;
+    var overrides: [4]canvas.CanvasRenderOverride = undefined;
+    const probe = geometry.PointF.init(39, 30); // right edge of the spinner circle
+    const first = try view.sampleCanvasRenderAnimations(start_ns + 100 * std.time.ns_per_ms, &overrides);
+    try std.testing.expectEqual(@as(usize, 1), first.len);
+    try std.testing.expectEqual(arc_id, first[0].id);
+    const first_point = first[0].transform.?.transformPoint(probe);
+    var later_overrides: [4]canvas.CanvasRenderOverride = undefined;
+    const later = try view.sampleCanvasRenderAnimations(start_ns + 350 * std.time.ns_per_ms, &later_overrides);
+    const later_point = later[0].transform.?.transformPoint(probe);
+    try std.testing.expect(@abs(first_point.x - later_point.x) > 1 or @abs(first_point.y - later_point.y) > 1);
+    // The spinner center is the rotation's fixed point.
+    const center = first[0].transform.?.transformPoint(geometry.PointF.init(30, 30));
+    try std.testing.expectApproxEqAbs(@as(f32, 30), center.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), center.y, 0.01);
+
+    // An unrelated display refresh must NOT reset the rotation phase.
+    _ = try harness.runtime.emitCanvasWidgetDisplayListWithStoredTokens(1, "canvas");
+    try std.testing.expectEqual(@as(usize, 1), view.canvas_render_animation_count);
+    try std.testing.expectEqual(start_ns, view.canvasRenderAnimations()[0].start_ns);
+
+    // Unmount: a rebuild without the spinner removes the animation so
+    // the view goes idle (the frame pump's park condition).
+    const empty = [_]canvas.Widget{.{
+        .id = 6,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 10, 80, 20),
+        .text = "Done",
+    }};
+    var empty_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const empty_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &empty }, geometry.RectF.init(0, 0, 240, 120), &empty_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", empty_layout);
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_widget_spinner_count);
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_render_animation_count);
+    try std.testing.expect(!view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
+}
+
+test "runtime leaves spinners static under reduced motion" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-spinner-reduced-motion", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const spinner = canvas.Widget{
+        .id = 5,
+        .kind = .spinner,
+        .frame = geometry.RectF.init(20, 20, 20, 20),
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{spinner} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", canvas.DesignTokens.theme(.{ .reduce_motion = true }));
+
+    // Reduced motion arms nothing: the arc renders as a static pose and
+    // the view never pumps frames for it.
+    const view = &harness.runtime.views[0];
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_widget_spinner_count);
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_render_animation_count);
+    try std.testing.expect(!view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
 }
 
 test "runtime classifies render animation final overrides for cleanup" {

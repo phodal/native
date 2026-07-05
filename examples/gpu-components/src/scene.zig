@@ -260,7 +260,9 @@ const catalog_slider_children = [_]canvas.Widget{canvas.builtinComponentWidget(.
 })};
 const catalog_spinner_children = [_]canvas.Widget{canvas.builtinComponentWidget(.spinner, .{
     .id = 20501,
-    .frame = rect(0, catalog_preview_y, 32, 32),
+    // The compact house register: a 16px (sm) activity glyph, centered
+    // on the preview row instead of dwarfing it.
+    .frame = rect(0, catalog_preview_y + 9, 16, 16),
 })};
 const catalog_switch_children = [_]canvas.Widget{canvas.builtinComponentWidget(.switch_control, .{
     .id = 20601,

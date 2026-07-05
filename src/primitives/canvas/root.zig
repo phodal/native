@@ -150,6 +150,7 @@ pub const RenderState = render_model.RenderState;
 pub const RenderCommand = render_model.RenderCommand;
 pub const CanvasRenderOverride = render_model.CanvasRenderOverride;
 pub const CanvasRenderAnimation = render_model.CanvasRenderAnimation;
+pub const CanvasRenderAnimationLoop = render_model.CanvasRenderAnimationLoop;
 pub const applyRenderOverrides = render_model.applyRenderOverrides;
 pub const renderOverrideDirtyBounds = render_model.renderOverrideDirtyBounds;
 pub const RenderPlan = render_model.RenderPlan;
@@ -479,6 +480,8 @@ pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimatio
 pub const emitWidgetLayout = widget_runtime.emitWidgetLayout;
 pub const toggleWidgetKnobCommandId = widget_runtime.toggleWidgetKnobCommandId;
 pub const textCaretCommandId = widget_runtime.textCaretCommandId;
+pub const spinnerWidgetArcCommandId = widget_runtime.spinnerWidgetArcCommandId;
+pub const spinnerWidgetRotationCenter = widget_runtime.spinnerWidgetRotationCenter;
 pub const textSelectionCommandId = widget_runtime.textSelectionCommandId;
 pub const toggleWidgetKnobTravel = widget_runtime.toggleWidgetKnobTravel;
 pub const widgetControlAimPoint = widget_runtime.widgetControlAimPoint;
@@ -535,6 +538,7 @@ pub const widgetWindowDragTargetIndexFromNode = @import("widget_routing.zig").wi
 /// stack-container list all derive from).
 pub const widgetKindStacksChildren = @import("widget_layout.zig").widgetKindStacksChildren;
 pub const widgetIsAnchored = @import("widget_tree.zig").widgetIsAnchored;
+pub const isWidgetHiddenInAncestors = @import("widget_tree.zig").isWidgetHiddenInAncestors;
 pub const anchoredWidgetFrame = @import("widget_layout.zig").anchoredWidgetFrame;
 /// Split-pane geometry (widget_layout.zig): divider band width, the
 /// fraction clamp band from the panes' min widths, and the in-place

@@ -455,6 +455,22 @@ test "widget layout uses intrinsic sizes for unframed controls" {
     try std.testing.expect(custom_layout.findById(2).?.frame.width > layout.findById(2).?.frame.width);
 }
 
+test "spinner intrinsic size is the compact icon register" {
+    // The spinner sizes as an inline activity glyph — 16 (sm) / 20
+    // (default) / 24 (lg), density scaled — never the 36px control
+    // square that dwarfed neighboring compact controls.
+    const tokens = DesignTokens{};
+    const sm = Widget{ .id = 2, .kind = .spinner, .size = .sm };
+    const default_size = Widget{ .id = 3, .kind = .spinner };
+    const lg = Widget{ .id = 4, .kind = .spinner, .size = .lg };
+    try std.testing.expectEqualDeep(geometry.SizeF.init(16, 16), intrinsicWidgetSize(sm, tokens));
+    try std.testing.expectEqualDeep(geometry.SizeF.init(20, 20), intrinsicWidgetSize(default_size, tokens));
+    try std.testing.expectEqualDeep(geometry.SizeF.init(24, 24), intrinsicWidgetSize(lg, tokens));
+
+    const compact = DesignTokens{ .density = .compact };
+    try std.testing.expectEqualDeep(geometry.SizeF.init(16 * 0.875, 16 * 0.875), intrinsicWidgetSize(sm, compact));
+}
+
 test "widget layout aligns row children on main and cross axes" {
     const centered_children = [_]Widget{
         .{

@@ -40,6 +40,7 @@ const widgetDefaultRowHeight = widget_metrics.widgetDefaultRowHeight;
 const widgetButtonInset = widget_metrics.widgetButtonInset;
 const widgetControlInset = widget_metrics.widgetControlInset;
 const widgetSizedDensityValue = widget_metrics.widgetSizedDensityValue;
+const densityValue = widget_metrics.densityValue;
 const widgetControlHeight = widget_metrics.widgetControlHeight;
 const widgetStatusBarPadding = widget_render.widgetStatusBarPadding;
 const controlStrokeWidth = widget_render.controlStrokeWidth;
@@ -1003,7 +1004,7 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 8)),
         .separator => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline)),
         .skeleton => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 120), widgetSizedDensityValue(widget, tokens, 20)),
-        .spinner => intrinsicSquareControlSize(widget, tokens),
+        .spinner => intrinsicSpinnerWidgetSize(widget, tokens),
         // A plot has no natural content size; the default is a small
         // sparkline-friendly box, and definite `width`/`height` (or flex
         // grow) size real charts.
@@ -1290,6 +1291,20 @@ fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF
 fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const height = widgetControlHeight(widget, tokens);
     return geometry.SizeF.init(height, height);
+}
+
+/// The spinner is an inline activity glyph, not a control box: it sizes
+/// to the icon register — 16 (sm) / 20 (default) / 24 (lg), density
+/// scaled — so it sits flush in a row of compact controls instead of
+/// claiming a 36px control square.
+fn intrinsicSpinnerWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+    const base: f32 = switch (widget.size) {
+        .sm => 16,
+        .default, .icon => 20,
+        .lg => 24,
+    };
+    const extent = densityValue(tokens, base);
+    return geometry.SizeF.init(extent, extent);
 }
 
 fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {

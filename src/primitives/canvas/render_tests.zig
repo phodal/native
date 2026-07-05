@@ -2982,6 +2982,44 @@ test "canvas render animations sample overrides for frame planning" {
     try std.testing.expectError(error.RenderOverrideListFull, sampleCanvasRenderAnimations(&animations, 500_001_000, &empty_overrides));
 }
 
+test "canvas render animations sample wrap-looping rotation about a center" {
+    // The spinner shape: a `.wrap` loop restarts the 0→1 sweep each
+    // cycle, and rotation samples by ANGLE about `rotation_center`
+    // (matrix lerp would collapse a full turn to a point).
+    const animations = [_]CanvasRenderAnimation{.{
+        .id = 5,
+        .start_ns = 0,
+        .duration_ms = 1000,
+        .easing = .linear,
+        .from_rotation = 0,
+        .to_rotation = 360,
+        .rotation_center = geometry.PointF.init(10, 10),
+        .loop = .wrap,
+    }};
+
+    // Quarter cycle: 90 degrees clockwise (y-down) about (10, 10).
+    var overrides: [1]CanvasRenderOverride = undefined;
+    const quarter = try sampleCanvasRenderAnimations(&animations, 250 * std.time.ns_per_ms, &overrides);
+    try std.testing.expectEqual(@as(usize, 1), quarter.len);
+    const rotated = quarter[0].transform.?.transformPoint(geometry.PointF.init(20, 10));
+    try std.testing.expectApproxEqAbs(@as(f32, 10), rotated.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), rotated.y, 0.001);
+
+    // One-and-a-quarter cycles wraps to the same quarter-turn pose —
+    // the seam between turns is invisible.
+    var wrap_overrides: [1]CanvasRenderOverride = undefined;
+    const wrapped = try sampleCanvasRenderAnimations(&animations, 1250 * std.time.ns_per_ms, &wrap_overrides);
+    try std.testing.expectEqual(@as(usize, 1), wrapped.len);
+    const wrapped_point = wrapped[0].transform.?.transformPoint(geometry.PointF.init(20, 10));
+    try std.testing.expectApproxEqAbs(rotated.x, wrapped_point.x, 0.001);
+    try std.testing.expectApproxEqAbs(rotated.y, wrapped_point.y, 0.001);
+
+    // The rotation center itself is a fixed point of the override.
+    const center = quarter[0].transform.?.transformPoint(geometry.PointF.init(10, 10));
+    try std.testing.expectApproxEqAbs(@as(f32, 10), center.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), center.y, 0.001);
+}
+
 test "motion tokens build render animations" {
     const tokens = MotionTokens{
         .fast_ms = 90,

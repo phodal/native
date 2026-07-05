@@ -102,6 +102,18 @@ pub const CanvasRenderOverride = struct {
     transform: ?Affine = null,
 };
 
+pub const CanvasRenderAnimationLoop = enum {
+    /// One from→to sweep, then the animation completes.
+    none,
+    /// Ping-pong the from→to sweep forever (0→1→0→…, one sweep per
+    /// `duration_ms`): the caret-blink shape.
+    ping_pong,
+    /// Restart the from→to sweep every `duration_ms` (0→1, 0→1, …):
+    /// with a linear ease and a full-turn rotation, continuous spin —
+    /// the spinner shape.
+    wrap,
+};
+
 pub const CanvasRenderAnimation = struct {
     id: ObjectId,
     start_ns: u64 = 0,
@@ -112,10 +124,16 @@ pub const CanvasRenderAnimation = struct {
     to_opacity: ?f32 = null,
     from_transform: ?Affine = null,
     to_transform: ?Affine = null,
-    /// Ping-pong the from→to sweep forever (0→1→0→…, one sweep per
-    /// `duration_ms`): the caret-blink shape. A looping animation never
-    /// completes — it stays active until explicitly removed.
-    loop: bool = false,
+    /// Rotation in DEGREES about `rotation_center`, sampled by angle
+    /// (matrix-component lerp collapses large rotations, so rotation is
+    /// its own channel). Composes with the transform channel when both
+    /// are set (rotation applied first).
+    from_rotation: ?f32 = null,
+    to_rotation: ?f32 = null,
+    rotation_center: geometry.PointF = .{ .x = 0, .y = 0 },
+    /// A looping animation never completes — it stays active until
+    /// explicitly removed.
+    loop: CanvasRenderAnimationLoop = .none,
 };
 
 pub fn applyRenderOverrides(commands: []RenderCommand, overrides: []const CanvasRenderOverride) ?geometry.RectF {
@@ -201,12 +219,13 @@ pub fn sampleCanvasRenderAnimations(animations: []const CanvasRenderAnimation, t
         const progress = motionProgress(animation, timestamp_ns);
         const opacity = sampleAnimatedF32(animation.from_opacity, animation.to_opacity, progress);
         const transform = sampleAnimatedAffine(animation.from_transform, animation.to_transform, progress);
-        if (opacity == null and transform == null) continue;
+        const rotation = sampleAnimatedRotation(animation, progress);
+        if (opacity == null and transform == null and rotation == null) continue;
         if (len >= output.len) return error.RenderOverrideListFull;
         output[len] = .{
             .id = animation.id,
             .opacity = opacity,
-            .transform = transform,
+            .transform = composeSampledTransforms(transform, rotation),
         };
         len += 1;
     }
@@ -214,10 +233,11 @@ pub fn sampleCanvasRenderAnimations(animations: []const CanvasRenderAnimation, t
 }
 
 pub fn motionProgress(animation: CanvasRenderAnimation, timestamp_ns: u64) f32 {
-    const raw = if (animation.loop)
-        pingPongMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns)
-    else
-        rawMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns);
+    const raw = switch (animation.loop) {
+        .none => rawMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns),
+        .ping_pong => pingPongMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns),
+        .wrap => wrapMotionProgress(animation.start_ns, animation.duration_ms, timestamp_ns),
+    };
     return easedMotionProgress(animation.easing, animation.spring, raw);
 }
 
@@ -228,6 +248,17 @@ fn rawMotionProgress(start_ns: u64, duration_ms: u32, timestamp_ns: u64) f32 {
     const elapsed_ns = timestamp_ns - start_ns;
     if (elapsed_ns >= duration_ns) return 1;
     return @as(f32, @floatFromInt(elapsed_ns)) / @as(f32, @floatFromInt(duration_ns));
+}
+
+/// Wrapping sweep: restart the 0→1 ramp every `duration_ms`. Easing
+/// applies to each cycle, so a `.linear` ease over a full-turn rotation
+/// is seamless continuous spin (progress 1 lands exactly on progress 0).
+fn wrapMotionProgress(start_ns: u64, duration_ms: u32, timestamp_ns: u64) f32 {
+    if (duration_ms == 0) return 1;
+    if (timestamp_ns <= start_ns) return 0;
+    const duration_ns = @as(u64, duration_ms) * 1_000_000;
+    const phase_ns = (timestamp_ns - start_ns) % duration_ns;
+    return @as(f32, @floatFromInt(phase_ns)) / @as(f32, @floatFromInt(duration_ns));
 }
 
 /// Looping sweep: fold elapsed time into a 0→1→0 triangle, one from→to
@@ -282,6 +313,30 @@ fn sampleAnimatedAffine(from: ?Affine, to: ?Affine, progress: f32) ?Affine {
         .tx = start.tx + (end.tx - start.tx) * progress,
         .ty = start.ty + (end.ty - start.ty) * progress,
     };
+}
+
+/// Sample the rotation channel by ANGLE, then build the affine: a
+/// translate-rotate-translate about `rotation_center`, so any command
+/// geometry spins in place regardless of where it sits in view space.
+fn sampleAnimatedRotation(animation: CanvasRenderAnimation, progress: f32) ?Affine {
+    const from = animation.from_rotation orelse return null;
+    const to = animation.to_rotation orelse return null;
+    const degrees = from + (to - from) * progress;
+    const radians = std.math.degreesToRadians(degrees);
+    const center = animation.rotation_center;
+    const rotation = Affine{
+        .a = @cos(radians),
+        .b = @sin(radians),
+        .c = -@sin(radians),
+        .d = @cos(radians),
+    };
+    return Affine.translate(center.x, center.y).multiply(rotation).multiply(Affine.translate(-center.x, -center.y));
+}
+
+fn composeSampledTransforms(transform: ?Affine, rotation: ?Affine) ?Affine {
+    const left = transform orelse return rotation;
+    const right = rotation orelse return left;
+    return left.multiply(right);
 }
 
 pub const RenderPlan = struct {

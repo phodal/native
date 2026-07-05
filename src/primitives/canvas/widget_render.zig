@@ -108,44 +108,33 @@ pub const sliderWidgetKnobRect = widget_render_controls.sliderWidgetKnobRect;
 
 const max_widget_depth: usize = 32;
 
-const SpinnerSegment = struct { x: f32, y: f32 };
-const spinner_segments = [_]SpinnerSegment{
-    .{ .x = 0, .y = -1 },
-    .{ .x = 0.707, .y = -0.707 },
-    .{ .x = 1, .y = 0 },
-    .{ .x = 0.707, .y = 0.707 },
-    .{ .x = 0, .y = 1 },
-    .{ .x = -0.707, .y = 0.707 },
-    .{ .x = -1, .y = 0 },
-    .{ .x = -0.707, .y = -0.707 },
-};
-
-/// Frame-lifetime scratch for chart path elements: `.chart` widgets build
-/// their line/band `PathElement`s here at emit time (unlike icons, whose
-/// elements are comptime-static), and emitted commands slice into it. The
-/// event loop is single-threaded and the runtime copies the display list
-/// into per-view storage within the same emit call stack, so one
-/// threadlocal buffer per frame is sound — reset at each emit entry
-/// point. Sized to mirror the runtime's per-view path-element budget
+/// Frame-lifetime scratch for widget-built path elements: `.chart`
+/// widgets build their line/band `PathElement`s here at emit time, and
+/// `.spinner` widgets their arc segment (unlike icons, whose elements
+/// are comptime-static); emitted commands slice into it. The event loop
+/// is single-threaded and the runtime copies the display list into
+/// per-view storage within the same emit call stack, so one threadlocal
+/// buffer per frame is sound — reset at each emit entry point. Sized to
+/// mirror the runtime's per-view path-element budget
 /// (`canvas_limits.max_canvas_path_elements_per_view`; a lockstep test
 /// keeps them equal), so overflow here fails exactly where the per-view
 /// copy would have refused anyway — loudly, by budget name.
-threadlocal var chart_frame_path_elements: [chart_model.max_chart_path_elements_per_frame]drawing_model.PathElement = undefined;
-threadlocal var chart_frame_path_len: usize = 0;
+threadlocal var frame_path_elements: [chart_model.max_chart_path_elements_per_frame]drawing_model.PathElement = undefined;
+threadlocal var frame_path_len: usize = 0;
 
-fn resetChartFramePathScratch() void {
-    chart_frame_path_len = 0;
+fn resetFramePathScratch() void {
+    frame_path_len = 0;
 }
 
-fn allocChartPathElements(count: usize) Error![]drawing_model.PathElement {
-    if (chart_frame_path_len + count > chart_frame_path_elements.len) return error.ChartPathElementListFull;
-    const start = chart_frame_path_len;
-    chart_frame_path_len += count;
-    return chart_frame_path_elements[start .. start + count];
+fn allocFramePathElements(count: usize) Error![]drawing_model.PathElement {
+    if (frame_path_len + count > frame_path_elements.len) return error.ChartPathElementListFull;
+    const start = frame_path_len;
+    frame_path_len += count;
+    return frame_path_elements[start .. start + count];
 }
 
 pub fn emitWidgetTree(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
-    resetChartFramePathScratch();
+    resetFramePathScratch();
     try emitWidgetDepth(builder, widget, tokens, 0);
 }
 
@@ -154,7 +143,7 @@ pub fn emitWidgetLayout(builder: *Builder, layout: anytype, tokens: DesignTokens
 }
 
 pub fn emitWidgetLayoutWithState(builder: *Builder, layout: anytype, tokens: DesignTokens, state: WidgetRenderState) Error!void {
-    resetChartFramePathScratch();
+    resetFramePathScratch();
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
     try emitWidgetLayoutAnchored(builder, layout, tokens, state);
 }
@@ -1046,6 +1035,21 @@ fn emitSkeletonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
     });
 }
 
+/// Compact activity-indicator stroke: 2px at every size (the icon
+/// register), before per-widget/theme overrides.
+const spinner_stroke_width: f32 = 2;
+/// Sweep of the accent arc segment, in degrees — a quarter turn.
+const spinner_arc_sweep_degrees: f32 = 90;
+
+/// Draw a `.spinner` widget: a muted full-circle track plus an accent
+/// quarter-arc segment, both stroked at the shared 2px width — the
+/// house activity-indicator register. Emission is deterministic: the
+/// arc's start angle is a pure function of `widget.value` (fractions of
+/// a turn from twelve o'clock), so static renders — docs previews,
+/// screenshots — pose it reproducibly. The LIVE spin is not emitted
+/// here: the runtime keeps a looping `.wrap` rotation render animation
+/// on the arc command (`spinnerWidgetArcCommandId`), rotating it about
+/// `spinnerWidgetRotationCenter` without re-emitting the display list.
 fn emitSpinnerWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = componentControlVisualTokens(widget, tokens);
     const normalized = widget.frame.normalized();
@@ -1053,26 +1057,60 @@ fn emitSpinnerWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Er
     const size = @min(normalized.width, normalized.height);
     if (size <= 0) return;
 
+    const stroke_width = controlStrokeWidth(widget, visual, spinner_stroke_width);
     const center = geometry.PointF.init(normalized.x + normalized.width * 0.5, normalized.y + normalized.height * 0.5);
-    const radius = size * 0.42;
-    const inner = radius * 0.58;
-    const stroke_width = controlStrokeWidth(widget, visual, @max(1, size * 0.09));
-    const color = widgetForegroundColor(widget, tokens, visual.foreground orelse visual.active_background orelse tokens.colors.accent);
-    const phase = @as(usize, @intFromFloat(@floor(std.math.clamp(widget.value, 0, 1) * 8))) % spinner_segments.len;
+    const radius = (size - stroke_width) * 0.5;
+    if (radius <= 0) return;
 
-    for (spinner_segments, 0..) |segment, index| {
-        const segment_index = (index + phase) % spinner_segments.len;
-        const alpha = 0.28 + @as(f32, @floatFromInt(segment_index)) * 0.09;
-        try builder.drawLine(.{
-            .id = widgetPartId(widget.id, @as(ObjectId, @intCast(index + 1))),
-            .from = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x + segment.x * inner, center.y + segment.y * inner)),
-            .to = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x + segment.x * radius, center.y + segment.y * radius)),
-            .stroke = .{
-                .fill = colorFill(colorWithAlpha(color, alpha)),
-                .width = stroke_width,
-            },
-        });
-    }
+    const track_rect = geometry.RectF.init(center.x - radius, center.y - radius, radius * 2, radius * 2);
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = track_rect,
+        .radius = Radius.all(radius),
+        .stroke = .{
+            .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.border)),
+            .width = stroke_width,
+        },
+    });
+
+    // One cubic approximates the quarter arc to sub-pixel error at
+    // these sizes (the standard circle-from-cubics constant).
+    const start_degrees = -90 + std.math.clamp(widget.value, 0, 1) * 360;
+    const start_radians = std.math.degreesToRadians(start_degrees);
+    const end_radians = std.math.degreesToRadians(start_degrees + spinner_arc_sweep_degrees);
+    const kappa: f32 = 0.5522847498 * radius;
+    const start = geometry.PointF.init(center.x + radius * @cos(start_radians), center.y + radius * @sin(start_radians));
+    const end = geometry.PointF.init(center.x + radius * @cos(end_radians), center.y + radius * @sin(end_radians));
+    const elements = try allocFramePathElements(2);
+    elements[0] = .{ .verb = .move_to, .points = .{ start, geometry.PointF.zero(), geometry.PointF.zero() } };
+    elements[1] = .{ .verb = .cubic_to, .points = .{
+        geometry.PointF.init(start.x - kappa * @sin(start_radians), start.y + kappa * @cos(start_radians)),
+        geometry.PointF.init(end.x + kappa * @sin(end_radians), end.y - kappa * @cos(end_radians)),
+        end,
+    } };
+    try builder.strokePath(.{
+        .id = spinnerWidgetArcCommandId(widget.id),
+        .elements = elements,
+        .stroke = .{
+            .fill = colorFill(widgetForegroundColor(widget, tokens, visual.foreground orelse visual.active_background orelse tokens.colors.accent)),
+            .width = stroke_width,
+        },
+    });
+}
+
+/// The command id of a spinner's accent arc segment — the part slot
+/// `emitSpinnerWidget` draws it under — so the runtime can target the
+/// arc with a looping rotation render animation.
+pub fn spinnerWidgetArcCommandId(id: ObjectId) ObjectId {
+    return widgetPartId(id, 2);
+}
+
+/// The point the spinner's rotation animation must spin about: the
+/// center of the PAINTED frame (pixel-snapped exactly like emission),
+/// so the sampled rotation never wobbles against the emitted geometry.
+pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometry.PointF {
+    const normalized = pixelSnapGeometryRect(tokens, widget.frame).normalized();
+    return geometry.PointF.init(normalized.x + normalized.width * 0.5, normalized.y + normalized.height * 0.5);
 }
 
 // ------------------------------------------------------------------ chart
@@ -1215,7 +1253,7 @@ fn emitChartLine(
 
     if (series.fill) {
         const base_y = chartMapY(chartBaselineValue(domain), domain, plot, 0);
-        const elements = try allocChartPathElements(points.len + 3);
+        const elements = try allocFramePathElements(points.len + 3);
         for (points, 0..) |point, index| {
             elements[index] = .{
                 .verb = if (index == 0) .move_to else .line_to,
@@ -1232,7 +1270,7 @@ fn emitChartLine(
         });
     }
 
-    const elements = try allocChartPathElements(points.len);
+    const elements = try allocFramePathElements(points.len);
     for (points, 0..) |point, index| {
         elements[index] = .{
             .verb = if (index == 0) .move_to else .line_to,
@@ -1263,7 +1301,7 @@ fn emitChartBand(
     const base_y = chartMapY(chartBaselineValue(domain), domain, plot, 0);
     const pair_count = @min(series.values.len, series.low.len);
     const lower_count = if (pair_count >= 2) pair_count else 2;
-    const elements = try allocChartPathElements(upper.len + lower_count + 1);
+    const elements = try allocFramePathElements(upper.len + lower_count + 1);
     for (upper, 0..) |point, index| {
         elements[index] = .{
             .verb = if (index == 0) .move_to else .line_to,

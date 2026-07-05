@@ -162,6 +162,16 @@ pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
 pub fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
     if (widget.style.border) |border| return colorFill(border);
     const visual = buttonControlVisualTokens(widget, tokens);
+    // A disabled button drops to the muted disabled fill, so the border
+    // mutes with it: the filled variants' accent edge would otherwise
+    // outline the gray fill in full-strength accent (the "idle button
+    // wearing a blue ring" read). Ghost keeps its no-border shape.
+    if (widget.state.disabled) {
+        return switch (widget.variant) {
+            .ghost => colorFill(widgetBorderColor(widget, visual.border orelse transparentColor())),
+            else => colorFill(widgetBorderColor(widget, visual.border orelse tokens.colors.border)),
+        };
+    }
     return switch (widget.variant) {
         .primary => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.accent)),
         .destructive => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.destructive)),

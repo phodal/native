@@ -112,8 +112,39 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
             if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
             try validateCanvasRenderAnimations(animations);
+            // Replacing NOTHING with NOTHING is a no-op: a rebuild that
+            // never declared animations must not schedule work.
+            if (animations.len == 0 and
+                self.views[index].canvas_render_animation_count == 0 and
+                self.views[index].canvas_frame_render_override_count == 0)
+            {
+                return self.views[index].info();
+            }
+            // Invalidate the AFFECTED commands, not the whole view: the
+            // union of the display-list bounds of every command a
+            // previously APPLIED override or a new animation targets,
+            // widened by the animations' from/to transforms. The next
+            // planned frame recomputes exact override dirt; this region
+            // only schedules the repaint — but a UiApp rebuild re-bases
+            // its animations on EVERY update, and a full-frame region
+            // here silently defeated incremental presentation.
+            const dirty = canvasRenderAnimationScheduleDirtyBounds(&self.views[index], animations);
             try self.views[index].copyCanvasRenderAnimations(animations);
-            self.invalidateFor(.state, self.views[index].frame);
+            if (dirty) |local_dirty| {
+                if (canvasDirtyRegionForView(self.views[index].frame, local_dirty)) |region| {
+                    self.invalidateFor(.state, region);
+                } else {
+                    self.invalidateFor(.state, self.views[index].frame);
+                }
+            } else if (animations.len == 0 and self.views[index].canvas_frame_render_override_count == 0) {
+                // Cleared an inert set (no applied overrides on screen):
+                // nothing painted from it, nothing to repaint.
+                self.invalidateFor(.state, null);
+            } else {
+                // Targets not in the current display list (or bounds
+                // unknown): stay loud with the full view.
+                self.invalidateFor(.state, self.views[index].frame);
+            }
             try requestCanvasFrameForView(self, index);
             return self.views[index].info();
         }
@@ -1346,4 +1377,63 @@ fn canvasDirtyRegionForView(view_frame: geometry.RectF, local_dirty: geometry.Re
     const clipped = geometry.RectF.intersection(surface_bounds, local_dirty.normalized());
     if (clipped.isEmpty()) return null;
     return clipped.translate(.{ .dx = normalized_view.x, .dy = normalized_view.y });
+}
+
+/// The view-local dirty bounds replacing the animation set can touch NOW:
+/// every command a previously APPLIED override moved (it may snap back)
+/// plus every command a new animation targets, each widened by the
+/// animation's from/to transforms (and the circumscribed square of a
+/// rotation about its center). Null when no targeted command exists in
+/// the current display list — the caller stays loud with the full view.
+fn canvasRenderAnimationScheduleDirtyBounds(view: anytype, animations: []const canvas.CanvasRenderAnimation) ?geometry.RectF {
+    const display_list = view.canvasDisplayList();
+    var bounds: ?geometry.RectF = null;
+    var found_any = false;
+
+    for (view.canvas_frame_render_overrides[0..view.canvas_frame_render_override_count]) |override| {
+        const rect = canvasCommandBoundsById(display_list, override.id) orelse continue;
+        found_any = true;
+        bounds = unionRects(bounds, rect);
+        if (override.transform) |transform| bounds = unionRects(bounds, transform.transformRect(rect));
+    }
+
+    for (animations) |animation| {
+        const rect = canvasCommandBoundsById(display_list, animation.id) orelse continue;
+        found_any = true;
+        bounds = unionRects(bounds, rect);
+        if (animation.from_transform) |transform| bounds = unionRects(bounds, transform.transformRect(rect));
+        if (animation.to_transform) |transform| bounds = unionRects(bounds, transform.transformRect(rect));
+        if (animation.from_rotation != null or animation.to_rotation != null) {
+            bounds = unionRects(bounds, canvasRotationCircumscribedBounds(rect, animation.rotation_center));
+        }
+    }
+
+    if (!found_any) return null;
+    return bounds;
+}
+
+fn canvasCommandBoundsById(display_list: canvas.DisplayList, id: canvas.ObjectId) ?geometry.RectF {
+    if (id == 0) return null;
+    const command_ref = display_list.findCommandById(id) orelse return null;
+    return command_ref.command.bounds();
+}
+
+/// Every pose of `rect` rotating about `center` stays inside the square
+/// circumscribing the farthest corner — the conservative dirty extent of
+/// a rotation animation.
+fn canvasRotationCircumscribedBounds(rect: geometry.RectF, center: geometry.PointF) geometry.RectF {
+    const normalized = rect.normalized();
+    const corners = [_]geometry.PointF{
+        normalized.topLeft(),
+        normalized.topRight(),
+        normalized.bottomLeft(),
+        normalized.bottomRight(),
+    };
+    var radius: f32 = 0;
+    for (corners) |corner| {
+        const dx = corner.x - center.x;
+        const dy = corner.y - center.y;
+        radius = @max(radius, @sqrt(dx * dx + dy * dy));
+    }
+    return geometry.RectF.init(center.x - radius, center.y - radius, radius * 2, radius * 2);
 }

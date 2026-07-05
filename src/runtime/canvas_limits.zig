@@ -188,6 +188,14 @@ pub const max_canvas_widget_anchored_per_view: usize = 16;
 /// anyway).
 pub const max_canvas_widget_autofocus_per_view: usize = 16;
 
+/// Spinners carrying the looping rotation render animation per view.
+/// Each armed spinner is one render animation slot plus one dirty-bounds
+/// entry, sampled every frame while visible — a view showing more than 8
+/// simultaneous activity indicators is a design smell, so the extras
+/// render as static arcs (deterministic pose from `widget.value`)
+/// instead of degrading the frame budget.
+pub const max_canvas_widget_spinner_animations_per_view: usize = 8;
+
 // Model-declared secondary windows per `UiApp` (`Options.windows_fn`
 // descriptors — settings, about, inspectors), on top of the scene's main
 // window. Sized for the dev-2-class desktop shape: one settings window,

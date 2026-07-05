@@ -254,6 +254,7 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
             const changes = try canvas.DisplayList.diff(self.views[view_index].canvasDisplayList(), display_list, &canvas_changes);
             try self.views[view_index].copyCanvasDisplayList(display_list);
             reconcileCanvasWidgetCaretBlink(self, view_index);
+            reconcileCanvasWidgetSpinners(self, view_index);
             canvas_frame_helpers.RuntimeCanvasFrames(Runtime).invalidateForCanvasChanges(self, self.views[view_index].frame, changes);
             if (changes.len > 0) {
                 try canvas_frame_helpers.RuntimeCanvasFrames(Runtime).requestCanvasFrameForView(self, view_index);
@@ -286,10 +287,80 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
                 .easing = .standard,
                 .from_opacity = 1,
                 .to_opacity = 0,
-                .loop = true,
+                .loop = .ping_pong,
             }) catch return;
             view.replaceCanvasRenderAnimationDirtyBounds(target.command_id, target.bounds) catch {};
             view.canvas_widget_caret_blink_id = target.command_id;
+        }
+
+        /// Keep each visible spinner's looping rotation animation in
+        /// step with the display list just emitted: a `.wrap` rotation
+        /// over the arc command spins it continuously (one turn per
+        /// `spinner_rotation_turn_ms`, linear so the wrap is seamless)
+        /// without re-emitting the display list. Arming preserves the
+        /// existing animation's phase — a refresh mid-spin (hover,
+        /// unrelated state) must not snap the arc back to its start.
+        /// When a spinner unmounts (or hides) its animation is removed,
+        /// so a view with no other work parks instead of pumping frames
+        /// forever. Reduced motion arms nothing: the arc renders as a
+        /// static pose.
+        fn reconcileCanvasWidgetSpinners(self: *Runtime, view_index: usize) void {
+            const view = &self.views[view_index];
+            var desired_ids: [canvas_limits.max_canvas_widget_spinner_animations_per_view]canvas.ObjectId = undefined;
+            var desired_count: usize = 0;
+
+            const reduce_motion = view.widget_tokens.motion.durationMs(.slow) == 0;
+            if (!reduce_motion) {
+                const layout = view.widgetLayoutTree();
+                for (layout.nodes, 0..) |node, node_index| {
+                    if (node.widget.kind != .spinner or node.widget.id == 0) continue;
+                    if (canvas.isWidgetHiddenInAncestors(layout, node_index)) continue;
+                    if (node.widget.opacity <= 0) continue;
+                    if (node.frame.normalized().isEmpty()) continue;
+                    if (desired_count >= desired_ids.len) break;
+                    const command_id = canvas.spinnerWidgetArcCommandId(node.widget.id);
+                    const start_ns = existingCanvasRenderAnimationStartNs(view, command_id) orelse canvasRenderAnimationStartNsForView(view);
+                    // The emitters paint at the LAYOUT frame (`node.frame`,
+                    // pixel-snapped inside `spinnerWidgetRotationCenter`),
+                    // so the rotation center matches the arc's geometry.
+                    var laid_out = node.widget;
+                    laid_out.frame = node.frame;
+                    view.replaceCanvasRenderAnimation(.{
+                        .id = command_id,
+                        .start_ns = start_ns,
+                        .duration_ms = spinner_rotation_turn_ms,
+                        .easing = .linear,
+                        .from_rotation = 0,
+                        .to_rotation = 360,
+                        .rotation_center = canvas.spinnerWidgetRotationCenter(laid_out, view.widget_tokens),
+                        .loop = .wrap,
+                    }) catch break;
+                    view.replaceCanvasRenderAnimationDirtyBounds(command_id, node.frame) catch {};
+                    desired_ids[desired_count] = command_id;
+                    desired_count += 1;
+                }
+            }
+
+            // Remove animations of spinners no longer visible.
+            for (view.canvas_widget_spinner_ids[0..view.canvas_widget_spinner_count]) |previous_id| {
+                var still_desired = false;
+                for (desired_ids[0..desired_count]) |desired_id| {
+                    if (desired_id == previous_id) {
+                        still_desired = true;
+                        break;
+                    }
+                }
+                if (!still_desired) view.removeCanvasRenderAnimation(previous_id);
+            }
+            @memcpy(view.canvas_widget_spinner_ids[0..desired_count], desired_ids[0..desired_count]);
+            view.canvas_widget_spinner_count = desired_count;
+        }
+
+        fn existingCanvasRenderAnimationStartNs(view: anytype, id: canvas.ObjectId) ?u64 {
+            for (view.canvasRenderAnimations()) |animation| {
+                if (animation.id == id) return animation.start_ns;
+            }
+            return null;
         }
 
         fn canvasWidgetCaretBlinkTarget(view: anytype) ?CanvasWidgetCaretBlinkTarget {
@@ -315,6 +386,9 @@ const CanvasWidgetCaretBlinkTarget = struct {
     command_id: canvas.ObjectId,
     bounds: geometry.RectF,
 };
+
+/// One full spinner revolution — linear, so the wrap seam is invisible.
+const spinner_rotation_turn_ms: u32 = 1000;
 
 /// One blink sweep (fade out or back) — a full cycle is two sweeps.
 const caret_blink_sweep_ms: u32 = 500;

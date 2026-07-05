@@ -77,7 +77,7 @@ export const navSections: NavSection[] = [
     title: "Web Content",
     items: [
       { name: "Web Engines", href: "/web-engines" },
-      { name: "Frontend Projects", href: "/frontend" },
+      { name: "Web Content", href: "/frontend" },
       { name: "Dev Server", href: "/cli/dev" },
       { name: "Multiple WebViews", href: "/webviews" },
       { name: "Bridge", href: "/bridge" },

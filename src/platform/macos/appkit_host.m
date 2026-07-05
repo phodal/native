@@ -7112,6 +7112,10 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     [self startAppearanceObservers];
 
     [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_START }];
+    // A failed START handler requests shutdown synchronously, before the
+    // run loop exists — [NSApp stop:] is a no-op there. Honor the request
+    // here instead of stranding a live app behind a blank window.
+    if (self.didShutdown) return;
     [self emitAppearanceChanged];
     [self emitResize];
     [self emitWindowFrame:YES];

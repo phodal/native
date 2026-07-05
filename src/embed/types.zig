@@ -3,7 +3,7 @@ const platform = @import("../platform/root.zig");
 pub const max_mobile_command_name_bytes: usize = 128;
 pub const max_mobile_input_text_bytes: usize = 512;
 pub const max_mobile_asset_root_bytes: usize = platform.max_webview_url_bytes;
-pub const max_mobile_asset_entry_bytes: usize = platform.max_window_source_bytes;
+pub const max_mobile_asset_entry_bytes: usize = platform.max_window_source_path_bytes;
 pub const mobile_gpu_surface_label = "mobile-surface";
 
 pub const MobileWidgetRole = enum(c_int) {

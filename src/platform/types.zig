@@ -141,7 +141,13 @@ pub const ViewId = u64;
 pub const max_windows: usize = 16;
 pub const max_window_label_bytes: usize = 64;
 pub const max_window_title_bytes: usize = 128;
-pub const max_window_source_bytes: usize = 4096;
+/// Budget for a window's webview source payload — for `.html` sources this
+/// is the whole inline document, so it must comfortably hold a real page
+/// (a 4096 cap silently blanked apps whose inline HTML outgrew it).
+pub const max_window_source_bytes: usize = 65536;
+/// Budget for the path-shaped source fields (asset root, entry, origin),
+/// which never need the full document budget.
+pub const max_window_source_path_bytes: usize = 4096;
 pub const max_webviews: usize = 16;
 pub const max_webview_label_bytes: usize = 64;
 pub const max_webview_url_bytes: usize = 4096;

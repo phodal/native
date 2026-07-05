@@ -3,9 +3,9 @@ const platform = @import("../platform/root.zig");
 
 pub const RuntimeSourceStorage = struct {
     bytes: [platform.max_window_source_bytes]u8 = undefined,
-    asset_root_path: [platform.max_window_source_bytes]u8 = undefined,
-    asset_entry: [platform.max_window_source_bytes]u8 = undefined,
-    asset_origin: [platform.max_window_source_bytes]u8 = undefined,
+    asset_root_path: [platform.max_window_source_path_bytes]u8 = undefined,
+    asset_entry: [platform.max_window_source_path_bytes]u8 = undefined,
+    asset_origin: [platform.max_window_source_path_bytes]u8 = undefined,
 };
 
 pub fn copySourceInto(storage: *RuntimeSourceStorage, source: platform.WebViewSource) !platform.WebViewSource {

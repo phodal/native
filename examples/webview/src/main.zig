@@ -166,6 +166,12 @@ pub fn main(init: std.process.Init) !void {
     }, init);
 }
 
+test "inline html stays within the runtime window source budget" {
+    // An inline source past this budget fails window load at app_start and
+    // the main window comes up blank; catch the overflow at test time.
+    try std.testing.expect(html.len <= native_sdk.platform.max_window_source_bytes);
+}
+
 test "webview bridge returns native ping response" {
     var env = std.process.Environ.Map.init(std.testing.allocator);
     defer env.deinit();

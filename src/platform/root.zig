@@ -16,6 +16,7 @@ pub const max_windows = types.max_windows;
 pub const max_window_label_bytes = types.max_window_label_bytes;
 pub const max_window_title_bytes = types.max_window_title_bytes;
 pub const max_window_source_bytes = types.max_window_source_bytes;
+pub const max_window_source_path_bytes = types.max_window_source_path_bytes;
 pub const max_webviews = types.max_webviews;
 pub const max_webview_label_bytes = types.max_webview_label_bytes;
 pub const max_webview_url_bytes = types.max_webview_url_bytes;

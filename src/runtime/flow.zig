@@ -133,6 +133,12 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
 
             switch (event_value) {
                 .app_start => {
+                    // A startup failure must be loud and attributable.
+                    // Without this record the error unwinds into the
+                    // platform stop path and the only trace is a bare
+                    // `app.stop` right after `start` — which reads like a
+                    // clean exit while the main window sits blank.
+                    errdefer |err| recordDispatchError(self, "app_start", err);
                     try reservePrimaryStartupWindow(self);
                     try app.start(self);
                     if (self.options.extensions) |registry| try registry.startAll(extensionContext(self));

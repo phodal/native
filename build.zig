@@ -748,6 +748,10 @@ pub fn build(b: *std.Build) void {
         \\snapshot="$("$cli" automate wait 2>&1)"
         \\case "$snapshot" in *"ready=true"*) ;; *) echo "automation snapshot was not ready" >&2; exit 1 ;; esac
         \\attempts=0
+        \\while [ "$attempts" -lt 50 ] && ! grep -q 'name="webview.load"' .zig-cache/native-sdk-webview-smoke.log; do attempts=$((attempts + 1)); sleep 0.1; done
+        \\grep -q 'name="webview.load"' .zig-cache/native-sdk-webview-smoke.log || { echo "main window never loaded its webview source (blank window)" >&2; exit 1; }
+        \\if grep -q 'name="dispatch.error"' .zig-cache/native-sdk-webview-smoke.log; then echo "runtime recorded a dispatch error during startup" >&2; exit 1; fi
+        \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"
         \\case "$response" in *'"ok":true'*) ;; *) echo "native.ping did not succeed: $response" >&2; exit 1 ;; esac
@@ -1677,6 +1681,10 @@ pub fn build(b: *std.Build) void {
         \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-webview-cef-smoke.log) ----" >&2; cat .zig-cache/native-sdk-webview-cef-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\snapshot="$("$cli" automate wait 2>&1)"
         \\case "$snapshot" in *"ready=true"*) ;; *) echo "automation snapshot was not ready" >&2; exit 1 ;; esac
+        \\attempts=0
+        \\while [ "$attempts" -lt 50 ] && ! grep -q 'name="webview.load"' .zig-cache/native-sdk-webview-cef-smoke.log; do attempts=$((attempts + 1)); sleep 0.1; done
+        \\grep -q 'name="webview.load"' .zig-cache/native-sdk-webview-cef-smoke.log || { echo "main window never loaded its webview source (blank window)" >&2; exit 1; }
+        \\if grep -q 'name="dispatch.error"' .zig-cache/native-sdk-webview-cef-smoke.log; then echo "runtime recorded a dispatch error during startup" >&2; exit 1; fi
         \\attempts=0
         \\while [ "$attempts" -lt 50 ] && [ ! -s "$response_file" ]; do attempts=$((attempts + 1)); sleep 0.1; done
         \\response="$(cat "$response_file" 2>/dev/null || true)"

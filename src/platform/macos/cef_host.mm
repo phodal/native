@@ -929,6 +929,13 @@ static const char *NativeSdkCefBridgeScript() {
     }
 
     [self emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_START }];
+    // A failed START handler requests shutdown synchronously, before the
+    // run loop exists — [NSApp stop:] is a no-op there. Honor the request
+    // here instead of stranding a live app behind a blank window.
+    if (self.didShutdown) {
+        shutdownCefIfNeeded();
+        return;
+    }
     [self emitResize];
     [self emitWindowFrameForWindowId:1 open:YES];
     [self startApplicationActivationObservers];

@@ -7,7 +7,8 @@
 # fast — root `zig build test` + `zig build validate`, plus the suites for
 # the examples AFFECTED by your diff against base-ref (default: main). The
 # diff is `git diff --name-only` against `git merge-base base-ref HEAD`,
-# plus untracked files, so uncommitted work counts.
+# plus untracked files, so uncommitted work counts. Framework diffs on
+# macOS additionally run the render-benchmark budget ratchet (see below).
 #
 # Path -> step mapping (fast tier):
 #   src/**, build.zig, build.zig.zon, build/**,
@@ -33,6 +34,21 @@
 # vs base-ref or --all was passed. --perf additionally runs the percentile
 # GPU perf check (test-gpu-dashboard-perf; macOS only, slow, load-sensitive —
 # opt-in so a busy dev box doesn't fail the gate on noise).
+#
+# bench-check — the render-benchmark budget ratchet
+# (`zig build bench-render -Doptimize=ReleaseFast -- --check
+# tools/bench-render-budgets.txt`): median e2e p50 of three deterministic
+# suite passes per scenario vs committed budgets with ~1.3x+ headroom, so
+# it trips on order-of-magnitude regressions (a reintroduced O(n^2)
+# planner scan, an extra emission per input), not machine noise. Unlike
+# the --perf harness it is headless, in-process, and seconds-long once the
+# ReleaseFast build is cached — that is why it runs by DEFAULT (fast tier:
+# framework diffs only, since engine perf cannot regress from an
+# example-only or docs diff; full tier: always) instead of opt-in like
+# --perf: a ratchet that only runs when someone remembers to ask is not a
+# ratchet. macOS-only because the budgets are calibrated on Apple Silicon.
+# Set NATIVE_SDK_SKIP_BENCH_CHECK=1 to skip it on a box that is too busy
+# even for the generous budgets.
 #
 # Deliberately NOT `set -e`: every step runs even after a failure so the
 # summary shows the whole picture; the exit code is non-zero if any step
@@ -164,6 +180,20 @@ docs_check() {
 is_macos=false
 [ "$(uname -s)" = "Darwin" ] && is_macos=true
 
+bench_check() {
+  zig build bench-render -Doptimize=ReleaseFast -- --check "$repo_root/tools/bench-render-budgets.txt"
+}
+
+run_bench_check_step() { # runs (or explains skipping) the render-benchmark ratchet
+  if ! $is_macos; then
+    skip_step "bench-check" "budgets calibrated on Apple Silicon macOS"
+  elif [ -n "${NATIVE_SDK_SKIP_BENCH_CHECK:-}" ]; then
+    skip_step "bench-check" "NATIVE_SDK_SKIP_BENCH_CHECK set"
+  else
+    run_step "bench-check" bench_check
+  fi
+}
+
 # ---- tiers ----------------------------------------------------------------
 
 if [ "$tier" = "fast" ]; then
@@ -184,6 +214,9 @@ if [ "$tier" = "fast" ]; then
     run_step "examples-frontends" zig build test-examples-frontends
     run_step "examples-native" zig build test-examples-native
     run_step "examples-mobile" zig build test-examples-mobile
+    # Engine perf can only regress through framework code, so the ratchet
+    # rides the same trigger as the full example sweep.
+    run_bench_check_step
   else
     for example in $affected_examples; do
       case " $registered_examples " in
@@ -226,6 +259,8 @@ else # full
     skip_step "smoke-native-shell" "macOS only"
     skip_step "smoke-canvas-preview" "macOS only"
   fi
+
+  run_bench_check_step
 
   if $run_perf; then
     if $is_macos; then

@@ -250,7 +250,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_bench_render = b.addRunArtifact(bench_render_exe);
     run_bench_render.has_side_effects = true;
-    const bench_render_step = b.step("bench-render", "Run the render macro-benchmark (deterministic scenarios; pass -Doptimize=ReleaseFast for baselines)");
+    // Repo root as cwd so the relative budgets path in the docs/gate
+    // invocation resolves regardless of where `zig build` ran from.
+    run_bench_render.setCwd(b.path("."));
+    // Ratchet mode: `zig build bench-render -Doptimize=ReleaseFast --
+    // --check tools/bench-render-budgets.txt` compares the median e2e
+    // p50 of three suite passes against the committed budgets (the
+    // benchmark refuses --check outside ReleaseFast).
+    if (b.args) |bench_args| run_bench_render.addArgs(bench_args);
+    const bench_render_step = b.step("bench-render", "Run the render macro-benchmark (deterministic scenarios; pass -Doptimize=ReleaseFast for baselines, `-- --check tools/bench-render-budgets.txt` for the budget ratchet)");
     bench_render_step.dependOn(&run_bench_render.step);
 
     // Live docs previews: the same scene catalog compiled to

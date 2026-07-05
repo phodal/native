@@ -23,8 +23,23 @@
 //! p90s over N warm iterations after warmup; rows where p90 > 2.5x p50
 //! are flagged `noisy` so one descheduled iteration cannot pass as a
 //! regression (or an improvement).
+//!
+//! Ratchet mode:
+//!
+//!   zig build bench-render -Doptimize=ReleaseFast -- --check tools/bench-render-budgets.txt
+//!
+//! Runs the whole suite `check_passes` times, takes the MEDIAN e2e p50
+//! per scenario across passes (one descheduled pass cannot fail the
+//! gate), and compares against the committed per-scenario budgets.
+//! Budgets carry ~30%+ headroom over healthy numbers: this mode exists
+//! to catch order-of-magnitude regressions and accidental O(n^2)
+//! reintroductions, not machine noise — see the budgets file for the
+//! per-scenario rationale. Refuses to run outside ReleaseFast (budgets
+//! are calibrated for it). Every scenario must have a budget and every
+//! budget must name a scenario, so renames cannot silently un-gate.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const native_sdk = @import("native_sdk");
 
 const canvas = native_sdk.canvas;
@@ -742,18 +757,153 @@ fn fmtUs(value: u64) []const u8 {
     return std.fmt.bufPrint(&fmt_us_storage[fmt_us_index], "{d}", .{value}) catch "?";
 }
 
-pub fn main(init: std.process.Init) !void {
-    _ = init;
-    initBigFormFixture();
-    initTranscriptFixture();
-    initDocFixture();
+// ---------------------------------------------------------- check mode
 
-    var reports: [6]ScenarioReport = undefined;
+const scenario_count = 6;
+const check_passes = 3;
+
+fn runAllScenarios() ![scenario_count]ScenarioReport {
+    var reports: [scenario_count]ScenarioReport = undefined;
     reports[0] = try scenarioFirstFrame();
     reports[1] = try scenarioKeystroke();
     reports[2] = try scenarioToggle();
     reports[3] = try scenarioTranscriptScroll();
     reports[4] = try scenarioChartTick();
     reports[5] = try scenarioDocEdit();
+    return reports;
+}
+
+const Budget = struct {
+    name: []const u8,
+    p50_budget_us: u64,
+    matched: bool = false,
+};
+
+const max_budgets = 16;
+
+/// Budgets file: `<scenario-name> <p50-budget-us>` per line; blank lines
+/// and `#` comments ignored.
+fn parseBudgets(content: []const u8, storage: *[max_budgets]Budget) ![]Budget {
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        var fields = std.mem.tokenizeAny(u8, line, " \t");
+        const name = fields.next() orelse continue;
+        const value_text = fields.next() orelse {
+            std.debug.print("bench-render --check: budget line missing a value: '{s}'\n", .{line});
+            return error.InvalidBudgetsFile;
+        };
+        if (fields.next() != null) {
+            std.debug.print("bench-render --check: budget line has trailing fields: '{s}'\n", .{line});
+            return error.InvalidBudgetsFile;
+        }
+        const value = std.fmt.parseInt(u64, value_text, 10) catch {
+            std.debug.print("bench-render --check: budget value is not an integer of microseconds: '{s}'\n", .{line});
+            return error.InvalidBudgetsFile;
+        };
+        if (count >= storage.len) return error.TooManyBudgets;
+        storage[count] = .{ .name = name, .p50_budget_us = value };
+        count += 1;
+    }
+    if (count == 0) {
+        std.debug.print("bench-render --check: budgets file declared no budgets\n", .{});
+        return error.InvalidBudgetsFile;
+    }
+    return storage[0..count];
+}
+
+fn medianOf(values: []u64) u64 {
+    std.sort.pdq(u64, values, {}, std.sort.asc(u64));
+    return values[(values.len - 1) / 2];
+}
+
+fn runCheck(init: std.process.Init, budgets_path: []const u8) !void {
+    if (builtin.mode != .ReleaseFast) {
+        std.debug.print("bench-render --check: budgets are calibrated for ReleaseFast; rebuild with -Doptimize=ReleaseFast (got {s})\n", .{@tagName(builtin.mode)});
+        return error.WrongOptimizeMode;
+    }
+    var arena_state = std.heap.ArenaAllocator.init(init.gpa);
+    defer arena_state.deinit();
+    const content = std.Io.Dir.cwd().readFileAlloc(init.io, budgets_path, arena_state.allocator(), .limited(64 * 1024)) catch |err| {
+        std.debug.print("bench-render --check: cannot read budgets file '{s}': {s}\n", .{ budgets_path, @errorName(err) });
+        return err;
+    };
+    var budget_storage: [max_budgets]Budget = undefined;
+    const budgets = try parseBudgets(content, &budget_storage);
+
+    // Median across passes: one descheduled pass (or one lucky one)
+    // cannot decide the verdict on a loaded box.
+    var passes: [check_passes][scenario_count]ScenarioReport = undefined;
+    for (&passes, 0..) |*pass, pass_index| {
+        pass.* = try runAllScenarios();
+        std.debug.print("bench-render --check: pass {d}/{d}:", .{ pass_index + 1, check_passes });
+        for (pass.*) |report| std.debug.print(" {s}={d}us", .{ report.name, report.e2e_p50_us });
+        std.debug.print("\n", .{});
+    }
+
+    var failures: usize = 0;
+    std.debug.print("\nbench-render --check: median e2e p50 of {d} passes vs budgets ({s})\n\n", .{ check_passes, budgets_path });
+    std.debug.print("{s:<22} {s:>10} {s:>10}  {s}\n", .{ "scenario", "p50_us", "budget_us", "verdict" });
+    for (0..scenario_count) |scenario_index| {
+        const name = passes[0][scenario_index].name;
+        var samples: [check_passes]u64 = undefined;
+        for (passes, 0..) |pass, pass_index| samples[pass_index] = pass[scenario_index].e2e_p50_us;
+        const median = medianOf(&samples);
+        const budget: ?*Budget = for (budgets) |*entry| {
+            if (std.mem.eql(u8, entry.name, name)) break entry;
+        } else null;
+        if (budget) |entry| {
+            entry.matched = true;
+            const over = median > entry.p50_budget_us;
+            if (over) failures += 1;
+            std.debug.print("{s:<22} {d:>10} {d:>10}  {s}\n", .{ name, median, entry.p50_budget_us, if (over) "FAIL" else "ok" });
+        } else {
+            failures += 1;
+            std.debug.print("{s:<22} {d:>10} {s:>10}  {s}\n", .{ name, median, "-", "FAIL (no budget declared)" });
+        }
+    }
+    for (budgets) |entry| {
+        if (!entry.matched) {
+            failures += 1;
+            std.debug.print("{s:<22} {s:>10} {d:>10}  FAIL (budget names no scenario — renamed?)\n", .{ entry.name, "-", entry.p50_budget_us });
+        }
+    }
+    std.debug.print("\n", .{});
+    if (failures > 0) {
+        std.debug.print("bench-render --check: {d} budget check(s) failed\n", .{failures});
+        return error.BudgetExceeded;
+    }
+    std.debug.print("bench-render --check: all scenarios within budget\n", .{});
+}
+
+pub fn main(init: std.process.Init) !void {
+    var args_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer args_arena.deinit();
+    const args = try init.minimal.args.toSlice(args_arena.allocator());
+    var budgets_path: ?[]const u8 = null;
+    var arg_index: usize = 1;
+    while (arg_index < args.len) : (arg_index += 1) {
+        if (std.mem.eql(u8, args[arg_index], "--check")) {
+            arg_index += 1;
+            if (arg_index >= args.len) {
+                std.debug.print("bench-render: --check requires a budgets file path\n", .{});
+                return error.InvalidArguments;
+            }
+            budgets_path = args[arg_index];
+        } else {
+            std.debug.print("bench-render: unknown argument '{s}' (usage: bench-render [--check <budgets-file>])\n", .{args[arg_index]});
+            return error.InvalidArguments;
+        }
+    }
+
+    initBigFormFixture();
+    initTranscriptFixture();
+    initDocFixture();
+
+    if (budgets_path) |path| return runCheck(init, path);
+
+    const reports = try runAllScenarios();
     printReports(&reports);
 }

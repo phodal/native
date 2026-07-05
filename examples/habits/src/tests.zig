@@ -211,3 +211,18 @@ test "the habits view lays out through the canvas engine" {
     }
     try testing.expect(saw_button);
 }
+
+
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = main.initialModel();
+    const tree = try buildTree(arena_state.allocator(), &model);
+    const size = native_sdk.geometry.SizeF.init(720, 520);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .min_size = size,
+        .default_size = size,
+        .large_size = size,
+    });
+}

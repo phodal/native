@@ -241,6 +241,16 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
                     }
                     if (pane_count != 2) fail(node, markup.split_children_message);
                 }
+                // Interpreter parity: the a11y lint's error half — an
+                // unnamed interactive control or a misused role ships a
+                // view a screen reader user cannot operate, so it is a
+                // compile error here.
+                if (markup.a11yNameError(node)) |message| {
+                    fail(node, message);
+                }
+                if (markup.a11yRoleError(node)) |message| {
+                    fail(node, message);
+                }
             }
             var options: Ui.ElementOptions = .{};
             applyAttrs(node, entries, ui, model, scope, &options);

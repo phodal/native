@@ -1162,6 +1162,179 @@ pub fn dismissEventElement(name: []const u8) bool {
     return nameInList(name, &known_dismiss_element_names);
 }
 
+// ----------------------------------------------------------- a11y lint
+//
+// The accessible-name and role lint. Severity rubric (stated once, at the
+// registry's `A11yNameRule`): a finding is an ERROR when a screen reader
+// user is FULLY BLOCKED (an unnamed interactive control cannot be
+// operated blind; a role that cannot mean what it says lies to the
+// bridge), and a WARNING when the experience degrades but remains
+// navigable (an unnamed image, a label duplicating the text it shadows).
+// Which elements are controls/editables/images is registry data
+// (`schema.ElementInfo.a11y_name`); the judgment about name sources and
+// severities lives here. Both engines and the validator call the same
+// predicates, so the lint cannot drift between check time and build time.
+
+pub const a11y_unlabeled_control_message = "this control has no accessible name - a screen reader announces an unnamed control that cannot be operated blind; give it visible text (element content or text=\"...\") or label=\"...\" naming the action (assistive tech and automation snapshots read the label)";
+
+pub const a11y_icon_only_message = "icon-only control: the icon name is a drawing instruction, not a label - a screen reader announces an unnamed control; add label=\"...\" naming the action (e.g. <button icon=\"trash\" label=\"Delete\"/>)";
+
+pub const a11y_unlabeled_editable_message = "this text control has no accessible name - a screen reader user cannot tell what to type; add label=\"...\" (or placeholder=\"...\", which the accessibility bridges announce as the fallback name)";
+
+pub const a11y_unknown_role_message = "unknown role: role takes a canvas.WidgetRole name (button, link, tree, treeitem, list, listitem, tab, checkbox, ...)";
+
+pub const a11y_container_role_message = "this role promises child structure (rows, items, cells) that this element can never hold - put the role on the container element around it, or drop it";
+
+pub const a11y_unlabeled_image_message = "this image has no alt-equivalent label - a screen reader announces an unnamed image; add label=\"...\" describing it, or the explicit label=\"\" to mark it decorative";
+
+pub const a11y_redundant_label_message = "this label duplicates the element's text content - the text is already the accessible name; drop the label so the two can never drift apart";
+
+/// The accessible-name ERROR for an element node, or null when the
+/// element is named (or carries no name requirement). Name sources are
+/// nonblank literals or `{bindings}` (a binding that resolves empty at
+/// runtime is the tree-level audit's finding, not markup's). Shared by
+/// the validator and both engines; comptime-callable.
+pub fn a11yNameError(node: MarkupNode) ?[]const u8 {
+    const entry = schema.elementByName(node.name) orelse return null;
+    switch (entry.a11y_name) {
+        .none, .image => return null,
+        .control => {
+            if (a11yNodeHasName(node)) return null;
+            if (node.attr("icon") != null) return a11y_icon_only_message;
+            return a11y_unlabeled_control_message;
+        },
+        .editable => {
+            // On text-entry controls the `text` attribute is the live
+            // VALUE, not a name (hearing the content does not say what
+            // to type), so the name must be a label or a placeholder.
+            // `select` is the one editable TEXT LEAF: its text channel
+            // (content or `text=`) is the face it shows, so it counts.
+            if (attrNonBlank(node, "label") or attrNonBlank(node, "placeholder")) return null;
+            if (entry.takes_text and a11yNodeHasName(node)) return null;
+            return a11y_unlabeled_editable_message;
+        },
+    }
+}
+
+/// The role-misuse ERROR for an element node: an unknown literal role, or
+/// a container role on an element that provably cannot hold the children
+/// the role promises. Dynamic role values (`role="{binding}"`) resolve at
+/// runtime, where the engines still reject unknown names. Shared by the
+/// validator and both engines; comptime-callable.
+pub fn a11yRoleError(node: MarkupNode) ?[]const u8 {
+    const entry = schema.elementByName(node.name) orelse return null;
+    const value = node.attr("role") orelse return null;
+    const expression = parseAttrExpression(value) orelse return null;
+    if (expression != .literal) return null;
+    const literal = expression.literal;
+    if (!nameInList(literal, &schema.role_names)) return a11y_unknown_role_message;
+    if (nameInList(literal, &schema.container_role_names) and !schema.elementHoldsChildren(entry)) {
+        return a11y_container_role_message;
+    }
+    return null;
+}
+
+fn a11yNodeHasName(node: MarkupNode) bool {
+    if (attrNonBlank(node, "label")) return true;
+    if (attrNonBlank(node, "text")) return true;
+    return nodeTextContentNonBlank(node);
+}
+
+fn nodeTextContentNonBlank(node: MarkupNode) bool {
+    for (node.children) |child| {
+        if (child.kind == .text and !allBlank(child.text)) return true;
+    }
+    return false;
+}
+
+fn attrNonBlank(node: MarkupNode, name: []const u8) bool {
+    const value = node.attr(name) orelse return false;
+    return !allBlank(value);
+}
+
+fn allBlank(text: []const u8) bool {
+    for (text) |byte| {
+        switch (byte) {
+            ' ', '\t', '\r', '\n' => {},
+            else => return false,
+        }
+    }
+    return true;
+}
+
+/// Findings reported per warnings pass; a document with more distinct
+/// a11y warnings than this is already unreviewable, so the collector
+/// keeps the first ones and the count stays honest via the slice length.
+pub const max_a11y_warnings = 64;
+
+/// The a11y WARNINGS for a document (see the severity rubric above):
+/// unnamed images and redundant labels. Callers that surface warnings
+/// (`native markup check`, the LSP) run this after `validate` is green;
+/// the engines stay silent about warnings because they have no channel
+/// that is not a build failure.
+pub fn collectA11yWarnings(document: MarkupDocument, storage: []MarkupErrorInfo) []const MarkupErrorInfo {
+    var len: usize = 0;
+    for (document.templates) |template_node| {
+        collectNodeA11yWarnings(template_node, storage, &len);
+    }
+    if (document.root) |root| {
+        collectNodeA11yWarnings(root, storage, &len);
+    }
+    return storage[0..len];
+}
+
+fn collectNodeA11yWarnings(node: MarkupNode, storage: []MarkupErrorInfo, len: *usize) void {
+    if (node.kind == .element) {
+        if (a11yImageWarning(node)) |message| {
+            appendWarning(storage, len, errorAt(node, message));
+        }
+        if (a11yRedundantLabel(node)) |attribute| {
+            appendWarning(storage, len, attrError(node, attribute, a11y_redundant_label_message));
+        }
+    }
+    for (node.children) |child| {
+        collectNodeA11yWarnings(child, storage, len);
+    }
+}
+
+fn appendWarning(storage: []MarkupErrorInfo, len: *usize, info: MarkupErrorInfo) void {
+    if (len.* >= storage.len) return;
+    storage[len.*] = info;
+    len.* += 1;
+}
+
+fn a11yImageWarning(node: MarkupNode) ?[]const u8 {
+    const entry = schema.elementByName(node.name) orelse return null;
+    if (entry.a11y_name != .image) return null;
+    // An explicit label attribute — even the empty decorative marker —
+    // is a declaration; only its ABSENCE is the unnamed-image warning.
+    if (node.attrEntry("label") != null) return null;
+    if (a11yNodeHasName(node)) return null;
+    return a11y_unlabeled_image_message;
+}
+
+/// The `label` attribute when its literal value duplicates the element's
+/// literal name from content or `text` (dynamic values never compare).
+fn a11yRedundantLabel(node: MarkupNode) ?MarkupAttr {
+    const attribute = node.attrEntry("label") orelse return null;
+    const label = trimBlank(attribute.value);
+    if (label.len == 0) return null;
+    if (std.mem.indexOfScalar(u8, label, '{') != null) return null;
+    if (node.attr("text")) |text| {
+        if (std.mem.eql(u8, label, trimBlank(text))) return attribute;
+    }
+    for (node.children) |child| {
+        if (child.kind != .text) continue;
+        if (std.mem.indexOfScalar(u8, child.text, '{') != null) continue;
+        if (std.mem.eql(u8, label, trimBlank(child.text))) return attribute;
+    }
+    return null;
+}
+
+fn trimBlank(text: []const u8) []const u8 {
+    return std.mem.trim(u8, text, " \t\r\n");
+}
+
 pub const font_coverage_message = "this text contains a character outside the bundled font's coverage - it renders as a tofu box on the reference/screenshot and mobile paths; use a vector icon (<icon name=\"...\"/> or the icon attribute) or plain words";
 
 pub const UncoveredCodepoint = struct {
@@ -1840,6 +2013,14 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     }
                 }
                 if (pane_count != 2) return errorAt(node, split_children_message);
+            }
+            // The a11y lint's error half: unnamed interactive controls
+            // and role misuse block a screen reader user outright, so
+            // they are validation errors (the warning half rides
+            // `collectA11yWarnings`). Mirrored by both engines.
+            if (a11yNameError(node)) |message| return errorAt(node, message);
+            if (a11yRoleError(node)) |message| {
+                return attrError(node, node.attrEntry("role").?, message);
             }
             for (node.attrs) |attribute| {
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {

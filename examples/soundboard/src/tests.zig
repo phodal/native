@@ -627,6 +627,34 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     }
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    apply(&model, .{ .play_track = 1 });
+
+    // The same view states the layout sweep audits: both tabs and the
+    // open-album drilldown, so every control the app can show is judged
+    // by the label assistive tech would announce.
+    const cases = [_]struct { tab: model_mod.Tab, open: ?u8 }{
+        .{ .tab = .albums, .open = null },
+        .{ .tab = .albums, .open = 2 },
+        .{ .tab = .songs, .open = null },
+    };
+    for (cases) |case| {
+        model.tab = case.tab;
+        model.open_album = case.open;
+        const tree = try buildTree(arena_state.allocator(), &model);
+        try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+            .tokens = main.tokensFromModel(&model),
+            .min_size = geometry.SizeF.init(main.window_min_width, main.window_min_height),
+            .default_size = surface_size,
+        });
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
 // Env-gated screenshot renderer (skipped by default, never in CI): renders
 // the app OFFSCREEN through the deterministic reference renderer via the
 // automation screenshot artifact — no live window. PNGs land in

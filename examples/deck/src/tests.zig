@@ -206,6 +206,34 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    apply(&model, .{ .play_track = 1 });
+    apply(&model, .{ .queue_track = 12 });
+
+    // Both windows at their fixed hardware geometry: the chassis and
+    // the playlist rack.
+    const chassis_size = geometry.SizeF.init(main.window_width, main.window_height);
+    const tree = try buildTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .tokens = main.tokensFromModel(&model),
+        .min_size = chassis_size,
+        .default_size = chassis_size,
+        .large_size = chassis_size,
+    });
+
+    const playlist = try buildPlaylistTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, playlist.root, .{
+        .tokens = main.tokensFromModel(&model),
+        .min_size = playlist_size,
+        .default_size = playlist_size,
+        .large_size = playlist_size,
+    });
+}
+
 test "play, pause, and seek drive the progress timer effect" {
     const live = try LiveApp.start(true);
     defer live.stop();

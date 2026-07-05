@@ -1085,6 +1085,19 @@ test "gpu dashboard layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "gpu dashboard a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const model = Model{};
+    const tree = try buildTestTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(std.testing.allocator, tree.root, .{
+        .tokens = dashboardWidgetTokens(),
+        .min_size = geometry.SizeF.init(window_min_width, window_min_height),
+        .default_size = geometry.SizeF.init(window_width, window_height),
+    });
+}
+
 test "gpu dashboard typed messages drive the model" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();

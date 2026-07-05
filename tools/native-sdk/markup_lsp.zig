@@ -3,7 +3,9 @@
 //!
 //! v1 scope (model-agnostic, mirrors `native markup check`):
 //! - publishDiagnostics on didOpen/didChange via the shared parser and
-//!   `ui_markup.validate` (line/column + teaching messages).
+//!   `ui_markup.validate` (line/column + teaching messages), plus the
+//!   a11y lint's warnings (`ui_markup.collectA11yWarnings`) at warning
+//!   severity once the document validates clean.
 //! - completion: element names after `<`, attribute/event names inside a tag.
 //! - hover: one-line docs for element and attribute names.
 //!
@@ -247,24 +249,35 @@ pub const Server = struct {
         try js.objectField("diagnostics");
         try js.beginArray();
         if (finding) |info| {
-            const line = if (info.line > 0) info.line - 1 else 0;
-            const character = if (info.column > 0) info.column - 1 else 0;
-            const end_character = diagnosticEndCharacter(text, line, character);
-            try js.beginObject();
-            try js.objectField("range");
-            try writeRange(&js, line, character, line, end_character);
-            try js.objectField("severity");
-            try js.write(1); // Error
-            try js.objectField("source");
-            try js.write("zml");
-            try js.objectField("message");
-            try js.write(info.message);
-            try js.endObject();
+            try writeDiagnostic(&js, text, info, 1); // Error
+        } else {
+            // The a11y lint's warning half only reports on a document
+            // that validates clean, mirroring `native markup check`.
+            var warning_storage: [ui_markup.max_a11y_warnings]ui_markup.MarkupErrorInfo = undefined;
+            for (analyzeWarnings(arena, text, &warning_storage)) |info| {
+                try writeDiagnostic(&js, text, info, 2); // Warning
+            }
         }
         try js.endArray();
         try js.endObject();
         try js.endObject();
         try sendFrame(self.out, body.written());
+    }
+
+    fn writeDiagnostic(js: *std.json.Stringify, text: []const u8, info: ui_markup.MarkupErrorInfo, severity: u8) !void {
+        const line = if (info.line > 0) info.line - 1 else 0;
+        const character = if (info.column > 0) info.column - 1 else 0;
+        const end_character = diagnosticEndCharacter(text, line, character);
+        try js.beginObject();
+        try js.objectField("range");
+        try writeRange(js, line, character, line, end_character);
+        try js.objectField("severity");
+        try js.write(severity);
+        try js.objectField("source");
+        try js.write("zml");
+        try js.objectField("message");
+        try js.write(info.message);
+        try js.endObject();
     }
 
     fn respondCompletion(self: *Server, arena: std.mem.Allocator, id: ?std.json.Value, params: std.json.Value) !void {
@@ -445,6 +458,15 @@ pub fn analyze(arena: std.mem.Allocator, source: []const u8) ?ui_markup.MarkupEr
         error.MarkupSyntax => return parser.diagnostic,
     };
     return ui_markup.validate(document);
+}
+
+/// The a11y lint's warnings for a document that already validates clean
+/// (unnamed images, redundant labels); empty when the source does not
+/// even parse — the error diagnostic owns that turn.
+pub fn analyzeWarnings(arena: std.mem.Allocator, source: []const u8, storage: []ui_markup.MarkupErrorInfo) []const ui_markup.MarkupErrorInfo {
+    var parser = ui_markup.Parser.init(arena, source);
+    const document = parser.parse() catch return storage[0..0];
+    return ui_markup.collectA11yWarnings(document, storage);
 }
 
 /// Byte offset for a 0-based LSP position, clamped to the line's end.
@@ -746,6 +768,36 @@ test "analyze reports parser and validation findings with positions" {
     const misplaced_image = analyze(arena, "<row>\n  <badge image=\"{user_image}\">3</badge>\n</row>").?;
     try testing.expectEqualStrings(ui_markup.avatar_image_element_message, misplaced_image.message);
     try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><avatar image=\"{user_image}\">CT</avatar></row>"));
+
+    // The a11y lint's error half rides analyze (an unnamed control is
+    // announced as an unnamed control - unusable blind).
+    const unnamed_control = analyze(arena, "<row>\n  <checkbox on-toggle=\"select\" />\n</row>").?;
+    try testing.expectEqualStrings(ui_markup.a11y_unlabeled_control_message, unnamed_control.message);
+    try testing.expectEqual(@as(?ui_markup.MarkupErrorInfo, null), analyze(arena, "<row><checkbox label=\"Done\" on-toggle=\"select\" /></row>"));
+}
+
+test "analyzeWarnings reports the a11y lint's warning half at warning positions" {
+    const allocator = testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var storage: [ui_markup.max_a11y_warnings]ui_markup.MarkupErrorInfo = undefined;
+
+    // An unnamed image validates clean but warns; label="" (decorative)
+    // and a real label stay quiet.
+    const unnamed = analyzeWarnings(arena, "<row>\n  <avatar image=\"{photo}\"></avatar>\n</row>", &storage);
+    try testing.expectEqual(@as(usize, 1), unnamed.len);
+    try testing.expectEqualStrings(ui_markup.a11y_unlabeled_image_message, unnamed[0].message);
+    try testing.expectEqual(@as(usize, 2), unnamed[0].line);
+    try testing.expectEqual(@as(usize, 0), analyzeWarnings(arena, "<row><avatar image=\"{photo}\" label=\"\"></avatar></row>", &storage).len);
+
+    // A label duplicating the text it shadows warns at the label.
+    const redundant = analyzeWarnings(arena, "<row>\n  <button label=\"Save\" on-press=\"save\">Save</button>\n</row>", &storage);
+    try testing.expectEqual(@as(usize, 1), redundant.len);
+    try testing.expectEqualStrings(ui_markup.a11y_redundant_label_message, redundant[0].message);
+
+    // Unparseable sources report nothing: the error diagnostic owns it.
+    try testing.expectEqual(@as(usize, 0), analyzeWarnings(arena, "<row", &storage).len);
 }
 
 test "completionContext classifies positions" {

@@ -761,6 +761,40 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = edgeModel();
+    for (0..model_mod.history_len) |_| {
+        apply(&model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
+        apply(&model, .{ .mem_done = .{ .key = model_mod.mem_key, .code = 0, .output = vm_stat_fixture } });
+    }
+    if (builtin.os.tag != .macos) {
+        model.mem_history_len = model_mod.history_len;
+        for (&model.mem_history) |*value| value.* = 0.5;
+    }
+
+    const tree = try buildTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .tokens = main.tokensFromModel(&model),
+        .min_size = geometry.SizeF.init(main.window_min_width, main.window_min_height),
+        .default_size = geometry.SizeF.init(main.window_width, main.window_height),
+    });
+
+    // The settings window, at its fixed size.
+    model.settings_open = true;
+    var ui = Ui.init(arena_state.allocator());
+    const settings = try ui.finalizeWithTokens(view_mod.settingsView(&ui, &model), main.tokensFromModel(&model));
+    const settings_size = geometry.SizeF.init(main.settings_window_width, main.settings_window_height);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, settings.root, .{
+        .tokens = main.tokensFromModel(&model),
+        .min_size = settings_size,
+        .default_size = settings_size,
+        .large_size = settings_size,
+    });
+}
+
 // -------------------------------------------------------------- snapshots
 
 test "automation snapshot names the tiles and drives pause/resume" {

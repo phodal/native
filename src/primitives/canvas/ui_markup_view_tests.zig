@@ -86,7 +86,7 @@ pub const inbox_markup_source =
     \\    <column gap="2">
     \\      <for each="visible" key="id" as="t">
     \\        <row gap="8" padding="6" cross="center">
-    \\          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" />
+    \\          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" label="Done" />
     \\          <text grow="1">{t.title}</text>
     \\        </row>
     \\      </for>
@@ -677,7 +677,7 @@ test "markup buttons take an inline icon with validated names" {
     const arena = arena_state.allocator();
     const model = Model{};
 
-    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"add\">Save</button>\n  <button icon=\"refresh-cw\" on-press=\"add\"></button>\n  <toggle-button icon=\"arrow-up\" on-toggle=\"add\">Newest</toggle-button>\n  <list-item icon=\"folder\" on-press=\"add\">Projects</list-item>\n  <menu-item icon=\"trash\" on-press=\"add\">Delete</menu-item>\n</row>");
+    var view = try InboxMarkup.init(arena, "<row gap=\"8\">\n  <button icon=\"save\" on-press=\"add\">Save</button>\n  <button icon=\"refresh-cw\" label=\"Refresh\" on-press=\"add\"></button>\n  <toggle-button icon=\"arrow-up\" on-toggle=\"add\">Newest</toggle-button>\n  <list-item icon=\"folder\" on-press=\"add\">Projects</list-item>\n  <menu-item icon=\"trash\" on-press=\"add\">Delete</menu-item>\n</row>");
     var ui = InboxUi.init(arena);
     const tree = try ui.finalize(try view.build(&ui, &model));
     const labeled = tree.root.children[0];
@@ -729,7 +729,7 @@ test "markup autofocus binds to focusable controls in both shapes" {
     const arena = arena_state.allocator();
     const model = Model{};
 
-    var view = try InboxMarkup.init(arena, "<column gap=\"8\">\n  <text-field autofocus=\"true\" on-input=\"draft\" />\n  <text-field on-input=\"draft\" />\n</column>");
+    var view = try InboxMarkup.init(arena, "<column gap=\"8\">\n  <text-field autofocus=\"true\" label=\"First\" on-input=\"draft\" />\n  <text-field label=\"Second\" on-input=\"draft\" />\n</column>");
     var ui = InboxUi.init(arena);
     const tree = try ui.finalize(try view.build(&ui, &model));
     try testing.expect(tree.root.children[0].autofocus);
@@ -900,6 +900,47 @@ test "the registry's stacking predicate matches the engine's" {
     // Every listed stack-container name is a known element.
     for (canvas.ui_markup.known_stack_container_element_names) |name| {
         try testing.expect(nameListed(name, &canvas.ui_markup.known_element_names));
+    }
+}
+
+test "the registry's role vocabulary matches the live WidgetRole enum" {
+    // role="..." values resolve through std.meta.stringToEnum on
+    // canvas.WidgetRole; the registry's std-only mirror must list exactly
+    // the same names so the validator and the engines accept identically.
+    const fields = std.meta.fields(canvas.WidgetRole);
+    try testing.expectEqual(fields.len, canvas.ui_markup.schema.role_names.len);
+    inline for (fields) |field| {
+        try testing.expect(nameListed(field.name, &canvas.ui_markup.schema.role_names));
+    }
+    // Container roles are a subset of the vocabulary.
+    for (canvas.ui_markup.schema.container_role_names) |name| {
+        try testing.expect(nameListed(name, &canvas.ui_markup.schema.role_names));
+    }
+}
+
+test "the registry's a11y name classes match the engine's control predicates" {
+    // The lint's element classes are registry data; hold them to the
+    // canvas layer's own predicates so an element the engine treats as
+    // an operable control can never skip the accessible-name lint.
+    for (canvas.ui_markup.known_element_names) |name| {
+        const entry = canvas.ui_markup.schema.elementByName(name).?;
+        const kind = markup_view.elementKind(name).?;
+        // Editable is EXACTLY the text-input kinds plus select (which
+        // announces its placeholder while empty).
+        try testing.expectEqual(
+            canvas.widgetTextInputKind(kind) or kind == .select,
+            entry.a11y_name == .editable,
+        );
+        // Every control-class element is a press-claiming hit target
+        // (the engine's definition of an operable leaf control).
+        if (entry.a11y_name == .control) {
+            try testing.expect(canvas.widgetKindHitTarget(kind));
+            try testing.expect(canvas.widgetKindClaimsPress(kind));
+        }
+        // Image-class elements are announced under the image role.
+        if (entry.a11y_name == .image) {
+            try testing.expectEqual(canvas.WidgetKind.avatar, kind);
+        }
     }
 }
 
@@ -1477,7 +1518,7 @@ pub const catalog_markup_source =
     \\    <combobox text="{query}" placeholder="Search fruit" on-input="query_edit" />
     \\  </row>
     \\  <radio-group gap="4">
-    \\    <radio checked="{bold}" on-toggle="toggle_bold" />
+    \\    <radio checked="{bold}" on-toggle="toggle_bold" label="Bold" />
     \\  </radio-group>
     \\  <accordion text="Details" selected="{details_open}" on-toggle="toggle_details" padding="8">
     \\    <text>More info</text>

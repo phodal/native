@@ -93,7 +93,10 @@ fn nearestSemanticParent(stack: []const ?usize) ?usize {
     return null;
 }
 
-fn semanticRole(widget: Widget) WidgetRole {
+/// The role a widget is exposed under: an explicit `semantics.role`, or
+/// the kind's default. Shared with the a11y audit (a11y_audit.zig), which
+/// must judge widgets by the role the bridges will actually announce.
+pub fn semanticRole(widget: Widget) WidgetRole {
     if (widget.semantics.role != .none) return widget.semantics.role;
     return switch (widget.kind) {
         .stack, .row, .column, .grid, .scroll_view, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group, .accordion, .bubble, .resizable, .alert, .card, .panel => .group,
@@ -127,7 +130,9 @@ fn semanticRole(widget: Widget) WidgetRole {
     };
 }
 
-fn semanticLabel(widget: Widget) []const u8 {
+/// The label a widget is announced under: an explicit `semantics.label`,
+/// falling back to the widget's text. Shared with the a11y audit.
+pub fn semanticLabel(widget: Widget) []const u8 {
     if (widget.semantics.label.len > 0) return widget.semantics.label;
     return widget.text;
 }

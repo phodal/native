@@ -486,9 +486,17 @@ Semantics: role `chart`, a generated series summary as the label (`"chart: stars
 
 Charts are Zig-only in v1: markup's scalar bindings cannot carry series arrays (the same closed-grammar constraint as select options), so chart panes are Zig views composed into markup apps the usual way.
 
+## Accessibility
+
+Every interactive element needs an accessible name — the text a screen reader announces and automation snapshots address widgets by. Name sources are the element's text content, the `text` attribute, or `label="..."`; text-entry controls take `label` or `placeholder` (the accessibility bridges announce the placeholder as the fallback name).
+
+This is a machine check, not a review item. An unnamed control, an icon-only control without a label (the icon name is a drawing instruction, not a label), or a misused role (`role="tree"` on an element that can never hold rows) is a validation error in `native markup check`, both view engines, and the LSP — the rubric is whether a screen reader user is fully blocked. Unnamed images and labels that duplicate the text they shadow degrade rather than block, so they report as warnings (`--strict` promotes them); the explicit `label=""` marks an image decorative on purpose.
+
+Zig-built views get the same discipline at tree level: `canvas.expectA11yAuditSweepClean` lays out the real tree and reports interactive widgets announced with no name (including dynamic labels that resolve empty at runtime), focusable widgets keyboard traversal can never reach, and identically labeled sibling controls — adopt it in your test suite next to `canvas.expectLayoutAuditSweepClean`. Contrast checking and focus-visible styling checks are not part of the audit yet.
+
 ## Tooling
 
-- `native markup check src/app.zml` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon or plain words). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds.
+- `native markup check src/app.zml` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon or plain words). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds. Accessibility findings ride the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (see [Accessibility](#accessibility)).
 - `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/zml/` in the repo for VS Code, Helix, and Neovim setup).
 - The automation harness drives widgets and reads accessibility snapshots and screenshots headlessly — see [Automation](/automation).
 

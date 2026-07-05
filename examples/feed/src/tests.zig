@@ -280,6 +280,31 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     }
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{ .loaded = main.max_posts };
+    // Same windowed-virtual discipline as the layout sweep: each swept
+    // size audits a tree built at exactly that viewport, deep in the
+    // corpus so the labels are the real six-digit ones.
+    const sizes = [_]geometry.SizeF{
+        geometry.SizeF.init(main.window_min_width, main.window_min_height),
+        geometry.SizeF.init(main.window_width, main.window_height),
+        geometry.SizeF.init(main.window_width * 1.5, main.window_height * 1.5),
+    };
+    for (sizes) |size| {
+        const tree = try buildTreeAt(arena_state.allocator(), &model, 99_900 * main.post_row_extent, size.height);
+        try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+            .tokens = main.feedTokens(&model),
+            .min_size = size,
+            .default_size = size,
+            .large_size = size,
+        });
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
 test "widget_nodes stays viewport-sized at the full 100k corpus while the scrollbar spans it" {
     var h = try Harness.create(.{ .loaded = main.max_posts });
     defer h.destroy();

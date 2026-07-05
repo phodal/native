@@ -233,6 +233,19 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    const tree = try buildTree(arena_state.allocator(), &model);
+    const floor = native_sdk.geometry.SizeF.init(main.window_min_width, main.window_min_height);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .min_size = floor,
+        .default_size = floor,
+    });
+}
+
 test "the templated board keeps the pre-template widget ids exactly" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

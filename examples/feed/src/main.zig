@@ -292,7 +292,11 @@ fn postRow(ui: *FeedUi, model: *const Model, index: usize) FeedUi.Node {
         .padding = 12,
         .selected = model.selected != null and model.selected.? == index,
         .on_press = Msg{ .select_post = index },
-        .semantics = .{ .role = .listitem, .label = post.author, .focusable = true },
+        // The label carries the post identity, not just the author:
+        // authors repeat across the timeline, and a screen reader needs
+        // adjacent rows to announce differently (the a11y audit's
+        // duplicate-sibling-label rule holds this honest).
+        .semantics = .{ .role = .listitem, .label = ui.fmt("Post {d} by {s}", .{ index, post.author }), .focusable = true },
     }, .{
         ui.row(.{ .gap = 10 }, .{
             ui.avatar(.{ .width = 36, .height = 36 }, post.initials),

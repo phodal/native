@@ -252,6 +252,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 }
                 if (pane_count != 2) return self.failNode(node, markup.split_children_message);
             }
+            // The a11y lint's error half: an unnamed interactive control
+            // or a misused role ships a view a screen reader user cannot
+            // operate, so it fails the build like any other markup
+            // mistake. Mirrors the validator and the compiled engine's
+            // compile error.
+            if (markup.a11yNameError(node)) |message| {
+                return self.failNode(node, message);
+            }
+            if (markup.a11yRoleError(node)) |message| {
+                return self.failNode(node, message);
+            }
             var options: Ui.ElementOptions = .{};
             try self.applyAttrs(scope, node, &options);
 

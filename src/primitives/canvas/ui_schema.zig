@@ -133,6 +133,26 @@ pub const EventInfo = struct {
     dead_on_non_hit_target: bool = false,
 };
 
+/// How the accessible-name lint treats an element. The rubric is whether
+/// a screen reader user is FULLY BLOCKED without the name:
+/// - `control`: an interactive control announced with no name at all
+///   cannot be operated blind — a missing name is an ERROR. Name sources:
+///   nonblank text content, a nonblank `text` attribute, or `label`.
+/// - `editable`: text-entry controls, plus `select` (which shows its
+///   placeholder while empty). The accessibility bridges announce the
+///   placeholder as the fallback name, so missing BOTH label and
+///   placeholder is the ERROR.
+/// - `image`: pictorial content. An unnamed image degrades (announced as
+///   an unnamed image) but does not block, so a missing alt-equivalent
+///   label is a WARNING; an explicit `label=""` marks it decorative.
+/// - `none`: layout, decoration, and content whose name IS its text.
+pub const A11yNameRule = enum {
+    none,
+    control,
+    editable,
+    image,
+};
+
 pub const ElementInfo = struct {
     /// Stable code, assigned at birth, never reused. Nonzero.
     code: u16,
@@ -162,6 +182,11 @@ pub const ElementInfo = struct {
     /// Its `icon` attribute draws an inline vector icon as part of the
     /// element's own rendering (one hit target, one tint).
     icon_attr: bool = false,
+    /// What the accessible-name lint requires of this element (see
+    /// `A11yNameRule` for the error/warning rubric). Conformance-tested
+    /// against the canvas layer's control predicates so an element the
+    /// engine treats as an operable control can never skip the lint.
+    a11y_name: A11yNameRule = .none,
     /// Named bespoke validation rule for composite elements. The rule's
     /// existence and attachment are registry data; the rule itself stays
     /// code in ui_markup.zig, dispatched by this name.
@@ -208,27 +233,27 @@ pub const elements = [_]ElementInfo{
     // Text-bearing leaves (label is the element content).
     .{ .code = 27, .name = "text", .widget_kind = "text", .takes_text = true },
     .{ .code = 28, .name = "badge", .widget_kind = "badge", .takes_text = true, .hit_target = false, .icon_attr = true },
-    .{ .code = 29, .name = "button", .widget_kind = "button", .takes_text = true, .icon_attr = true },
-    .{ .code = 30, .name = "toggle", .widget_kind = "toggle", .takes_text = true },
-    .{ .code = 31, .name = "list-item", .widget_kind = "list_item", .takes_text = true, .icon_attr = true },
-    .{ .code = 32, .name = "menu-item", .widget_kind = "menu_item", .takes_text = true, .icon_attr = true },
+    .{ .code = 29, .name = "button", .widget_kind = "button", .takes_text = true, .icon_attr = true, .a11y_name = .control },
+    .{ .code = 30, .name = "toggle", .widget_kind = "toggle", .takes_text = true, .a11y_name = .control },
+    .{ .code = 31, .name = "list-item", .widget_kind = "list_item", .takes_text = true, .icon_attr = true, .a11y_name = .control },
+    .{ .code = 32, .name = "menu-item", .widget_kind = "menu_item", .takes_text = true, .icon_attr = true, .a11y_name = .control },
     .{ .code = 33, .name = "status-bar", .widget_kind = "status_bar", .takes_text = true },
-    .{ .code = 34, .name = "avatar", .widget_kind = "avatar", .takes_text = true, .hit_target = false },
-    .{ .code = 35, .name = "select", .widget_kind = "select", .takes_text = true },
-    .{ .code = 36, .name = "switch", .widget_kind = "switch_control", .takes_text = true },
+    .{ .code = 34, .name = "avatar", .widget_kind = "avatar", .takes_text = true, .hit_target = false, .a11y_name = .image },
+    .{ .code = 35, .name = "select", .widget_kind = "select", .takes_text = true, .a11y_name = .editable },
+    .{ .code = 36, .name = "switch", .widget_kind = "switch_control", .takes_text = true, .a11y_name = .control },
     .{ .code = 37, .name = "table-cell", .widget_kind = "data_cell", .takes_text = true },
-    .{ .code = 38, .name = "toggle-button", .widget_kind = "toggle_button", .takes_text = true, .icon_attr = true },
+    .{ .code = 38, .name = "toggle-button", .widget_kind = "toggle_button", .takes_text = true, .icon_attr = true, .a11y_name = .control },
     .{ .code = 39, .name = "tooltip", .widget_kind = "tooltip", .takes_text = true, .hit_target = false },
     // Value controls and text entry.
-    .{ .code = 40, .name = "checkbox", .widget_kind = "checkbox" },
-    .{ .code = 41, .name = "radio", .widget_kind = "radio" },
-    .{ .code = 42, .name = "slider", .widget_kind = "slider" },
+    .{ .code = 40, .name = "checkbox", .widget_kind = "checkbox", .a11y_name = .control },
+    .{ .code = 41, .name = "radio", .widget_kind = "radio", .a11y_name = .control },
+    .{ .code = 42, .name = "slider", .widget_kind = "slider", .a11y_name = .control },
     .{ .code = 43, .name = "progress", .widget_kind = "progress" },
-    .{ .code = 44, .name = "text-field", .widget_kind = "text_field" },
-    .{ .code = 45, .name = "search-field", .widget_kind = "search_field" },
-    .{ .code = 46, .name = "textarea", .widget_kind = "textarea" },
-    .{ .code = 47, .name = "input", .widget_kind = "input" },
-    .{ .code = 48, .name = "combobox", .widget_kind = "combobox" },
+    .{ .code = 44, .name = "text-field", .widget_kind = "text_field", .a11y_name = .editable },
+    .{ .code = 45, .name = "search-field", .widget_kind = "search_field", .a11y_name = .editable },
+    .{ .code = 46, .name = "textarea", .widget_kind = "textarea", .a11y_name = .editable },
+    .{ .code = 47, .name = "input", .widget_kind = "input", .a11y_name = .editable },
+    .{ .code = 48, .name = "combobox", .widget_kind = "combobox", .a11y_name = .editable },
     // Plain leaves.
     .{ .code = 49, .name = "separator", .widget_kind = "separator", .hit_target = false },
     .{ .code = 50, .name = "spacer", .widget_kind = "stack", .hit_target = false, .stacks_children = true },
@@ -361,6 +386,37 @@ pub const icon_names = [_][]const u8{
     "send",        "settings",      "shuffle",      "skip-back",        "skip-forward",
     "sun",         "trash",         "volume",       "x",                "x-circle",
 };
+
+/// The semantic role vocabulary the `role` attribute accepts: the field
+/// names of `canvas.WidgetRole`, mirrored as data here (this module stays
+/// std-only) with a lockstep test in ui_markup_view_tests.zig holding the
+/// mirror equal to the live enum.
+pub const role_names = [_][]const u8{
+    "none",     "group",    "text",     "link",           "image",
+    "button",   "textbox",  "tooltip",  "dialog",         "menu",
+    "menuitem", "list",     "listitem", "row",            "grid",
+    "gridcell", "tab",      "checkbox", "radio",          "switch_control",
+    "slider",   "progressbar", "chart", "tree",           "treeitem",
+    "separator",
+};
+
+/// Roles that promise CHILD STRUCTURE to assistive tech (rows, items,
+/// cells, dialog content). Stamping one on an element that provably
+/// cannot hold element children (see `elementHoldsChildren`) is role
+/// misuse the registry can see: the promise can never be kept.
+pub const container_role_names = [_][]const u8{
+    "tree", "list", "menu", "grid", "row", "dialog",
+};
+
+/// Whether markup can put element children inside this element: text
+/// leaves hold a single text run and the icon leaf holds nothing (both
+/// enforced by the validator), so a container role there is provably
+/// misuse. Other leaves (separator, value controls) structurally accept
+/// children, so the lint stays quiet about them.
+pub fn elementHoldsChildren(entry: *const ElementInfo) bool {
+    if (entry.takes_text) return false;
+    return !std.mem.eql(u8, entry.name, "icon");
+}
 
 // ---------------------------------------------------------------- lookups
 

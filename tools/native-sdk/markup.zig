@@ -92,6 +92,7 @@ pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []con
             continue;
         };
         if (checked.had_view) views_checked += 1;
+        outcome.warnings += checked.warnings;
     }
     if (contract_value != null) outcome.contract_checked = true;
 
@@ -234,6 +235,7 @@ const FileCheckContext = struct {
 
 const FileCheckResult = struct {
     had_view: bool = false,
+    warnings: usize = 0,
 };
 
 fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8, context: FileCheckContext) !FileCheckResult {
@@ -303,8 +305,17 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8, co
             return error.MarkupInvalid;
         }
     }
+    // The a11y lint's warning half (unnamed images, redundant labels):
+    // the view degrades but stays operable, so these report without
+    // failing the file; --strict promotes them like every warning.
+    var warning_storage: [ui_markup.max_a11y_warnings]ui_markup.MarkupErrorInfo = undefined;
+    const a11y_warnings = ui_markup.collectA11yWarnings(document, &warning_storage);
+    for (a11y_warnings) |info| {
+        const info_path = if (info.path.len > 0) info.path else file_path;
+        std.debug.print("{s}:{d}:{d}: warning: {s}\n", .{ info_path, info.line, info.column, info.message });
+    }
     std.debug.print("{s}: ok\n", .{file_path});
-    return .{ .had_view = document.root != null };
+    return .{ .had_view = document.root != null, .warnings = a11y_warnings.len };
 }
 
 /// Import loading for the checker: resolver paths are already joined
@@ -436,7 +447,7 @@ fn printStaleBinaryHint(message: []const u8) void {
     if (!vocabulary_miss) return;
     std.debug.print(
         "       (if this syntax is newer than this binary, your `native` binary may be\n" ++
-            "        stale - rebuild it from the current framework checkout and compare\n" ++
+            "        stale - rebuild it from the current toolkit checkout and compare\n" ++
             "        `native version`)\n",
         .{},
     );
@@ -479,9 +490,12 @@ fn usage() void {
         \\check: parses and validates markup views: grammar, expression forms,
         \\elements, attributes, structure tags, imports (checking a view
         \\follows its <import> closure; a file that is all templates is a
-        \\valid component file), and font coverage (literal text outside the
+        \\valid component file), font coverage (literal text outside the
         \\bundled face renders as tofu boxes on reference paths - the error
-        \\names the character; use icons or plain words).
+        \\names the character; use icons or plain words), and accessibility
+        \\(unnamed interactive controls, icon-only controls without labels,
+        \\and role misuse are errors - a screen reader user is blocked;
+        \\unnamed images and redundant labels are warnings).
         \\
         \\Inside an app directory with a fresh zig-out/model-contract.zon
         \\(emit it with `zig build model-contract`), the check also verifies

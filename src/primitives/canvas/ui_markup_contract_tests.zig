@@ -149,9 +149,9 @@ const fixtures = [_]Fixture{
         \\  </if>
         \\  <for each="cards" key="id" as="c">
         \\    <row>
-        \\      <checkbox checked="{c.done}" on-toggle="remove:{c.id}" />
+        \\      <checkbox checked="{c.done}" on-toggle="remove:{c.id}" label="Done" />
         \\      <text>{c.label} {c.badge}</text>
-        \\      <slider value="{c.weight}" on-change="scale:{c.weight}" />
+        \\      <slider value="{c.weight}" on-change="scale:{c.weight}" label="Weight" />
         \\    </row>
         \\  </for>
         \\  <for each="visible" as="v">
@@ -292,7 +292,7 @@ const fixtures = [_]Fixture{
         .name = "on-input on a non-TextInputEvent tag rejects",
         .source =
         \\<column>
-        \\  <text-field on-input="add" />
+        \\  <text-field label="Title" on-input="add" />
         \\</column>
         ,
         .expect = "on-input tag must carry a TextInputEvent payload",

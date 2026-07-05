@@ -345,6 +345,20 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var clock = native_sdk.TestClock{};
+    var model = model_mod.initialModel(testClock(&clock));
+    const tree = try buildTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .tokens = main.notesTokens(&model),
+        .min_size = geometry.SizeF.init(main.window_min_width, main.window_min_height),
+        .default_size = geometry.SizeF.init(main.window_width, main.window_height),
+    });
+}
+
 test "the idle editor pane shows the keyboard reference" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

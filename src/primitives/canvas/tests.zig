@@ -22,4 +22,5 @@ test {
     _ = @import("markdown_tests.zig");
     _ = @import("markdown_hostile_tests.zig");
     _ = @import("layout_audit_tests.zig");
+    _ = @import("a11y_audit_tests.zig");
 }

@@ -14,7 +14,7 @@
       <!-- Clearing is the search field's own affordance: the built-in
            trailing x (and Escape) clear through the standard edit path. -->
       <search-field text="{search}" placeholder="Search all notes…" width="300" on-input="search_edit" label="Search notes" />
-      <button variant="primary" icon="plus" on-press="new_note" label="New note">New note</button>
+      <button variant="primary" icon="plus" on-press="new_note">New note</button>
     </row>
     <separator />
     <!-- Nested splitters: the outer seam resizes the folder sidebar, the

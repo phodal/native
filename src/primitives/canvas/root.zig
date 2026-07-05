@@ -542,6 +542,7 @@ pub const staticTextOffsetForWidgetPoint = @import("widget_text_select.zig").sta
 pub const staticTextSelectionRects = @import("widget_text_select.zig").staticTextSelectionRects;
 pub const max_static_text_layout_lines = @import("widget_text_select.zig").max_static_text_layout_lines;
 pub const widgetSelectableTextKind = @import("widget_access.zig").widgetSelectableTextKind;
+pub const widgetTextInputKind = @import("widget_access.zig").widgetTextInputKind;
 pub const widgetTextSelectionRange = @import("widget_access.zig").widgetTextSelectionRange;
 pub const textInputViewportForWidget = widget_runtime.textInputViewportForWidget;
 pub const textInputClearButtonRect = widget_runtime.textInputClearButtonRect;
@@ -619,6 +620,15 @@ pub const max_layout_audit_findings = @import("layout_audit.zig").max_layout_aud
 pub const max_layout_audit_nodes = @import("layout_audit.zig").max_layout_audit_nodes;
 pub const layout_audit_epsilon = @import("layout_audit.zig").layout_audit_epsilon;
 pub const pseudo_locale_text_expansion = @import("layout_audit.zig").pseudo_locale_text_expansion;
+/// The accessibility audit (a11y_audit.zig): a machine pass over a built
+/// widget tree that reports interactive widgets announced with no name,
+/// focusable widgets keyboard traversal can never reach, and identically
+/// labeled sibling controls — the tree-level half of the a11y checks
+/// (the markup lint in ui_markup.zig is the source-level half). The
+/// sweep helper (`canvas.a11y.expectA11yAuditSweepClean`, re-exported
+/// below) is adopted by the example suites like the layout audit's.
+pub const a11y = @import("a11y_audit.zig");
+pub const expectA11yAuditSweepClean = a11y.expectA11yAuditSweepClean;
 /// Minimum pointer hit-target register (tokens.zig): the floor the layout
 /// audit's `hit_target` rule scales per widget size and density.
 pub const min_pointer_hit_target = @import("tokens.zig").min_pointer_hit_target;

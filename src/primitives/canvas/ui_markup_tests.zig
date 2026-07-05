@@ -19,7 +19,7 @@ const inbox_source =
     \\    <column gap="2">
     \\      <for each="visible" key="id" as="t">
     \\        <row gap="8" padding="6" cross="center" global-key="{t.id}">
-    \\          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" />
+    \\          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" label="Done" />
     \\          <text grow="1">{t.title}</text>
     \\        </row>
     \\      </for>
@@ -303,7 +303,7 @@ test "structural validation reports positions for grammar misuse" {
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try button_icon_parser.parse()));
 
     // Autofocus on focusable controls: literal or bound.
-    const autofocus_source = "<column gap=\"8\">\n  <text-field autofocus=\"true\" on-input=\"edit\" />\n  <textarea autofocus=\"{editing}\" on-input=\"edit\" />\n</column>";
+    const autofocus_source = "<column gap=\"8\">\n  <text-field autofocus=\"true\" label=\"Title\" on-input=\"edit\" />\n  <textarea autofocus=\"{editing}\" label=\"Body\" on-input=\"edit\" />\n</column>";
     var autofocus_parser = markup.Parser.init(arena_state.allocator(), autofocus_source);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try autofocus_parser.parse()));
 
@@ -455,6 +455,130 @@ test "a dead handler on a non-hit-target element reports the attribute position"
     const fixed = "<column>\n  <row gap=\"8\">\n    <checkbox on-change=\"select\">press me</checkbox>\n  </row>\n</column>";
     var fixed_parser = markup.Parser.init(arena_state.allocator(), fixed);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try fixed_parser.parse()));
+}
+
+test "the a11y lint: unnamed controls, icon-only controls, and unnamed text entry are errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // A control with no name anywhere is announced as an unnamed
+        // control - unusable blind.
+        .{ .source = "<row>\n  <checkbox on-toggle=\"select\" />\n</row>", .message = markup.a11y_unlabeled_control_message },
+        .{ .source = "<row>\n  <slider value=\"0.5\" on-change=\"scale\" />\n</row>", .message = markup.a11y_unlabeled_control_message },
+        // The icon name is a drawing instruction, not a label.
+        .{ .source = "<row>\n  <button icon=\"trash\" on-press=\"remove\"></button>\n</row>", .message = markup.a11y_icon_only_message },
+        // Text entry needs a label or a placeholder; a bound VALUE is
+        // not a name (hearing the content does not say what to type).
+        .{ .source = "<row>\n  <text-field on-input=\"draft\" />\n</row>", .message = markup.a11y_unlabeled_editable_message },
+        .{ .source = "<row>\n  <input text=\"{query}\" on-input=\"draft\" />\n</row>", .message = markup.a11y_unlabeled_editable_message },
+        // A blank label is not a name on a control (unlike an image,
+        // where the empty label is the decorative opt-out).
+        .{ .source = "<row>\n  <checkbox label=\" \" on-toggle=\"select\" />\n</row>", .message = markup.a11y_unlabeled_control_message },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+    }
+
+    // Every sanctioned name source validates clean: text content, the
+    // text attribute, a label (literal or binding), a placeholder, and
+    // select's face content.
+    const clean = [_][]const u8{
+        "<row>\n  <checkbox on-toggle=\"select\">Done</checkbox>\n</row>",
+        "<row>\n  <checkbox text=\"Done\" on-toggle=\"select\" />\n</row>",
+        "<row>\n  <checkbox label=\"Done\" on-toggle=\"select\" />\n</row>",
+        "<row>\n  <button icon=\"trash\" label=\"Delete\" on-press=\"remove\"></button>\n</row>",
+        "<row>\n  <button icon=\"save\" on-press=\"save\">Save</button>\n</row>",
+        "<row>\n  <checkbox label=\"{item.title}\" on-toggle=\"select\" />\n</row>",
+        "<row>\n  <text-field placeholder=\"New task\" on-input=\"draft\" />\n</row>",
+        "<row>\n  <textarea label=\"Body\" on-input=\"draft\" />\n</row>",
+        "<row>\n  <select on-press=\"open\">Newest first</select>\n</row>",
+        "<row>\n  <select text=\"{choice}\" on-press=\"open\"/>\n</row>",
+    };
+    for (clean) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+}
+
+test "the a11y lint: unknown literal roles and container roles on childless elements are errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const unknown = "<row>\n  <button role=\"pushbutton\" on-press=\"add\">Add</button>\n</row>";
+    var unknown_parser = markup.Parser.init(arena, unknown);
+    const unknown_info = markup.validate(try unknown_parser.parse()) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(markup.a11y_unknown_role_message, unknown_info.message);
+    // The diagnostic points at the role attribute.
+    try testing.expectEqual(@as(usize, 2), unknown_info.line);
+
+    // role="tree" promises rows a text leaf can never hold.
+    const misuse = "<row>\n  <button role=\"tree\" on-press=\"add\">Add</button>\n</row>";
+    var misuse_parser = markup.Parser.init(arena, misuse);
+    const misuse_info = markup.validate(try misuse_parser.parse()) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings(markup.a11y_container_role_message, misuse_info.message);
+
+    // The same container roles are fine on containers, treeitem is fine
+    // on a pressable row, and a dynamic role resolves at runtime.
+    const clean = [_][]const u8{
+        "<column role=\"tree\">\n  <row role=\"treeitem\" on-press=\"pick\"><text>Docs</text></row>\n</column>",
+        "<row>\n  <button role=\"{item.role}\" on-press=\"add\">Add</button>\n</row>",
+    };
+    for (clean) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+}
+
+test "the a11y lint: unnamed images and redundant labels are warnings, not errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var storage: [markup.max_a11y_warnings]markup.MarkupErrorInfo = undefined;
+
+    // An unnamed avatar validates (degraded, not blocked) and warns.
+    const unnamed = "<row>\n  <avatar image=\"{photo}\"></avatar>\n</row>";
+    var unnamed_parser = markup.Parser.init(arena, unnamed);
+    const unnamed_doc = try unnamed_parser.parse();
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(unnamed_doc));
+    const unnamed_warnings = markup.collectA11yWarnings(unnamed_doc, &storage);
+    try testing.expectEqual(@as(usize, 1), unnamed_warnings.len);
+    try testing.expectEqualStrings(markup.a11y_unlabeled_image_message, unnamed_warnings[0].message);
+    try testing.expectEqual(@as(usize, 2), unnamed_warnings[0].line);
+
+    // label="" is the explicit decorative opt-out; initials or a real
+    // label also clear it.
+    const clean = [_][]const u8{
+        "<row>\n  <avatar image=\"{photo}\" label=\"\"></avatar>\n</row>",
+        "<row>\n  <avatar image=\"{photo}\" label=\"Octocat\"></avatar>\n</row>",
+        "<row>\n  <avatar>CT</avatar>\n</row>",
+    };
+    for (clean) |source| {
+        var parser = markup.Parser.init(arena, source);
+        const document = try parser.parse();
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+        try testing.expectEqual(@as(usize, 0), markup.collectA11yWarnings(document, &storage).len);
+    }
+
+    // A label duplicating the text it shadows warns at the label.
+    const redundant = "<row>\n  <button label=\"Save\" on-press=\"save\">Save</button>\n</row>";
+    var redundant_parser = markup.Parser.init(arena, redundant);
+    const redundant_doc = try redundant_parser.parse();
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(redundant_doc));
+    const redundant_warnings = markup.collectA11yWarnings(redundant_doc, &storage);
+    try testing.expectEqual(@as(usize, 1), redundant_warnings.len);
+    try testing.expectEqualStrings(markup.a11y_redundant_label_message, redundant_warnings[0].message);
+
+    // A label that ADDS information (differs from the text) is the
+    // sanctioned shape and stays quiet.
+    const adds = "<row>\n  <button label=\"Save the draft\" on-press=\"save\">Save</button>\n</row>";
+    var adds_parser = markup.Parser.init(arena, adds);
+    const adds_doc = try adds_parser.parse();
+    try testing.expectEqual(@as(usize, 0), markup.collectA11yWarnings(adds_doc, &storage).len);
 }
 
 test "press and toggle handlers are legal on layout elements (press fall-through makes them pressable)" {

@@ -654,6 +654,25 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
     });
 }
 
+test "a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    // The same live state the layout sweep audits: a real expression and
+    // result, so dynamic labels are the ones assistive tech would hear.
+    var model = Model{};
+    const h = PressHarness{ .arena = arena_state.allocator(), .model = &model };
+    try h.presses(&.{ "1", "2", "8", "×", "9", "6", "=" });
+
+    const tree = try buildTree(arena_state.allocator(), &model);
+    try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+        .tokens = main.tokensFromModel(&model),
+        .min_size = surface_size,
+        .default_size = surface_size,
+        .large_size = surface_size,
+    });
+}
+
 // ------------------------------------------------------------- snapshots
 
 test "automation snapshot names every key and mirrors the display" {

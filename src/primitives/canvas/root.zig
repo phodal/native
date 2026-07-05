@@ -419,6 +419,10 @@ pub const plan_key_index = @import("plan_key_index.zig");
 // `ui_markup_compiled.zig` (comptime parse: the release engine, no parser in
 // the binary).
 pub const ui_markup = @import("ui_markup.zig");
+/// Widget provenance (write-back's read half): structural id -> authored
+/// markup, plus the minimal-diff edit ops tooling applies to it.
+pub const ui_provenance = @import("ui_provenance.zig");
+pub const ui_markup_edit = @import("ui_markup_edit.zig");
 pub const MarkupView = @import("ui_markup_view.zig").MarkupView;
 pub const MarkupBuildDiagnostic = @import("ui_markup_view.zig").BuildDiagnostic;
 pub const CompiledMarkupView = @import("ui_markup_compiled.zig").CompiledMarkupView;

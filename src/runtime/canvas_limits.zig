@@ -221,6 +221,27 @@ pub const max_canvas_widget_autofocus_per_view: usize = 16;
 /// instead of degrading the frame budget.
 pub const max_canvas_widget_spinner_animations_per_view: usize = 8;
 
+// Widget provenance (write-back's read half; `UiApp` retains it only in
+// markup-interpreter builds, and only fills it when automation is on).
+// One record per markup-authored widget of the main canvas view, so the
+// cap mirrors the layout node budget -- layout rejects a deeper tree
+// before the provenance pool can saturate, which a lockstep test pins.
+pub const max_canvas_widget_provenance_records_per_view: usize = max_canvas_widget_nodes_per_view;
+// Source files a provenance table can name: the markup root plus the
+// import-closure cap (`canvas.ui_markup.max_imported_files`).
+pub const max_canvas_widget_provenance_files: usize = 33;
+// Per-entry path storage: `canvas.ui_markup.max_import_path_len` plus
+// headroom for the watch-path prefix the app joins on.
+pub const max_canvas_widget_provenance_path_bytes: usize = 240;
+// Template instantiation chain depth a record reports (outermost use
+// sites first). Deeper chains truncate the REPORT, never identity: four
+// levels names the whole chain for every real component tree while
+// keeping the record small enough to retain per widget.
+pub const max_canvas_widget_provenance_chain: usize = 4;
+// Rendered iteration-key text per record ("card-12/3"): keys beyond
+// this truncate with an honest marker in the record.
+pub const max_canvas_widget_provenance_key_bytes: usize = 48;
+
 // Model-declared secondary windows per `UiApp` (`Options.windows_fn`
 // descriptors — settings, about, inspectors), on top of the scene's main
 // window. Sized for the dev-2-class desktop shape: one settings window,

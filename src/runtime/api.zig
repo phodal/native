@@ -201,6 +201,17 @@ pub const WindowClosedEvent = struct {
     label: []const u8,
 };
 
+/// An automation `provenance` query for a live widget: the runtime has
+/// already resolved the view and (for point queries) hit-tested the
+/// widget id; the app that authored the view answers from its retained
+/// provenance table and publishes the response through the automation
+/// server. Slices are valid for the synchronous dispatch only.
+pub const AutomationProvenanceEvent = struct {
+    window_id: platform.WindowId,
+    view_label: []const u8,
+    widget_id: u64,
+};
+
 pub const InvalidationReason = enum {
     startup,
     surface_resize,
@@ -240,6 +251,7 @@ pub const Event = union(enum) {
     canvas_widget_context_press: CanvasWidgetContextPressEvent,
     canvas_widget_resize: CanvasWidgetResizeEvent,
     window_closed: WindowClosedEvent,
+    automation_provenance: AutomationProvenanceEvent,
 
     pub fn name(self: Event) []const u8 {
         return switch (self) {
@@ -263,6 +275,7 @@ pub const Event = union(enum) {
             .canvas_widget_context_press => "canvas_widget_context_press",
             .canvas_widget_resize => "canvas_widget_resize",
             .window_closed => "window_closed",
+            .automation_provenance => "automation_provenance",
         };
     }
 };

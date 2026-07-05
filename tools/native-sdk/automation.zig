@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("automation_protocol");
+const ui_markup = @import("ui_markup");
 
 const automation_dir = protocol.default_dir;
 
@@ -115,10 +116,218 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ_map: *std.process.E
         deleteAutomationFile(io, "bridge-response.txt");
         try sendCommand(allocator, io, "bridge", args[1]);
         try waitForFile(allocator, io, "bridge-response.txt", "", .any_publisher);
+    } else if (std.mem.eql(u8, command, "provenance")) {
+        // `provenance <view-label> <widget-id>` or
+        // `provenance <view-label> at <x> <y>`.
+        if (args.len != 3 and !(args.len == 5 and std.mem.eql(u8, args[2], "at"))) return usage();
+        const value = try std.mem.join(allocator, " ", args[1..]);
+        defer allocator.free(value);
+        deleteAutomationFile(io, "provenance.txt");
+        try sendCommand(allocator, io, "provenance", value);
+        try waitForFile(allocator, io, "provenance.txt", "", .any_publisher);
+    } else if (std.mem.eql(u8, command, "edit")) {
+        try runEdit(allocator, io, args[1..]);
     } else {
         return usage();
     }
 }
+
+// ------------------------------------------------------------- write-back
+
+/// `edit <view-label> <widget-id> <set-attr|remove-attr|set-text> ...`:
+/// apply one minimal-diff edit operation to the markup file backing a
+/// RUNNING widget. The flow is provenance -> refusal ladder -> checked
+/// span edit -> whole-closure validation -> file write; the app's own
+/// hot-reload watch then picks the change up (no reload command needed).
+/// Refusals never touch the file: a Zig-authored widget, a file that
+/// changed since the app loaded it, or an edit that fails validation all
+/// stop with a teaching error.
+fn runEdit(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
+    if (args.len < 4) return usage();
+    const view_label = args[0];
+    const widget_id = args[1];
+    const op_name = args[2];
+    var op: ui_markup.edit.EditOp = undefined;
+    if (std.mem.eql(u8, op_name, "set-attr")) {
+        if (args.len != 5) return usage();
+        op = .{ .set_attr = .{ .name = args[3], .value = args[4] } };
+    } else if (std.mem.eql(u8, op_name, "remove-attr")) {
+        if (args.len != 4) return usage();
+        op = .{ .remove_attr = .{ .name = args[3] } };
+    } else if (std.mem.eql(u8, op_name, "set-text")) {
+        const text = try std.mem.join(allocator, " ", args[3..]);
+        // Leaked into the arena's lifetime below via the op; freed with
+        // the arena at function end.
+        op = .{ .set_text = .{ .text = text } };
+    } else {
+        return usage();
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // 1. Provenance: where the running app says this widget was authored.
+    const query = try std.fmt.allocPrint(arena, "{s} {s}", .{ view_label, widget_id });
+    deleteAutomationFile(io, "provenance.txt");
+    try sendCommand(allocator, io, "provenance", query);
+    try waitForFileQuietly(allocator, io, "provenance.txt");
+    var response_path: [256]u8 = undefined;
+    const response = try readFile(arena, io, path(&response_path, "provenance.txt"));
+
+    if (std.mem.startsWith(u8, response, "provenance error")) {
+        return failEdit(response);
+    }
+    if (responseField(response, "authored=")) |authored| {
+        if (!std.mem.eql(u8, authored, "markup")) return failEdit(response);
+    } else return failEdit(response);
+    const watching = responseField(response, "watching=") orelse "false";
+    if (!std.mem.eql(u8, watching, "true")) {
+        return failEdit("the app is not watching markup sources (no MarkupOptions.watch_path) - write-back needs the dev hot-reload watch so the edit can land in the running app\n");
+    }
+    const node_line = responseLine(response, "node ") orelse return failEdit(response);
+    const file_path = responseField(node_line, "file=") orelse return failEdit(response);
+    const hash_text = responseField(node_line, "hash=") orelse return failEdit(response);
+    const span_text = responseField(node_line, "span=") orelse return failEdit(response);
+    const root_path = responseField(response, "root=") orelse file_path;
+    if (file_path.len == 0) return failEdit("provenance names no on-disk file for this widget's source - write-back has nothing to edit\n");
+    const app_hash = std.fmt.parseUnsigned(u64, hash_text, 16) catch return failEdit(response);
+    const span_start = std.fmt.parseUnsigned(usize, span_text[0 .. std.mem.indexOf(u8, span_text, "..") orelse return failEdit(response)], 10) catch return failEdit(response);
+
+    // 2. Concurrent-modification guard: the app answered with the hash of
+    // the bytes it LOADED; the file on disk must still be those bytes, or
+    // the spans do not describe it and writing would clobber someone's
+    // concurrent edit (or race a not-yet-reloaded save).
+    const disk_source = readFile(arena, io, file_path) catch {
+        std.debug.print("error: cannot read {s} - run this command from the app project's working directory (the same place the app runs from)\n", .{file_path});
+        return error.AutomationCommandFailed;
+    };
+    if (std.hash.Wyhash.hash(0, disk_source) != app_hash) {
+        std.debug.print(
+            "error: {s} changed on disk since the app loaded it - the provenance spans no longer describe these bytes.\n" ++
+                "       save your editor, let the app's hot-reload watch catch up (it polls every 500ms), and retry;\n" ++
+                "       this command never overwrites concurrent edits.\n",
+            .{file_path},
+        );
+        return error.AutomationCommandFailed;
+    }
+
+    // 3. The checked minimal-diff edit: parse, apply, reparse, validate,
+    // and diff the trees - the file is written only when every other node
+    // is provably untouched.
+    var diagnostic: ui_markup.MarkupErrorInfo = .{};
+    const edited = ui_markup.edit.applyChecked(arena, disk_source, span_start, op, &diagnostic) catch {
+        std.debug.print("error: edit refused at {s}:{d}:{d}: {s}\n", .{ file_path, diagnostic.line, diagnostic.column, diagnostic.message });
+        return error.AutomationCommandFailed;
+    };
+
+    // 4. Whole-closure validation: the single-file check cannot see
+    // cross-file template wiring, so resolve the import closure from disk
+    // with the edited bytes substituted and run the strict pass before
+    // anything lands on disk.
+    try validateEditedClosure(arena, io, root_path, file_path, edited);
+
+    // 5. Write. The app's watch reloads within its poll interval;
+    // `native automate assert` on the snapshot is the way to await the
+    // repaint.
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = edited }) catch {
+        std.debug.print("error: could not write {s}\n", .{file_path});
+        return error.AutomationCommandFailed;
+    };
+    var summary_buffer: [512]u8 = undefined;
+    const summary = std.fmt.bufPrint(&summary_buffer, "edited {s} at byte {d} ({s}); the app's markup watch reloads it within 500ms\n", .{ file_path, span_start, op_name }) catch "edited\n";
+    try emitPayload(io, &.{summary});
+}
+
+/// Poll for a response artifact without echoing it to stdout (the edit
+/// flow consumes the provenance response internally).
+fn waitForFileQuietly(allocator: std.mem.Allocator, io: std.Io, name: []const u8) !void {
+    var attempts: usize = 0;
+    while (attempts < 300) : (attempts += 1) {
+        var file_path: [256]u8 = undefined;
+        const bytes = readFile(allocator, io, path(&file_path, name)) catch {
+            try std.Io.sleep(io, std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+            continue;
+        };
+        allocator.free(bytes);
+        return;
+    }
+    return fail("timed out waiting for the provenance response");
+}
+
+fn failEdit(response: []const u8) error{AutomationCommandFailed} {
+    std.debug.print("error: {s}", .{response});
+    if (response.len == 0 or response[response.len - 1] != '\n') std.debug.print("\n", .{});
+    return error.AutomationCommandFailed;
+}
+
+/// `<marker><value>` field from a key=value response (value ends at
+/// whitespace; `message="..."` fields are not parsed here).
+fn responseField(text: []const u8, marker: []const u8) ?[]const u8 {
+    var search: usize = 0;
+    while (std.mem.indexOfPos(u8, text, search, marker)) |index| {
+        search = index + marker.len;
+        if (index > 0 and text[index - 1] != ' ' and text[index - 1] != '\n') continue;
+        var end = search;
+        while (end < text.len and text[end] != ' ' and text[end] != '\n') end += 1;
+        return text[search..end];
+    }
+    return null;
+}
+
+/// The first line starting with `prefix`.
+fn responseLine(text: []const u8, prefix: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, prefix)) return line;
+    }
+    return null;
+}
+
+/// Resolve the root file's import closure from disk with `edited_path`'s
+/// bytes substituted, and run the strict validation pass - the cross-file
+/// half of "ops validate before write".
+fn validateEditedClosure(arena: std.mem.Allocator, io: std.Io, root_path: []const u8, edited_path: []const u8, edited: []const u8) !void {
+    var loader = EditOverlayLoader{ .io = io, .edited_path = edited_path, .edited = edited };
+    const root_source = if (std.mem.eql(u8, root_path, edited_path))
+        edited
+    else
+        readFile(arena, io, root_path) catch {
+            std.debug.print("error: cannot read the markup root {s} for closure validation\n", .{root_path});
+            return error.AutomationCommandFailed;
+        };
+    var diagnostic: ui_markup.MarkupErrorInfo = .{};
+    const document = ui_markup.resolveImports(arena, root_path, root_source, loader.loader(), &diagnostic) catch {
+        std.debug.print("error: the edit would break the markup closure ({s}:{d}:{d}): {s}\n", .{ diagnostic.path, diagnostic.line, diagnostic.column, diagnostic.message });
+        return error.AutomationCommandFailed;
+    };
+    if (ui_markup.validate(document)) |info| {
+        std.debug.print("error: the edit would fail validation ({s}:{d}:{d}): {s}\n", .{ info.path, info.line, info.column, info.message });
+        return error.AutomationCommandFailed;
+    }
+}
+
+/// Disk loader with one path overridden by the edited bytes (validation
+/// must see the closure AS IT WOULD BE after the write).
+const EditOverlayLoader = struct {
+    io: std.Io,
+    edited_path: []const u8,
+    edited: []const u8,
+
+    fn loader(self: *EditOverlayLoader) ui_markup.ImportLoader {
+        return .{ .context = @ptrCast(self), .load = load };
+    }
+
+    fn load(context: *const anyopaque, arena: std.mem.Allocator, load_path: []const u8) ?[]const u8 {
+        const self: *const EditOverlayLoader = @ptrCast(@alignCast(context));
+        if (std.mem.eql(u8, load_path, self.edited_path)) return self.edited;
+        var file = std.Io.Dir.cwd().openFile(self.io, load_path, .{}) catch return null;
+        defer file.close(self.io);
+        const buffer = arena.alloc(u8, 256 * 1024) catch return null;
+        const len = file.readPositionalAll(self.io, buffer, 0) catch return null;
+        return buffer[0..len];
+    }
+};
 
 const SessionLaunchMode = enum { record, replay };
 
@@ -230,6 +439,10 @@ fn usage() void {
         \\      (each pattern is a regex that must match snapshot.txt; --absent
         \\       inverts: every pattern must be gone. Polls until the timeout.)
         \\  bridge <request-json>
+        \\  provenance <view-label> (<widget-id> | at <x> <y>)   (where a live widget was authored: file, byte span, line:column, template chain, iteration keys)
+        \\  edit <view-label> <widget-id> set-attr <name> <value>   (write the change back into the widget's markup file; hot reload picks it up)
+        \\  edit <view-label> <widget-id> remove-attr <name>
+        \\  edit <view-label> <widget-id> set-text <text...>
         \\
     , .{});
 }

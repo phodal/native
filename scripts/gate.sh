@@ -38,8 +38,8 @@
 #
 # full — root test + validate, every example suite (frontends, native incl.
 # canvas-preview, mobile), the Chromium host link check (cef-host-link),
-# the four macOS GPU smokes (gpu-surface,
-# gpu-dashboard, gpu-components, canvas-preview; skipped off-macOS), a
+# the macOS automation smokes (gpu-surface,
+# gpu-dashboard, gpu-components, canvas-preview, writeback; skipped off-macOS), a
 # markup check over every example .zml, and the docs check if docs/ changed
 # vs base-ref or --all was passed. --perf additionally runs the percentile
 # GPU perf check (test-gpu-dashboard-perf; macOS only, slow, load-sensitive —
@@ -299,6 +299,7 @@ else # full
     run_step "smoke-webview" zig build test-webview-smoke
     run_step "smoke-native-shell" zig build test-native-shell-smoke
     run_step "smoke-canvas-preview" zig build test-canvas-preview-smoke
+    run_step "smoke-writeback" zig build test-writeback-smoke
   else
     skip_step "smoke-gpu-surface" "macOS only"
     skip_step "smoke-gpu-dashboard" "macOS only"
@@ -306,6 +307,7 @@ else # full
     skip_step "smoke-webview" "macOS only"
     skip_step "smoke-native-shell" "macOS only"
     skip_step "smoke-canvas-preview" "macOS only"
+    skip_step "smoke-writeback" "macOS only"
   fi
 
   run_bench_check_step

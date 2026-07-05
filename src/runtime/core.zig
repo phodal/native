@@ -148,6 +148,7 @@ pub const CanvasWidgetDismissEvent = runtime_api.CanvasWidgetDismissEvent;
 pub const CanvasWidgetContextPressEvent = runtime_api.CanvasWidgetContextPressEvent;
 pub const CanvasWidgetResizeEvent = runtime_api.CanvasWidgetResizeEvent;
 pub const WindowClosedEvent = runtime_api.WindowClosedEvent;
+pub const AutomationProvenanceEvent = runtime_api.AutomationProvenanceEvent;
 pub const InvalidationReason = runtime_api.InvalidationReason;
 pub const FrameDiagnostics = runtime_api.FrameDiagnostics;
 pub const Event = runtime_api.Event;
@@ -228,6 +229,11 @@ pub const Runtime = struct {
     automation_views: [automation.snapshot.max_views]platform.ViewInfo = undefined,
     automation_widgets: [automation.snapshot.max_widgets]automation.snapshot.Widget = undefined,
     automation_tray_items: [platform.max_tray_items]automation.snapshot.TrayItem = undefined,
+    /// Handshake for the `provenance` verb: cleared before the query is
+    /// evented to the app, set by the app's response publish — so the
+    /// dispatcher can answer with a teaching error when no app-side
+    /// provenance table exists (builder-only apps, release engines).
+    automation_provenance_published: bool = false,
     widget_event_route_entries: [canvas.max_widget_depth * 2]canvas.WidgetEventRouteEntry = undefined,
     /// The in-flight native context-menu request: set when the
     /// platform is asked to present, resolved by the matching

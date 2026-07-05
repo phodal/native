@@ -58,6 +58,10 @@ When the runtime publishes a snapshot, it writes these files to the automation d
       <td><code>bridge-response.txt</code></td>
       <td>JSON response from the last bridge command</td>
     </tr>
+    <tr>
+      <td><code>provenance.txt</code></td>
+      <td>Response to the last <code>provenance</code> command: where a live widget was authored (file, byte span, line:column, template chain, iteration keys)</td>
+    </tr>
   </tbody>
 </table>
 
@@ -84,6 +88,10 @@ The runtime polls `command.txt` and processes these actions:
     <tr>
       <td><code>resize &lt;width&gt; &lt;height&gt; [&lt;scale&gt;]</code></td>
       <td>Dispatch a main-window resize event and relayout native/WebView surfaces</td>
+    </tr>
+    <tr>
+      <td><code>provenance &lt;view-label&gt; (&lt;widget-id&gt; | at &lt;x&gt; &lt;y&gt;)</code></td>
+      <td>Report where a live widget was authored into <code>provenance.txt</code>: markup file, byte span, line:column, template use-site chain, and iteration keys. Point queries hit-test view-local coordinates.</td>
     </tr>
     <tr>
       <td><code>bridge &lt;json&gt;</code></td>
@@ -219,6 +227,30 @@ The WebView and native-shell smoke build steps demonstrate full automation test 
 ```bash
 zig build test-webview-smoke -Dplatform=macos
 ```
+
+## Write-back
+
+Because views are data, automation can go the other way too: select a widget in the running app, jump to the markup that authored it, and write an edit back into the source file — the app's own hot-reload watch picks the change up and repaints.
+
+The read half is `provenance`. Every markup-built widget's structural id maps back to its authored source, captured at view build time: the file, the node's byte span and line:column, the template instantiation chain (a widget inside a template reports both its definition site and every `<use>` that put it there), and the iteration keys that say which `<for>` row it is. Widgets built with the Zig builder report `authored=zig` honestly — write-back edits markup files only.
+
+```bash
+# Where does this widget come from? (id from the snapshot, or hit-test a point)
+native automate provenance kanban-canvas 6624116744891006388
+native automate provenance kanban-canvas at 760 30
+```
+
+The write half is `edit`: typed, minimal-diff operations on the file the widget came from. An operation changes only bytes inside the target node's span — whitespace, comments, attribute order, and every other node survive byte for byte, proven by reparsing and diffing the parse trees before anything is written.
+
+```bash
+native automate edit kanban-canvas 6624116744891006388 set-text "Add task"
+native automate edit kanban-canvas 6624116744891006388 set-attr variant secondary
+native automate edit kanban-canvas 6624116744891006388 remove-attr variant
+```
+
+Edits refuse rather than guess: a widget authored in Zig, a file that changed on disk since the app loaded it (the provenance response carries the loaded bytes' hash, so concurrent edits are never clobbered), or an edit that would fail markup validation all stop with a teaching error and leave the file untouched. A successful edit needs no reload command — the markup watch (`MarkupOptions.watch_path`, a dev/Debug feature) reloads within its poll interval, so `native automate assert` on the snapshot is the way to await the repaint.
+
+`zig build test-writeback-smoke` (macOS) drives the whole loop against the kanban example: query provenance, flip the button label through the verb, assert the repaint, verify the byte-exact diff, and flip it back.
 
 ## Custom directory
 

@@ -52,6 +52,17 @@ pub const Server = struct {
         try writePath(self.io, self.path("bridge-response.txt", &path_buffer), response);
     }
 
+    /// Response artifact for the `provenance` verb: the queried widget's
+    /// authored-markup record, or the teaching error saying why there is
+    /// none. One command in flight at a time, like the bridge response.
+    pub fn publishProvenanceResponse(self: Server, response: []const u8) !void {
+        if (!has_filesystem) return;
+        var cwd = std.Io.Dir.cwd();
+        try cwd.createDirPath(self.io, self.directory);
+        var path_buffer: [256]u8 = undefined;
+        try writePath(self.io, self.path("provenance.txt", &path_buffer), response);
+    }
+
     /// Write a view screenshot artifact (`screenshot-<label>.png`). The
     /// bytes land in a temporary file first and are renamed into place so
     /// pollers never observe a partially written PNG.

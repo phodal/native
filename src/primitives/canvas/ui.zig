@@ -23,6 +23,7 @@ const builtin = @import("builtin");
 const font_coverage = @import("font_coverage.zig");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
+const ui_provenance = @import("ui_provenance.zig");
 
 const ObjectId = canvas.ObjectId;
 const Widget = canvas.Widget;
@@ -283,6 +284,13 @@ pub fn Ui(comptime Msg: type) type {
         /// for the app loop's coverage check and scroll re-derivation.
         virtual_window_records: [max_virtual_windows]VirtualWindowRecord = [_]VirtualWindowRecord{.{}} ** max_virtual_windows,
         virtual_window_record_count: usize = 0,
+        /// Widget provenance collector (write-back's read half): when set,
+        /// the markup engines stamp each built node's source, and
+        /// `finalize` feeds the sink one record per markup-authored widget
+        /// as it assigns structural ids. Null (the default) costs one
+        /// branch per node and captures nothing — builder-only apps and
+        /// non-automation runs never pay for it.
+        provenance_sink: ?ui_provenance.Sink = null,
 
         pub const ElementOptions = struct {
             /// Sibling-scoped identity: the widget id hashes the parent
@@ -550,6 +558,11 @@ pub fn Ui(comptime Msg: type) type {
             on_scroll: ?ScrollMsgFn = null,
             context_menu: []const ContextMenuItem = &.{},
             nodes: []const Node = &.{},
+            /// Markup authoring provenance, stamped by the markup engines
+            /// when the builder carries a `provenance_sink`; null for
+            /// builder-authored (Zig) nodes, which is itself the honest
+            /// answer write-back tooling reports for them.
+            source: ?*const ui_provenance.NodeSource = null,
         };
 
         pub const Handler = struct {
@@ -1600,7 +1613,8 @@ pub fn Ui(comptime Msg: type) type {
             const handlers = try self.arena.alloc(Handler, handler_capacity);
             var handler_len: usize = 0;
             const root_key = node.key orelse UiKey{ .index = 0 };
-            const root = try self.finalizeNode(node, root_id_seed, root_key, handlers, &handler_len, &tokens);
+            var key_trail = ui_provenance.KeyTrail{};
+            const root = try self.finalizeNode(node, root_id_seed, root_key, handlers, &handler_len, &tokens, &key_trail);
             return .{ .root = root, .handlers = handlers[0..handler_len] };
         }
 
@@ -1612,6 +1626,7 @@ pub fn Ui(comptime Msg: type) type {
             handlers: []Handler,
             handler_len: *usize,
             tokens: *const canvas.DesignTokens,
+            key_trail: *ui_provenance.KeyTrail,
         ) error{OutOfMemory}!Widget {
             var widget = node.widget;
             warnUncoveredText(widget.kind, widget.text);
@@ -1640,6 +1655,22 @@ pub fn Ui(comptime Msg: type) type {
                 structuralId(global_id_seed, widget.kind, global_key)
             else
                 structuralId(parent_id, widget.kind, key);
+            // Provenance record (write-back's read half): this is the one
+            // point where the markup-stamped source and the just-assigned
+            // structural id are both in hand. Explicit keys (loop item
+            // identity, author key=/global-key=) join the trail so the
+            // record says WHICH iteration of a for-body this widget is;
+            // auto index keys carry position, not identity, and stay out.
+            const trail_pushed = if (self.provenance_sink != null and (node.global_key != null or node.key != null))
+                key_trail.push(provenanceKey(node.global_key orelse key))
+            else
+                false;
+            defer if (trail_pushed) key_trail.pop();
+            if (self.provenance_sink) |sink| {
+                if (node.source) |source| {
+                    sink.record(widget.id, source, key_trail.items(), key_trail.truncated);
+                }
+            }
             // Typed handlers imply the matching accessibility actions, the
             // same way a stringly `command` does for engine-owned dispatch.
             if (node.on_press != null) widget.semantics.actions.press = true;
@@ -1663,9 +1694,9 @@ pub fn Ui(comptime Msg: type) type {
                 // (and a pane narrower than its content) never paints
                 // into the neighbor.
                 const child_widgets = try self.arena.alloc(Widget, 3);
-                child_widgets[0] = try self.finalizeNode(node.nodes[0], widget.id, node.nodes[0].key orelse UiKey{ .index = 0 }, handlers, handler_len, tokens);
+                child_widgets[0] = try self.finalizeNode(node.nodes[0], widget.id, node.nodes[0].key orelse UiKey{ .index = 0 }, handlers, handler_len, tokens, key_trail);
                 child_widgets[1] = splitDividerWidget(widget);
-                child_widgets[2] = try self.finalizeNode(node.nodes[1], widget.id, node.nodes[1].key orelse UiKey{ .index = 1 }, handlers, handler_len, tokens);
+                child_widgets[2] = try self.finalizeNode(node.nodes[1], widget.id, node.nodes[1].key orelse UiKey{ .index = 1 }, handlers, handler_len, tokens, key_trail);
                 child_widgets[0].layout.clip_content = true;
                 child_widgets[2].layout.clip_content = true;
                 widget.children = child_widgets;
@@ -1673,7 +1704,7 @@ pub fn Ui(comptime Msg: type) type {
                 const child_widgets = try self.arena.alloc(Widget, node.nodes.len);
                 for (node.nodes, 0..) |child, index| {
                     const child_key = child.key orelse UiKey{ .index = index };
-                    child_widgets[index] = try self.finalizeNode(child, widget.id, child_key, handlers, handler_len, tokens);
+                    child_widgets[index] = try self.finalizeNode(child, widget.id, child_key, handlers, handler_len, tokens, key_trail);
                 }
                 widget.children = child_widgets;
             }
@@ -1915,6 +1946,15 @@ pub fn forSlotKey(arena: std.mem.Allocator, base: UiKey, slot: usize) error{OutO
         .index => |value| .{ .str = try std.fmt.allocPrint(arena, "{d}\x1f{d}", .{ value, slot }) },
         .int => |value| .{ .str = try std.fmt.allocPrint(arena, "{d}\x1f{d}", .{ value, slot }) },
         .str => |value| .{ .str = try std.fmt.allocPrint(arena, "{s}\x1f{d}", .{ value, slot }) },
+    };
+}
+
+/// `UiKey` in the provenance module's std-only mirror, for sink records.
+fn provenanceKey(key: UiKey) ui_provenance.Key {
+    return switch (key) {
+        .index => |value| .{ .index = value },
+        .int => |value| .{ .int = value },
+        .str => |value| .{ .str = value },
     };
 }
 

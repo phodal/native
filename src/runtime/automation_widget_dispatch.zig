@@ -13,6 +13,7 @@ const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
 
 const AutomationWidgetAction = automation_commands.AutomationWidgetAction;
 const AutomationWidgetTarget = automation_commands.AutomationWidgetTarget;
+const AutomationProvenanceTarget = automation_commands.AutomationProvenanceTarget;
 const AutomationWidgetWheel = automation_commands.AutomationWidgetWheel;
 const AutomationWidgetKey = automation_commands.AutomationWidgetKey;
 const AutomationWidgetPointerDrag = automation_commands.AutomationWidgetPointerDrag;
@@ -524,6 +525,41 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             return automationGpuSurfaceViewIndexByLabel(self, target.view_label);
         }
 
+        /// The `provenance` verb: resolve the view (and, for point
+        /// queries, hit-test the widget id), then ask the app that
+        /// authored the view to answer from its retained provenance
+        /// table. Every path writes `provenance.txt` — the CLI polls the
+        /// artifact, so silence would be a hang, and errors teach.
+        pub fn dispatchAutomationProvenance(self: *Runtime, app: runtime_api.App(Runtime), target: AutomationProvenanceTarget) anyerror!void {
+            const server = self.options.automation orelse return;
+            self.command_count += 1;
+            const view_index = automationGpuSurfaceViewIndexByLabel(self, target.view_label) catch {
+                try publishAutomationProvenanceError(server, target.view_label, target.id, "no open gpu_surface view with this label - `native automate list` names the open views");
+                return error.ViewNotFound;
+            };
+            const layout = self.views[view_index].widgetLayoutTree();
+            var id = target.id;
+            if (target.point) |point| {
+                const hit = layout.hitTest(point) orelse {
+                    try publishAutomationProvenanceError(server, target.view_label, 0, "no widget at the given point (view-local points; the snapshot's bounds= fields name each widget's rectangle)");
+                    return error.InvalidCommand;
+                };
+                id = hit.id;
+            } else if (layout.findById(id) == null) {
+                try publishAutomationProvenanceError(server, target.view_label, id, "no widget with this id in the view - ids go stale across rebuilds, re-read the snapshot");
+                return error.InvalidCommand;
+            }
+            self.automation_provenance_published = false;
+            try app.event(self, .{ .automation_provenance = .{
+                .window_id = self.views[view_index].window_id,
+                .view_label = self.views[view_index].label,
+                .widget_id = id,
+            } });
+            if (!self.automation_provenance_published) {
+                try publishAutomationProvenanceError(server, target.view_label, id, "the app exposes no widget provenance - it needs the markup interpreter (UiAppFeatures.runtime_markup) running under automation; compiled-only (release) views report none");
+            }
+        }
+
         /// Resolve a widget verb's gpu_surface view by label across ALL
         /// open windows — snapshots enumerate every window's views, so
         /// the verbs must reach them too (a model-declared settings
@@ -551,6 +587,13 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
             return runtime_canvas_widget_events.RuntimeCanvasWidgetEvents(Runtime);
         }
     };
+}
+
+fn publishAutomationProvenanceError(server: anytype, view_label: []const u8, id: u64, message: []const u8) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try writer.print("provenance error view={s} id={d} message=\"{s}\"\n", .{ view_label, id, message });
+    try server.publishProvenanceResponse(writer.buffered());
 }
 
 fn runtimeFindWindowIndexById(self: anytype, id: platform.WindowId) ?usize {

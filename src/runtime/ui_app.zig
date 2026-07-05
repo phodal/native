@@ -37,6 +37,7 @@ const canvas_frame = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const launch_timing = @import("launch_timing.zig");
 const runtime_effects = @import("effects.zig");
+const ui_app_provenance = @import("ui_app_provenance.zig");
 
 const Runtime = core.Runtime;
 const App = core.App;
@@ -532,6 +533,18 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         markup_diagnostic: ?canvas.ui_markup.MarkupErrorInfo = null,
         markup_diagnostic_message_storage: [512]u8 = undefined,
         markup_diagnostic_path_storage: [canvas.ui_markup.max_import_path_len]u8 = undefined,
+        /// Widget provenance (write-back's read half): the retained
+        /// structural-id -> authored-markup table the `provenance`
+        /// automation verb answers from. Exists only in markup-interpreter
+        /// builds; filled only while automation is enabled.
+        provenance: if (features.runtime_markup) ui_app_provenance.ProvenanceTable else void =
+            if (features.runtime_markup) .{} else {},
+        /// Import-closure staging for the file table: filled by the
+        /// hashing loader during a resolve, committed on adopt so a failed
+        /// mid-edit reload can never re-anchor spans to bytes the running
+        /// view was not built from.
+        provenance_closure: if (features.runtime_markup) ui_app_provenance.ClosureFiles else void =
+            if (features.runtime_markup) .{} else {},
         layout_nodes: [canvas_limits.max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
         gpu_commands: [canvas_limits.max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined,
         /// Packet transport buffer, sized for the larger of the two wire
@@ -852,6 +865,16 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// for the next Msg.
         pub fn rebuild(self: *Self, runtime: *Runtime, window_id: platform.WindowId) anyerror!void {
             self.syncModel(runtime, window_id);
+            if (comptime features.runtime_markup) {
+                // Under automation, drive the interpreter from the first
+                // frame even when a compiled view is present: provenance
+                // (write-back's read half) is stamped by the interpreter,
+                // and the engines are parity-proven, so the pixels and
+                // structural ids do not change.
+                if (runtime.options.automation != null and self.markup_view == null and self.options.markup != null) {
+                    self.reloadMarkup(self.options.markup.?.source) catch {};
+                }
+            }
             const tokens = runtime.tokensWithTextMeasure(self.effectiveTokens());
             const next_index = self.arena_index ^ 1;
             // Widget layout is inset by the runtime's viewport chrome
@@ -873,6 +896,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 var ui = Ui.init(self.arenas[next_index].allocator());
                 ui.virtual_window_context = @ptrCast(&window_source);
                 ui.virtual_window_source = VirtualWindowResolver.resolve;
+                if (comptime features.runtime_markup) {
+                    if (self.markup_view != null and runtime.options.automation != null) {
+                        self.provenance.resetRecords();
+                        ui.provenance_sink = self.provenance.sink();
+                    }
+                }
                 // Frame-profile stamps (no-ops unless profiling is on): the
                 // view build fn + tree finalize is the `rebuild` stage, the
                 // flex pass below is `layout`; reconcile/emit are stamped at
@@ -1427,6 +1456,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const sources: []const canvas.ui_markup.SourceFile = if (self.options.markup) |markup_options| markup_options.sources else &.{};
             var set_loader = canvas.ui_markup.SourceSetLoader{ .set = sources };
             var hashing = HashingLoader.init(set_loader.loader(), source, "");
+            if (comptime features.runtime_markup) {
+                self.provenance_closure.reset();
+                hashing.closure = &self.provenance_closure;
+            }
             const next_index = self.markup_arena_index ^ 1;
             _ = self.markup_arenas[next_index].reset(.retain_capacity);
             const arena = self.markup_arenas[next_index].allocator();
@@ -1440,6 +1473,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // here instead of on every frame's build.
             const canonical = try canvas.ui_markup.canonicalize(arena, document);
             self.adoptMarkupDocument(canonical, next_index, hashing.hasher.final());
+            // Embedded resolve: root nodes carry an empty src_path, and
+            // imported entries are markup-root-relative (joined onto the
+            // watched file's directory for their on-disk location).
+            self.commitProvenanceFiles("", owned_source, false);
         }
 
         /// Activate a resolved document built into `arena_index`'s arena.
@@ -1462,6 +1499,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             inner: canvas.ui_markup.ImportLoader,
             hasher: std.hash.Wyhash,
             strip_prefix: []const u8 = "",
+            /// Provenance staging: when set, every loaded file's
+            /// resolver-relative path and content hash is recorded so the
+            /// adopt step can commit them as write-back anchors.
+            closure: ?*ui_app_provenance.ClosureFiles = null,
 
             fn init(inner: canvas.ui_markup.ImportLoader, root_source: []const u8, strip_prefix: []const u8) HashingLoader {
                 var hasher = std.hash.Wyhash.init(0);
@@ -1485,9 +1526,56 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 self.hasher.update(hashed_path);
                 self.hasher.update(&[_]u8{0});
                 self.hasher.update(source);
+                if (self.closure) |closure| closure.add(path, std.hash.Wyhash.hash(0, source));
                 return source;
             }
         };
+
+        /// Commit the just-adopted closure into the provenance file
+        /// table (write-back anchors: per-file loaded-bytes hashes and
+        /// on-disk paths). `root_stamped` is the src_path the resolver
+        /// stamped on root nodes; `entries_are_disk_paths` is true for
+        /// the disk (watch) resolve, whose paths are already cwd-relative.
+        /// Committed ONLY on adopt: a failed mid-edit reload keeps the
+        /// last-good table so spans and hashes always describe the bytes
+        /// the running view was built from.
+        fn commitProvenanceFiles(self: *Self, root_stamped: []const u8, root_source: []const u8, entries_are_disk_paths: bool) void {
+            if (comptime !features.runtime_markup) return;
+            const markup_options = self.options.markup;
+            const watch_path: ?[]const u8 = if (markup_options) |m| m.watch_path else null;
+            self.provenance.resetFiles();
+            self.provenance.watching = watch_path != null and (if (markup_options) |m| m.io != null else false);
+            self.provenance.addFile(root_stamped, watch_path orelse "", std.hash.Wyhash.hash(0, root_source)) catch {};
+            const disk_prefix: []const u8 = if (watch_path) |path| (std.fs.path.dirname(path) orelse "") else "";
+            for (self.provenance_closure.entries[0..self.provenance_closure.len]) |*entry| {
+                const stamped = entry.path[0..entry.path_len];
+                var disk_buffer: [ui_app_provenance.max_path_bytes]u8 = undefined;
+                const disk: []const u8 = if (entries_are_disk_paths)
+                    stamped
+                else if (watch_path == null)
+                    ""
+                else if (disk_prefix.len > 0)
+                    std.fmt.bufPrint(&disk_buffer, "{s}/{s}", .{ disk_prefix, stamped }) catch ""
+                else
+                    stamped;
+                self.provenance.addFile(stamped, disk, entry.hash) catch {};
+            }
+        }
+
+        /// Answer an automation `provenance` query for our canvas view
+        /// from the retained table and publish the response artifact.
+        /// Setting the runtime's handshake flag tells the dispatcher an
+        /// answer landed (its fallback teaches when no app responds).
+        fn handleProvenanceQuery(self: *Self, runtime: *Runtime, query: core.AutomationProvenanceEvent) anyerror!void {
+            if (comptime !features.runtime_markup) return;
+            if (!std.mem.eql(u8, query.view_label, self.options.canvas_label)) return;
+            const server = runtime.options.automation orelse return;
+            var buffer: [4096]u8 = undefined;
+            var writer = std.Io.Writer.fixed(&buffer);
+            try self.provenance.writeResponse(&writer, query.view_label, query.widget_id);
+            try server.publishProvenanceResponse(writer.buffered());
+            runtime.automation_provenance_published = true;
+        }
 
         /// Store a markup diagnostic and say it out loud once per distinct
         /// failure: build errors recur every frame, and a view that fails
@@ -1584,6 +1672,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             var disk_loader = DiskImportLoader{ .io = io };
             const watch_dir = std.fs.path.dirname(watch_path) orelse "";
             var hashing = HashingLoader.init(disk_loader.loader(), source, watch_dir);
+            if (comptime features.runtime_markup) {
+                self.provenance_closure.reset();
+                hashing.closure = &self.provenance_closure;
+            }
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
             const document = canvas.ui_markup.resolveImports(arena, watch_path, source, hashing.loader(), &diagnostic) catch |err| {
                 const hash = hashing.hasher.final();
@@ -1600,6 +1692,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // document builds identically through attrTyped's fallback.
             const canonical = canvas.ui_markup.canonicalize(arena, document) catch document;
             self.adoptMarkupDocument(canonical, next_index, hash);
+            // Disk resolve: root nodes carry the watch path, and imported
+            // entries are already cwd-relative disk paths.
+            self.commitProvenanceFiles(watch_path, source, true);
             if (self.installed) self.rebuild(runtime, window_id) catch {};
         }
 
@@ -1747,6 +1842,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .canvas_widget_context_press => |press_event| try self.handleContextPress(runtime, press_event),
                 .canvas_widget_resize => |resize_event| try self.handleWidgetResize(runtime, resize_event),
                 .window_closed => |closed| try self.handleWindowClosed(runtime, closed),
+                .automation_provenance => |query| try self.handleProvenanceQuery(runtime, query),
                 else => {},
             }
         }

@@ -12,6 +12,7 @@
 const std = @import("std");
 const canvas = @import("root.zig");
 const markup = @import("ui_markup.zig");
+const ui_provenance = @import("ui_provenance.zig");
 
 pub const BuildError = error{ MarkupBuild, OutOfMemory };
 
@@ -113,6 +114,10 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             len: usize,
             floor: usize,
             template_ctx: ?usize,
+            /// The use site's template chain: slot content is authored at
+            /// the use site, so its provenance restores to the consumer's
+            /// chain exactly like its scope does.
+            chain: []const ui_provenance.UseSite = &.{},
         };
 
         const max_scope_depth = 16;
@@ -140,6 +145,12 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             /// reference earlier templates (the validator's rule, enforced
             /// again here so an unvalidated document cannot recurse).
             template_ctx: ?usize = null,
+            /// Template instantiation chain for provenance stamping: the
+            /// `<use>` sites (outermost first) that put the node currently
+            /// building where it is. Arena-allocated snapshots — pushed by
+            /// `buildUse`, restored by `<slot/>` content — so every
+            /// stamped `NodeSource` shares one immutable slice.
+            source_chain: []const ui_provenance.UseSite = &.{},
 
             fn lookup(self: *const Scope, head: []const u8) ?*const ScopeEntry {
                 var index = self.len;
@@ -177,7 +188,28 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
         }
 
+        /// Build one element and, when the builder collects provenance,
+        /// stamp the node's authored source (file, span, template chain)
+        /// onto the built `Ui.Node`. Every element — composites included —
+        /// funnels through here, so the stamp covers the whole vocabulary
+        /// in one place. `finalize` pairs the stamp with the structural id.
         fn buildElement(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var built = try self.buildElementInner(ui, scope, node);
+            if (ui.provenance_sink != null) {
+                const source = try ui.arena.create(ui_provenance.NodeSource);
+                source.* = .{
+                    .src_path = node.src_path,
+                    .span = node.span,
+                    .line = node.line,
+                    .column = node.column,
+                    .chain = scope.source_chain,
+                };
+                built.source = source;
+            }
+            return built;
+        }
+
+        fn buildElementInner(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             if (std.mem.eql(u8, node.name, "markdown")) {
                 return self.buildMarkdown(ui, scope, node);
             }
@@ -379,9 +411,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             for (scope.entries[capture.len..saved_len], 0..) |entry, offset| {
                 saved_entries[offset] = entry;
             }
+            const saved_chain = scope.source_chain;
             scope.len = capture.len;
             scope.floor = capture.floor;
             scope.template_ctx = capture.template_ctx;
+            scope.source_chain = capture.chain;
             defer {
                 for (saved_entries[0 .. saved_len - capture.len], 0..) |entry, offset| {
                     scope.entries[capture.len + offset] = entry;
@@ -389,6 +423,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 scope.len = saved_len;
                 scope.floor = saved_floor;
                 scope.template_ctx = saved_ctx;
+                scope.source_chain = saved_chain;
             }
             try self.buildChildList(ui, scope, capture.nodes, out);
         }
@@ -870,6 +905,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .len = saved_len,
                     .floor = saved_floor,
                     .template_ctx = saved_ctx,
+                    .chain = scope.source_chain,
                 } },
             };
             arg_count += 1;
@@ -878,11 +914,27 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             scope.floor = saved_len;
             scope.use_depth += 1;
             scope.template_ctx = template_index;
+            // Provenance: the template body's nodes report this use site
+            // (appended to any outer chain) alongside their definition
+            // site, so "jump to its markup" can offer both.
+            const saved_chain = scope.source_chain;
+            if (ui.provenance_sink != null) {
+                const chain = try ui.arena.alloc(ui_provenance.UseSite, saved_chain.len + 1);
+                @memcpy(chain[0..saved_chain.len], saved_chain);
+                chain[saved_chain.len] = .{
+                    .src_path = node.src_path,
+                    .span = node.span,
+                    .line = node.line,
+                    .column = node.column,
+                };
+                scope.source_chain = chain;
+            }
             defer {
                 scope.len = saved_len;
                 scope.floor = saved_floor;
                 scope.use_depth -= 1;
                 scope.template_ctx = saved_ctx;
+                scope.source_chain = saved_chain;
             }
             return self.buildElement(ui, scope, template_node.children[0]);
         }

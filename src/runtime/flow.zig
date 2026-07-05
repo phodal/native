@@ -34,6 +34,7 @@ const parseAutomationViewLabel = automation_commands.parseAutomationViewLabel;
 const parseAutomationNativeCommand = automation_commands.parseAutomationNativeCommand;
 const parseAutomationWidgetAction = automation_commands.parseAutomationWidgetAction;
 const parseAutomationWidgetTarget = automation_commands.parseAutomationWidgetTarget;
+const parseAutomationProvenanceTarget = automation_commands.parseAutomationProvenanceTarget;
 const parseAutomationWidgetWheel = automation_commands.parseAutomationWidgetWheel;
 const parseAutomationWidgetKey = automation_commands.parseAutomationWidgetKey;
 const parseAutomationWidgetPointerDrag = automation_commands.parseAutomationWidgetPointerDrag;
@@ -387,6 +388,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .window_closed => {
                     self.invalidateFor(.state, null);
                 },
+                .automation_provenance => {},
                 .lifecycle => {},
             }
         }
@@ -683,6 +685,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .widget_wheel => "automation.widget_wheel",
                 .widget_key => "automation.widget_key",
                 .tray_action => "automation.tray_action",
+                .provenance => "automation.provenance",
                 else => "automation.command",
             };
         }
@@ -784,6 +787,9 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                     if (enable and !self.frame_profile.enabled) self.frame_profile.reset();
                     self.frame_profile.enabled = enable;
                     self.invalidateFor(.command, null);
+                },
+                .provenance => {
+                    try AutomationWidgetMethods().dispatchAutomationProvenance(self, app, try parseAutomationProvenanceTarget(command.value));
                 },
                 .wait => {},
             }

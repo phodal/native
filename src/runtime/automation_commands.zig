@@ -187,6 +187,33 @@ pub fn parseAutomationWidgetTarget(value: []const u8) !AutomationWidgetTarget {
     return .{ .view_label = view.token, .id = id };
 }
 
+/// Target of a `provenance` query: a widget named by structural id
+/// (`<view-label> <id>`), or by hit-test point in view-local points
+/// (`<view-label> at <x> <y>`).
+pub const AutomationProvenanceTarget = struct {
+    view_label: []const u8,
+    id: canvas.ObjectId = 0,
+    point: ?geometry.PointF = null,
+};
+
+pub fn parseAutomationProvenanceTarget(value: []const u8) !AutomationProvenanceTarget {
+    const view = takeAutomationToken(value) orelse return error.InvalidCommand;
+    const first = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
+    if (std.mem.eql(u8, first.token, "at")) {
+        const x_part = takeAutomationToken(first.rest) orelse return error.InvalidCommand;
+        const y_part = takeAutomationToken(x_part.rest) orelse return error.InvalidCommand;
+        if (takeAutomationToken(y_part.rest) != null) return error.InvalidCommand;
+        const x = std.fmt.parseFloat(f32, x_part.token) catch return error.InvalidCommand;
+        const y = std.fmt.parseFloat(f32, y_part.token) catch return error.InvalidCommand;
+        if (!std.math.isFinite(x) or !std.math.isFinite(y)) return error.InvalidCommand;
+        return .{ .view_label = view.token, .point = geometry.PointF.init(x, y) };
+    }
+    if (takeAutomationToken(first.rest) != null) return error.InvalidCommand;
+    const id = std.fmt.parseInt(canvas.ObjectId, first.token, 10) catch return error.InvalidCommand;
+    if (id == 0) return error.InvalidCommand;
+    return .{ .view_label = view.token, .id = id };
+}
+
 pub fn parseAutomationWidgetWheel(value: []const u8) !AutomationWidgetWheel {
     const view = takeAutomationToken(value) orelse return error.InvalidCommand;
     const id_part = takeAutomationToken(view.rest) orelse return error.InvalidCommand;
@@ -516,6 +543,27 @@ test "runtime parses automation widget click targets" {
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 0"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas nope"));
     try std.testing.expectError(error.InvalidCommand, parseAutomationWidgetTarget("canvas 42 extra"));
+}
+
+test "runtime parses automation provenance targets" {
+    const by_id = try parseAutomationProvenanceTarget("canvas 42");
+    try std.testing.expectEqualStrings("canvas", by_id.view_label);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 42), by_id.id);
+    try std.testing.expect(by_id.point == null);
+
+    const at_point = try parseAutomationProvenanceTarget("canvas at 120 64.5");
+    try std.testing.expectEqualStrings("canvas", at_point.view_label);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), at_point.id);
+    try std.testing.expectEqual(@as(f32, 120), at_point.point.?.x);
+    try std.testing.expectEqual(@as(f32, 64.5), at_point.point.?.y);
+
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget(""));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas 0"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas at 10"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas at 10 nan"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas at 10 20 30"));
+    try std.testing.expectError(error.InvalidCommand, parseAutomationProvenanceTarget("canvas 42 extra"));
 }
 
 test "runtime parses automation widget wheel targets" {

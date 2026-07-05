@@ -18,8 +18,10 @@ pub const max_command_bytes: usize = 16 * 1024 + 64;
 /// `widget-context-press`) and per-window snapshot view/widget scoping.
 /// 3 = the `profile on|off` verb and the snapshot's `frame_profile`
 /// per-stage timing line.
+/// 4 = the `provenance` verb (widget id or point -> authored markup) and
+/// its `provenance.txt` response artifact, the write-back read half.
 /// Snapshots without a `protocol=` field predate the handshake entirely.
-pub const version: u32 = 3;
+pub const version: u32 = 4;
 
 pub const Error = error{
     InvalidCommand,
@@ -49,6 +51,11 @@ pub const Action = enum {
     /// `profile on|off`: toggle per-stage frame timing; while on, the
     /// snapshot carries a `frame_profile` line of rolling p50/p90s.
     profile,
+    /// `provenance <view-label> <widget-id>` or
+    /// `provenance <view-label> at <x> <y>`: report the markup that
+    /// authored a live widget (file, byte span, line:column, template
+    /// chain, iteration keys) into `provenance.txt`.
+    provenance,
 };
 
 pub const Command = struct {
@@ -83,6 +90,7 @@ pub const Command = struct {
         if (std.mem.eql(u8, action_text, "profile") and (std.mem.eql(u8, value, "on") or std.mem.eql(u8, value, "off"))) {
             return .{ .action = .profile, .value = value };
         }
+        if (std.mem.eql(u8, action_text, "provenance") and value.len > 0) return .{ .action = .provenance, .value = value };
         return error.InvalidCommand;
     }
 };
@@ -185,6 +193,13 @@ test "commands parse reload and wait" {
     try std.testing.expectEqualStrings("off", profile_off.value);
     try std.testing.expectError(error.InvalidCommand, Command.parse("profile"));
     try std.testing.expectError(error.InvalidCommand, Command.parse("profile maybe"));
+    const provenance_by_id = try Command.parse("provenance kanban-canvas 42");
+    try std.testing.expectEqual(Action.provenance, provenance_by_id.action);
+    try std.testing.expectEqualStrings("kanban-canvas 42", provenance_by_id.value);
+    const provenance_at = try Command.parse("provenance kanban-canvas at 120 64");
+    try std.testing.expectEqual(Action.provenance, provenance_at.action);
+    try std.testing.expectEqualStrings("kanban-canvas at 120 64", provenance_at.value);
+    try std.testing.expectError(error.InvalidCommand, Command.parse("provenance"));
 }
 
 test "screenshot file names stay inside the automation directory" {

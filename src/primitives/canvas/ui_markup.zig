@@ -35,6 +35,12 @@ pub const binary = @import("ui_markup_binary.zig");
 /// per-app `zig build model-contract` step share (ui_markup_contract.zig).
 pub const contract = @import("ui_markup_contract.zig");
 
+/// Minimal-diff edit operations (write-back's write half): typed ops on a
+/// parsed document that change only bytes inside the target node's span,
+/// validated by reparse + structural diff before any file write
+/// (ui_markup_edit.zig).
+pub const edit = @import("ui_markup_edit.zig");
+
 pub const MarkupErrorInfo = struct {
     line: usize = 0,
     column: usize = 0,

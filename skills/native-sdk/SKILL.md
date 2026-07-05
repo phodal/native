@@ -1,6 +1,6 @@
 ---
 name: native-sdk
-description: Discovery skill for the Native SDK, a cross-platform native app framework inspired by the web - native-rendered apps from .zml markup views plus Zig logic by default, with WebView-shell apps as a coexisting architecture. Use when the user asks what the Native SDK is, how to build a Native SDK app, author native UI, scaffold an app, configure app.zon, choose a WebView engine, add bridge commands, package an app, test a running app, or automate a Native SDK app.
+description: Discovery skill for the Native SDK, a cross-platform native app toolkit inspired by the web - native-rendered apps from Native markup (.native) views plus Zig logic by default, with WebView-shell apps as a coexisting architecture. Use when the user asks what the Native SDK is, how to build a Native SDK app, author native UI, scaffold an app, configure app.zon, choose a WebView engine, add bridge commands, package an app, test a running app, or automate a Native SDK app.
 allowed-tools: Bash(native:*), Bash(npx @native-sdk/cli:*)
 hidden: true
 ---

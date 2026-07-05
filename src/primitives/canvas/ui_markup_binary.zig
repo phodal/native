@@ -3,7 +3,7 @@
 //! One deterministic little-endian binary encoding of a resolved markup
 //! document — registry CODES on the wire, never names, so a rename or
 //! reorder in source can never silently change what stored artifacts mean.
-//! ZML text stays the house *authoring* projection; NSUI is a tooling
+//! Native markup text stays the house *authoring* projection; NSUI is a tooling
 //! interchange and journal-anchor format, not something humans or agents
 //! write. The derived human view is `writeJson` (`native markup dump`),
 //! always produced FROM the decoded binary so the binary stays the

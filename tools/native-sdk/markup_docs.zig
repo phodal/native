@@ -1,4 +1,4 @@
-//! One-line documentation tables for the closed .zml markup grammar,
+//! One-line documentation tables for the closed Native markup grammar,
 //! sourced from skill-data/native-ui/SKILL.md (Elements / Attributes /
 //! Expressions / Structure tags tables). Standalone on purpose: the
 //! markup LSP serves these as hover/completion docs, and the docs-site
@@ -84,7 +84,7 @@ pub const structure_docs = [_]Doc{
     .{ .name = "else", .doc = "Structure tag: must directly follow an if (renders when the test is false) or a for (renders when the iterable is empty)." },
     .{ .name = "template", .doc = "Top-level template definition (before the view root): name, optional args (name or name=default; defaults are literals), exactly one element child, at most one <slot/>." },
     .{ .name = "use", .doc = "Expands a template in place: template names an earlier definition, other attributes must match its args exactly (defaulted args may be omitted). Children are slot content: built in the consumer's scope and inserted at the template's <slot/>." },
-    .{ .name = "import", .doc = "Top of the file, before templates: <import src=\"components/cards.zml\"/> splices a component file's templates (transitively) before this file's own. Paths resolve relative to this file, under the markup root." },
+    .{ .name = "import", .doc = "Top of the file, before templates: <import src=\"components/cards.native\"/> splices a component file's templates (transitively) before this file's own. Paths resolve relative to this file, under the markup root." },
     .{ .name = "slot", .doc = "Template bodies only, at most one: marks where use-site children are inserted. Attribute-less leaf; a use with no children renders it empty." },
 };
 
@@ -131,7 +131,7 @@ pub const template_attr_docs = [_]Doc{
     .{ .name = "name", .doc = "template: the definition's name, referenced by use. icon: the built-in vector icon to draw (literal, comptime-validated against canvas.icons.known_icon_names)." },
     .{ .name = "args", .doc = "template: space-separated arg names use sites must pass (slice bindings iterate, scalars bind as values); name=default declares a literal default the use site may omit." },
     .{ .name = "template", .doc = "use: names an earlier top-level template to expand in place." },
-    .{ .name = "src", .doc = "import: a .zml component file (templates only), relative to the importing file, under the markup root." },
+    .{ .name = "src", .doc = "import: a .native component file (templates only), relative to the importing file, under the markup root." },
 };
 
 pub const for_attr_docs = [_]Doc{

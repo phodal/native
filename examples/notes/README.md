@@ -1,6 +1,6 @@
 # notes
 
-The daily-driver shape — folders sidebar, note list, editor — authored in markup + Zig. The whole view lives in `src/notes.zml` (compiled at comptime, hot-reloaded in dev builds); `src/model.zig` is the logic: folders and notes as model-owned tables, everything showable derived per rebuild, and persistence as one store file through the effects channel. `src/main.zig` is the wiring — shell scene, the paper/evergreen theme, the store path, and the keyboard map.
+The daily-driver shape — folders sidebar, note list, editor — authored in markup + Zig. The whole view lives in `src/notes.native` (compiled at comptime, hot-reloaded in dev builds); `src/model.zig` is the logic: folders and notes as model-owned tables, everything showable derived per rebuild, and persistence as one store file through the effects channel. `src/main.zig` is the wiring — shell scene, the paper/evergreen theme, the store path, and the keyboard map.
 
 ```sh
 native dev

@@ -2,8 +2,8 @@
 """End-to-end smoke test for `native markup lsp` — no editor required.
 
 Spawns the server, speaks LSP over stdio with Content-Length framing:
-initialize -> initialized -> didOpen (broken .zml) -> expect
-publishDiagnostics at the right line/column -> didChange (fixed .zml) ->
+initialize -> initialized -> didOpen (broken .native) -> expect
+publishDiagnostics at the right line/column -> didChange (fixed .native) ->
 expect empty diagnostics -> completion -> hover -> shutdown -> exit.
 
 Usage: lsp-smoke.py [path/to/native-sdk]   (default: zig-out/bin/native)
@@ -15,7 +15,7 @@ import sys
 
 BROKEN = "<column>\n  <bogus />\n</column>\n"
 FIXED = '<row gap="8"><text>hi {name}</text></row>\n'
-URI = "file:///tmp/smoke.zml"
+URI = "file:///tmp/smoke.native"
 
 
 def frame(payload):
@@ -78,7 +78,7 @@ def main():
 
     send(proc, {"jsonrpc": "2.0", "method": "initialized", "params": {}})
     send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
-        "textDocument": {"uri": URI, "languageId": "zml", "version": 1, "text": BROKEN}}})
+        "textDocument": {"uri": URI, "languageId": "native-markup", "version": 1, "text": BROKEN}}})
 
     published = read_until(proc, lambda m: m.get("method") == "textDocument/publishDiagnostics")
     diags = published["params"]["diagnostics"]

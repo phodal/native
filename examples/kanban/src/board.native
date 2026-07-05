@@ -1,9 +1,9 @@
 <!-- The kanban board view. The board-column template lives in
-     components/board-column.zml (a component file: all templates, no view
+     components/board-column.native (a component file: all templates, no view
      root) and is imported here; the template body is built in place of
      each <use>, so widget ids are identical to writing the three columns
      out by hand in this file. -->
-<import src="components/board-column.zml"/>
+<import src="components/board-column.native"/>
 <column gap="12" padding="16">
   <row gap="8" cross="center">
     <text grow="1">Kanban</text>

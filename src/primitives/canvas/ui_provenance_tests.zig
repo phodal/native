@@ -17,7 +17,7 @@ const Ui = canvas.Ui(Msg);
 const View = canvas.MarkupView(Model, Msg);
 
 const board_source =
-    "<import src=\"components/pill.zml\"/>\n" ++
+    "<import src=\"components/pill.native\"/>\n" ++
     "<column gap=\"8\">\n" ++
     "  <text>Board</text>\n" ++
     "  <for each=\"tasks\" as=\"task\" key=\"id\">\n" ++
@@ -72,12 +72,12 @@ const Capture = struct {
 
 fn resolvedDocument(arena: std.mem.Allocator) !markup.MarkupDocument {
     const sources = [_]markup.SourceFile{
-        .{ .path = "board.zml", .source = board_source },
-        .{ .path = "components/pill.zml", .source = pill_source },
+        .{ .path = "board.native", .source = board_source },
+        .{ .path = "components/pill.native", .source = pill_source },
     };
     var set_loader = markup.SourceSetLoader{ .set = &sources };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    const document = try markup.resolveImports(arena, "board.zml", board_source, set_loader.loader(), &diagnostic);
+    const document = try markup.resolveImports(arena, "board.native", board_source, set_loader.loader(), &diagnostic);
     return try markup.canonicalize(arena, document);
 }
 
@@ -115,7 +115,7 @@ test "interpreter stamps provenance: definition site, use-site chain, iteration 
     // its span starts at the `<column` byte of the root source. Finalize
     // records parents before children, so it is the first record.
     const column_record = capture.records.items[0];
-    try std.testing.expectEqualStrings("board.zml", column_record.src_path);
+    try std.testing.expectEqualStrings("board.native", column_record.src_path);
     try std.testing.expectEqual(std.mem.indexOf(u8, board_source, "<column").?, column_record.span.start);
     try std.testing.expectEqual(@as(usize, 0), column_record.chain_len);
     try std.testing.expectEqual(@as(usize, 0), column_record.key_count);
@@ -124,12 +124,12 @@ test "interpreter stamps provenance: definition site, use-site chain, iteration 
     // the root file (the <use> element's span), and the loop's item key.
     var badge_count: usize = 0;
     for (capture.records.items) |record| {
-        if (!std.mem.eql(u8, record.src_path, "components/pill.zml")) continue;
+        if (!std.mem.eql(u8, record.src_path, "components/pill.native")) continue;
         badge_count += 1;
         try std.testing.expectEqual(std.mem.indexOf(u8, pill_source, "<badge").?, record.span.start);
         try std.testing.expectEqual(@as(usize, 2), record.line);
         try std.testing.expectEqual(@as(usize, 1), record.chain_len);
-        try std.testing.expectEqualStrings("board.zml", record.chain_first_path);
+        try std.testing.expectEqualStrings("board.native", record.chain_first_path);
         try std.testing.expectEqual(std.mem.indexOf(u8, board_source, "<use").?, record.chain_first_span.start);
         try std.testing.expectEqual(@as(usize, 1), record.key_count);
         try std.testing.expectEqual(record.first_key_int.?, badge_count);

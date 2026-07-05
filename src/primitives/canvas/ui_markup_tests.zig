@@ -755,15 +755,15 @@ test "import resolution merges imported templates before the importer's own" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // view.zml imports components/pills.zml, which imports base.zml from
+    // view.native imports components/pills.native, which imports base.native from
     // its own directory (transitive, subdirectory, relative-to-importer).
     const set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<import src=\"components/pills.zml\"/>\n<template name=\"local\"><text>l</text></template>\n<row>\n  <use template=\"pill-stack\" title=\"T\" />\n</row>" },
-        .{ .path = "components/pills.zml", .source = "<import src=\"base.zml\"/>\n<template name=\"pill-stack\" args=\"title\"><column><use template=\"pill\" label=\"{title}\" /></column></template>" },
-        .{ .path = "components/base.zml", .source = "<template name=\"pill\" args=\"label\"><badge>{label}</badge></template>" },
+        .{ .path = "view.native", .source = "<import src=\"components/pills.native\"/>\n<template name=\"local\"><text>l</text></template>\n<row>\n  <use template=\"pill-stack\" title=\"T\" />\n</row>" },
+        .{ .path = "components/pills.native", .source = "<import src=\"base.native\"/>\n<template name=\"pill-stack\" args=\"title\"><column><use template=\"pill\" label=\"{title}\" /></column></template>" },
+        .{ .path = "components/base.native", .source = "<template name=\"pill\" args=\"label\"><badge>{label}</badge></template>" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    const document = try resolveSet(arena, &set, "view.zml", &diagnostic);
+    const document = try resolveSet(arena, &set, "view.native", &diagnostic);
 
     // Depth-first splice order: transitive imports first, then the
     // importer's templates, then the root's own.
@@ -774,11 +774,11 @@ test "import resolution merges imported templates before the importer's own" {
     try testing.expectEqual(@as(usize, 0), document.imports.len);
 
     // Every node is stamped with its source file for diagnostics.
-    try testing.expectEqualStrings("components/base.zml", document.templates[0].src_path);
-    try testing.expectEqualStrings("components/pills.zml", document.templates[1].src_path);
-    try testing.expectEqualStrings("view.zml", document.templates[2].src_path);
-    try testing.expectEqualStrings("view.zml", document.root.?.src_path);
-    try testing.expectEqualStrings("components/base.zml", document.templates[0].children[0].src_path);
+    try testing.expectEqualStrings("components/base.native", document.templates[0].src_path);
+    try testing.expectEqualStrings("components/pills.native", document.templates[1].src_path);
+    try testing.expectEqualStrings("view.native", document.templates[2].src_path);
+    try testing.expectEqualStrings("view.native", document.root.?.src_path);
+    try testing.expectEqualStrings("components/base.native", document.templates[0].children[0].src_path);
 
     // The merged document passes the strict (resolved) validation pass.
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
@@ -790,20 +790,20 @@ test "import cycles are reported with the cycle path spelled out" {
     const arena = arena_state.allocator();
 
     const set = [_]markup.SourceFile{
-        .{ .path = "a.zml", .source = "<import src=\"b.zml\"/>\n<row />" },
-        .{ .path = "b.zml", .source = "<import src=\"a.zml\"/>\n<template name=\"t\"><text>x</text></template>" },
+        .{ .path = "a.native", .source = "<import src=\"b.native\"/>\n<row />" },
+        .{ .path = "b.native", .source = "<import src=\"a.native\"/>\n<template name=\"t\"><text>x</text></template>" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "a.zml", &diagnostic));
-    try testing.expectEqualStrings("import cycle: a.zml -> b.zml -> a.zml", diagnostic.message);
-    try testing.expectEqualStrings("b.zml", diagnostic.path);
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "a.native", &diagnostic));
+    try testing.expectEqualStrings("import cycle: a.native -> b.native -> a.native", diagnostic.message);
+    try testing.expectEqualStrings("b.native", diagnostic.path);
 
     // Self-import is the shortest cycle.
     const self_set = [_]markup.SourceFile{
-        .{ .path = "a.zml", .source = "<import src=\"a.zml\"/>\n<row />" },
+        .{ .path = "a.native", .source = "<import src=\"a.native\"/>\n<row />" },
     };
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &self_set, "a.zml", &diagnostic));
-    try testing.expectEqualStrings("import cycle: a.zml -> a.zml", diagnostic.message);
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &self_set, "a.native", &diagnostic));
+    try testing.expectEqualStrings("import cycle: a.native -> a.native", diagnostic.message);
 }
 
 test "duplicate template names across files name both definition sites" {
@@ -812,24 +812,24 @@ test "duplicate template names across files name both definition sites" {
     const arena = arena_state.allocator();
 
     const set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<import src=\"one.zml\"/>\n<import src=\"two.zml\"/>\n<row />" },
-        .{ .path = "one.zml", .source = "<template name=\"card\"><text>1</text></template>" },
-        .{ .path = "two.zml", .source = "<template name=\"card\"><text>2</text></template>" },
+        .{ .path = "view.native", .source = "<import src=\"one.native\"/>\n<import src=\"two.native\"/>\n<row />" },
+        .{ .path = "one.native", .source = "<template name=\"card\"><text>1</text></template>" },
+        .{ .path = "two.native", .source = "<template name=\"card\"><text>2</text></template>" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.zml", &diagnostic));
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.native", &diagnostic));
     try testing.expect(std.mem.indexOf(u8, diagnostic.message, "duplicate template name \"card\"") != null);
-    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "one.zml:1:1") != null);
-    try testing.expectEqualStrings("two.zml", diagnostic.path);
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "one.native:1:1") != null);
+    try testing.expectEqualStrings("two.native", diagnostic.path);
 
     // Import vs local: the local definition collides with the imported one.
     const local_set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<import src=\"one.zml\"/>\n<template name=\"card\"><text>l</text></template>\n<row />" },
-        .{ .path = "one.zml", .source = "<template name=\"card\"><text>1</text></template>" },
+        .{ .path = "view.native", .source = "<import src=\"one.native\"/>\n<template name=\"card\"><text>l</text></template>\n<row />" },
+        .{ .path = "one.native", .source = "<template name=\"card\"><text>1</text></template>" },
     };
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &local_set, "view.zml", &diagnostic));
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &local_set, "view.native", &diagnostic));
     try testing.expect(std.mem.indexOf(u8, diagnostic.message, "duplicate template name \"card\"") != null);
-    try testing.expectEqualStrings("view.zml", diagnostic.path);
+    try testing.expectEqualStrings("view.native", diagnostic.path);
 }
 
 test "import path escapes, absolute paths, and bad extensions are teaching errors" {
@@ -838,17 +838,17 @@ test "import path escapes, absolute paths, and bad extensions are teaching error
     const arena = arena_state.allocator();
 
     const cases = [_]struct { src: []const u8, message: []const u8 }{
-        .{ .src = "../secrets.zml", .message = markup.import_src_escape_message },
-        .{ .src = "/etc/passwd.zml", .message = markup.import_src_absolute_message },
-        .{ .src = "c:\\parts.zml", .message = markup.import_src_absolute_message },
+        .{ .src = "../secrets.native", .message = markup.import_src_escape_message },
+        .{ .src = "/etc/passwd.native", .message = markup.import_src_absolute_message },
+        .{ .src = "c:\\parts.native", .message = markup.import_src_absolute_message },
         .{ .src = "parts.txt", .message = markup.import_src_extension_message },
         .{ .src = "", .message = markup.import_src_message },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(arena, "<import src=\"{s}\"/>\n<row />", .{case.src});
-        const set = [_]markup.SourceFile{.{ .path = "src/view.zml", .source = source }};
+        const set = [_]markup.SourceFile{.{ .path = "src/view.native", .source = source }};
         var diagnostic: markup.MarkupErrorInfo = .{};
-        try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "src/view.zml", &diagnostic));
+        try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "src/view.native", &diagnostic));
         try testing.expectEqualStrings(case.message, diagnostic.message);
         try testing.expectEqual(@as(usize, 1), diagnostic.line);
     }
@@ -856,10 +856,43 @@ test "import path escapes, absolute paths, and bad extensions are teaching error
     // Within-root ".." stays legal: components can reach a sibling folder
     // under the markup root.
     var buffer: [markup.max_import_path_len]u8 = undefined;
-    const resolved = markup.resolveImportPath("src", "src/components/pills.zml", "../shared/base.zml", &buffer);
-    try testing.expectEqualStrings("src/shared/base.zml", resolved.path);
-    const escaped = markup.resolveImportPath("src", "src/view.zml", "../../other.zml", &buffer);
+    const resolved = markup.resolveImportPath("src", "src/components/pills.native", "../shared/base.native", &buffer);
+    try testing.expectEqualStrings("src/shared/base.native", resolved.path);
+    const escaped = markup.resolveImportPath("src", "src/view.native", "../../other.native", &buffer);
     try testing.expectEqualStrings(markup.import_src_escape_message, escaped.message);
+}
+
+test "the former .zml extension keeps loading and mixes with .native imports" {
+    // The rename window: `.zml` (the format's former extension) resolves
+    // everywhere `.native` does, and imports go by the path as written, so
+    // a closure may mix both extensions while an app renames file by file.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try testing.expect(markup.hasMarkupExtension("view.native"));
+    try testing.expect(markup.hasMarkupExtension("view.zml"));
+    try testing.expect(!markup.hasMarkupExtension("view.html"));
+    try testing.expect(!markup.hasMarkupExtension("view.xml"));
+
+    // A .native view importing a .zml component.
+    const native_root_set = [_]markup.SourceFile{
+        .{ .path = "view.native", .source = "<import src=\"parts.zml\"/>\n<row><use template=\"pill\" /></row>" },
+        .{ .path = "parts.zml", .source = "<template name=\"pill\"><badge>x</badge></template>" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    const native_root = try resolveSet(arena, &native_root_set, "view.native", &diagnostic);
+    try testing.expectEqual(@as(usize, 1), native_root.templates.len);
+    try testing.expectEqualStrings("parts.zml", native_root.templates[0].src_path);
+
+    // A .zml view importing a .native component.
+    const zml_root_set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<import src=\"parts.native\"/>\n<row><use template=\"pill\" /></row>" },
+        .{ .path = "parts.native", .source = "<template name=\"pill\"><badge>x</badge></template>" },
+    };
+    const zml_root = try resolveSet(arena, &zml_root_set, "view.zml", &diagnostic);
+    try testing.expectEqual(@as(usize, 1), zml_root.templates.len);
+    try testing.expectEqualStrings("parts.native", zml_root.templates[0].src_path);
 }
 
 test "an imported file with a view root is rejected with the teaching error" {
@@ -868,13 +901,13 @@ test "an imported file with a view root is rejected with the teaching error" {
     const arena = arena_state.allocator();
 
     const set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<import src=\"other.zml\"/>\n<row />" },
-        .{ .path = "other.zml", .source = "<template name=\"t\"><text>x</text></template>\n<column />" },
+        .{ .path = "view.native", .source = "<import src=\"other.native\"/>\n<row />" },
+        .{ .path = "other.native", .source = "<template name=\"t\"><text>x</text></template>\n<column />" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.zml", &diagnostic));
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.native", &diagnostic));
     try testing.expectEqualStrings(markup.import_view_root_message, diagnostic.message);
-    try testing.expectEqualStrings("other.zml", diagnostic.path);
+    try testing.expectEqualStrings("other.native", diagnostic.path);
 }
 
 test "a missing imported file reports at the importing file's position" {
@@ -883,13 +916,13 @@ test "a missing imported file reports at the importing file's position" {
     const arena = arena_state.allocator();
 
     const set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<row />\n" },
-        .{ .path = "importer.zml", .source = "<import src=\"nope.zml\"/>\n<row />" },
+        .{ .path = "view.native", .source = "<row />\n" },
+        .{ .path = "importer.native", .source = "<import src=\"nope.native\"/>\n<row />" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "importer.zml", &diagnostic));
-    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "unable to read imported file \"nope.zml\"") != null);
-    try testing.expectEqualStrings("importer.zml", diagnostic.path);
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "importer.native", &diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "unable to read imported file \"nope.native\"") != null);
+    try testing.expectEqualStrings("importer.native", diagnostic.path);
     try testing.expectEqual(@as(usize, 1), diagnostic.line);
 }
 
@@ -901,15 +934,15 @@ test "hostile import chains and template counts get bounded errors" {
     // A chain one past max_import_depth errors instead of recursing on.
     var files: std.ArrayListUnmanaged(markup.SourceFile) = .empty;
     for (0..markup.max_import_depth + 1) |index| {
-        const path = try std.fmt.allocPrint(arena, "c{d}.zml", .{index});
+        const path = try std.fmt.allocPrint(arena, "c{d}.native", .{index});
         const source = if (index == markup.max_import_depth)
             try std.fmt.allocPrint(arena, "<template name=\"leaf\"><text>x</text></template>", .{})
         else
-            try std.fmt.allocPrint(arena, "<import src=\"c{d}.zml\"/>\n<template name=\"t{d}\"><text>x</text></template>", .{ index + 1, index });
+            try std.fmt.allocPrint(arena, "<import src=\"c{d}.native\"/>\n<template name=\"t{d}\"><text>x</text></template>", .{ index + 1, index });
         try files.append(arena, .{ .path = path, .source = source });
     }
     var diagnostic: markup.MarkupErrorInfo = .{};
-    try testing.expectError(error.MarkupImport, resolveSet(arena, files.items, "c0.zml", &diagnostic));
+    try testing.expectError(error.MarkupImport, resolveSet(arena, files.items, "c0.native", &diagnostic));
     try testing.expectEqualStrings(markup.import_depth_message, diagnostic.message);
 
     // A single file with too many templates fails the parse cap.
@@ -929,15 +962,15 @@ test "imports parse at the top only and validate their shape" {
     const arena = arena_state.allocator();
 
     // An import after a template is a parse error (position is structure).
-    var parser = markup.Parser.init(arena, "<template name=\"t\"><text>x</text></template>\n<import src=\"a.zml\"/>\n<row />");
+    var parser = markup.Parser.init(arena, "<template name=\"t\"><text>x</text></template>\n<import src=\"a.native\"/>\n<row />");
     try testing.expectError(error.MarkupSyntax, parser.parse());
     try testing.expectEqualStrings(markup.import_top_level_message, parser.diagnostic.message);
 
     const shape_cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<import/>\n<row />", .message = markup.import_src_message },
-        .{ .source = "<import src=\"a.zml\" extra=\"1\"/>\n<row />", .message = markup.import_attrs_message },
-        .{ .source = "<import src=\"a.zml\"><text>x</text></import>\n<row />", .message = markup.import_children_message },
-        .{ .source = "<column>\n  <import src=\"a.zml\"/>\n</column>", .message = markup.import_top_level_message },
+        .{ .source = "<import src=\"a.native\" extra=\"1\"/>\n<row />", .message = markup.import_attrs_message },
+        .{ .source = "<import src=\"a.native\"><text>x</text></import>\n<row />", .message = markup.import_children_message },
+        .{ .source = "<column>\n  <import src=\"a.native\"/>\n</column>", .message = markup.import_top_level_message },
     };
     for (shape_cases) |case| {
         var case_parser = markup.Parser.init(arena, case.source);
@@ -947,7 +980,7 @@ test "imports parse at the top only and validate their shape" {
 
     // A view with unresolved imports skips use-reference checks (the
     // template may come from the import); everything else still validates.
-    var lenient_parser = markup.Parser.init(arena, "<import src=\"a.zml\"/>\n<row>\n  <use template=\"from-import\" whatever=\"1\" />\n</row>");
+    var lenient_parser = markup.Parser.init(arena, "<import src=\"a.native\"/>\n<row>\n  <use template=\"from-import\" whatever=\"1\" />\n</row>");
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try lenient_parser.parse()));
 }
 

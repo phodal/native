@@ -40,7 +40,7 @@
 # canvas-preview, mobile), the Chromium host link check (cef-host-link),
 # the macOS automation smokes (gpu-surface,
 # gpu-dashboard, gpu-components, canvas-preview, writeback; skipped off-macOS), a
-# markup check over every example .zml, and the docs check if docs/ changed
+# markup check over every example markup file, and the docs check if docs/ changed
 # vs base-ref or --all was passed. --perf additionally runs the percentile
 # GPU perf check (test-gpu-dashboard-perf; macOS only, slow, load-sensitive —
 # opt-in so a busy dev box doesn't fail the gate on noise).
@@ -325,7 +325,8 @@ else # full
   markup_check() {
     zig build || return 1
     # shellcheck disable=SC2046
-    ./zig-out/bin/native markup check $(find examples -name '*.zml' | sort)
+    # .zml is the format's former extension; it keeps checking during the rename window.
+    ./zig-out/bin/native markup check $(find examples -name '*.native' -o -name '*.zml' | sort)
   }
   run_step "markup-check" markup_check
 

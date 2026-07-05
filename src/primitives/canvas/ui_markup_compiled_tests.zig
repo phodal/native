@@ -1111,12 +1111,12 @@ test "compiled split and tree match the interpreter and the hand-written view" {
 const ImportCompiled = canvas.CompiledMarkupImports(
     fixture.TemplateModel,
     fixture.TemplateMsg,
-    "view.zml",
+    "view.native",
     &fixture.import_view_sources,
 );
 
 fn interpretImports(arena: std.mem.Allocator, model: *const fixture.TemplateModel) !TemplateUi.Tree {
-    const document = try fixture.resolveImportSet(arena, &fixture.import_view_sources, "view.zml");
+    const document = try fixture.resolveImportSet(arena, &fixture.import_view_sources, "view.native");
     var view = TemplateInterpreter.fromDocument(document);
     var ui = TemplateUi.init(arena);
     return ui.finalize(try view.build(&ui, model));

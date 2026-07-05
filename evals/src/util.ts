@@ -72,7 +72,7 @@ export function tailLines(result: ExecResult, maxLines = 15): string {
 
 /**
  * Resolve a minimal glob relative to `root`: either an exact relative path or
- * a single-`*` basename pattern like "src/*.zml" (also searched one level of
+ * a single-`*` basename pattern like "src/*.native" (also searched one level of
  * subdirectories deep under the pattern's directory).
  */
 export function resolveFiles(root: string, selector: string): string[] {

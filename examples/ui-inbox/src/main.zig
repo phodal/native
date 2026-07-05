@@ -1,6 +1,6 @@
 //! ui-inbox: a native-rendered task inbox authored in markup + Zig.
 //!
-//! The view lives in `inbox.zml` (embedded into the binary, and watched for
+//! The view lives in `inbox.native` (embedded into the binary, and watched for
 //! hot reload in dev); this file is the logic: `Model`, `Msg`, and `update`.
 //! The markup compiles to the same builder tree a hand-written `view()`
 //! would produce — structural identity, flex layout, and typed message
@@ -179,10 +179,10 @@ pub fn update(model: *Model, msg: Msg) void {
 // ------------------------------------------------------------------- view
 
 pub const InboxUi = canvas.Ui(Msg);
-pub const inbox_markup = @embedFile("inbox.zml");
+pub const inbox_markup = @embedFile("inbox.native");
 pub const CompiledInboxView = canvas.CompiledMarkupView(Model, Msg, inbox_markup);
 
-/// Debug builds keep the interpreter for .zml hot reload; release builds
+/// Debug builds keep the interpreter for .native hot reload; release builds
 /// ship the comptime-compiled view with no parser in the binary.
 const dev_markup_reload = builtin.mode == .Debug;
 
@@ -204,7 +204,7 @@ fn initialModel() Model {
 // ------------------------------------------------------------------ mobile
 //
 // `zig build lib -Dmobile=true` compiles this same Model/Msg/update and the
-// comptime-compiled .zml view into the mobile embed static library
+// comptime-compiled .native view into the mobile embed static library
 // (`native_sdk.addMobileLib`); the embed host drives it on the canonical
 // single-surface canvas scene. Markup hot reload stays desktop-only.
 
@@ -232,7 +232,7 @@ pub fn main(init: std.process.Init) !void {
         .update = update,
         .view = CompiledInboxView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = inbox_markup, .watch_path = "src/inbox.zml", .io = init.io }
+            .{ .source = inbox_markup, .watch_path = "src/inbox.native", .io = init.io }
         else
             null,
     });

@@ -1,18 +1,18 @@
 ---
 name: native-ui
-description: Authoring guide for native-rendered Native SDK apps - declarative .zml markup views plus Zig logic on the UiApp loop. Use when building or modifying native UI (widgets, layout, bindings, messages), writing .zml files, wiring Model/Msg/update, testing markup views, or verifying a native app through the automation harness.
+description: Authoring guide for native-rendered Native SDK apps - declarative Native markup (.native) views plus Zig logic on the UiApp loop. Use when building or modifying native UI (widgets, layout, bindings, messages), writing .native files, wiring Model/Msg/update, testing markup views, or verifying a native app through the automation harness.
 ---
 
 # Author native UI with markup + Zig
 
 A native-rendered Native SDK app is a markup view plus Zig logic:
 
-- `src/<view>.zml` — the entire UI: elements, layout, bindings, message dispatch.
+- `src/<view>.native` — the entire UI: elements, layout, bindings, message dispatch.
 - `src/main.zig` — `Model` (plain struct), `Msg` (tagged union), `update(model, msg)`, and a `main` that hands them to `native_sdk.UiApp(Model, Msg)`.
 
 The markup compiles to the same widget tree a hand-written `canvas.Ui(Msg)` builder view would produce: identical structural widget ids, identical typed handler table. Markup can never mutate state — it binds values and dispatches messages; all logic lives in Zig.
 
-Editors highlight `.zml` well in HTML mode — projects ship `.vscode/settings.json` with `"files.associations": {"*.zml": "html"}` (add it if missing).
+Editors highlight `.native` markup well in HTML mode — projects ship `.vscode/settings.json` with `"files.associations": {"*.native": "html"}` (add it if missing). Files with the format's former `.zml` extension still load and check everywhere `.native` does; rename them when convenient.
 
 Start a new app with `native init` (zero-config: app.zon + src + assets, the CLI generates the build graph), or copy `examples/habits/` (smallest): change the name/id in app.zon and `assets/` copies verbatim — there are no build files to edit. The `native dev|test|build` verbs drive any app directory shaped this way.
 
@@ -32,8 +32,8 @@ pub fn main(init: std.process.Init) !void {
         .canvas_label = "habits-canvas",  // must match the ShellView label
         .update = update,
         .markup = .{
-            .source = @embedFile("habits.zml"),
-            .watch_path = "src/habits.zml", // dev hot reload; omit in release
+            .source = @embedFile("habits.native"),
+            .watch_path = "src/habits.native", // dev hot reload; omit in release
             .io = init.io,
         },
     });
@@ -45,17 +45,17 @@ pub fn main(init: std.process.Init) !void {
 
 (`create` requires every Model field to carry a default; the model starts as `.{}` and boot state is assigned through the returned pointer. Tests that instantiate the app per fixture should use `create`/`destroy` too — a runtime-built Model passed to `init` by value crashes the test stack once models get large.)
 
-The runtime owns the loop: install on first GPU frame, presentation, resize, pointer/keyboard dispatch into `update` + rebuild. With `watch_path` set, editing the `.zml` while the app runs hot-reloads the view within ~2s, preserving model state and widget ids; parse failures keep the last good view and set `app_state.markup_diagnostic` (line/column/message).
+The runtime owns the loop: install on first GPU frame, presentation, resize, pointer/keyboard dispatch into `update` + rebuild. With `watch_path` set, editing the `.native` file while the app runs hot-reloads the view within ~2s, preserving model state and widget ids; parse failures keep the last good view and set `app_state.markup_diagnostic` (line/column/message).
 
-**Release: compile the markup at comptime.** `canvas.CompiledMarkupView(Model, Msg, source).build` parses the `.zml` entirely at compile time and produces the identical tree (same ids, handlers, dispatch) with no parser in the binary; markup or binding mistakes become compile errors with line/column. Hand it to `.view`, and gate the runtime engine per build mode:
+**Release: compile the markup at comptime.** `canvas.CompiledMarkupView(Model, Msg, source).build` parses the `.native` source entirely at compile time and produces the identical tree (same ids, handlers, dispatch) with no parser in the binary; markup or binding mistakes become compile errors with line/column. Hand it to `.view`, and gate the runtime engine per build mode:
 
 ```zig
 const dev = @import("builtin").mode == .Debug;
 const App = native_sdk.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev });
-const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("habits.zml"));
+const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("habits.native"));
 // options:
 .view = CompiledView.build,
-.markup = if (dev) .{ .source = ..., .watch_path = "src/habits.zml", .io = init.io } else null,
+.markup = if (dev) .{ .source = ..., .watch_path = "src/habits.native", .io = init.io } else null,
 ```
 
 With both set (dev), the compiled view renders until the watched file first changes, then the interpreter hot-reloads it. See `examples/habits` for the full pattern.
@@ -824,9 +824,9 @@ Rules and semantics:
 - Args bind like `for` variables: an arg whose value is a `{binding}` naming an iterable (model slice/array field, pub decl, or model fn — the same set `for each` accepts) is iterable inside the template (`<for each="cards" ...>`); any other arg (literal or scalar binding) is a value usable in bindings, interpolation, and equality (`{title}`, `label="{title}"`). Args are evaluated at the use site; inside the body only the args, the model, and the body's own loop variables are in scope. Value args are scalars — `{arg.field}` is an error.
 - Uses inside a template body may only reference templates defined EARLIER in the file (this also makes recursion impossible). Bindings stay zero-argument: the template deduplicates the view, the per-case query stays a named model function.
 - SLOTS: a template body may contain one `<slot/>` (attribute-less, childless; named slots do not exist). The `<use>` site's children build IN THE CONSUMER'S SCOPE — they see the model paths and loop variables where the use is written — and land at the slot's position; ids hash as if inlined. A use with no children renders the slot empty; children on a slotless template are an error; a `<slot/>` inside use-site children (forwarding) is an error.
-- IMPORTS: `<import src="components/cards.zml"/>` lines go at the very top of a file, before its templates. Paths are relative to the importing file (subdirectories and transitive imports fine, always under the root view file's directory — absolute paths and escapes are errors). An imported file defines templates ONLY (a component file; a view root inside one is an error, and a component file checks standalone). Importing splices the file's templates (transitively) BEFORE yours, in import order — as if pasted at the import site — so define-before-use stays the only ordering rule. Cycles are reported with the cycle path; duplicate template names are an error naming both definition sites.
+- IMPORTS: `<import src="components/cards.native"/>` lines go at the very top of a file, before its templates. Paths are relative to the importing file (subdirectories and transitive imports fine, always under the root view file's directory — absolute paths and escapes are errors). An imported file defines templates ONLY (a component file; a view root inside one is an error, and a component file checks standalone). Importing splices the file's templates (transitively) BEFORE yours, in import order — as if pasted at the import site — so define-before-use stays the only ordering rule. Cycles are reported with the cycle path; duplicate template names are an error naming both definition sites.
 
-Both engines implement templates, defaults, slots, and imports: the interpreter expands at build time (hot reload re-resolves imports from disk, so edits to imported files reload), and the compiled engine inlines at comptime with the identical result. A document with imports compiles through `canvas.CompiledMarkupImports(Model, Msg, "root.zml", &sources)` where `sources` is a `canvas.ui_markup.SourceFile` set (`.{ .path = "components/cards.zml", .source = @embedFile("components/cards.zml") }`, paths relative to the root file's directory); pass the same set on `MarkupOptions.sources` for the runtime engine. See `examples/kanban/src/board.zml` + `examples/kanban/src/components/board-column.zml`.
+Both engines implement templates, defaults, slots, and imports: the interpreter expands at build time (hot reload re-resolves imports from disk, so edits to imported files reload), and the compiled engine inlines at comptime with the identical result. A document with imports compiles through `canvas.CompiledMarkupImports(Model, Msg, "root.native", &sources)` where `sources` is a `canvas.ui_markup.SourceFile` set (`.{ .path = "components/cards.native", .source = @embedFile("components/cards.native") }`, paths relative to the root file's directory); pass the same set on `MarkupOptions.sources` for the runtime engine. See `examples/kanban/src/board.native` + `examples/kanban/src/components/board-column.native`.
 
 ## Markdown in markup: `<markdown>`
 
@@ -927,7 +927,7 @@ Md.view(ui, model.body_markdown, .{
 
 ## Validate without building
 
-`native markup check src/view.zml` — instant grammar/structure validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face (⌘, ✓, ⑂, dingbats, CJK) is a teaching error naming the character, because it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon (`icon=` / `<icon name>`) or plain words. Dynamic strings get the same lesson as a Debug-build `zero_canvas_ui` diagnostic when the view builds. The accessibility lint rides the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (`--strict` promotes).
+`native markup check src/view.native` — instant grammar/structure validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face (⌘, ✓, ⑂, dingbats, CJK) is a teaching error naming the character, because it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon (`icon=` / `<icon name>`) or plain words. Dynamic strings get the same lesson as a Debug-build `zero_canvas_ui` diagnostic when the view builds. The accessibility lint rides the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (`--strict` promotes).
 
 The model side checks at check time too: the model-contract step (refreshed by `native test`, or run directly as `zig build model-contract` in an app that owns its build) reflects Model/Msg into `zig-out/model-contract.zon`, and `native check` (or `markup check` run in the app directory) then verifies every binding path, iterable, `key` field, message tag, payload type, and expression type against the app's real surface — did-you-mean over your actual field names, and type errors naming the field's Zig type. It also WARNS on model state and Msg tags no view uses; opt update-only names out with `pub const view_unbound = .{ "next_id" };` on Model or Msg (`--strict` turns the warnings into failures). A stale artifact degrades to grammar-only checking with a note; binding paths and message tags are always re-enforced when the app builds (and on hot reload).
 

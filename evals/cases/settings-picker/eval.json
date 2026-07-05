@@ -1,7 +1,7 @@
 {
   "name": "settings-picker",
   "description": "Exercises the anchored floating surface pattern: select triggers composed with anchored dropdown-menus (anchor + on-dismiss + menu-item), model-owned open state, exclusive open across two pickers.",
-  "prompt": "This workspace is a freshly scaffolded Native SDK native-frontend app (see README.md; the view is src/app.zml, the logic src/main.zig). Replace the counter with a small appearance settings panel.\n\nRequirements:\n- A picker row labeled exactly \"Theme\": a closed picker control that always shows the currently selected theme's name. The options are exactly \"System\", \"Light\", and \"Dark\", starting on \"System\".\n- Pressing the closed picker opens a floating menu listing all three options. The menu must float OVER the content below it, anchored to the picker — opening it must not push the rest of the layout down or reflow any sibling. The currently selected option is visually marked inside the open menu.\n- Choosing an option makes it the current selection and closes the menu. Pressing Escape or clicking anywhere outside the open menu must close it without changing the selection.\n- A second picker row labeled exactly \"Accent\" with options exactly \"Blue\", \"Green\", and \"Orange\" (starting on \"Blue\"), behaving the same way. At most one menu is open at a time: opening one picker closes the other.\n- A status bar with the exact text \"Theme: <theme> · Accent: <accent>\" (so \"Theme: System · Accent: Blue\" at first), updating live with the selections.\n- Keep all logic in src/main.zig (Model, Msg, update); the markup only binds values and dispatches messages.\n- Validate the markup with `native markup check src/app.zml`, and keep `zig build test` green — extend src/tests.zig so the tests cover opening a picker, choosing an option through the real dispatch path (assert the selection changed and the menu closed), and the dismiss path (the menu closes, the selection does not change).\n\nWhen you are done, make sure `zig build test` passes and summarize what you built.",
+  "prompt": "This workspace is a freshly scaffolded Native SDK native-frontend app (see README.md; the view is src/app.native, the logic src/main.zig). Replace the counter with a small appearance settings panel.\n\nRequirements:\n- A picker row labeled exactly \"Theme\": a closed picker control that always shows the currently selected theme's name. The options are exactly \"System\", \"Light\", and \"Dark\", starting on \"System\".\n- Pressing the closed picker opens a floating menu listing all three options. The menu must float OVER the content below it, anchored to the picker — opening it must not push the rest of the layout down or reflow any sibling. The currently selected option is visually marked inside the open menu.\n- Choosing an option makes it the current selection and closes the menu. Pressing Escape or clicking anywhere outside the open menu must close it without changing the selection.\n- A second picker row labeled exactly \"Accent\" with options exactly \"Blue\", \"Green\", and \"Orange\" (starting on \"Blue\"), behaving the same way. At most one menu is open at a time: opening one picker closes the other.\n- A status bar with the exact text \"Theme: <theme> · Accent: <accent>\" (so \"Theme: System · Accent: Blue\" at first), updating live with the selections.\n- Keep all logic in src/main.zig (Model, Msg, update); the markup only binds values and dispatches messages.\n- Validate the markup with `native markup check src/app.native`, and keep `zig build test` green — extend src/tests.zig so the tests cover opening a picker, choosing an option through the real dispatch path (assert the selection changed and the menu closed), and the dismiss path (the menu closes, the selection does not change).\n\nWhen you are done, make sure `zig build test` passes and summarize what you built.",
   "frontend": "native",
   "timeoutMs": 1200000,
   "maxTurns": 80,
@@ -17,28 +17,28 @@
     },
     {
       "type": "file_grep",
-      "files": "src/*.zml",
+      "files": "src/*.native",
       "pattern": "<select[\\s>]",
       "expect": true,
       "description": "the closed picker is a <select> trigger"
     },
     {
       "type": "file_grep",
-      "files": "src/*.zml",
+      "files": "src/*.native",
       "pattern": "<dropdown-menu\\s+[^>]*anchor=",
       "expect": true,
       "description": "the options float in an anchored <dropdown-menu>"
     },
     {
       "type": "file_grep",
-      "files": "src/*.zml",
+      "files": "src/*.native",
       "pattern": "on-dismiss=",
       "expect": true,
       "description": "Escape/outside-click dismissal dispatches on-dismiss"
     },
     {
       "type": "file_grep",
-      "files": "src/*.zml",
+      "files": "src/*.native",
       "pattern": "<menu-item[\\s>]",
       "expect": true,
       "description": "the options are <menu-item>s"

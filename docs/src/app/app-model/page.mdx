@@ -5,7 +5,7 @@ A Native SDK app is one loop with four parts:
 - **Model** — a plain Zig struct holding all app state.
 - **Msg** — a tagged union of everything that can happen.
 - **update(model, msg)** — the only place state changes.
-- **View** — a `.zml` markup file (or a Zig view function) that derives the UI from the model.
+- **View** — a Native markup file (`.native`, or a Zig view function) that derives the UI from the model.
 
 The runtime owns everything else: window creation, GPU presentation, resize, pointer and keyboard dispatch, timers, accessibility, and hot reload. Your code never handles a raw event — input lands on a widget, the widget's bound message dispatches into `update`, the view rebuilds from the new model, and the engine repaints what changed.
 
@@ -33,7 +33,7 @@ pub fn update(model: *Model, msg: Msg) void {
 }
 ```
 
-The view in `src/app.zml` binds the model and names the messages:
+The view in `src/app.native` binds the model and names the messages:
 
 ```html
 <row gap="8" main="center" cross="center" grow="1">
@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,             // one window, one gpu_surface view
         .canvas_label = "main-canvas",    // must match the scene's view label
         .update = update,
-        .markup = .{ .source = app_markup, .watch_path = "src/app.zml", .io = init.io },
+        .markup = .{ .source = app_markup, .watch_path = "src/app.native", .io = init.io },
     });
     defer app_state.destroy();
     app_state.model = initialModel();     // boot state: assign through the pointer
@@ -81,7 +81,7 @@ After every `update`, the runtime rebuilds the view from the model. Rebuilds are
 
 ## Hot reload in development
 
-With `watch_path` set, the runtime watches the `.zml` file while the app runs. Edits apply within about two seconds, preserving model state and widget identity. Parse failures keep the last good view on screen and record a diagnostic (`app_state.markup_diagnostic` carries line, column, and message).
+With `watch_path` set, the runtime watches the `.native` file while the app runs. Edits apply within about two seconds, preserving model state and widget identity. Parse failures keep the last good view on screen and record a diagnostic (`app_state.markup_diagnostic` carries line, column, and message).
 
 ## Compile the markup for release
 
@@ -90,10 +90,10 @@ In release builds the markup compiles at comptime — no parser in the binary, a
 ```zig
 const dev = @import("builtin").mode == .Debug;
 const App = native_sdk.UiAppWithFeatures(Model, Msg, .{ .runtime_markup = dev });
-const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("app.zml"));
+const CompiledView = canvas.CompiledMarkupView(Model, Msg, @embedFile("app.native"));
 // options:
 .view = CompiledView.build,
-.markup = if (dev) .{ .source = app_markup, .watch_path = "src/app.zml", .io = init.io } else null,
+.markup = if (dev) .{ .source = app_markup, .watch_path = "src/app.native", .io = init.io } else null,
 ```
 
 Both engines produce the identical widget tree — same structural ids, same typed handler table — so tests, automation scripts, and goldens hold across dev and release.

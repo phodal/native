@@ -12,7 +12,7 @@ import { githubUrl, npmCli, siteName } from "@/lib/site";
 
 const installCommands = [`npm install -g ${npmCli}`];
 
-const zmlSample = `<column gap="12" padding="16">
+const markupSample = `<column gap="12" padding="16">
   <row gap="8" cross="center">
     <text-field text="{draft}" placeholder="New task…"
                 on-input="draft_edit" on-submit="add" grow="1" />
@@ -409,7 +409,7 @@ export default function HomePage() {
             app runs, keeping state.
           </SectionLede>
           <div className="mt-10 grid gap-6 lg:grid-cols-2">
-            <CodePane title="src/inbox.zml" lang="html" code={zmlSample} />
+            <CodePane title="src/inbox.native" lang="html" code={markupSample} />
             <CodePane title="src/main.zig" lang="zig" code={zigSample} />
           </div>
           <figure className="mt-6">
@@ -613,7 +613,7 @@ export default function HomePage() {
             <Terminal title="terminal">
               <Prompt>native init my_app</Prompt>
               <Prompt>cd my_app && native dev</Prompt>
-              <Muted>a real window opens — edit src/app.zml while it runs</Muted>
+              <Muted>a real window opens — edit src/app.native while it runs</Muted>
             </Terminal>
           </div>
           <div className="mt-8 flex items-center justify-center gap-3">

@@ -236,7 +236,7 @@ fn usage() void {
         \\  dev [dir] [--yes] [-D... zig build flags]      build and run the app (hot reload)
         \\  build [dir] [--yes] [-D... zig build flags]    build a ReleaseFast binary into zig-out/bin/
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
-        \\  check [dir] [--strict]                         validate src/*.zml markup and app.zon (uses zig-out/model-contract.zon when fresh)
+        \\  check [dir] [--strict]                         validate src/*.native markup and app.zon (uses zig-out/model-contract.zon when fresh)
         \\  eject [dir]                                    write an owned build.zig/build.zig.zon into the app
         \\  cef install|path|doctor [--dir path] [--version version] [--source prepared|official] [--force]
         \\  doctor [--strict] [--manifest app.zon] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install]
@@ -248,7 +248,7 @@ fn usage() void {
         \\  package-linux [--output path] [--binary path]
         \\  package-ios [--output path] [--binary path]
         \\  package-android [--output path] [--binary path]
-        \\  markup check <file.zml> [more files...] [--strict] | markup dump <file.zml> [--out doc.nsui] | markup lsp
+        \\  markup check <file.native> [more files...] [--strict] | markup dump <file.native> [--out doc.nsui] | markup lsp
         \\  automate <command>
         \\  skills list|get
         \\  version
@@ -341,7 +341,7 @@ fn enterAppDir(io: std.Io, dir: []const u8) !void {
     };
 }
 
-/// `native check`: validate every .zml under src/ plus app.zon — the
+/// `native check`: validate every markup file under src/ plus app.zon — the
 /// no-build confidence pass (markup vocabulary + manifest schema). With a
 /// fresh model-contract artifact in zig-out (emitted by the app's
 /// `zig build model-contract` step), the markup pass also verifies
@@ -356,7 +356,7 @@ fn runCheck(allocator: std.mem.Allocator, io: std.Io, strict: bool) !void {
 
     var markup_files: std.ArrayList([]const u8) = .empty;
     defer markup_files.deinit(allocator);
-    try collectZmlFiles(allocator, io, "src", &markup_files);
+    try collectMarkupFiles(allocator, io, "src", &markup_files);
     var outcome = markup_cli.CheckOutcome{};
     if (markup_files.items.len > 0) {
         outcome = try markup_cli.checkFiles(allocator, io, markup_files.items);
@@ -375,13 +375,16 @@ fn runCheck(allocator: std.mem.Allocator, io: std.Io, strict: bool) !void {
     }
 }
 
-fn collectZmlFiles(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8, out: *std.ArrayList([]const u8)) !void {
+/// Every `.native` file under the root — plus `.zml`, the format's former
+/// extension, which keeps checking during the rename window (the checker
+/// notes the rename per file).
+fn collectMarkupFiles(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8, out: *std.ArrayList([]const u8)) !void {
     var root = std.Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true }) catch return;
     defer root.close(io);
     var walker = try root.walk(allocator);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".zml")) {
+        if (entry.kind == .file and markup_cli.hasMarkupExtension(entry.path)) {
             try out.append(allocator, try std.fs.path.join(allocator, &.{ root_path, entry.path }));
         }
     }

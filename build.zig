@@ -1037,7 +1037,7 @@ pub fn build(b: *std.Build) void {
     // interpreter + hot-reload watch, which apps enable in Debug
     // (kanban's dev_markup_reload) - the release engine is compiled and
     // watchless by design.
-    const writeback_smoke_build = b.addSystemCommand(&.{ "zig", "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true", "-Doptimize=Debug" });
+    const writeback_smoke_build = managedExampleRun(b, cli_exe, &.{ "build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true", "-Doptimize=Debug" });
     writeback_smoke_build.setCwd(b.path("examples/kanban"));
     const writeback_smoke_run = b.addSystemCommand(&.{
         "sh", "-c",
@@ -1049,45 +1049,45 @@ pub fn build(b: *std.Build) void {
         \\automation_dir=".zig-cache/native-sdk-automation"
         \\mkdir -p "$automation_dir"
         \\rm -f "$automation_dir/snapshot.txt" "$automation_dir/command.txt" "$automation_dir/provenance.txt"
-        \\# The smoke edits src/board.zml through the write-back verb and restores
+        \\# The smoke edits src/board.native through the write-back verb and restores
         \\# it through the same verb; the trap restores from the backup on ANY
         \\# failure so an aborted run never leaves the example dirty.
-        \\cp src/board.zml .zig-cache/board.zml.smoke-backup
+        \\cp src/board.native .zig-cache/board.native.smoke-backup
         \\"$app" > .zig-cache/native-sdk-writeback-smoke.log 2>&1 &
         \\pid=$!
-        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; cp .zig-cache/board.zml.smoke-backup src/board.zml; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-writeback-smoke.log) ----" >&2; cat .zig-cache/native-sdk-writeback-smoke.log >&2 2>/dev/null || true; fi' EXIT
+        \\trap 'status=$?; kill "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; cp .zig-cache/board.native.smoke-backup src/board.native; if [ "$status" -ne 0 ]; then echo "---- app log (.zig-cache/native-sdk-writeback-smoke.log) ----" >&2; cat .zig-cache/native-sdk-writeback-smoke.log >&2 2>/dev/null || true; fi' EXIT
         \\"$cli" automate assert --timeout-ms 30000 'ready=true' >/dev/null
         \\snapshot="$(cat "$automation_dir/snapshot.txt")"
         \\button_id="$(printf '%s\n' "$snapshot" | sed -n 's/.*widget @w1\/kanban-canvas#\([0-9][0-9]*\) role=button name="Add card".*/\1/p' | head -n 1)"
         \\case "$button_id" in ''|*[!0-9]*) echo "writeback smoke: Add card button id was missing from the snapshot" >&2; exit 1 ;; esac
         \\# 1. Provenance: the button reports its authored span in the root file.
         \\provenance="$("$cli" automate provenance kanban-canvas "$button_id" 2>/dev/null)"
-        \\case "$provenance" in *"authored=markup"*"root=src/board.zml"*) ;; *) echo "writeback smoke: button provenance was not markup-authored: $provenance" >&2; exit 1 ;; esac
-        \\case "$provenance" in *"node file=src/board.zml"*) ;; *) echo "writeback smoke: button provenance named the wrong file: $provenance" >&2; exit 1 ;; esac
+        \\case "$provenance" in *"authored=markup"*"root=src/board.native"*) ;; *) echo "writeback smoke: button provenance was not markup-authored: $provenance" >&2; exit 1 ;; esac
+        \\case "$provenance" in *"node file=src/board.native"*) ;; *) echo "writeback smoke: button provenance named the wrong file: $provenance" >&2; exit 1 ;; esac
         \\# 2. Template + import chain: a card title reports its definition site in
         \\# the component file plus the <use> site in the root file, with the
         \\# for-loop iteration key.
         \\card_id="$(printf '%s\n' "$snapshot" | sed -n 's/.*widget @w1\/kanban-canvas#\([0-9][0-9]*\) role=text name="Sketch the board layout".*/\1/p' | head -n 1)"
         \\case "$card_id" in ''|*[!0-9]*) echo "writeback smoke: card text id was missing from the snapshot" >&2; exit 1 ;; esac
         \\card_provenance="$("$cli" automate provenance kanban-canvas "$card_id" 2>/dev/null)"
-        \\case "$card_provenance" in *"node file=src/components/board-column.zml"*) ;; *) echo "writeback smoke: card provenance missed the component file: $card_provenance" >&2; exit 1 ;; esac
-        \\case "$card_provenance" in *"use file=src/board.zml"*) ;; *) echo "writeback smoke: card provenance missed the use-site chain: $card_provenance" >&2; exit 1 ;; esac
+        \\case "$card_provenance" in *"node file=src/components/board-column.native"*) ;; *) echo "writeback smoke: card provenance missed the component file: $card_provenance" >&2; exit 1 ;; esac
+        \\case "$card_provenance" in *"use file=src/board.native"*) ;; *) echo "writeback smoke: card provenance missed the use-site chain: $card_provenance" >&2; exit 1 ;; esac
         \\case "$card_provenance" in *"keys="*) ;; *) echo "writeback smoke: card provenance missed the iteration key: $card_provenance" >&2; exit 1 ;; esac
         \\# 3. Write-back: flip the button label through the verb; the app's own
         \\# hot-reload watch picks the file change up and repaints.
         \\"$cli" automate edit kanban-canvas "$button_id" set-text "Add task" >/dev/null 2>&1
         \\"$cli" automate assert --timeout-ms 15000 'role=button name="Add task"' >/dev/null
         \\# The file diff is byte-exact: exactly the label bytes changed.
-        \\sed 's/>Add card</>Add task</' .zig-cache/board.zml.smoke-backup > .zig-cache/board.zml.smoke-expected
-        \\cmp -s .zig-cache/board.zml.smoke-expected src/board.zml || { echo "writeback smoke: the edit was not minimal-diff" >&2; exit 1; }
+        \\sed 's/>Add card</>Add task</' .zig-cache/board.native.smoke-backup > .zig-cache/board.native.smoke-expected
+        \\cmp -s .zig-cache/board.native.smoke-expected src/board.native || { echo "writeback smoke: the edit was not minimal-diff" >&2; exit 1; }
         \\# 4. Flip it back through the same verb: the structural id survived the
         \\# reload (text is not identity), and the file restores byte-identical.
         \\"$cli" automate edit kanban-canvas "$button_id" set-text "Add card" >/dev/null 2>&1
         \\"$cli" automate assert --timeout-ms 15000 'role=button name="Add card"' >/dev/null
-        \\cmp -s .zig-cache/board.zml.smoke-backup src/board.zml || { echo "writeback smoke: the flip-back did not restore the file byte-identically" >&2; exit 1; }
+        \\cmp -s .zig-cache/board.native.smoke-backup src/board.native || { echo "writeback smoke: the flip-back did not restore the file byte-identically" >&2; exit 1; }
         \\# 5. Refusal: an edit that fails validation leaves the file untouched.
         \\if "$cli" automate edit kanban-canvas "$button_id" set-attr bogus 1 >/dev/null 2>&1; then echo "writeback smoke: an invalid edit was not refused" >&2; exit 1; fi
-        \\cmp -s .zig-cache/board.zml.smoke-backup src/board.zml || { echo "writeback smoke: a refused edit touched the file" >&2; exit 1; }
+        \\cmp -s .zig-cache/board.native.smoke-backup src/board.native || { echo "writeback smoke: a refused edit touched the file" >&2; exit 1; }
         \\echo "writeback smoke ok"
         ,
         "sh",

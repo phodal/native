@@ -1,5 +1,5 @@
 //! soundboard views. Markup-first: the header and now-playing bars are
-//! compiled `.zml` views (see header.zml / nowplaying.zml); this file holds
+//! compiled `.native` views (see header.native / nowplaying.native); this file holds
 //! the Zig-only sections the closed markup grammar cannot express —
 //! rounded-square cover images (`ElementOptions.image` outside the avatar),
 //! the album grid's column count, per-track native context menus, and the
@@ -16,8 +16,8 @@ pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
 pub const Ui = canvas.Ui(Msg);
 
-pub const header_markup = @embedFile("header.zml");
-pub const nowplaying_markup = @embedFile("nowplaying.zml");
+pub const header_markup = @embedFile("header.native");
+pub const nowplaying_markup = @embedFile("nowplaying.native");
 pub const CompiledHeaderView = canvas.CompiledMarkupView(Model, Msg, header_markup);
 pub const CompiledNowPlayingView = canvas.CompiledMarkupView(Model, Msg, nowplaying_markup);
 

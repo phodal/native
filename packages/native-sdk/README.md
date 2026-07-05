@@ -28,7 +28,7 @@ Use WebViews for rich product UI, and add native windows, menus, shortcuts, view
 | `native dev [dir]` | Build and run the app (markup hot reload; managed frontend dev server when configured) |
 | `native build [dir]` | Build a ReleaseFast binary into `zig-out/bin/` |
 | `native test [dir]` | Run the app's test suite |
-| `native check [dir]` | Validate `src/**.zml` markup and `app.zon` |
+| `native check [dir]` | Validate `src/**.native` markup and `app.zon` |
 | `native eject [dir]` | Write an owned build.zig/build.zig.zon into the app |
 | `native doctor` | Check host environment, WebView, manifest, and CEF |
 | `native validate` | Validate `app.zon` against the manifest schema |

@@ -112,13 +112,13 @@ async function buildTest(args: string[], context: GradeContext): Promise<Pending
 }
 
 async function markupCheck(context: GradeContext): Promise<PendingResult> {
-  const files = resolveFiles(context.workspace.path, "src/*.zml");
+  const files = resolveFiles(context.workspace.path, "src/*.native");
   if (files.length === 0) {
     return {
       type: "markup_check",
-      description: "native markup check src/*.zml",
+      description: "native markup check src/*.native",
       status: "fail",
-      detail: "no .zml files found under src/",
+      detail: "no .native files found under src/",
     };
   }
   const failures: string[] = [];

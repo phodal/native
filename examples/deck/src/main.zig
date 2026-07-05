@@ -13,7 +13,7 @@
 //! the progress clock, no audio is decoded.
 //!
 //! Authoring split (markup where it fits): the playlist's status strip is
-//! a `.zml` view compiled at comptime; the faceplate and the playlist
+//! a `.native` view compiled at comptime; the faceplate and the playlist
 //! rack are Zig views because they need what the closed markup grammar
 //! deliberately excludes — the chart widget, scaled mono spans, per-row
 //! native context menus, and the registered-texture image leaf.

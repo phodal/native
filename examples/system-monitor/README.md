@@ -25,7 +25,7 @@ The toolbar gear opens **Settings** in its own window — the model-declared win
 
 ## Authoring split (markup-first)
 
-- `src/header.zml` — brand and the live/paused status line holding the trailing corner. The app follows the system appearance; there is no in-window theme control.
+- `src/header.native` — brand and the live/paused status line holding the trailing corner. The app follows the system appearance; there is no in-window theme control.
 - `src/view.zig` — the Zig sections: stat tiles, `ui.chart` sparklines, the toolbar (vector icons paired with press handlers — play/pause, chevrons; the filter field's clear is the search component's own built-in affordance), the process table as flat `list_item` rows under a hairline-separated heading (one surface, full-width hover washes, per-row context menus) with a controlled scroll (the model echoes the applied offset, so the 2 s sample rebuild never resets it mid-gesture), and the modal confirmation overlaid through a z-stack root.
 - `src/sampler.zig` — the pure parsers and per-OS command lines; no effects, no allocation.
 - `src/model.zig` — sampling state, history, table derivations, `update`, `boot`.

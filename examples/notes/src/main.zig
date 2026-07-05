@@ -1,7 +1,7 @@
 //! notes: the daily-driver shape — folders sidebar, note list, editor —
 //! authored in markup + Zig.
 //!
-//! The whole view lives in `src/notes.zml` (compiled at comptime, hot
+//! The whole view lives in `src/notes.native` (compiled at comptime, hot
 //! reloaded in dev); `src/model.zig` is the logic: folders and notes as
 //! model-owned tables, titles/snippets/relative-times derived per rebuild,
 //! and persistence as one store file through the effects channel with a
@@ -192,7 +192,7 @@ pub fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
 // -------------------------------------------------------------------- view
 
 pub const NotesUi = canvas.Ui(Msg);
-pub const notes_markup = @embedFile("notes.zml");
+pub const notes_markup = @embedFile("notes.native");
 
 /// The comptime-compiled engine: same tree, ids, and handlers as the
 /// interpreter, no parser in the binary.
@@ -229,7 +229,7 @@ pub fn main(init: std.process.Init) !void {
         .on_command = command,
         .view = CompiledNotesView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = notes_markup, .watch_path = "src/notes.zml", .io = init.io }
+            .{ .source = notes_markup, .watch_path = "src/notes.native", .io = init.io }
         else
             null,
     });

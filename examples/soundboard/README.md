@@ -6,13 +6,13 @@ A music-library browser built to showcase native-rendered Native SDK UI: an albu
 
 ## Authoring split (markup-first)
 
-- `src/header.zml` — brand, library tabs (the `<tabs>` buttons lower to segmented triggers, so the active tab lifts per the house treatment), and the search field (its trailing clear is the component's own).
-- `src/nowplaying.zml` — the transport bar: circular cover (the avatar image binding is the one image reference markup carries), title/artist, prev/play/next, seek slider, time labels, queue badge.
+- `src/header.native` — brand, library tabs (the `<tabs>` buttons lower to segmented triggers, so the active tab lifts per the house treatment), and the search field (its trailing clear is the component's own).
+- `src/nowplaying.native` — the transport bar: circular cover (the avatar image binding is the one image reference markup carries), title/artist, prev/play/next, seek slider, time labels, queue badge.
 - `src/view.zig` — the Zig-only sections the closed markup grammar deliberately excludes: rounded-square cover images, the grid's column count, scaled paragraph headings, and per-track native context menus (Play Next, Copy Title). The root view composes the compiled markup sections and the Zig sections into one tree, so widget identity, dispatch, and theming behave exactly as in a single-source view.
 - `src/model.zig` — library data, playback/search/queue/appearance state, the controlled scroll offsets (each region's `on_scroll` stores the applied offset and the view echoes it back, so a rebuild mid-gesture never resets a list), and `update`.
 - `src/theme.zig` — a custom "studio" token set (warm neutrals, violet accent, softer radii) over the built-in light/dark themes; high-contrast requests fall back to the framework palettes and reduce-motion zeroes the motion tokens.
 
-Both `.zml` files compile at comptime (`canvas.CompiledMarkupView`); the test suite additionally builds them through the runtime interpreter and asserts engine parity.
+Both `.native` files compile at comptime (`canvas.CompiledMarkupView`); the test suite additionally builds them through the runtime interpreter and asserts engine parity.
 
 ## Cover art
 

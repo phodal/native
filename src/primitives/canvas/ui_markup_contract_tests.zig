@@ -545,7 +545,7 @@ test "the contract check follows argument kinds through the import closure" {
         \\</template>
     ;
     const good_root =
-        \\<import src="components/lane.zml"/>
+        \\<import src="components/lane.native"/>
         \\<row>
         \\  <use template="lane" width="{ratio}" title="{name}">
         \\    <text>{count}</text>
@@ -553,28 +553,28 @@ test "the contract check follows argument kinds through the import closure" {
         \\</row>
     ;
     const bad_root =
-        \\<import src="components/lane.zml"/>
+        \\<import src="components/lane.native"/>
         \\<row>
         \\  <use template="lane" width="{name}" title="{name}" />
         \\</row>
     ;
     const sources = [_]markup.SourceFile{
-        .{ .path = "components/lane.zml", .source = component },
+        .{ .path = "components/lane.native", .source = component },
     };
     var loader = markup.SourceSetLoader{ .set = &sources };
 
     var diagnostic: markup.MarkupErrorInfo = .{};
-    const good = try markup.resolveImports(arena, "view.zml", good_root, loader.loader(), &diagnostic);
+    const good = try markup.resolveImports(arena, "view.native", good_root, loader.loader(), &diagnostic);
     try testing.expectEqual(null, markup.validate(good));
     try testing.expectEqual(null, try contractMessage(arena, good, null));
 
-    const bad = try markup.resolveImports(arena, "view.zml", bad_root, loader.loader(), &diagnostic);
+    const bad = try markup.resolveImports(arena, "view.native", bad_root, loader.loader(), &diagnostic);
     try testing.expectEqual(null, markup.validate(bad));
     const info = (try contract.checkDocument(arena, bad, &model_contract, null)).?;
     try testing.expectEqualStrings("expected a number", info.message);
     // The mismatch is diagnosed where the template body consumes the arg,
     // so the position names the imported component file.
-    try testing.expectEqualStrings("components/lane.zml", info.path);
+    try testing.expectEqualStrings("components/lane.native", info.path);
 }
 
 // ------------------------------------------------------------- artifact
@@ -678,13 +678,13 @@ test "hashSourceDir changes when a source file changes and ignores non-Zig files
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     try tmp.dir.writeFile(io, .{ .sub_path = "a.zig", .data = "pub const x = 1;\n" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "view.zml", .data = "<column/>" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "view.native", .data = "<column/>" });
 
     const first = try contract.hashSourceDirAt(arena, io, tmp.dir, ".");
 
     // A markup edit must not invalidate the contract (it is derived from
     // the Zig side only)...
-    try tmp.dir.writeFile(io, .{ .sub_path = "view.zml", .data = "<row/>" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "view.native", .data = "<row/>" });
     try testing.expectEqual(first, try contract.hashSourceDirAt(arena, io, tmp.dir, "."));
 
     // ...while any Zig edit must.

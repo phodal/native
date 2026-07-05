@@ -284,15 +284,15 @@ fn writeKeyByte(writer: *std.Io.Writer, byte: u8, record: *Record) void {
 
 test "provenance table records, finds, and formats" {
     var table = ProvenanceTable{};
-    try table.addFile("", "src/board.zml", 0xabcd);
-    try table.addFile("components/pill.zml", "src/components/pill.zml", 0x1234);
+    try table.addFile("", "src/board.native", 0xabcd);
+    try table.addFile("components/pill.native", "src/components/pill.native", 0x1234);
     table.watching = true;
 
     const chain = [_]canvas.ui_provenance.UseSite{
         .{ .src_path = "", .span = .{ .start = 100, .end = 140 }, .line = 9, .column = 5 },
     };
     const source = canvas.ui_provenance.NodeSource{
-        .src_path = "components/pill.zml",
+        .src_path = "components/pill.native",
         .span = .{ .start = 40, .end = 90 },
         .line = 2,
         .column = 3,
@@ -311,8 +311,8 @@ test "provenance table records, finds, and formats" {
     try table.writeResponse(&writer, "kanban-canvas", 77);
     const text = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, text, "authored=markup") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "node file=src/components/pill.zml") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "use file=src/board.zml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "node file=src/components/pill.native") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "use file=src/board.native") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "keys=card-7/2") != null);
 
     writer = std.Io.Writer.fixed(&buffer);
@@ -322,7 +322,7 @@ test "provenance table records, finds, and formats" {
 
 test "provenance pool budget: at capacity applies, one past errors named, no half-apply" {
     var table = ProvenanceTable{};
-    try table.addFile("", "src/app.zml", 1);
+    try table.addFile("", "src/app.native", 1);
     const source = canvas.ui_provenance.NodeSource{ .src_path = "", .span = .{ .start = 0, .end = 4 }, .line = 1, .column = 1 };
     var index: usize = 0;
     while (index < max_records) : (index += 1) {
@@ -346,10 +346,10 @@ test "provenance pool budget: at capacity applies, one past errors named, no hal
 
 test "provenance record caps truncate honestly" {
     var table = ProvenanceTable{};
-    try table.addFile("a.zml", "src/a.zml", 1);
+    try table.addFile("a.native", "src/a.native", 1);
     var chain: [max_chain + 2]canvas.ui_provenance.UseSite = undefined;
-    for (&chain) |*site| site.* = .{ .src_path = "a.zml", .span = .{ .start = 1, .end = 2 }, .line = 1, .column = 1 };
-    const source = canvas.ui_provenance.NodeSource{ .src_path = "a.zml", .span = .{ .start = 0, .end = 4 }, .chain = &chain };
+    for (&chain) |*site| site.* = .{ .src_path = "a.native", .span = .{ .start = 1, .end = 2 }, .line = 1, .column = 1 };
+    const source = canvas.ui_provenance.NodeSource{ .src_path = "a.native", .span = .{ .start = 0, .end = 4 }, .chain = &chain };
     const long_key = "k" ** (max_key_bytes + 8);
     const keys = [_]canvas.ui_provenance.Key{.{ .str = long_key }};
     try table.appendRecord(5, &source, &keys, false);
@@ -364,7 +364,7 @@ test "file table one past errors named" {
     var table = ProvenanceTable{};
     var index: usize = 0;
     while (index < max_files) : (index += 1) {
-        try table.addFile("x.zml", "src/x.zml", index);
+        try table.addFile("x.native", "src/x.native", index);
     }
-    try std.testing.expectError(error.WidgetProvenanceFileLimitReached, table.addFile("y.zml", "src/y.zml", 1));
+    try std.testing.expectError(error.WidgetProvenanceFileLimitReached, table.addFile("y.native", "src/y.native", 1));
 }

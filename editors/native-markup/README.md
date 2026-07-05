@@ -1,9 +1,8 @@
-# ZML editor support
+# Native markup editor support
 
-Editor tooling for `.zml` markup views (see `skill-data/native-ui/SKILL.md`
-for the language itself):
+Editor tooling for `.native` markup views (see `skill-data/native-ui/SKILL.md` for the language itself). Files with the format's former `.zml` extension are matched too while the rename window lasts.
 
-- **TextMate grammar** (`syntaxes/zml.tmLanguage.json`) — tags, attribute
+- **TextMate grammar** (`syntaxes/native-markup.tmLanguage.json`) — tags, attribute
   names, strings, comments, and `{...}` binding expressions get their own
   scopes; `on-*` event attributes and `for`/`if`/`else` structure tags are
   scoped distinctly.
@@ -38,20 +37,20 @@ Any editor below just needs `native markup lsp` to be runnable — put
 Install by symlinking this folder into your extensions directory:
 
 ```bash
-ln -s /path/to/native-sdk/editors/zml ~/.vscode/extensions/native-sdk.zml-0.1.0
+ln -s /path/to/native-sdk/editors/native-markup ~/.vscode/extensions/native-sdk.native-markup-0.1.0
 ```
 
-Then reload VS Code and open a `.zml` file. If `native` is not on
+Then reload VS Code and open a `.native` file. If `native` is not on
 PATH, set the server path in settings:
 
 ```json
 {
-  "zml.serverPath": "/path/to/native-sdk/zig-out/bin/native"
+  "native-markup.serverPath": "/path/to/native-sdk/zig-out/bin/native"
 }
 ```
 
-Remove any old `"files.associations": {"*.zml": "html"}` entry so the file
-picks up the `zml` language id.
+Remove any old `"files.associations"` entry mapping `*.native` (or `*.zml`)
+to `html` so the file picks up the `native-markup` language id.
 
 (`code --install-extension` expects a packaged `.vsix`; the symlink route
 avoids needing `vsce`/npm entirely.)
@@ -61,21 +60,21 @@ avoids needing `vsce`/npm entirely.)
 `~/.config/helix/languages.toml`:
 
 ```toml
-[language-server.zml-lsp]
+[language-server.native-markup-lsp]
 command = "native"
 args = ["markup", "lsp"]
 
 [[language]]
-name = "zml"
-scope = "source.zml"
-file-types = ["zml"]
+name = "native-markup"
+scope = "source.native-markup"
+file-types = ["native", "zml"]
 comment-tokens = []
 block-comment-tokens = { start = "<!--", end = "-->" }
-language-servers = ["zml-lsp"]
+language-servers = ["native-markup-lsp"]
 auto-pairs = { '<' = '>', '{' = '}', '"' = '"' }
 ```
 
-Helix has no `.zml` tree-sitter grammar; until one exists you can add
+Helix has no `.native` tree-sitter grammar; until one exists you can add
 `grammar = "html"` to the `[[language]]` block for approximate
 highlighting — diagnostics, completion, and hover come from the LSP
 either way.
@@ -83,13 +82,13 @@ either way.
 ## Neovim (0.10+)
 
 ```lua
-vim.filetype.add({ extension = { zml = "zml" } })
+vim.filetype.add({ extension = { native = "native-markup", zml = "native-markup" } })
 
 vim.api.nvim_create_autocmd("FileType", {
-  pattern = "zml",
+  pattern = "native-markup",
   callback = function(args)
     vim.lsp.start({
-      name = "zml-lsp",
+      name = "native-markup-lsp",
       cmd = { "native", "markup", "lsp" },
       root_dir = vim.fs.dirname(vim.fs.find({ "build.zig", ".git" }, { upward = true })[1]),
     }, { bufnr = args.buf })
@@ -98,7 +97,7 @@ vim.api.nvim_create_autocmd("FileType", {
 ```
 
 For highlighting, either treat the buffer as HTML
-(`vim.treesitter.language.register("html", "zml")`) or rely on an LSP-only
+(`vim.treesitter.language.register("html", "native-markup")`) or rely on an LSP-only
 setup — diagnostics, completion, and hover work regardless.
 
 ## Smoke test (no editor required)
@@ -108,5 +107,5 @@ Content-Length framing — initialize, didOpen with a broken document — and
 asserts a `publishDiagnostics` notification with the right line/column:
 
 ```bash
-python3 editors/zml/scripts/lsp-smoke.py zig-out/bin/native
+python3 editors/native-markup/scripts/lsp-smoke.py zig-out/bin/native
 ```

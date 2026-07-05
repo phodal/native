@@ -757,7 +757,7 @@ test "ui app hooks drive chrome, dynamic tokens, animations, and frame reports" 
 
 test "markup watch polls from the reserved runtime timer" {
     const io = std.testing.io;
-    const watch_path = ".zig-cache/ui-app-markup-watch-test.zml";
+    const watch_path = ".zig-cache/ui-app-markup-watch-test.native";
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = watch_path, .data = counter_markup });
     defer cwd.deleteFile(io, watch_path) catch {};
@@ -813,7 +813,7 @@ test "markup watch polls from the reserved runtime timer" {
 }
 
 const watch_import_root_markup =
-    \\<import src="ui-app-markup-watch-parts.zml"/>
+    \\<import src="ui-app-markup-watch-parts.native"/>
     \\<column gap="8" padding="12">
     \\  <text>Count {count}</text>
     \\  <use template="actions" />
@@ -840,8 +840,8 @@ const watch_import_parts_markup_v2 =
 
 test "the markup watch reloads when an IMPORTED file changes on disk" {
     const io = std.testing.io;
-    const watch_path = ".zig-cache/ui-app-markup-watch-import-test.zml";
-    const parts_path = ".zig-cache/ui-app-markup-watch-parts.zml";
+    const watch_path = ".zig-cache/ui-app-markup-watch-import-test.native";
+    const parts_path = ".zig-cache/ui-app-markup-watch-parts.native";
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = watch_path, .data = watch_import_root_markup });
     defer cwd.deleteFile(io, watch_path) catch {};
@@ -859,7 +859,7 @@ test "the markup watch reloads when an IMPORTED file changes on disk" {
     options.markup = .{
         .source = watch_import_root_markup,
         .sources = &.{
-            .{ .path = "ui-app-markup-watch-parts.zml", .source = watch_import_parts_markup },
+            .{ .path = "ui-app-markup-watch-parts.native", .source = watch_import_parts_markup },
         },
         .watch_path = watch_path,
         .io = io,
@@ -908,25 +908,25 @@ test "the markup watch reloads when an IMPORTED file changes on disk" {
     try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 2_500_000).?);
     try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Start over") != null);
     try std.testing.expect(app_state.markup_diagnostic != null);
-    try std.testing.expect(std.mem.indexOf(u8, app_state.markup_diagnostic.?.path, "ui-app-markup-watch-parts.zml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_state.markup_diagnostic.?.path, "ui-app-markup-watch-parts.native") != null);
 }
 
 const watch_import_sources = [_]canvas.ui_markup.SourceFile{
-    .{ .path = "ui-app-markup-watch-import-baseline.zml", .source = watch_import_root_markup },
-    .{ .path = "ui-app-markup-watch-parts.zml", .source = watch_import_parts_markup },
+    .{ .path = "ui-app-markup-watch-import-baseline.native", .source = watch_import_root_markup },
+    .{ .path = "ui-app-markup-watch-parts.native", .source = watch_import_parts_markup },
 };
 
 const CompiledImportCounterView = canvas.CompiledMarkupImports(
     CounterModel,
     CounterMsg,
-    "ui-app-markup-watch-import-baseline.zml",
+    "ui-app-markup-watch-import-baseline.native",
     &watch_import_sources,
 );
 
 test "with imports the compiled view stays the baseline until the watched closure changes" {
     const io = std.testing.io;
-    const watch_path = ".zig-cache/ui-app-markup-watch-import-baseline.zml";
-    const parts_path = ".zig-cache/ui-app-markup-watch-parts.zml";
+    const watch_path = ".zig-cache/ui-app-markup-watch-import-baseline.native";
+    const parts_path = ".zig-cache/ui-app-markup-watch-parts.native";
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = watch_path, .data = watch_import_root_markup });
     defer cwd.deleteFile(io, watch_path) catch {};
@@ -1026,7 +1026,7 @@ test "a compiled markup view drives the ui app with the runtime markup engine co
 
 test "with view and markup both set the compiled view renders until the watched file changes" {
     const io = std.testing.io;
-    const watch_path = ".zig-cache/ui-app-compiled-watch-test.zml";
+    const watch_path = ".zig-cache/ui-app-compiled-watch-test.native";
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = watch_path, .data = counter_markup });
     defer cwd.deleteFile(io, watch_path) catch {};

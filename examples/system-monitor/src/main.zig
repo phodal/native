@@ -11,7 +11,7 @@
 //! confirmed SIGTERM context-menu action.
 //!
 //! Authoring split (markup-first): the header is a comptime-compiled
-//! `.zml` view; the tiles, sparklines (bar charts built in Zig views —
+//! `.native` view; the tiles, sparklines (bar charts built in Zig views —
 //! one token-tinted bar widget per sample), toolbar (vector icons paired
 //! with press handlers), table, and the confirmation overlay are Zig.
 //! See `src/view.zig`.

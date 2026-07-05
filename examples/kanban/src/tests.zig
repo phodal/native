@@ -12,12 +12,12 @@ const Msg = main.Msg;
 const KanbanMarkup = canvas.MarkupView(Model, main.Msg);
 
 /// The interpreter over the same resolved document the compiled view
-/// embeds: the board imports components/board-column.zml, so the test
+/// embeds: the board imports components/board-column.native, so the test
 /// resolves the embedded source set exactly like the app runtime does.
 fn boardView(arena: std.mem.Allocator) !KanbanMarkup {
     var set_loader = canvas.ui_markup.SourceSetLoader{ .set = &main.board_markup_files };
     var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-    const document = try canvas.ui_markup.resolveImports(arena, "board.zml", main.board_markup, set_loader.loader(), &diagnostic);
+    const document = try canvas.ui_markup.resolveImports(arena, "board.native", main.board_markup, set_loader.loader(), &diagnostic);
     return KanbanMarkup.fromDocument(document);
 }
 
@@ -321,7 +321,7 @@ test "the board markup satisfies the model contract in both directions" {
     const board_contract = comptime canvas.describeModelContract(Model, Msg);
     var set_loader = canvas.ui_markup.SourceSetLoader{ .set = &main.board_markup_files };
     var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-    const document = try canvas.ui_markup.resolveImports(arena, "board.zml", main.board_markup, set_loader.loader(), &diagnostic);
+    const document = try canvas.ui_markup.resolveImports(arena, "board.native", main.board_markup, set_loader.loader(), &diagnostic);
     try testing.expectEqual(null, canvas.ui_markup.validate(document));
 
     var usage = try canvas.ui_markup.contract.Usage.init(arena, &board_contract);

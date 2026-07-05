@@ -1,6 +1,6 @@
 # markdown-viewer
 
-A split-pane markdown editor/preview authored in markup + Zig: the left pane is a `textarea` mirrored elm-style into the model, the right pane is one `<markdown>` element bound to the same bytes, so the preview tracks every keystroke with no debounce and no drift. The whole view lives in `src/viewer.zml` (hot-reloaded in dev builds); `src/main.zig` is the logic — `Model`, `Msg`, `update`, effects, and a two-mode custom theme.
+A split-pane markdown editor/preview authored in markup + Zig: the left pane is a `textarea` mirrored elm-style into the model, the right pane is one `<markdown>` element bound to the same bytes, so the preview tracks every keystroke with no debounce and no drift. The whole view lives in `src/viewer.native` (hot-reloaded in dev builds); `src/main.zig` is the logic — `Model`, `Msg`, `update`, effects, and a two-mode custom theme.
 
 ```sh
 native dev

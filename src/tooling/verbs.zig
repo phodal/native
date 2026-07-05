@@ -5,7 +5,7 @@
 //! into `<app>/.native/build/` (see buildgraph.zig) and drives that.
 //!
 //! Callers are expected to have chdir'd into the app directory: every
-//! relative path an app uses at runtime (assets/, the src/app.zml hot
+//! relative path an app uses at runtime (assets/, the src/app.native hot
 //! reload watcher, .zig-cache/native-sdk-automation) resolves against the
 //! process cwd, so the verbs run zig — and the app — from the app root.
 

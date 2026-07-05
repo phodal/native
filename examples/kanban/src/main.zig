@@ -1,7 +1,7 @@
 //! kanban: a three-column board (Todo / Doing / Done) written with the
 //! `canvas.Ui` declarative builder on the runtime-owned `UiApp` loop.
 //!
-//! The board view lives in `board.zml` (embedded, hot-reloaded in dev);
+//! The board view lives in `board.native` (embedded, hot-reloaded in dev);
 //! this file is the logic. Cards carry a markup `global-key`, which pins
 //! their widget ids to the card id independent of the parent chain — so a
 //! card keeps its identity (and its move button keeps its handler binding)
@@ -205,19 +205,19 @@ pub fn update(model: *Model, msg: Msg) void {
 // ------------------------------------------------------------------- view
 
 pub const KanbanUi = canvas.Ui(Msg);
-pub const board_markup = @embedFile("board.zml");
+pub const board_markup = @embedFile("board.native");
 /// The board's markup source set: the root view plus its import closure,
 /// paths relative to this directory. One list feeds both engines — the
 /// compiled view resolves it at comptime, and the runtime interpreter
 /// resolves the same set for the embedded source (hot reload re-resolves
 /// from disk, so edits to imported files reload too).
 pub const board_markup_files = [_]canvas.ui_markup.SourceFile{
-    .{ .path = "board.zml", .source = board_markup },
-    .{ .path = "components/board-column.zml", .source = @embedFile("components/board-column.zml") },
+    .{ .path = "board.native", .source = board_markup },
+    .{ .path = "components/board-column.native", .source = @embedFile("components/board-column.native") },
 };
-pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.zml", &board_markup_files);
+pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.native", &board_markup_files);
 
-/// Debug builds keep the interpreter for .zml hot reload; release builds
+/// Debug builds keep the interpreter for .native hot reload; release builds
 /// ship the comptime-compiled view with no parser in the binary.
 const dev_markup_reload = builtin.mode == .Debug;
 
@@ -250,7 +250,7 @@ pub fn main(init: std.process.Init) !void {
         .update = update,
         .view = CompiledBoardView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = board_markup, .sources = &board_markup_files, .watch_path = "src/board.zml", .io = init.io }
+            .{ .source = board_markup, .sources = &board_markup_files, .watch_path = "src/board.native", .io = init.io }
         else
             null,
     });

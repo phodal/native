@@ -179,8 +179,8 @@ test "the hash ignores provenance: the same structure from another file layout" 
     // src_path stamps differ, the hash must not.
     const loader_a = markup.SourceSetLoader{ .set = &.{} };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    const doc_a = try markup.resolveImports(arena, "app/main.zml", "<row><text>hi</text></row>", loader_a.loader(), &diagnostic);
-    const doc_b = try markup.resolveImports(arena, "elsewhere/view.zml", "<row><text>hi</text></row>", loader_a.loader(), &diagnostic);
+    const doc_a = try markup.resolveImports(arena, "app/main.native", "<row><text>hi</text></row>", loader_a.loader(), &diagnostic);
+    const doc_b = try markup.resolveImports(arena, "elsewhere/view.native", "<row><text>hi</text></row>", loader_a.loader(), &diagnostic);
     try testing.expect(doc_a.root.?.src_path.len > 0);
     try testing.expect(!std.mem.eql(u8, doc_a.root.?.src_path, doc_b.root.?.src_path));
     try testing.expectEqual(
@@ -232,7 +232,7 @@ test "NSUI refuses what it does not know, loudly" {
     }
     // Unresolved imports refuse to encode.
     {
-        var parser = markup.Parser.init(arena, "<import src=\"parts.zml\"/>\n<use template=\"chip\"/>");
+        var parser = markup.Parser.init(arena, "<import src=\"parts.native\"/>\n<use template=\"chip\"/>");
         const unresolved = try parser.parse();
         try testing.expectError(error.DocumentEncode, nsui.encode(arena, unresolved, .{}, &diagnostic));
         try testing.expectEqualStrings(nsui.unresolved_imports_message, diagnostic.message);

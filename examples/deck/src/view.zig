@@ -4,7 +4,7 @@
 //! `windows_fn` while the model says it is open.
 //!
 //! Markup-first where markup fits (the playlist's status strip is a
-//! compiled `.zml` view); everything else is Zig because the faceplate
+//! compiled `.native` view); everything else is Zig because the faceplate
 //! needs what the closed markup grammar excludes — the `ui.chart`
 //! spectrum analyzer, mono paragraph readouts at custom scales, per-row
 //! native context menus, the registered-texture image leaf, and
@@ -29,7 +29,7 @@ pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
 pub const Ui = canvas.Ui(Msg);
 
-pub const statusbar_markup = @embedFile("statusbar.zml");
+pub const statusbar_markup = @embedFile("statusbar.native");
 pub const CompiledStatusBarView = canvas.CompiledMarkupView(Model, Msg, statusbar_markup);
 
 /// The chassis layout table (see layout.zig): re-exported so app wiring

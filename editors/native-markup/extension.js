@@ -1,4 +1,4 @@
-// ZML language client for VS Code — dependency-free by design.
+// Native markup language client for VS Code — dependency-free by design.
 //
 // Instead of pulling in vscode-languageclient (an npm dependency that would
 // require a build step), this extension speaks just enough LSP itself:
@@ -11,7 +11,7 @@
 const vscode = require("vscode");
 const { spawn } = require("child_process");
 
-const LANGUAGE_ID = "zml";
+const LANGUAGE_ID = "native-markup";
 
 let server = null; // { proc, pending, nextId, buffer, contentLength }
 let diagnostics = null;
@@ -19,7 +19,7 @@ let outputChannel = null;
 
 function activate(context) {
   diagnostics = vscode.languages.createDiagnosticCollection(LANGUAGE_ID);
-  outputChannel = vscode.window.createOutputChannel("ZML Language Server");
+  outputChannel = vscode.window.createOutputChannel("Native Markup Language Server");
   context.subscriptions.push(diagnostics, outputChannel);
 
   startServer();
@@ -44,7 +44,7 @@ function deactivate() {
 // ------------------------------------------------------------------ server
 
 function startServer() {
-  const serverPath = vscode.workspace.getConfiguration("zml").get("serverPath", "native");
+  const serverPath = vscode.workspace.getConfiguration("native-markup").get("serverPath", "native");
   let proc;
   try {
     proc = spawn(serverPath, ["markup", "lsp"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -69,7 +69,7 @@ function startServer() {
     processId: process.pid,
     rootUri: null,
     capabilities: {},
-    clientInfo: { name: "zml-vscode", version: "0.1.0" },
+    clientInfo: { name: "native-markup-vscode", version: "0.1.0" },
   }).then(() => {
     sendNotification("initialized", {});
     for (const document of vscode.workspace.textDocuments) {
@@ -94,8 +94,8 @@ function stopServer() {
 function reportStartFailure(serverPath, error) {
   server = null;
   vscode.window.showWarningMessage(
-    `ZML: could not start "${serverPath} markup lsp" (${error.message}). ` +
-      "Build the CLI with `zig build` and set zml.serverPath to zig-out/bin/native."
+    `Native markup: could not start "${serverPath} markup lsp" (${error.message}). ` +
+      "Build the CLI with `zig build` and set native-markup.serverPath to zig-out/bin/native."
   );
 }
 
@@ -175,12 +175,12 @@ function handleMessage(message) {
 
 // -------------------------------------------------------------- documents
 
-function isZml(document) {
+function isMarkupDocument(document) {
   return document.languageId === LANGUAGE_ID;
 }
 
 function sendDidOpen(document) {
-  if (!server || !isZml(document)) return;
+  if (!server || !isMarkupDocument(document)) return;
   sendNotification("textDocument/didOpen", {
     textDocument: {
       uri: document.uri.toString(),
@@ -192,7 +192,7 @@ function sendDidOpen(document) {
 }
 
 function sendDidChange(document) {
-  if (!server || !isZml(document)) return;
+  if (!server || !isMarkupDocument(document)) return;
   sendNotification("textDocument/didChange", {
     textDocument: { uri: document.uri.toString(), version: document.version },
     contentChanges: [{ text: document.getText() }], // full sync
@@ -200,7 +200,7 @@ function sendDidChange(document) {
 }
 
 function sendDidClose(document) {
-  if (!server || !isZml(document)) return;
+  if (!server || !isMarkupDocument(document)) return;
   sendNotification("textDocument/didClose", {
     textDocument: { uri: document.uri.toString() },
   });

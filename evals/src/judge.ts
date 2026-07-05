@@ -6,7 +6,7 @@ import { resolveFiles } from "./util.ts";
 export const DEFAULT_JUDGE_MODEL = "anthropic/claude-opus-4.8";
 
 /** Files shown to the judge when a case doesn't override them. */
-const DEFAULT_JUDGE_FILES = ["src/*.zml", "src/main.zig", "src/tests.zig"];
+const DEFAULT_JUDGE_FILES = ["src/*.native", "src/main.zig", "src/tests.zig"];
 const MAX_FILE_BYTES = 24 * 1024;
 const MAX_TOTAL_BYTES = 96 * 1024;
 
@@ -22,7 +22,7 @@ export interface JudgeVerdict {
   summary: string;
 }
 
-const SYSTEM_PROMPT = `You are a strict senior code reviewer grading a Native SDK app written by another AI agent. Native SDK apps follow The Elm Architecture in Zig: a Model struct, a Msg tagged union, an update function, and a declarative .zml markup view that only binds model data and dispatches messages.
+const SYSTEM_PROMPT = `You are a strict senior code reviewer grading a Native SDK app written by another AI agent. Native SDK apps follow The Elm Architecture in Zig: a Model struct, a Msg tagged union, an update function, and a declarative Native markup view that only binds model data and dispatches messages.
 
 Score each listed criterion from 0 to 10 (10 = exemplary, 7 = solid with minor nits, 5 = acceptable but flawed, 3 = poor, 0 = absent or broken). Judge only what the code shows; do not reward verbosity or comments. Be calibrated: reserve 9-10 for work you could not meaningfully improve. The overall score is your holistic judgment, not necessarily the mean.
 

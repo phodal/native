@@ -31,7 +31,7 @@ The expression line is a real `text_field` and it is the app's keyboard path: cl
 
 ## Authoring split (markup-first)
 
-- `src/keypad.zml` — the entire keypad, key by key: function keys `secondary`, the operator column and equals `primary` (the inverted monochrome column), digits default surfaces, the pending operator highlighted via a model-sourced `selected=`. Markup message payloads are bindings, so each key dispatches its own void `Msg` arm — which also reads exactly like the keypad it is.
+- `src/keypad.native` — the entire keypad, key by key: function keys `secondary`, the operator column and equals `primary` (the inverted monochrome column), digits default surfaces, the pending operator highlighted via a model-sourced `selected=`. Markup message payloads are bindings, so each key dispatches its own void `Msg` arm — which also reads exactly like the keypad it is.
 - `src/view.zig` — the Zig-only sections: the drag band (hidden-inset titlebar, `window_drag`, deliberately empty) and the display block, because the big result line needs a scaled, right-aligned monospace paragraph (markup text tops out at the `lg` body size). Also documented there: text fields are start-aligned by the engine (caret math), so the expression line stays left-aligned.
 - `src/model.zig` — the whole engine and the **plain-form TEA update**: no effects, no timers, no I/O. This is the smallest real Native SDK app shape.
 - `src/theme.zig` — the neutral palettes for both modes, the inverted-monochrome operator column, and the one blue accent through `controls.button_primary.active_background`; high-contrast falls back to the framework palettes, and keypad glyphs render at 18px via `typography.button_size`.

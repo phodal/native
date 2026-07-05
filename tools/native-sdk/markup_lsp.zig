@@ -1,4 +1,4 @@
-//! Language Server Protocol server for `.zml` markup views, spoken over
+//! Language Server Protocol server for `.native` markup views, spoken over
 //! stdio by `native markup lsp`.
 //!
 //! v1 scope (model-agnostic, mirrors `native markup check`):
@@ -274,7 +274,7 @@ pub const Server = struct {
         try js.objectField("severity");
         try js.write(severity);
         try js.objectField("source");
-        try js.write("zml");
+        try js.write("native-markup");
         try js.objectField("message");
         try js.write(info.message);
         try js.endObject();
@@ -301,8 +301,8 @@ pub const Server = struct {
         switch (context) {
             .none => {},
             .elements => {
-                for (element_docs) |doc| try writeCompletionItem(&js, doc.name, .class, "zml element", doc.doc);
-                for (structure_docs) |doc| try writeCompletionItem(&js, doc.name, .keyword, "zml structure tag", doc.doc);
+                for (element_docs) |doc| try writeCompletionItem(&js, doc.name, .class, "markup element", doc.doc);
+                for (structure_docs) |doc| try writeCompletionItem(&js, doc.name, .keyword, "markup structure tag", doc.doc);
             },
             .attributes => |element_name| {
                 if (std.mem.eql(u8, element_name, "for")) {
@@ -323,15 +323,15 @@ pub const Server = struct {
                     for (timeline_item_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline-item attribute", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "avatar")) {
                     for (avatar_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "avatar attribute", doc.doc);
-                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
-                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
+                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markup attribute", doc.doc);
+                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "markup event", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "dropdown-menu")) {
                     for (anchor_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "dropdown-menu attribute", doc.doc);
-                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
-                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
+                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markup attribute", doc.doc);
+                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "markup event", doc.doc);
                 } else {
-                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "zml attribute", doc.doc);
-                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "zml event", doc.doc);
+                    for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markup attribute", doc.doc);
+                    for (event_docs) |doc| try writeCompletionItem(&js, doc.name, .event, "markup event", doc.doc);
                 }
             },
         }
@@ -470,7 +470,7 @@ pub fn analyzeWarnings(arena: std.mem.Allocator, source: []const u8, storage: []
 }
 
 /// Byte offset for a 0-based LSP position, clamped to the line's end.
-/// Positions are treated as byte columns; `.zml` markup is ASCII in
+/// Positions are treated as byte columns; `.native` markup is ASCII in
 /// practice (UTF-16 column mapping is documented future work).
 pub fn offsetForPosition(text: []const u8, line: usize, character: usize) usize {
     var current_line: usize = 0;
@@ -635,15 +635,15 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
     // <bogus /> sits at line 2, column 3 (1-based) -> LSP line 1, character 2.
     const broken =
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{" ++
-        "\"uri\":\"file:///tmp/app.zml\",\"languageId\":\"zml\",\"version\":1," ++
+        "\"uri\":\"file:///tmp/app.native\",\"languageId\":\"native-markup\",\"version\":1," ++
         "\"text\":\"<column>\\n  <bogus />\\n</column>\\n\"}}}";
     const valid_doc =
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{" ++
-        "\"uri\":\"file:///tmp/app.zml\",\"version\":2},\"contentChanges\":[{" ++
+        "\"uri\":\"file:///tmp/app.native\",\"version\":2},\"contentChanges\":[{" ++
         "\"text\":\"<row gap=\\\"8\\\"><text>hi</text></row>\"}]}}";
     const avatar_doc =
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{" ++
-        "\"uri\":\"file:///tmp/app.zml\",\"version\":3},\"contentChanges\":[{" ++
+        "\"uri\":\"file:///tmp/app.native\",\"version\":3},\"contentChanges\":[{" ++
         "\"text\":\"<avatar >CT</avatar>\"}]}}";
 
     var input: std.Io.Writer.Allocating = .init(arena);
@@ -652,10 +652,10 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
         broken,
         valid_doc,
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":5}}}",
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":2}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.native\"},\"position\":{\"line\":0,\"character\":5}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.native\"},\"position\":{\"line\":0,\"character\":2}}}",
         avatar_doc,
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.zml\"},\"position\":{\"line\":0,\"character\":8}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/app.native\"},\"position\":{\"line\":0,\"character\":8}}}",
         "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"shutdown\"}",
         "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}",
     }) |body| {
@@ -692,7 +692,7 @@ test "serve: initialize, didOpen with broken markup, publishDiagnostics round tr
     const diag = try std.json.parseFromSliceLeaky(std.json.Value, arena, bodies.items[1], .{});
     const params = diag.object.get("params").?;
     try testing.expectEqualStrings("textDocument/publishDiagnostics", diag.object.get("method").?.string);
-    try testing.expectEqualStrings("file:///tmp/app.zml", params.object.get("uri").?.string);
+    try testing.expectEqualStrings("file:///tmp/app.native", params.object.get("uri").?.string);
     const diagnostics = params.object.get("diagnostics").?.array.items;
     try testing.expectEqual(@as(usize, 1), diagnostics.len);
     try testing.expectEqualStrings("unknown element", diagnostics[0].object.get("message").?.string);

@@ -1,5 +1,5 @@
 //! calculator views. Markup-first: the whole keypad is a compiled
-//! `.zml` view; this file holds the sections the closed markup grammar
+//! `.native` view; this file holds the sections the closed markup grammar
 //! cannot express — the drag band (the hidden-inset titlebar's
 //! `window_drag` region: empty by design, the window has no chrome) and
 //! the display block, which needs a scaled, right-aligned monospace
@@ -23,10 +23,10 @@ pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
 pub const Ui = canvas.Ui(Msg);
 
-pub const keypad_markup = @embedFile("keypad.zml");
+pub const keypad_markup = @embedFile("keypad.native");
 pub const CompiledKeypadView = canvas.CompiledMarkupView(Model, Msg, keypad_markup);
 
-// Keypad metrics (kept in lockstep with keypad.zml; the layout test
+// Keypad metrics (kept in lockstep with keypad.native; the layout test
 // asserts the rendered frames match these numbers exactly).
 pub const key_width: f32 = 66;
 pub const key_height: f32 = 54;

@@ -36,7 +36,7 @@ This scaffolds a native-rendered app — and nothing else. There are no build fi
   </thead>
   <tbody>
     <tr>
-      <td><code>src/app.zml</code></td>
+      <td><code>src/app.native</code></td>
       <td>The entire UI: elements, layout, bindings, and message dispatch</td>
     </tr>
     <tr>
@@ -70,7 +70,7 @@ Prefer to own `build.zig` from day one? `native init my_app --full` scaffolds th
 native dev
 ```
 
-The first run compiles the app and the SDK, so give it a minute; subsequent runs are incremental. A native window opens with a working counter. The whole view is `src/app.zml`:
+The first run compiles the app and the SDK, so give it a minute; subsequent runs are incremental. A native window opens with a working counter. The whole view is `src/app.native` — a Native markup file:
 
 ```html
 <column gap="12" padding="16">
@@ -113,7 +113,7 @@ That is the whole loop: the model holds state, messages describe what happened, 
 
 ## Edit while it runs
 
-`src/app.zml` is embedded into the binary and watched while `native dev` runs. Edit it — change a label, add a button — and the window updates within a couple of seconds without losing the count. Parse failures keep the last good view on screen.
+`src/app.native` is embedded into the binary and watched while `native dev` runs. Edit it — change a label, add a button — and the window updates within a couple of seconds without losing the count. Parse failures keep the last good view on screen.
 
 ## Check and test
 
@@ -121,10 +121,10 @@ That is the whole loop: the model holds state, messages describe what happened, 
 native check
 ```
 
-`native check` validates every `.zml` file under `src/` plus `app.zon` without building anything:
+`native check` validates every `.native` file under `src/` plus `app.zon` without building anything:
 
 ```
-src/app.zml: ok
+src/app.native: ok
 info[manifest.valid]: app.zon is valid
 checked 1 markup file and app.zon
 ```

@@ -81,7 +81,7 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     // threads it through the STARTUP window create): the toolbar row is
     // toolbar-height, so the TALL band centers the traffic lights
     // against it (the Notes look) instead of parking them high. The
-    // toolbar is the drag region (`window-drag` in viewer.zml), pads
+    // toolbar is the drag region (`window-drag` in viewer.native), pads
     // its leading edge by the chrome insets `on_chrome` delivers, and
     // matches its height to the band so its controls and the lights
     // share a centerline.
@@ -615,7 +615,7 @@ pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
 // ------------------------------------------------------------------- view
 
 pub const ViewerUi = canvas.Ui(Msg);
-pub const viewer_markup = @embedFile("viewer.zml");
+pub const viewer_markup = @embedFile("viewer.native");
 
 /// The comptime-compiled engine: same tree, ids, and handlers as the
 /// interpreter, no parser in the binary.
@@ -662,7 +662,7 @@ pub fn main(init: std.process.Init) !void {
         .on_chrome = onChrome,
         .view = CompiledViewerView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = viewer_markup, .watch_path = "src/viewer.zml", .io = init.io }
+            .{ .source = viewer_markup, .watch_path = "src/viewer.native", .io = init.io }
         else
             null,
     });

@@ -3,7 +3,7 @@
 //! result display, keyboard input, and a chromeless hidden-inset window
 //! in the house register: pure neutrals, one action-blue accent.
 //!
-//! Authoring split (markup-first): the entire keypad is a `.zml` view
+//! Authoring split (markup-first): the entire keypad is a `.native` view
 //! compiled at comptime; the Zig views are the drag band (the
 //! hidden-inset titlebar's drag region, deliberately empty) and the
 //! display block, which needs a scaled right-aligned mono result

@@ -1,4 +1,4 @@
-//! Comptime-compiled markup views: parse a `.zml` source entirely at
+//! Comptime-compiled markup views: parse a `.native` source entirely at
 //! comptime and emit a `build(ui, model)` whose output is identical to the
 //! interpreter's (ui_markup_view.zig) for the same model — same structural
 //! widget ids node for node, same handler table, same dispatch results —
@@ -42,7 +42,7 @@ const Value = interpreter.Value;
 pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime source: []const u8) type {
     const parsed = markup.parseComptime(source);
     if (parsed.imports.len > 0) {
-        @compileError("this markup imports other files - compile it with canvas.CompiledMarkupImports(Model, Msg, \"root.zml\", &sources), where sources is a markup.SourceFile set embedding the root and every imported file");
+        @compileError("this markup imports other files - compile it with canvas.CompiledMarkupImports(Model, Msg, \"root.native\", &sources), where sources is a markup.SourceFile set embedding the root and every imported file");
     }
     return CompiledMarkupDocument(ModelT, MsgT, parsed);
 }

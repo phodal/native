@@ -2274,15 +2274,15 @@ test "split and tree misuse is validated with teaching messages" {
 // ------------------------------------- import/slot/default fixture
 
 /// A three-file document exercising the whole component surface: a
-/// transitive import chain (view -> components/pills.zml -> base.zml,
+/// transitive import chain (view -> components/pills.native -> base.native,
 /// resolved relative to each importer), an imported template using
 /// another imported template, a defaulted arg (tone=muted), and a slot
 /// whose content builds in the consumer's scope (it sees the `for` loop
 /// variable at the use site) — including a nested `<use>` with the
 /// defaulted arg omitted, and a second use with no children (empty slot).
 pub const import_view_sources = [_]canvas.ui_markup.SourceFile{
-    .{ .path = "view.zml", .source = 
-    \\<import src="components/pills.zml"/>
+    .{ .path = "view.native", .source = 
+    \\<import src="components/pills.native"/>
     \\<row gap="8">
     \\  <use template="pill-stack" title="Top">
     \\    <for each="top" as="f">
@@ -2293,8 +2293,8 @@ pub const import_view_sources = [_]canvas.ui_markup.SourceFile{
     \\  <use template="pill-stack" title="Bottom" />
     \\</row>
     },
-    .{ .path = "components/pills.zml", .source = 
-    \\<import src="base.zml"/>
+    .{ .path = "components/pills.native", .source = 
+    \\<import src="base.native"/>
     \\<template name="pill-stack" args="title">
     \\  <column gap="4">
     \\    <use template="pill" label="{title}" tone="header" />
@@ -2302,7 +2302,7 @@ pub const import_view_sources = [_]canvas.ui_markup.SourceFile{
     \\  </column>
     \\</template>
     },
-    .{ .path = "components/base.zml", .source = 
+    .{ .path = "components/base.native", .source = 
     \\<template name="pill" args="label tone=muted">
     \\  <badge radius="md">{label} {tone}</badge>
     \\</template>
@@ -2358,7 +2358,7 @@ test "imported templates with slots and defaults build the hand-written tree" {
     const model = templateTestModel();
     const TemplateMarkup = markup_view.MarkupView(TemplateModel, TemplateMsg);
 
-    const document = try resolveImportSet(arena, &import_view_sources, "view.zml");
+    const document = try resolveImportSet(arena, &import_view_sources, "view.native");
     var view = TemplateMarkup.fromDocument(document);
     var markup_ui = TemplateUi.init(arena);
     const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
@@ -2415,7 +2415,7 @@ test "slot, default, and component-file misuse fails the interpreter build with 
         },
         .{
             // Unresolved imports never reach the interpreter silently.
-            .source = "<import src=\"components.zml\"/>\n<row />",
+            .source = "<import src=\"components.native\"/>\n<row />",
             .message = canvas.ui_markup.import_unresolved_message,
         },
     };

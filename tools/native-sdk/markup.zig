@@ -2,6 +2,10 @@ const std = @import("std");
 const ui_markup = @import("ui_markup");
 const markup_lsp = @import("markup_lsp");
 
+/// Re-exported for the `native check` verb's src/ walk: true for `.native`
+/// and, during the rename window, `.zml`.
+pub const hasMarkupExtension = ui_markup.hasMarkupExtension;
+
 pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     if (args.len >= 1 and std.mem.eql(u8, args[0], "lsp")) {
         return runLsp(allocator, io);
@@ -83,16 +87,23 @@ pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []con
     }
     var views_checked: usize = 0;
     for (files) |file_path| {
+        // The rename window: `.zml` (the format's former extension) still
+        // checks and loads, with a nudge toward the current name. Not a
+        // warning — --strict must not fail an app that simply has not
+        // renamed yet.
+        const legacy_extension = std.mem.endsWith(u8, file_path, ui_markup.legacy_markup_extension);
         const checked = checkFile(allocator, io, file_path, .{
             .contract = if (contract_value) |*parsed| parsed else null,
             .usage = if (usage_state) |*live_usage| live_usage else null,
             .arena = arena,
         }) catch {
             outcome.failures += 1;
+            if (legacy_extension) printRenameNote(file_path);
             continue;
         };
         if (checked.had_view) views_checked += 1;
         outcome.warnings += checked.warnings;
+        if (legacy_extension) printRenameNote(file_path);
     }
     if (contract_value != null) outcome.contract_checked = true;
 
@@ -109,6 +120,11 @@ pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []con
         }
     }
     return outcome;
+}
+
+/// The gentle nudge for files still on the format's former extension.
+fn printRenameNote(file_path: []const u8) void {
+    std.debug.print("{s}: note: rename to .native — .zml keeps working for now\n", .{file_path});
 }
 
 const ContractState = union(enum) {
@@ -148,7 +164,7 @@ fn runLsp(allocator: std.mem.Allocator, io: std.Io) !void {
     try server.run();
 }
 
-/// `native markup dump <file.zml> [--out doc.nsui]`: resolve, validate,
+/// `native markup dump <file.native> [--out doc.nsui]`: resolve, validate,
 /// and canonicalize a view, encode it as NSUI (the canonical binary), and
 /// print the JSON inspection view DERIVED FROM THE DECODED BINARY — what
 /// you read is what the artifact of record says, not what the source
@@ -174,7 +190,7 @@ fn runDump(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         file_path = args[index];
     }
     const path = file_path orelse {
-        std.debug.print("usage: native markup dump <file.zml> [--out doc.nsui]\n", .{});
+        std.debug.print("usage: native markup dump <file.native> [--out doc.nsui]\n", .{});
         return error.MarkupCommandFailed;
     };
 
@@ -483,8 +499,8 @@ fn readFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) ![]
 
 fn usage() void {
     std.debug.print(
-        \\usage: native markup check <file.zml> [more files...] [--strict]
-        \\       native markup dump <file.zml> [--out doc.nsui]
+        \\usage: native markup check <file.native> [more files...] [--strict]
+        \\       native markup dump <file.native> [--out doc.nsui]
         \\       native markup lsp
         \\
         \\check: parses and validates markup views: grammar, expression forms,
@@ -513,8 +529,11 @@ fn usage() void {
         \\--out also writes the .nsui artifact.
         \\
         \\lsp: speaks the Language Server Protocol over stdio (diagnostics,
-        \\completion, hover) for .zml files; wire it into your editor's LSP
-        \\client (see editors/zml/README.md).
+        \\completion, hover) for .native files; wire it into your editor's LSP
+        \\client (see editors/native-markup/README.md).
+        \\
+        \\Files with the format's former .zml extension keep working for all
+        \\three verbs for now; check notes the rename.
         \\
     , .{});
 }

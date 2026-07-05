@@ -30,7 +30,7 @@ The `native` CLI provides project scaffolding, markup validation, automation, pa
     </tr>
     <tr>
       <td><code>native check [dir] [--strict]</code></td>
-      <td>Validate <code>src/**.zml</code> markup and <code>app.zon</code> without building; with a fresh <code>zig-out/model-contract.zon</code> (<code>zig build model-contract</code>) it also checks bindings, iterables, and message tags against your <code>Model</code>/<code>Msg</code> and warns on model state no view uses (<code>--strict</code> fails on warnings)</td>
+      <td>Validate <code>src/**.native</code> markup and <code>app.zon</code> without building; with a fresh <code>zig-out/model-contract.zon</code> (<code>zig build model-contract</code>) it also checks bindings, iterables, and message tags against your <code>Model</code>/<code>Msg</code> and warns on model state no view uses (<code>--strict</code> fails on warnings)</td>
     </tr>
     <tr>
       <td><code>native eject [dir]</code></td>
@@ -81,8 +81,8 @@ The `native` CLI provides project scaffolding, markup validation, automation, pa
       <td>Package shortcut for Android</td>
     </tr>
     <tr>
-      <td><code>native markup check &lt;file.zml&gt; [more files...]</code></td>
-      <td>Validate <code>.zml</code> markup without building; errors carry <code>file:line:column</code> and a teaching message; run inside an app directory it picks up a fresh model contract the same way <code>native check</code> does</td>
+      <td><code>native markup check &lt;file.native&gt; [more files...]</code></td>
+      <td>Validate Native markup without building; errors carry <code>file:line:column</code> and a teaching message (files still on the former <code>.zml</code> extension check too, with a rename note); run inside an app directory it picks up a fresh model contract the same way <code>native check</code> does</td>
     </tr>
     <tr>
       <td><code>native markup lsp</code></td>

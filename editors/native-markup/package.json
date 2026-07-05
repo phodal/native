@@ -1,7 +1,7 @@
 {
-  "name": "zml",
-  "displayName": "ZML (Native SDK markup)",
-  "description": "Syntax highlighting, diagnostics, completion, and hover for Native SDK .zml markup views.",
+  "name": "native-markup",
+  "displayName": "Native markup",
+  "description": "Syntax highlighting, diagnostics, completion, and hover for Native SDK .native markup views.",
   "version": "0.1.0",
   "publisher": "native-sdk",
   "license": "MIT",
@@ -13,17 +13,17 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:zml"
+    "onLanguage:native-markup"
   ],
   "contributes": {
     "languages": [
       {
-        "id": "zml",
+        "id": "native-markup",
         "aliases": [
-          "ZML",
-          "Native SDK markup"
+          "Native markup"
         ],
         "extensions": [
+          ".native",
           ".zml"
         ],
         "configuration": "./language-configuration.json"
@@ -31,15 +31,15 @@
     ],
     "grammars": [
       {
-        "language": "zml",
-        "scopeName": "source.zml",
-        "path": "./syntaxes/zml.tmLanguage.json"
+        "language": "native-markup",
+        "scopeName": "source.native-markup",
+        "path": "./syntaxes/native-markup.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "ZML",
+      "title": "Native markup",
       "properties": {
-        "zml.serverPath": {
+        "native-markup.serverPath": {
           "type": "string",
           "default": "native",
           "description": "Path to the Native SDK CLI used to start the markup language server (`native markup lsp`). Set an absolute path if the CLI is not on PATH."

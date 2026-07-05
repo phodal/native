@@ -1,15 +1,15 @@
 # Native UI
 
-The default Native SDK app is native-rendered: the view is a `.zml` markup file, the logic is Zig, and rendering happens through Native SDK's own engine. Scaffold one with `native init my_app` and run it with `native dev`.
+The default Native SDK app is native-rendered: the view is a Native markup file (`.native`), the logic is Zig, and rendering happens through Native SDK's own engine. Scaffold one with `native init my_app` and run it with `native dev`.
 
 An app is four things:
 
-- `src/app.zml` — the entire UI: elements, layout, bindings, and message dispatch.
+- `src/app.native` — the entire UI: elements, layout, bindings, and message dispatch.
 - `Model` — a plain Zig struct holding your state.
 - `Msg` — a tagged union of everything that can happen.
 - `update(model, msg)` — the only place state changes.
 
-The runtime owns the rest: install, presentation, resize, typed event dispatch, timers, and hot reload. In dev builds, edit the `.zml` while the app runs and the window updates in place — model state, selection, and widget identity all survive. In release builds the markup is compiled at comptime, so the binary carries no parser and a typo in a view is a compile error with a line and column.
+The runtime owns the rest: install, presentation, resize, typed event dispatch, timers, and hot reload. In dev builds, edit the `.native` file while the app runs and the window updates in place — model state, selection, and widget identity all survive. In release builds the markup is compiled at comptime, so the binary carries no parser and a typo in a view is a compile error with a line and column.
 
 ## A complete view
 
@@ -144,7 +144,7 @@ An arg can declare a literal default with `name=value`, and a use site may then 
 Templates become shared components through `<import>`, which goes at the very top of a file, before its own templates:
 
 ```html
-<import src="components/board-column.zml"/>
+<import src="components/board-column.native"/>
 <column gap="12">
   <use template="board-column" title="Todo" cards="{todoCards}" />
 </column>
@@ -156,10 +156,10 @@ Each engine resolves imports through its own source access. The runtime interpre
 
 ```zig
 pub const board_markup_files = [_]canvas.ui_markup.SourceFile{
-    .{ .path = "board.zml", .source = @embedFile("board.zml") },
-    .{ .path = "components/board-column.zml", .source = @embedFile("components/board-column.zml") },
+    .{ .path = "board.native", .source = @embedFile("board.native") },
+    .{ .path = "components/board-column.native", .source = @embedFile("components/board-column.native") },
 };
-pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.zml", &board_markup_files);
+pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.native", &board_markup_files);
 ```
 
 A template can also take markup children. The body marks the insertion point with a single `<slot/>`, and the use site's children build in the consumer's scope — they see the model paths and loop variables where the `<use>` is written — then land at the slot's position:
@@ -496,8 +496,8 @@ Zig-built views get the same discipline at tree level: `canvas.expectA11yAuditSw
 
 ## Tooling
 
-- `native markup check src/app.zml` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon or plain words). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds. Accessibility findings ride the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (see [Accessibility](#accessibility)).
-- `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/zml/` in the repo for VS Code, Helix, and Neovim setup).
+- `native markup check src/app.native` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon or plain words). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds. Accessibility findings ride the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (see [Accessibility](#accessibility)).
+- `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/native-markup/` in the repo for VS Code, Helix, and Neovim setup).
 - The automation harness drives widgets and reads accessibility snapshots and screenshots headlessly — see [Automation](/automation).
 
 ### The model–view contract

@@ -44,7 +44,7 @@ Deck deliberately shares soundboard's domain: the same fictional 48-track/8-albu
 
 ## Authoring split
 
-- `src/statusbar.zml` — the playlist rack's status strip (search field, match counter, queue badge), compiled at comptime; the test suite also runs it through the runtime interpreter and asserts engine parity.
+- `src/statusbar.native` — the playlist rack's status strip (search field, match counter, queue badge), compiled at comptime; the test suite also runs it through the runtime interpreter and asserts engine parity.
 - `src/layout.zig` — the chassis layout table: every shared dimension (window, cap band, glass rows, key plates, wells, the transport cluster's accumulated x-positions, the playlist rack's stack) on one 4px grid, with comptime asserts holding the sums (the transport row fits its container; the ledger viewport folds on a whole row). Both the widget views and the chrome pass machine against this one table, so the metalwork cannot drift from the controls it hugs.
 - `src/view.zig` — the Zig-only chrome for both windows: the player (cap band drag region, VFD with mono paragraph readouts and the marquee, the `ui.chart` spectrum, seek fader, transport with the `PL` key) and the playlist rack (weave-texture backdrop image leaf, the flat full-library track ledger with per-row native context menus, cue strip).
 - `src/model.zig` — the library data, playback/queue/search/playlist-window state, the deterministic spectrum and marquee functions, and `update`.

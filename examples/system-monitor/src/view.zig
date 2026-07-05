@@ -1,5 +1,5 @@
 //! system-monitor views. Markup-first where markup fits: the header bar
-//! (brand, status line, theme chips) is a compiled `.zml` view. Everything
+//! (brand, status line, theme chips) is a compiled `.native` view. Everything
 //! else is Zig because it needs what the closed markup grammar excludes —
 //! vector icons paired with press handlers, the sparkline charts (one
 //! `ui.chart` widget per tile: token-tinted bar/line series in the
@@ -20,7 +20,7 @@ pub const Model = model_mod.Model;
 pub const Msg = model_mod.Msg;
 pub const Ui = canvas.Ui(Msg);
 
-pub const header_markup = @embedFile("header.zml");
+pub const header_markup = @embedFile("header.native");
 pub const CompiledHeaderView = canvas.CompiledMarkupView(Model, Msg, header_markup);
 
 // ------------------------------------------------------- layout constants

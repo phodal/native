@@ -1534,10 +1534,10 @@ pub const slot_children_message = "slot is a leaf - it takes no children; the us
 pub const empty_document_message = "markup file is empty - define templates (a component file), a view root, or both";
 pub const component_file_view_message = "this file defines templates only (a component file) - a view needs a root element after the templates; import this file from a view instead";
 pub const import_top_level_message = "import is only allowed at the top of the file, before the template definitions and the view root";
-pub const import_src_message = "import requires a src attribute naming a .zml file, relative to this file (subdirectories allowed)";
+pub const import_src_message = "import requires a src attribute naming a .native file, relative to this file (subdirectories allowed)";
 pub const import_attrs_message = "import takes only a src attribute";
 pub const import_children_message = "import is a leaf - it takes no children";
-pub const import_src_extension_message = "import src must name a .zml file";
+pub const import_src_extension_message = "import src must name a .native file (.zml, the format's former extension, still works for now)";
 pub const import_src_absolute_message = "import src must be a relative path (resolved against the importing file) - absolute paths are rejected so markup stays portable";
 pub const import_src_separator_message = "import src uses forward slashes only";
 pub const import_src_escape_message = "import src escapes the markup root (the root view file's directory) - keep component files under it";
@@ -1603,8 +1603,25 @@ pub fn importSrcShapeError(src: []const u8) ?[]const u8 {
     if (src[0] == '/') return import_src_absolute_message;
     if (std.mem.indexOfScalar(u8, src, ':') != null) return import_src_absolute_message;
     if (std.mem.indexOfScalar(u8, src, '\\') != null) return import_src_separator_message;
-    if (!std.mem.endsWith(u8, src, ".zml")) return import_src_extension_message;
+    if (!hasMarkupExtension(src)) return import_src_extension_message;
     return null;
+}
+
+/// The Native markup file extension.
+pub const markup_extension = ".native";
+
+/// The format's former extension. Files named `.zml` keep loading and
+/// importing everywhere `.native` does, so existing apps build unchanged
+/// while they rename; the checker suggests the rename. Imports resolve by
+/// the path as written, so a `.zml` file may import a `.native` file and
+/// vice versa.
+pub const legacy_markup_extension = ".zml";
+
+/// True for both accepted markup extensions (`.native` and, for now,
+/// `.zml`).
+pub fn hasMarkupExtension(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, markup_extension) or
+        std.mem.endsWith(u8, path, legacy_markup_extension);
 }
 
 fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?MarkupErrorInfo {
@@ -2489,7 +2506,7 @@ const ImportResolver = struct {
         return false;
     }
 
-    /// "import cycle: a.zml -> b.zml -> a.zml" — the chain from the first
+    /// "import cycle: a.native -> b.native -> a.native" — the chain from the first
     /// occurrence of the re-imported file down to the import that closes
     /// the loop.
     fn cycleMessage(self: *ImportResolver, start: usize, depth: usize, resolved: []const u8) error{OutOfMemory}![]const u8 {

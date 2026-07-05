@@ -30,7 +30,7 @@ export interface BuildTestCheck {
   args?: string[];
 }
 
-/** Run `native markup check` on every `src/**\/*.zml` in the workspace. */
+/** Run `native markup check` on every `src/**\/*.native` in the workspace. */
 export interface MarkupCheckCheck {
   type: "markup_check";
 }
@@ -38,7 +38,7 @@ export interface MarkupCheckCheck {
 /** Grep workspace files for a pattern. */
 export interface FileGrepCheck {
   type: "file_grep";
-  /** Glob-ish file selector relative to the workspace: exact path or "src/*.zml". */
+  /** Glob-ish file selector relative to the workspace: exact path or "src/*.native". */
   files: string;
   /** JavaScript regular expression source (no flags; matched with "m"). */
   pattern: string;
@@ -70,7 +70,7 @@ export interface LlmJudgeCheck {
   type: "llm_judge";
   /** Case-specific criteria, each scored 0-10 by the judge. */
   criteria: string[];
-  /** Workspace files to show the judge (default: src/*.zml, src/main.zig, src/tests.zig). */
+  /** Workspace files to show the judge (default: src/*.native, src/main.zig, src/tests.zig). */
   files?: string[];
   /** Overall score at or above this counts as pass. Default 6. */
   minScore?: number;

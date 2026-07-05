@@ -1,6 +1,6 @@
 //! habits: a small habit tracker authored in markup + Zig.
 //!
-//! The view lives in `habits.zml`; this file is the logic: `Model`, `Msg`,
+//! The view lives in `habits.native`; this file is the logic: `Model`, `Msg`,
 //! and `update`. Rows carry a markup `global-key` pinned to the habit id,
 //! so a row keeps its widget identity across rebuilds and filtering.
 //!
@@ -8,7 +8,7 @@
 //! release builds use `canvas.CompiledMarkupView` — the source is parsed
 //! entirely at comptime, so the binary carries no markup parser and a
 //! markup mistake is a compile error — while debug builds additionally
-//! ship the runtime interpreter and watch `src/habits.zml`: the compiled
+//! ship the runtime interpreter and watch `src/habits.native`: the compiled
 //! view renders until the file first changes on disk, then hot reload
 //! takes over without losing streak state.
 
@@ -141,7 +141,7 @@ pub fn update(model: *Model, msg: Msg) void {
 // ------------------------------------------------------------------- view
 
 pub const HabitsUi = canvas.Ui(Msg);
-pub const habits_markup = @embedFile("habits.zml");
+pub const habits_markup = @embedFile("habits.native");
 
 /// The comptime-compiled engine: same tree, ids, and handlers as the
 /// interpreter, no parser in the binary.
@@ -174,7 +174,7 @@ pub fn main(init: std.process.Init) !void {
         .update = update,
         .view = CompiledHabitsView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = habits_markup, .watch_path = "src/habits.zml", .io = init.io }
+            .{ .source = habits_markup, .watch_path = "src/habits.native", .io = init.io }
         else
             null,
     });

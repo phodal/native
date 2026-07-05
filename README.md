@@ -1,6 +1,6 @@
 # Native SDK
 
-Cross-platform native development inspired by the web. Views are declarative `.zml` markup, styling is a token system, logic is Zig — rendered by Native SDK's own engine, not a browser. Tiny binaries. Minimal memory. Instant rebuilds, with hot-reloading views.
+Cross-platform native development inspired by the web. Views are declarative Native markup, styling is a token system, logic is Zig — rendered by Native SDK's own engine, not a browser. Tiny binaries. Minimal memory. Instant rebuilds, with hot-reloading views.
 
 Native SDK apps are native-rendered by default: a retained widget tree with flex layout, typed message dispatch, accessibility, and a built-in component catalog, drawn through the platform's GPU surface. WebViews remain a first-class coexisting surface — use one when a feature should stay web-shaped (browser surfaces, rich previews, embedded web apps, third-party content), or build the whole app as a WebView shell with the frontend framework you already use. Native, web, or both.
 
@@ -21,7 +21,7 @@ cd my_app
 native dev
 ```
 
-The default app is native-rendered: a declarative `.zml` view plus Zig logic, with hot reload of the view while the app runs. With a web frontend selected, the first run installs frontend dependencies and opens a desktop window rendering your WebView content.
+The default app is native-rendered: a declarative `.native` view plus Zig logic, with hot reload of the view while the app runs. With a web frontend selected, the first run installs frontend dependencies and opens a desktop window rendering your WebView content.
 
 Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
 
@@ -29,11 +29,11 @@ Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/qui
 
 ### Model like HTML, logic in a real language
 
-A view is a `.zml` file: elements, flex layout, `{bindings}`, and typed message dispatch — the composability of the web with a deliberately closed grammar. Logic is plain Zig: a `Model` struct, a `Msg` union, and an `update` function. The markup compiles at comptime, so release builds carry no parser and a typo in a view is a compile error with a line and column.
+A view is a `.native` file: elements, flex layout, `{bindings}`, and typed message dispatch — the composability of the web with a deliberately closed grammar. Logic is plain Zig: a `Model` struct, a `Msg` union, and an `update` function. The markup compiles at comptime, so release builds carry no parser and a typo in a view is a compile error with a line and column.
 
 ### Edit the view while the app runs
 
-In dev builds the `.zml` file is watched: save it and the window updates in place, keeping your model state, selection, and widget identity. No JS engine, no bundler.
+In dev builds the `.native` file is watched: save it and the window updates in place, keeping your model state, selection, and widget identity. No JS engine, no bundler.
 
 ### Built to be verified
 

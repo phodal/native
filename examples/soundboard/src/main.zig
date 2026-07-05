@@ -5,7 +5,7 @@
 //! plays), search, and a custom light/dark theme.
 //!
 //! Authoring split (markup-first): the header and now-playing bars are
-//! `.zml` views compiled at comptime; the album grid, album detail, and
+//! `.native` views compiled at comptime; the album grid, album detail, and
 //! track rows are Zig views because they need what the closed markup
 //! grammar deliberately excludes — square cover images, grid column
 //! counts, scaled paragraph headings, and per-row native context menus.

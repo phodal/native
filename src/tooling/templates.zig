@@ -12,7 +12,7 @@ pub const Frontend = enum {
     react,
     svelte,
     vue,
-    /// Native-rendered markup app (.zml + Zig): no WebView, no npm frontend.
+    /// Native-rendered markup app (.native + Zig): no WebView, no npm frontend.
     native,
 
     pub fn parse(value: []const u8) ?Frontend {
@@ -130,7 +130,7 @@ fn writeNativeAppSlim(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.
     defer allocator.free(readme_md);
 
     try writeFile(app_dir, io, "src/main.zig", main_zig);
-    try writeFile(app_dir, io, "src/app.zml", nativeAppZml());
+    try writeFile(app_dir, io, "src/app.native", nativeAppMarkup());
     try writeFile(app_dir, io, "src/tests.zig", tests_zig);
     try writeFile(app_dir, io, "app.zon", app_zon);
     try writeFile(app_dir, io, "assets/icon.icns", default_icon_icns);
@@ -155,7 +155,7 @@ fn slimNativeReadme(allocator: std.mem.Allocator, names: TemplateNames) ![]const
     try out.appendSlice(allocator,
         \\
         \\
-        \\A native-rendered Native SDK app: the view lives in `src/app.zml`
+        \\A native-rendered Native SDK app: the view lives in `src/app.native`
         \\(declarative markup) and the logic in `src/main.zig` (`Model`, `Msg`,
         \\`update`). No WebView, no npm, no build files — the `native` CLI owns
         \\the build.
@@ -166,12 +166,12 @@ fn slimNativeReadme(allocator: std.mem.Allocator, names: TemplateNames) ![]const
         \\native dev     # build and run the app with hot reload
         \\native test    # run the app's test suite
         \\native build   # produce a ReleaseFast binary in zig-out/bin/
-        \\native check   # validate src/*.zml markup and app.zon
+        \\native check   # validate src/*.native markup and app.zon
         \\```
         \\
         \\## Hot reload
         \\
-        \\`src/app.zml` is watched while `native dev` runs: edit it and the
+        \\`src/app.native` is watched while `native dev` runs: edit it and the
         \\window updates within ~2s without losing model state. Parse failures
         \\keep the last good view.
         \\
@@ -207,7 +207,7 @@ fn writeNativeApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir,
     try writeFile(app_dir, io, "build.zig", build_zig);
     try writeFile(app_dir, io, "build.zig.zon", build_zon);
     try writeFile(app_dir, io, "src/main.zig", main_zig);
-    try writeFile(app_dir, io, "src/app.zml", nativeAppZml());
+    try writeFile(app_dir, io, "src/app.native", nativeAppMarkup());
     try writeFile(app_dir, io, "src/tests.zig", tests_zig);
     try writeFile(app_dir, io, "app.zon", app_zon);
     try writeFile(app_dir, io, "assets/icon.icns", default_icon_icns);
@@ -274,7 +274,7 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator,
         \\//! A minimal native-rendered Native SDK app: the view lives in
-        \\//! `app.zml` (embedded into the binary, and watched for hot reload in
+        \\//! `app.native` (embedded into the binary, and watched for hot reload in
         \\//! dev); this file is the logic: `Model`, `Msg`, and `update`.
         \\
         \\const std = @import("std");
@@ -332,7 +332,7 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
         \\// ------------------------------------------------------------------- view
         \\
         \\pub const AppUi = canvas.Ui(Msg);
-        \\pub const app_markup = @embedFile("app.zml");
+        \\pub const app_markup = @embedFile("app.native");
         \\
         \\// -------------------------------------------------------------------- app
         \\
@@ -357,7 +357,7 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
         \\        .scene = shell_scene,
         \\        .canvas_label = canvas_label,
         \\        .update = update,
-        \\        .markup = .{ .source = app_markup, .watch_path = "src/app.zml", .io = init.io },
+        \\        .markup = .{ .source = app_markup, .watch_path = "src/app.native", .io = init.io },
         \\    });
         \\    defer app_state.destroy();
         \\    app_state.model = initialModel();
@@ -400,11 +400,11 @@ fn nativeMainZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8
     return out.toOwnedSlice(allocator);
 }
 
-fn nativeAppZml() []const u8 {
+fn nativeAppMarkup() []const u8 {
     return
     \\<!-- The whole view. Embedded into the binary and hot-reloaded in dev:
     \\     edit this file while the app runs and the window updates without
-    \\     losing the count. Validate with: native markup check src/app.zml -->
+    \\     losing the count. Validate with: native markup check src/app.native -->
     \\<column gap="12" padding="16">
     \\  <row gap="8" cross="center">
     \\    <text grow="1">Counter</text>
@@ -443,11 +443,11 @@ fn nativeTestsZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u
         \\    var view = try AppMarkup.init(arena, main.app_markup);
         \\    var ui = AppUi.init(arena);
         \\    const node = view.build(&ui, model) catch |err| {
-        \\        // Name the app.zml position instead of leaving a bare error
+        \\        // Name the app.native position instead of leaving a bare error
         \\        // trace: the usual causes are a binding without a matching
         \\        // Model field or an on-* message without a Msg arm.
         \\        if (err == error.MarkupBuild) {
-        \\            std.debug.print("app.zml:{d}:{d}: {s}\n", .{ view.diagnostic.line, view.diagnostic.column, view.diagnostic.message });
+        \\            std.debug.print("app.native:{d}:{d}: {s}\n", .{ view.diagnostic.line, view.diagnostic.column, view.diagnostic.message });
         \\        }
         \\        return err;
         \\    };
@@ -463,11 +463,11 @@ fn nativeTestsZig(allocator: std.mem.Allocator, names: TemplateNames) ![]const u
         \\}
         \\
         \\/// A miss fails the test with the mismatch spelled out instead of a
-        \\/// null-unwrap panic: the usual cause is app.zml and this test
+        \\/// null-unwrap panic: the usual cause is app.native and this test
         \\/// drifting apart after an edit.
         \\fn expectByText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) !canvas.Widget {
         \\    return findByText(widget, kind, text) orelse {
-        \\        std.debug.print("no {t} with text \"{s}\" in the view - if you changed app.zml, update this test to match\n", .{ kind, text });
+        \\        std.debug.print("no {t} with text \"{s}\" in the view - if you changed app.native, update this test to match\n", .{ kind, text });
         \\        return error.WidgetNotFound;
         \\    };
         \\}
@@ -598,7 +598,7 @@ fn nativeAppZon(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 
 fn nativeVscodeSettings() []const u8 {
     return
     \\{
-    \\  "files.associations": { "*.zml": "html" }
+    \\  "files.associations": { "*.native": "html" }
     \\}
     \\
     ;
@@ -620,7 +620,7 @@ fn nativeReadme(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
     try out.appendSlice(allocator,
         \\
         \\
-        \\A native-rendered Native SDK app: the view lives in `src/app.zml`
+        \\A native-rendered Native SDK app: the view lives in `src/app.native`
         \\(declarative markup) and the logic in `src/main.zig` (`Model`, `Msg`,
         \\`update`). No WebView, no npm — the UI renders on a GPU surface.
         \\
@@ -629,12 +629,12 @@ fn nativeReadme(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\```sh
         \\zig build run                          # build and launch the app
         \\zig build test                         # run the full-loop UI tests
-        \\native markup check src/app.zml   # validate the markup without building
+        \\native markup check src/app.native   # validate the markup without building
         \\```
         \\
         \\## Hot reload
         \\
-        \\`src/app.zml` is embedded into the binary and watched during development:
+        \\`src/app.native` is embedded into the binary and watched during development:
         \\edit it while the app runs and the window updates within ~2s without
         \\losing model state. Parse failures keep the last good view.
         \\
@@ -2929,8 +2929,8 @@ test "writeDefaultApp emits native project files" {
     defer std.testing.allocator.free(build_zon_text);
     const main_zig_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/main.zig");
     defer std.testing.allocator.free(main_zig_text);
-    const app_zml_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/app.zml");
-    defer std.testing.allocator.free(app_zml_text);
+    const app_markup_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/app.native");
+    defer std.testing.allocator.free(app_markup_text);
     const tests_zig_text = try readTestFile(std.testing.allocator, std.testing.io, destination, "src/tests.zig");
     defer std.testing.allocator.free(tests_zig_text);
     const vscode_text = try readTestFile(std.testing.allocator, std.testing.io, destination, ".vscode/settings.json");
@@ -2952,14 +2952,14 @@ test "writeDefaultApp emits native project files" {
     try std.testing.expect(std.mem.indexOf(u8, build_zon_text, ".native_sdk = .{ .path = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zon_text, ".name = .my_app") != null);
     try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "native_sdk.UiApp(Model, Msg)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "@embedFile(\"app.zml\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, ".watch_path = \"src/app.zml\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, app_zml_text, "on-press=\"increment\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "@embedFile(\"app.native\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, main_zig_text, ".watch_path = \"src/app.native\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_markup_text, "on-press=\"increment\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, tests_zig_text, "msgForPointer") != null);
     try std.testing.expect(std.mem.indexOf(u8, tests_zig_text, "canvas.MarkupView(Model, Msg)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, vscode_text, "\"*.zml\": \"html\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, vscode_text, "\"*.native\": \"html\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, gitignore_text, "zig-out/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, readme_text, "native markup check src/app.zml") != null);
+    try std.testing.expect(std.mem.indexOf(u8, readme_text, "native markup check src/app.native") != null);
     try std.testing.expect(std.mem.indexOf(u8, readme_text, "hot") != null or std.mem.indexOf(u8, readme_text, "Hot") != null);
 }
 

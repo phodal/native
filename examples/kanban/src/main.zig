@@ -104,6 +104,11 @@ pub const Model = struct {
     card_count: usize = 0,
     next_id: u32 = 1,
 
+    /// Update-only state: the view binds the per-column query fns, never
+    /// the backing store — opting these out keeps `native check`'s
+    /// dead-state lint quiet without weakening it for real drift.
+    pub const view_unbound = .{ "cards", "card_count", "next_id" };
+
     pub fn addCard(model: *Model, text: []const u8) void {
         if (model.card_count >= max_cards) return;
         var card = Card{ .id = model.next_id };

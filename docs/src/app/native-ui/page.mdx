@@ -492,4 +492,14 @@ Charts are Zig-only in v1: markup's scalar bindings cannot carry series arrays (
 - `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/zml/` in the repo for VS Code, Helix, and Neovim setup).
 - The automation harness drives widgets and reads accessibility snapshots and screenshots headlessly — see [Automation](/automation).
 
+### The model–view contract
+
+`zig build model-contract` (part of every scaffolded app's build; `zig build test` refreshes it too) reflects your `Model`/`Msg` into `zig-out/model-contract.zon`. With that artifact fresh, `native check` verifies markup against your app's actual surface — no app compile in the loop:
+
+- View → model: every binding path, `for each` iterable, `key` field, message tag, and payload type must exist on the model with the right shape, and expressions type-check with the real binding types — `{count > 'a'}` is an error naming `count` and its Zig type. Unknown names get a did-you-mean over your model's actual fields.
+- Model → view: model fields, query fns, and `Msg` tags that no view binds or dispatches are reported as **warnings** — state only `update`/fx logic touches is legitimate, so declare it: `pub const view_unbound = .{ "next_id" };` on `Model` or `Msg` opts names out. `--strict` promotes the warnings to failures.
+- Template args are part of a template's interface: the kinds of use-site arguments flow into the template body (a string passed into a `width` arg fails at the use), slot content checks in the consumer's scope, and the check follows the whole `<import>` closure.
+
+A missing or stale artifact (the artifact carries a hash of your Zig sources) degrades to structural checking with a note — never a false pass; the compiled engine still enforces the same contract at build time, and a conformance suite holds the two checkers to identical accept/reject sets.
+
 For the component catalog and styling model, see [Built-in Components](/built-in-components). For dropping down to the programmatic API, the `canvas.Ui(Msg)` builder produces exactly the same trees the markup compiles to.

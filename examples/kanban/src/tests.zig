@@ -294,3 +294,31 @@ fn expectSameIds(expected: canvas.Widget, actual: canvas.Widget) !void {
         try expectSameIds(expected_child, actual_child);
     }
 }
+
+test "the board markup satisfies the model contract in both directions" {
+    // The same check `native check` runs against the emitted artifact,
+    // in-process: every binding, iterable, message tag, and expression in
+    // the resolved board document against the app's real Model/Msg
+    // (view -> model), and no model state or Msg tag left unbound past
+    // the declared view_unbound set (model -> view).
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const board_contract = comptime canvas.describeModelContract(Model, Msg);
+    var set_loader = canvas.ui_markup.SourceSetLoader{ .set = &main.board_markup_files };
+    var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+    const document = try canvas.ui_markup.resolveImports(arena, "board.zml", main.board_markup, set_loader.loader(), &diagnostic);
+    try testing.expectEqual(null, canvas.ui_markup.validate(document));
+
+    var usage = try canvas.ui_markup.contract.Usage.init(arena, &board_contract);
+    if (try canvas.ui_markup.contract.checkDocument(arena, document, &board_contract, &usage)) |info| {
+        std.debug.print("contract check failed: {s}:{d}:{d}: {s}\n", .{ info.path, info.line, info.column, info.message });
+        return error.TestUnexpectedError;
+    }
+    const warnings = try canvas.ui_markup.contract.deadState(arena, &board_contract, &usage);
+    for (warnings) |warning| {
+        std.debug.print("dead-state warning: {s}\n", .{warning.message});
+    }
+    try testing.expectEqual(@as(usize, 0), warnings.len);
+}

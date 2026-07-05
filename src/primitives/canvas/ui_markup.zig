@@ -18,6 +18,12 @@ const font_coverage = @import("font_coverage.zig");
 /// evaluator both engines share (see ui_markup_expr.zig).
 pub const expr = @import("ui_markup_expr.zig");
 
+/// The model–view contract: comptime reflection of Model/Msg into a
+/// serializable artifact, the check-time verifier of markup against it
+/// (both directions), and the emit/parse plumbing `native check` and the
+/// per-app `zig build model-contract` step share (ui_markup_contract.zig).
+pub const contract = @import("ui_markup_contract.zig");
+
 pub const MarkupErrorInfo = struct {
     line: usize = 0,
     column: usize = 0,

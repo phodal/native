@@ -490,3 +490,16 @@ test "huge Model builds through the compiled engine without raising the eval-bra
     const node = compiled_view.CompiledMarkupView(HugeModel, HugeMsg, huge_source).build(&ui, &model);
     try std.testing.expect(node.nodes.len >= 3);
 }
+
+test "huge Model reflects into a model contract without raising the eval-branch quota" {
+    // The describe step is a Model/Msg-scaled comptime walk like the
+    // engines' own: it must derive its quota from the scanned types, so
+    // the ovation-shaped fixture is its compile-cost tripwire too.
+    const huge_contract = comptime canvas.ui_markup.contract.describe(HugeModel, HugeMsg, .{
+        .TextInputEvent = canvas.TextInputEvent,
+        .ScrollState = canvas.ScrollState,
+    });
+    try std.testing.expect(huge_contract.model.scalars.len > 100);
+    try std.testing.expect(huge_contract.iterables.len > 30);
+    try std.testing.expect(huge_contract.msgs.len > 60);
+}

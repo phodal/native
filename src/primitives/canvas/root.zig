@@ -424,6 +424,26 @@ pub const MarkupBuildDiagnostic = @import("ui_markup_view.zig").BuildDiagnostic;
 pub const CompiledMarkupView = @import("ui_markup_compiled.zig").CompiledMarkupView;
 pub const CompiledMarkupImports = @import("ui_markup_compiled.zig").CompiledMarkupImports;
 
+// The model–view contract (ui_markup_contract.zig): the payload types the
+// engines special-case are bound here so the contract module stays
+// std-only while apps and the build's emit step get one-call access.
+pub const markup_contract_specials = ui_markup.contract.Specials{
+    .TextInputEvent = TextInputEvent,
+    .ScrollState = ScrollState,
+};
+
+/// Reflect an app's Model/Msg into a markup contract (see
+/// `ui_markup.contract.describe`).
+pub fn describeModelContract(comptime Model: type, comptime Msg: type) ui_markup.contract.Contract {
+    return ui_markup.contract.describe(Model, Msg, markup_contract_specials);
+}
+
+/// The per-app `zig build model-contract` step's whole program: the app
+/// build wires a generated root that hands its own module to this.
+pub fn emitModelContractMain(comptime app: type, init: std.process.Init) !void {
+    return ui_markup.contract.emitMain(app, markup_contract_specials, init);
+}
+
 // Experimental declarative authoring layer lives in `ui.zig`.
 pub const ui_builder = @import("ui.zig");
 pub const Ui = ui_builder.Ui;

@@ -63,9 +63,9 @@ pub fn main(init: std.process.Init) !void {
             .forwarded_args = verb_args.forwarded,
         }) catch |err| return failVerb(err);
     } else if (std.mem.eql(u8, command, "check")) {
-        const verb_args = parseVerbArgs(allocator, args[2..], &.{}) catch fail("usage: native check [dir]");
+        const verb_args = parseVerbArgs(allocator, args[2..], &.{}) catch fail("usage: native check [dir] [--strict]");
         try enterAppDir(init.io, verb_args.dir);
-        runCheck(allocator, init.io) catch |err| return failVerb(err);
+        runCheck(allocator, init.io, flagBool(args, "--strict")) catch |err| return failVerb(err);
     } else if (std.mem.eql(u8, command, "eject")) {
         const verb_args = parseVerbArgs(allocator, args[2..], &.{}) catch fail("usage: native eject [dir]");
         try enterAppDir(init.io, verb_args.dir);
@@ -236,7 +236,7 @@ fn usage() void {
         \\  dev [dir] [--yes] [-D... zig build flags]      build and run the app (hot reload)
         \\  build [dir] [--yes] [-D... zig build flags]    build a ReleaseFast binary into zig-out/bin/
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
-        \\  check [dir]                                    validate src/*.zml markup and app.zon
+        \\  check [dir] [--strict]                         validate src/*.zml markup and app.zon (uses zig-out/model-contract.zon when fresh)
         \\  eject [dir]                                    write an owned build.zig/build.zig.zon into the app
         \\  cef install|path|doctor [--dir path] [--version version] [--source prepared|official] [--force]
         \\  doctor [--strict] [--manifest app.zon] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install]
@@ -248,7 +248,7 @@ fn usage() void {
         \\  package-linux [--output path] [--binary path]
         \\  package-ios [--output path] [--binary path]
         \\  package-android [--output path] [--binary path]
-        \\  markup check <file.zml> [more files...] | markup lsp
+        \\  markup check <file.zml> [more files...] [--strict] | markup lsp
         \\  automate <command>
         \\  skills list|get
         \\  version
@@ -312,6 +312,8 @@ fn parseVerbArgs(allocator: std.mem.Allocator, args: []const []const u8, value_f
             out.assume_yes = true;
             continue;
         }
+        // Verb-specific boolean flags read by the caller via flagBool.
+        if (std.mem.eql(u8, arg, "--strict")) continue;
         if (std.mem.startsWith(u8, arg, "-D") or std.mem.startsWith(u8, arg, "--release")) {
             try forwarded.append(allocator, arg);
             continue;
@@ -340,26 +342,37 @@ fn enterAppDir(io: std.Io, dir: []const u8) !void {
 }
 
 /// `native check`: validate every .zml under src/ plus app.zon — the
-/// no-build confidence pass (markup vocabulary + manifest schema).
-fn runCheck(allocator: std.mem.Allocator, io: std.Io) !void {
+/// no-build confidence pass (markup vocabulary + manifest schema). With a
+/// fresh model-contract artifact in zig-out (emitted by the app's
+/// `zig build model-contract` step), the markup pass also verifies
+/// bindings, iterables, message tags, and expression types against the
+/// app's actual Model/Msg, and reports unused model state as warnings
+/// (--strict promotes warnings to failures).
+fn runCheck(allocator: std.mem.Allocator, io: std.Io, strict: bool) !void {
     if (!tooling.buildgraph.fileExists(io, "app.zon")) {
         std.debug.print("no app.zon here — `native check` runs inside an app directory (or pass one: `native check path/to/app`)\n", .{});
         return error.MissingManifest;
     }
 
-    var markup_args: std.ArrayList([]const u8) = .empty;
-    defer markup_args.deinit(allocator);
-    try markup_args.append(allocator, "check");
-    try collectZmlFiles(allocator, io, "src", &markup_args);
-    if (markup_args.items.len > 1) {
-        try markup_cli.run(allocator, io, markup_args.items);
+    var markup_files: std.ArrayList([]const u8) = .empty;
+    defer markup_files.deinit(allocator);
+    try collectZmlFiles(allocator, io, "src", &markup_files);
+    var outcome = markup_cli.CheckOutcome{};
+    if (markup_files.items.len > 0) {
+        outcome = try markup_cli.checkFiles(allocator, io, markup_files.items);
+        if (outcome.failures > 0) return error.MarkupCheckFailed;
     }
 
     const result = try tooling.manifest.validateFile(allocator, io, "app.zon");
     tooling.manifest.printDiagnostic(result);
     if (!result.ok) return error.InvalidManifest;
-    const checked_markup = markup_args.items.len - 1;
-    std.debug.print("checked {d} markup file{s} and app.zon\n", .{ checked_markup, if (checked_markup == 1) "" else "s" });
+    const checked_markup = markup_files.items.len;
+    const contract_note: []const u8 = if (outcome.contract_checked) " against the model contract" else "";
+    std.debug.print("checked {d} markup file{s}{s} and app.zon\n", .{ checked_markup, if (checked_markup == 1) "" else "s", contract_note });
+    if (strict and outcome.warnings > 0) {
+        std.debug.print("{d} warning{s} promoted to errors (--strict)\n", .{ outcome.warnings, if (outcome.warnings == 1) "" else "s" });
+        return error.MarkupCheckFailed;
+    }
 }
 
 fn collectZmlFiles(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8, out: *std.ArrayList([]const u8)) !void {

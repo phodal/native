@@ -10,20 +10,128 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !
         usage();
         return error.MarkupCommandFailed;
     }
-    if (args.len < 2) {
+    var files: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer files.deinit(allocator);
+    var strict = false;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--strict")) {
+            strict = true;
+            continue;
+        }
+        try files.append(allocator, arg);
+    }
+    if (files.items.len == 0) {
         std.debug.print("error: markup check requires a file path\n", .{});
         return error.MarkupCommandFailed;
     }
 
-    var failures: usize = 0;
-    for (args[1..]) |file_path| {
-        checkFile(allocator, io, file_path) catch {
-            failures += 1;
-        };
-    }
+    const outcome = try checkFiles(allocator, io, files.items);
     // Exit directly: the diagnostics above are the whole story, and a
     // returned error would bury them under the CLI's own return trace.
-    if (failures > 0) std.process.exit(1);
+    if (outcome.failures > 0) std.process.exit(1);
+    if (strict and outcome.warnings > 0) {
+        std.debug.print("{d} warning{s} promoted to errors (--strict)\n", .{ outcome.warnings, if (outcome.warnings == 1) "" else "s" });
+        std.process.exit(1);
+    }
+}
+
+pub const CheckOutcome = struct {
+    failures: usize = 0,
+    warnings: usize = 0,
+    /// True when a fresh model contract backed the pass (bindings,
+    /// iterables, messages, and expression types were checked against the
+    /// app's actual Model/Msg, not just structurally).
+    contract_checked: bool = false,
+};
+
+/// The `check` body shared by `native markup check` and `native check`:
+/// structural validation of every file, plus — when the working directory
+/// is an app with a FRESH model-contract artifact — the model-aware
+/// contract pass and the dead-state lint. A missing, stale, or unreadable
+/// artifact degrades to structural checking with a note, never a false
+/// pass.
+pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []const u8) !CheckOutcome {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var outcome = CheckOutcome{};
+    var contract_value: ?ui_markup.contract.Contract = null;
+    switch (discoverContract(arena, io)) {
+        .no_app => {},
+        .missing => std.debug.print(
+            "model contract: no artifact at {s} - bindings and messages were checked structurally only (run `zig build model-contract` in the app to enable model checks)\n",
+            .{ui_markup.contract.default_artifact_path},
+        ),
+        .unreadable => std.debug.print(
+            "model contract: {s} could not be parsed (it may come from a different toolkit version) - bindings and messages were checked structurally only (re-run `zig build model-contract`)\n",
+            .{ui_markup.contract.default_artifact_path},
+        ),
+        .stale => std.debug.print(
+            "model contract: {s} is stale (the app's Zig sources changed since it was emitted) - bindings and messages were checked structurally only (re-run `zig build model-contract`)\n",
+            .{ui_markup.contract.default_artifact_path},
+        ),
+        .ok => |parsed| contract_value = parsed,
+    }
+
+    var usage_state: ?ui_markup.contract.Usage = null;
+    if (contract_value) |*parsed| {
+        usage_state = try ui_markup.contract.Usage.init(arena, parsed);
+    }
+    var views_checked: usize = 0;
+    for (files) |file_path| {
+        const checked = checkFile(allocator, io, file_path, .{
+            .contract = if (contract_value) |*parsed| parsed else null,
+            .usage = if (usage_state) |*live_usage| live_usage else null,
+            .arena = arena,
+        }) catch {
+            outcome.failures += 1;
+            continue;
+        };
+        if (checked.had_view) views_checked += 1;
+    }
+    if (contract_value != null) outcome.contract_checked = true;
+
+    // The reverse direction — model state and Msg tags no view binds —
+    // only reads once every view has contributed its bindings, and only
+    // when the forward pass is clean (errors already fail the run).
+    if (outcome.failures == 0 and views_checked > 0) {
+        if (contract_value) |*parsed| {
+            const warnings = try ui_markup.contract.deadState(arena, parsed, &usage_state.?);
+            for (warnings) |warning| {
+                std.debug.print("warning: {s}\n", .{warning.message});
+            }
+            outcome.warnings += warnings.len;
+        }
+    }
+    return outcome;
+}
+
+const ContractState = union(enum) {
+    no_app,
+    missing,
+    unreadable,
+    stale,
+    ok: ui_markup.contract.Contract,
+};
+
+/// Look for the app's contract artifact next to the working directory's
+/// app.zon and prove it fresh (the artifact carries a hash over the app's
+/// Zig sources; any drift degrades to structural checking).
+fn discoverContract(arena: std.mem.Allocator, io: std.Io) ContractState {
+    if (!fileExists(io, "app.zon")) return .no_app;
+    const source = readFile(arena, io, ui_markup.contract.default_artifact_path) catch return .missing;
+    const parsed = ui_markup.contract.parseArtifact(arena, source) catch return .unreadable;
+    if (parsed.format != ui_markup.contract.format_version) return .unreadable;
+    const current = ui_markup.contract.hashSourceDir(arena, io, parsed.source_root) catch return .stale;
+    if (current != parsed.source_hash) return .stale;
+    return .{ .ok = parsed };
+}
+
+fn fileExists(io: std.Io, path: []const u8) bool {
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
 }
 
 fn runLsp(allocator: std.mem.Allocator, io: std.Io) !void {
@@ -36,7 +144,19 @@ fn runLsp(allocator: std.mem.Allocator, io: std.Io) !void {
     try server.run();
 }
 
-fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !void {
+const FileCheckContext = struct {
+    contract: ?*const ui_markup.contract.Contract = null,
+    usage: ?*ui_markup.contract.Usage = null,
+    /// Session arena for contract-check messages, which outlive the
+    /// per-file arena (the dead-state summary prints after all files).
+    arena: std.mem.Allocator,
+};
+
+const FileCheckResult = struct {
+    had_view: bool = false,
+};
+
+fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8, context: FileCheckContext) !FileCheckResult {
     const source = readFile(allocator, io, file_path) catch |err| {
         std.debug.print("error: {s}: unable to read file ({s})\n", .{ file_path, @errorName(err) });
         return err;
@@ -92,7 +212,19 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
         printStaleBinaryHint(info.message);
         return error.MarkupInvalid;
     }
+    // The model-aware pass, when a fresh contract artifact is in hand:
+    // bindings, iterables, message tags, and expression types against the
+    // app's actual Model/Msg. Component files (no view root) check
+    // through the views that import them, where argument kinds exist.
+    if (context.contract) |contract_value| {
+        if (try ui_markup.contract.checkDocument(context.arena, document, contract_value, context.usage)) |info| {
+            const info_path = if (info.path.len > 0) info.path else file_path;
+            std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ info_path, info.line, info.column, info.message });
+            return error.MarkupInvalid;
+        }
+    }
     std.debug.print("{s}: ok\n", .{file_path});
+    return .{ .had_view = document.root != null };
 }
 
 /// Import loading for the checker: resolver paths are already joined
@@ -260,7 +392,7 @@ fn readFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) ![]
 
 fn usage() void {
     std.debug.print(
-        \\usage: native markup check <file.zml> [more files...]
+        \\usage: native markup check <file.zml> [more files...] [--strict]
         \\       native markup lsp
         \\
         \\check: parses and validates markup views: grammar, expression forms,
@@ -268,9 +400,17 @@ fn usage() void {
         \\follows its <import> closure; a file that is all templates is a
         \\valid component file), and font coverage (literal text outside the
         \\bundled face renders as tofu boxes on reference paths - the error
-        \\names the character; use icons or plain words). Binding paths and
-        \\message tags are validated against your Model/Msg when the app
-        \\builds.
+        \\names the character; use icons or plain words).
+        \\
+        \\Inside an app directory with a fresh zig-out/model-contract.zon
+        \\(emit it with `zig build model-contract`), the check also verifies
+        \\bindings, iterables, message tags, and expression types against
+        \\the app's actual Model/Msg, and reports model state and Msg tags
+        \\no view uses as warnings (--strict promotes warnings to failures;
+        \\opt update-only names out with pub const view_unbound on Model or
+        \\Msg). A missing or stale artifact degrades to structural checking
+        \\with a note - never a false pass; binding paths are then validated
+        \\against your Model/Msg when the app builds.
         \\
         \\lsp: speaks the Language Server Protocol over stdio (diagnostics,
         \\completion, hover) for .zml files; wire it into your editor's LSP

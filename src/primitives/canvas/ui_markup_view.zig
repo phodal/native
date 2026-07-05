@@ -1513,25 +1513,14 @@ pub const color_style_attr_fields: []const AttrName = &.{
     .{ .markup = "focus-ring", .zig = "focus_ring" },
 };
 
-/// Comptime walks over an app's Model and Msg scale with the type's
-/// field/decl count, and the default 1000-backwards-branch quota dies at
-/// real app sizes (ovation: ~200 pub decls) — inside framework code the
-/// app never asked to run, before it uses any markup. Every Model/Msg
-/// shaped comptime walk in both markup engines derives its quota from the
-/// scanned type instead of relying on the default: generous linear
-/// headroom per field/decl (name compares, fn-signature checks,
-/// `sliceElement` recursion) plus the item-type dedupe's worst-case
-/// quadratic accumulation. Apps never raise the quota for framework
-/// scans; `ui_markup_huge_model_tests.zig` is the compile-cost guard.
-pub fn typeScanQuota(comptime T: type) u32 {
-    const entries: u32 = switch (@typeInfo(T)) {
-        .@"struct" => |info| @intCast(info.fields.len + info.decls.len),
-        .@"union" => |info| @intCast(info.fields.len + info.decls.len),
-        .@"enum" => |info| @intCast(info.fields.len + info.decls.len),
-        else => 0,
-    };
-    return 2000 + entries * 64 + entries * entries;
-}
+/// Model/Msg reflection predicates shared with the compiled engine and
+/// the model-contract describe step (see ui_markup_reflect.zig — one
+/// definition of what markup can bind, three consumers).
+const reflect = @import("ui_markup_reflect.zig");
+pub const typeScanQuota = reflect.typeScanQuota;
+pub const sliceElement = reflect.sliceElement;
+pub const isItemFn = reflect.isItemFn;
+pub const isArenaScalarFn = reflect.isArenaScalarFn;
 
 fn collectItemTypes(comptime Model: type) []const type {
     comptime {
@@ -1567,32 +1556,6 @@ fn appendUniqueType(comptime types: []const type, comptime T: type) []const type
         if (existing == T) return types;
     }
     return types ++ &[_]type{T};
-}
-
-pub fn sliceElement(comptime T: type) ?type {
-    return switch (@typeInfo(T)) {
-        .array => |info| info.child,
-        .pointer => |info| if (info.size == .slice) info.child else if (info.size == .one) sliceElement(info.child) else null,
-        else => null,
-    };
-}
-
-pub fn isItemFn(comptime DeclType: type, comptime Item: type, comptime with_arena: bool) bool {
-    const info = switch (@typeInfo(DeclType)) {
-        .@"fn" => |fn_info| fn_info,
-        else => return false,
-    };
-    if (info.params.len == 0 or info.params[0].type == null) return false;
-    switch (@typeInfo(info.params[0].type.?)) {
-        .pointer => {},
-        else => return false,
-    }
-    const expected_params: usize = if (with_arena) 2 else 1;
-    if (info.params.len != expected_params) return false;
-    const Return = info.return_type orelse return false;
-    if (sliceElement(Return) != Item) return false;
-    if (with_arena and info.params[1].type != std.mem.Allocator) return false;
-    return true;
 }
 
 pub fn asSlice(comptime Item: type, value: anytype) []const Item {
@@ -1648,20 +1611,6 @@ fn resolveOn(comptime T: type, value: *const T, path: []const u8, arena: ?std.me
     }
 }
 
-/// An arena-taking scalar binding fn: `fn (self: *const T,
-/// arena: std.mem.Allocator) V`. The `for each` arena form returns a slice
-/// of items; this form returns one value (typically a formatted
-/// `[]const u8` allocated from the arena).
-pub fn isArenaScalarFn(comptime T: type, comptime DeclType: type) bool {
-    const info = switch (@typeInfo(DeclType)) {
-        .@"fn" => |fn_info| fn_info,
-        else => return false,
-    };
-    if (info.params.len != 2 or info.return_type == null) return false;
-    if (info.params[0].type != *const T) return false;
-    return info.params[1].type == std.mem.Allocator;
-}
-
 fn resolveNested(comptime T: type, ptr: anytype, path: []const u8, arena: ?std.mem.Allocator) ?Value {
     return switch (@typeInfo(T)) {
         .@"struct" => resolveOn(T, ptr, path, arena),
@@ -1683,13 +1632,7 @@ pub fn valueOf(comptime T: type, value: T) ?Value {
     };
 }
 
-pub fn literalValue(text: []const u8) Value {
-    if (std.mem.eql(u8, text, "true")) return .{ .boolean = true };
-    if (std.mem.eql(u8, text, "false")) return .{ .boolean = false };
-    if (std.fmt.parseInt(i64, text, 10)) |int| return .{ .integer = int } else |_| {}
-    if (std.fmt.parseFloat(f32, text)) |float| return .{ .float = float } else |_| {}
-    return .{ .string = text };
-}
+pub const literalValue = reflect.literalValue;
 
 /// Display-text formatting for interpolation and `++` concatenation:
 /// defined once in the expression core so both engines (and the evaluator

@@ -829,6 +829,42 @@ test "the validator's element list matches the interpreter" {
     }
 }
 
+test "the contract checker's attr kind classes match the ElementOptions field types" {
+    // The contract module is std-only, so it carries the attribute value
+    // classes as data; the engines derive them from the real field types
+    // in setOptionField. This lockstep holds the two readings equal, so
+    // the check-time pass and the build-time pass cannot drift.
+    const contract = canvas.ui_markup.contract;
+    inline for (markup_view.attr_names) |name| {
+        const FieldType = @FieldType(InboxUi.ElementOptions, name.zig);
+        const expected: contract.AttrClass = switch (@typeInfo(FieldType)) {
+            .float => .number,
+            .int => .whole,
+            .bool, .optional => .truthy,
+            .@"enum" => .option,
+            .pointer => .text,
+            else => unreachable,
+        };
+        var found = false;
+        for (contract.attr_kind_rules) |rule| {
+            if (std.mem.eql(u8, rule.name, name.markup)) {
+                found = true;
+                try testing.expectEqual(expected, rule.class);
+            }
+        }
+        try testing.expect(found);
+    }
+    // Every rule names a real option attribute (dead table entries would
+    // silently check nothing).
+    for (contract.attr_kind_rules) |rule| {
+        var known = false;
+        inline for (markup_view.attr_names) |name| {
+            if (std.mem.eql(u8, rule.name, name.markup)) known = true;
+        }
+        try testing.expect(known);
+    }
+}
+
 test "the validator's non-hit-target element list matches the engine's hit-target predicate" {
     // The engine predicate (canvas.widgetKindHitTarget, which the runtime's
     // pointer dispatch and both markup engines use) is the source of truth;

@@ -422,6 +422,7 @@ pub const ui_markup = @import("ui_markup.zig");
 pub const MarkupView = @import("ui_markup_view.zig").MarkupView;
 pub const MarkupBuildDiagnostic = @import("ui_markup_view.zig").BuildDiagnostic;
 pub const CompiledMarkupView = @import("ui_markup_compiled.zig").CompiledMarkupView;
+pub const CompiledMarkupImports = @import("ui_markup_compiled.zig").CompiledMarkupImports;
 
 // Experimental declarative authoring layer lives in `ui.zig`.
 pub const ui_builder = @import("ui.zig");

@@ -812,6 +812,170 @@ test "markup watch polls from the reserved runtime timer" {
     try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 1"));
 }
 
+const watch_import_root_markup =
+    \\<import src="ui-app-markup-watch-parts.zml"/>
+    \\<column gap="8" padding="12">
+    \\  <text>Count {count}</text>
+    \\  <use template="actions" />
+    \\</column>
+;
+
+const watch_import_parts_markup =
+    \\<template name="actions">
+    \\  <column gap="4">
+    \\    <button variant="primary" on-press="increment">Increment</button>
+    \\    <button on-press="reset">Reset</button>
+    \\  </column>
+    \\</template>
+;
+
+const watch_import_parts_markup_v2 =
+    \\<template name="actions">
+    \\  <column gap="4">
+    \\    <button variant="primary" on-press="increment">Increment</button>
+    \\    <button on-press="reset">Start over</button>
+    \\  </column>
+    \\</template>
+;
+
+test "the markup watch reloads when an IMPORTED file changes on disk" {
+    const io = std.testing.io;
+    const watch_path = ".zig-cache/ui-app-markup-watch-import-test.zml";
+    const parts_path = ".zig-cache/ui-app-markup-watch-parts.zml";
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = watch_path, .data = watch_import_root_markup });
+    defer cwd.deleteFile(io, watch_path) catch {};
+    try cwd.writeFile(io, .{ .sub_path = parts_path, .data = watch_import_parts_markup });
+    defer cwd.deleteFile(io, parts_path) catch {};
+
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    // The embedded source set mirrors the on-disk closure (paths relative
+    // to the root file's directory), so the first build and the disk poll
+    // agree until something actually changes.
+    var options = markupCounterOptions();
+    options.markup = .{
+        .source = watch_import_root_markup,
+        .sources = &.{
+            .{ .path = "ui-app-markup-watch-parts.zml", .source = watch_import_parts_markup },
+        },
+        .watch_path = watch_path,
+        .io = io,
+    };
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    // The imported template built into the view.
+    const increment_id = findWidgetIdByText(app_state.tree.?, .button, "Increment").?;
+
+    // An idle poll (closure unchanged) swaps nothing.
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 1_500_000).?);
+    try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Reset") != null);
+
+    // Advance model state, then edit only the IMPORTED file: the poll
+    // covers the whole closure, so the change reloads and rebuilds while
+    // model state and ids hold.
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ canvas_label, increment_id });
+    try harness.runtime.dispatchAutomationCommand(app, click);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+
+    try cwd.writeFile(io, .{ .sub_path = parts_path, .data = watch_import_parts_markup_v2 });
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 2_000_000).?);
+
+    try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Start over") != null);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.count);
+    try std.testing.expectEqual(increment_id, findWidgetIdByText(app_state.tree.?, .button, "Increment").?);
+
+    // A broken edit to the imported file keeps the last good view and
+    // records a diagnostic naming the imported file.
+    try cwd.writeFile(io, .{ .sub_path = parts_path, .data = "<template name=\"actions\"><column><oops</column></template>" });
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 2_500_000).?);
+    try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Start over") != null);
+    try std.testing.expect(app_state.markup_diagnostic != null);
+    try std.testing.expect(std.mem.indexOf(u8, app_state.markup_diagnostic.?.path, "ui-app-markup-watch-parts.zml") != null);
+}
+
+const watch_import_sources = [_]canvas.ui_markup.SourceFile{
+    .{ .path = "ui-app-markup-watch-import-baseline.zml", .source = watch_import_root_markup },
+    .{ .path = "ui-app-markup-watch-parts.zml", .source = watch_import_parts_markup },
+};
+
+const CompiledImportCounterView = canvas.CompiledMarkupImports(
+    CounterModel,
+    CounterMsg,
+    "ui-app-markup-watch-import-baseline.zml",
+    &watch_import_sources,
+);
+
+test "with imports the compiled view stays the baseline until the watched closure changes" {
+    const io = std.testing.io;
+    const watch_path = ".zig-cache/ui-app-markup-watch-import-baseline.zml";
+    const parts_path = ".zig-cache/ui-app-markup-watch-parts.zml";
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = watch_path, .data = watch_import_root_markup });
+    defer cwd.deleteFile(io, watch_path) catch {};
+    try cwd.writeFile(io, .{ .sub_path = parts_path, .data = watch_import_parts_markup });
+    defer cwd.deleteFile(io, parts_path) catch {};
+
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    var options = markupCounterOptions();
+    options.view = CompiledImportCounterView.build;
+    options.markup = .{
+        .source = watch_import_root_markup,
+        .sources = &watch_import_sources,
+        .watch_path = watch_path,
+        .io = io,
+    };
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expect(app_state.markup_view == null);
+
+    // The disk closure matches the embedded one (the baseline hash covers
+    // imports in the same root-relative path space), so an idle poll never
+    // phantom-swaps to the interpreter.
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 1_500_000).?);
+    try std.testing.expect(app_state.markup_view == null);
+
+    // An edit to the IMPORTED file flips the baseline to the interpreter.
+    try cwd.writeFile(io, .{ .sub_path = parts_path, .data = watch_import_parts_markup_v2 });
+    try harness.runtime.dispatchPlatformEvent(app, harness.null_platform.fireTimer(CounterApp.markup_watch_timer_id, 2_000_000).?);
+    try std.testing.expect(app_state.markup_view != null);
+    try std.testing.expect(findWidgetIdByText(app_state.tree.?, .button, "Start over") != null);
+}
+
 const CompiledCounterView = canvas.CompiledMarkupView(CounterModel, CounterMsg, counter_markup);
 
 test "a compiled markup view drives the ui app with the runtime markup engine compiled out" {

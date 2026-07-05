@@ -46,40 +46,74 @@ fn checkFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !v
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
 
-    var parser = ui_markup.Parser.init(arena_state.allocator(), source);
-    const document = parser.parse() catch |err| {
-        std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, parser.diagnostic.line, parser.diagnostic.column, parser.diagnostic.message });
-        printStaleBinaryHint(parser.diagnostic.message);
+    // Resolve the import closure from disk, rooted at the checked file's
+    // directory (the markup root): checking a view checks its imports, and
+    // a broken import reports at the importing file's position. A file
+    // that is all templates (no view root) is a valid component file —
+    // it checks standalone and as an import target.
+    var disk_loader = DiskLoader{ .io = io };
+    var diagnostic: ui_markup.MarkupErrorInfo = .{};
+    const document = ui_markup.resolveImports(arena_state.allocator(), file_path, source, disk_loader.loader(), &diagnostic) catch |err| {
+        const path = if (diagnostic.path.len > 0) diagnostic.path else file_path;
+        std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, diagnostic.line, diagnostic.column, diagnostic.message });
+        printStaleBinaryHint(diagnostic.message);
         return err;
     };
     if (ui_markup.validate(document)) |info| {
+        const info_path = if (info.path.len > 0) info.path else file_path;
+        // The position-into-source refinements (tofu codepoint, vocabulary
+        // suggestion) read the ROOT file's source; an error inside an
+        // imported file still reports its own path:line:column.
+        const position_in_root = info.path.len == 0 or std.mem.eql(u8, info.path, file_path);
         // The tofu guard's position points at the exact character; name
         // the codepoint so the fix is one glance.
-        if (info.message.ptr == ui_markup.font_coverage_message.ptr) {
+        if (position_in_root and info.message.ptr == ui_markup.font_coverage_message.ptr) {
             if (codepointAt(source, info.line, info.column)) |found| {
-                std.debug.print("{s}:{d}:{d}: error: {s} (found \"{s}\" U+{X:0>4})\n", .{ file_path, info.line, info.column, info.message, found.bytes, found.codepoint });
+                std.debug.print("{s}:{d}:{d}: error: {s} (found \"{s}\" U+{X:0>4})\n", .{ info_path, info.line, info.column, info.message, found.bytes, found.codepoint });
                 return error.MarkupInvalid;
             }
         }
         // A vocabulary miss teaches best when it names the token and its
         // nearest valid spelling: the validator's message is a static
         // string, but the checker holds the source and the position.
-        if (vocabularySuggestion(source, info)) |extra| {
-            std.debug.print("{s}:{d}:{d}: error: {s} \"{s}\"", .{ file_path, info.line, info.column, info.message, extra.token });
-            if (extra.suggestion) |suggestion| {
-                std.debug.print(" (did you mean \"{s}\"?)\n", .{suggestion});
-            } else {
-                std.debug.print("\n", .{});
+        if (position_in_root) {
+            if (vocabularySuggestion(source, info)) |extra| {
+                std.debug.print("{s}:{d}:{d}: error: {s} \"{s}\"", .{ info_path, info.line, info.column, info.message, extra.token });
+                if (extra.suggestion) |suggestion| {
+                    std.debug.print(" (did you mean \"{s}\"?)\n", .{suggestion});
+                } else {
+                    std.debug.print("\n", .{});
+                }
+                printStaleBinaryHint(info.message);
+                return error.MarkupInvalid;
             }
-            printStaleBinaryHint(info.message);
-            return error.MarkupInvalid;
         }
-        std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ file_path, info.line, info.column, info.message });
+        std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ info_path, info.line, info.column, info.message });
         printStaleBinaryHint(info.message);
         return error.MarkupInvalid;
     }
     std.debug.print("{s}: ok\n", .{file_path});
 }
+
+/// Import loading for the checker: resolver paths are already joined
+/// against the checked file's path, so they read relative to the process
+/// cwd exactly like the file argument itself.
+const DiskLoader = struct {
+    io: std.Io,
+
+    fn loader(self: *DiskLoader) ui_markup.ImportLoader {
+        return .{ .context = @ptrCast(self), .load = load };
+    }
+
+    fn load(context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+        const self: *const DiskLoader = @ptrCast(@alignCast(context));
+        var file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        defer file.close(self.io);
+        var read_buffer: [4096]u8 = undefined;
+        var reader = file.reader(self.io, &read_buffer);
+        return reader.interface.allocRemaining(arena, .limited(1024 * 1024)) catch null;
+    }
+};
 
 const VocabularySuggestion = struct { token: []const u8, suggestion: ?[]const u8 };
 
@@ -206,11 +240,13 @@ fn usage() void {
         \\       native markup lsp
         \\
         \\check: parses and validates markup views: grammar, expression forms,
-        \\elements, attributes, structure tags, and font coverage (literal text
-        \\outside the bundled face renders as tofu boxes on reference paths -
-        \\the error names the character; use icons or plain words). Binding
-        \\paths and message tags are validated against your Model/Msg when the
-        \\app builds.
+        \\elements, attributes, structure tags, imports (checking a view
+        \\follows its <import> closure; a file that is all templates is a
+        \\valid component file), and font coverage (literal text outside the
+        \\bundled face renders as tofu boxes on reference paths - the error
+        \\names the character; use icons or plain words). Binding paths and
+        \\message tags are validated against your Model/Msg when the app
+        \\builds.
         \\
         \\lsp: speaks the Language Server Protocol over stdio (diagnostics,
         \\completion, hover) for .zml files; wire it into your editor's LSP

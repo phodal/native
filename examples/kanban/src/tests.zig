@@ -11,8 +11,18 @@ const Msg = main.Msg;
 
 const KanbanMarkup = canvas.MarkupView(Model, main.Msg);
 
+/// The interpreter over the same resolved document the compiled view
+/// embeds: the board imports components/board-column.zml, so the test
+/// resolves the embedded source set exactly like the app runtime does.
+fn boardView(arena: std.mem.Allocator) !KanbanMarkup {
+    var set_loader = canvas.ui_markup.SourceSetLoader{ .set = &main.board_markup_files };
+    var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+    const document = try canvas.ui_markup.resolveImports(arena, "board.zml", main.board_markup, set_loader.loader(), &diagnostic);
+    return KanbanMarkup.fromDocument(document);
+}
+
 fn buildTree(arena: std.mem.Allocator, model: *const Model) !KanbanUi.Tree {
-    var view = try KanbanMarkup.init(arena, main.board_markup);
+    var view = try boardView(arena);
     var ui = KanbanUi.init(arena);
     return ui.finalize(try view.build(&ui, model));
 }

@@ -1105,3 +1105,87 @@ test "compiled split and tree match the interpreter and the hand-written view" {
     try testing.expectEqual(@as(u32, 1), compiled.msgForPointer(row.id, .up).?.select_folder);
     try testing.expectEqual(@as(u32, 1), compiled.msgFor(row.id, .toggle).?.toggle_folder);
 }
+
+// --------------------------------- imports, slots, and defaults parity
+
+const ImportCompiled = canvas.CompiledMarkupImports(
+    fixture.TemplateModel,
+    fixture.TemplateMsg,
+    "view.zml",
+    &fixture.import_view_sources,
+);
+
+fn interpretImports(arena: std.mem.Allocator, model: *const fixture.TemplateModel) !TemplateUi.Tree {
+    const document = try fixture.resolveImportSet(arena, &fixture.import_view_sources, "view.zml");
+    var view = TemplateInterpreter.fromDocument(document);
+    var ui = TemplateUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileImports(arena: std.mem.Allocator, model: *const fixture.TemplateModel) !TemplateUi.Tree {
+    var ui = TemplateUi.init(arena);
+    return ui.finalize(ImportCompiled.build(&ui, model));
+}
+
+test "compiled imports with slots and defaults match the interpreter and the hand-written view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.templateTestModel();
+
+    const interpreted = try interpretImports(arena, &model);
+    const compiled = try compileImports(arena, &model);
+    var hand_ui = TemplateUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handImportView(&hand_ui, &model));
+
+    // Three engines, one tree: the comptime source-set resolution and the
+    // runtime set resolution produce the same merged document, and slot
+    // content (built in the consumer's scope, spliced at the slot) hashes
+    // the same structural ids as hand-written inlining. The fixture
+    // covers a transitive import chain, an imported template using
+    // another imported template, a defaulted arg omitted inside slot
+    // content, and an empty slot.
+    try expectSameTree(fixture.TemplateMsg, hand, interpreted);
+    try expectSameTree(fixture.TemplateMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // Defaulted arg parity down to the interpolated byte.
+    try testing.expect(fixture.findByText(compiled.root, .badge, "Top header") != null);
+    try testing.expect(fixture.findByText(compiled.root, .badge, "apple muted") != null);
+    try testing.expect(fixture.findByText(compiled.root, .badge, "Bottom header") != null);
+
+    // Dispatch parity for a handler declared in slot content: it captured
+    // the consumer's loop variable.
+    const pear_button = fixture.findByText(compiled.root, .button, "pear").?;
+    try testing.expectEqual(
+        interpreted.msgForPointer(pear_button.id, .up).?,
+        compiled.msgForPointer(pear_button.id, .up).?,
+    );
+    try testing.expectEqual(@as(u32, 2), compiled.msgForPointer(pear_button.id, .up).?.pick);
+
+    // Rebuild stability: same ids on a second build.
+    const rebuilt = try compileImports(arena, &model);
+    try testing.expectEqual(pear_button.id, fixture.findByText(rebuilt.root, .button, "pear").?.id);
+}
+
+test "compiled slot content follows model changes like the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Slot content iterates model.top at the use site: growing the list
+    // grows both engines' trees identically.
+    var model = fixture.templateTestModel();
+    model.top = &[_]fixture.Fruit{
+        .{ .id = 1, .name = "apple" },
+        .{ .id = 2, .name = "pear" },
+        .{ .id = 9, .name = "quince" },
+    };
+    const interpreted = try interpretImports(arena, &model);
+    const compiled = try compileImports(arena, &model);
+    try expectSameTree(fixture.TemplateMsg, interpreted, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+    const quince_button = fixture.findByText(compiled.root, .button, "quince").?;
+    try testing.expectEqual(@as(u32, 9), compiled.msgForPointer(quince_button.id, .up).?.pick);
+}

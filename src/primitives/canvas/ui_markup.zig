@@ -18,6 +18,11 @@ pub const MarkupErrorInfo = struct {
     line: usize = 0,
     column: usize = 0,
     message: []const u8 = "",
+    /// Source file the position refers to, relative to the markup root
+    /// (the root view file's directory). Empty for single-file documents;
+    /// import resolution stamps it so errors inside imported component
+    /// files name the right file.
+    path: []const u8 = "",
 };
 
 pub const MarkupNodeKind = enum {
@@ -28,6 +33,8 @@ pub const MarkupNodeKind = enum {
     else_block,
     template_block,
     use_block,
+    import_block,
+    slot_block,
 };
 
 pub const MarkupAttr = struct {
@@ -47,6 +54,10 @@ pub const MarkupNode = struct {
     text: []const u8 = "",
     line: usize = 0,
     column: usize = 0,
+    /// Source file this node came from, relative to the markup root.
+    /// Empty for single-file documents; import resolution stamps every
+    /// node of every resolved file so diagnostics name the right file.
+    src_path: []const u8 = "",
 
     pub fn attr(self: MarkupNode, name: []const u8) ?[]const u8 {
         for (self.attrs) |attribute| {
@@ -57,12 +68,21 @@ pub const MarkupNode = struct {
 };
 
 pub const MarkupDocument = struct {
+    /// Top-level `<import src="..."/>` nodes, in file order, before the
+    /// templates. Import resolution (`resolveImports` /
+    /// `resolveImportsComptime`) consumes them into `templates` and leaves
+    /// this empty; a non-empty list marks the document unresolved.
+    imports: []const MarkupNode = &.{},
     /// Top-level `<template name="..." args="...">` definitions, in file
-    /// order. `<use>` sites reference them by name; a use may only
-    /// reference templates defined earlier in the file (which also rules
-    /// out recursion structurally).
+    /// order (after import resolution: imported templates first, in import
+    /// order, then the file's own). `<use>` sites reference them by name;
+    /// a use inside a template body may only reference templates defined
+    /// earlier in this list (which also rules out recursion structurally).
     templates: []const MarkupNode = &.{},
-    root: MarkupNode,
+    /// The view root element. Null for a component file — a file that is
+    /// all templates is valid as an import target, but an app view needs
+    /// a root, which the engines enforce with a teaching error.
+    root: ?MarkupNode = null,
 
     pub fn templateIndex(self: MarkupDocument, name: []const u8) ?usize {
         for (self.templates, 0..) |template_node, index| {
@@ -73,18 +93,52 @@ pub const MarkupDocument = struct {
     }
 };
 
-/// Iterate a template's declared arg names (the space-separated `args`
-/// attribute). Works at runtime and comptime.
+/// One declared template arg: the name, and the default literal when the
+/// declaration used the `name=default` form (`args="title trend=flat"`).
+pub const TemplateArg = struct {
+    name: []const u8,
+    default: ?[]const u8 = null,
+};
+
+/// Split one `args` token into name and optional default. Defaults are
+/// literals only — a default cannot see any scope — which `validate`
+/// enforces with a teaching error.
+pub fn parseTemplateArg(token: []const u8) TemplateArg {
+    const eq = std.mem.indexOfScalar(u8, token, '=') orelse return .{ .name = token };
+    return .{ .name = token[0..eq], .default = token[eq + 1 ..] };
+}
+
+/// Iterate a template's declared args (the space-separated `args`
+/// attribute; each token is `name` or `name=default`). Works at runtime
+/// and comptime.
 pub fn templateArgs(template_node: MarkupNode) std.mem.TokenIterator(u8, .scalar) {
     return std.mem.tokenizeScalar(u8, template_node.attr("args") orelse "", ' ');
 }
 
 pub fn templateDeclaresArg(template_node: MarkupNode, name: []const u8) bool {
     var args = templateArgs(template_node);
-    while (args.next()) |arg_name| {
-        if (std.mem.eql(u8, arg_name, name)) return true;
+    while (args.next()) |token| {
+        if (std.mem.eql(u8, parseTemplateArg(token).name, name)) return true;
     }
     return false;
+}
+
+/// The single `<slot/>` in a template body, or null. Does not descend into
+/// `<use>` children: content passed onward belongs to the inner template's
+/// slot, and a literal slot there is rejected by `validate` (v1 has no
+/// slot forwarding).
+pub fn templateSlot(template_node: MarkupNode) ?MarkupNode {
+    if (template_node.children.len != 1) return null;
+    return findSlot(template_node.children[0]);
+}
+
+fn findSlot(node: MarkupNode) ?MarkupNode {
+    if (node.kind == .slot_block) return node;
+    if (node.kind == .use_block) return null;
+    for (node.children) |child| {
+        if (findSlot(child)) |found| return found;
+    }
+    return null;
 }
 
 pub const ParseError = error{ MarkupSyntax, OutOfMemory };
@@ -102,17 +156,33 @@ pub const Parser = struct {
     }
 
     /// Parse a document: comments and whitespace around zero or more
-    /// top-level `<template>` definitions followed by exactly one root
-    /// element.
+    /// top-level `<import>` nodes, then zero or more `<template>`
+    /// definitions, then at most one root element. A file that is all
+    /// templates (a component file) parses with a null root — it is valid
+    /// as an import target; the engines require a root for a view.
     pub fn parse(self: *Parser) ParseError!MarkupDocument {
+        var imports: std.ArrayListUnmanaged(MarkupNode) = .empty;
         var templates: std.ArrayListUnmanaged(MarkupNode) = .empty;
         while (true) {
             self.skipWhitespaceAndComments();
-            if (self.index >= self.source.len and templates.items.len > 0) {
-                return self.fail("expected a view root element after the template definitions");
+            if (self.index >= self.source.len) {
+                if (imports.items.len == 0 and templates.items.len == 0) {
+                    return self.fail(empty_document_message);
+                }
+                return .{ .imports = imports.items, .templates = templates.items, .root = null };
             }
             const node = try self.parseElement();
+            if (node.kind == .import_block) {
+                if (templates.items.len > 0) {
+                    return self.failAt(node.line, node.column, import_top_level_message);
+                }
+                try imports.append(self.arena, node);
+                continue;
+            }
             if (node.kind == .template_block) {
+                if (templates.items.len >= max_document_templates) {
+                    return self.failAt(node.line, node.column, max_templates_message);
+                }
                 try templates.append(self.arena, node);
                 continue;
             }
@@ -120,7 +190,7 @@ pub const Parser = struct {
             if (self.index < self.source.len) {
                 return self.fail("expected end of file after the root element");
             }
-            return .{ .templates = templates.items, .root = node };
+            return .{ .imports = imports.items, .templates = templates.items, .root = node };
         }
     }
 
@@ -331,6 +401,8 @@ fn nodeKindForName(name: []const u8) MarkupNodeKind {
     if (std.mem.eql(u8, name, "else")) return .else_block;
     if (std.mem.eql(u8, name, "template")) return .template_block;
     if (std.mem.eql(u8, name, "use")) return .use_block;
+    if (std.mem.eql(u8, name, "import")) return .import_block;
+    if (std.mem.eql(u8, name, "slot")) return .slot_block;
     return .element;
 }
 
@@ -346,14 +418,28 @@ pub fn parseComptime(comptime source: []const u8) MarkupDocument {
     comptime {
         @setEvalBranchQuota(comptime_parse_quota_base + source.len * comptime_parse_quota_per_byte);
         var parser = Parser.init(undefined, source);
+        var imports: []const MarkupNode = &.{};
         var templates: []const MarkupNode = &.{};
         while (true) {
             parser.skipWhitespaceAndComments();
-            if (parser.index >= parser.source.len and templates.len > 0) {
-                failComptime(&parser, parser.fail("expected a view root element after the template definitions"));
+            if (parser.index >= parser.source.len) {
+                if (imports.len == 0 and templates.len == 0) {
+                    failComptime(&parser, parser.fail(empty_document_message));
+                }
+                return .{ .imports = imports, .templates = templates, .root = null };
             }
             const node = parseElementComptime(&parser);
+            if (node.kind == .import_block) {
+                if (templates.len > 0) {
+                    failComptime(&parser, parser.failAt(node.line, node.column, import_top_level_message));
+                }
+                imports = imports ++ &[_]MarkupNode{node};
+                continue;
+            }
             if (node.kind == .template_block) {
+                if (templates.len >= max_document_templates) {
+                    failComptime(&parser, parser.failAt(node.line, node.column, max_templates_message));
+                }
                 templates = templates ++ &[_]MarkupNode{node};
                 continue;
             }
@@ -361,7 +447,7 @@ pub fn parseComptime(comptime source: []const u8) MarkupDocument {
             if (parser.index < parser.source.len) {
                 failComptime(&parser, parser.fail("expected end of file after the root element"));
             }
-            return .{ .templates = templates, .root = node };
+            return .{ .imports = imports, .templates = templates, .root = node };
         }
     }
 }
@@ -763,15 +849,15 @@ fn textNodeCoverageError(node: MarkupNode) ?MarkupErrorInfo {
             column += 1;
         }
     }
-    return .{ .line = line, .column = column, .message = font_coverage_message };
+    return .{ .line = line, .column = column, .message = font_coverage_message, .path = node.src_path };
 }
 
-fn attrCoverageError(attribute: MarkupAttr) ?MarkupErrorInfo {
+fn attrCoverageError(node: MarkupNode, attribute: MarkupAttr) ?MarkupErrorInfo {
     if (!nameInList(attribute.name, &known_text_attr_names)) return null;
     const expression = parseAttrExpression(attribute.value) orelse return null;
     if (expression != .literal) return null;
     if (firstUncoveredCodepoint(expression.literal) == null) return null;
-    return .{ .line = attribute.line, .column = attribute.column, .message = font_coverage_message };
+    return attrError(node, attribute, font_coverage_message);
 }
 
 /// Markup attributes that reference a color design token by name. Values
@@ -831,26 +917,95 @@ pub const table_cell_parent_message = "table-cell is only allowed inside a table
 pub const template_top_level_message = "template definitions are only allowed at the top of the file, before the view root";
 pub const template_name_message = "template requires a name attribute";
 pub const template_unique_name_message = "template names must be unique";
-pub const template_args_message = "template args must be space-separated names (args=\"title cards\")";
+pub const template_args_message = "template args must be space-separated names, each optionally with a literal default (args=\"title cards trend=flat\")";
+pub const template_default_literal_message = "template arg defaults are literals only - a default cannot see any scope ({bindings} are rejected); pass the value at the use site instead";
 pub const template_attrs_message = "template takes only name and args attributes";
 pub const template_one_child_message = "template takes exactly one element child (wrap siblings in a container)";
+pub const template_one_slot_message = "a template body takes at most one <slot/> (one unnamed slot; named slots are not supported yet)";
 pub const use_template_attr_message = "use requires a template attribute naming a template defined at the top of the file";
-pub const use_undefined_template_message = "use references an undefined template (define <template name=\"...\"> before the view root)";
+pub const use_undefined_template_message = "use references an undefined template (define <template name=\"...\"> before the view root, or import the file that defines it)";
 pub const use_earlier_template_message = "use may only reference templates defined earlier in the file";
-pub const use_missing_arg_message = "use is missing an argument the template declares in args";
+pub const use_missing_arg_message = "use is missing an argument the template declares in args (only args declared with a default, like trend=flat, may be omitted)";
 pub const use_extra_arg_message = "use passes an argument the template does not declare in args";
-pub const use_no_children_message = "use takes no children (the template body is built in its place)";
+pub const use_children_without_slot_message = "this template has no <slot/> - use-site children need an insertion point; add <slot/> to the template body or remove the children";
+pub const slot_outside_template_message = "slot is only allowed inside a template body - it marks where use-site children are inserted";
+pub const slot_in_use_children_message = "a slot cannot sit inside use-site children - slot forwarding is not supported; each template body declares its own slot";
+pub const slot_attrs_message = "slot takes no attributes (one unnamed slot; named slots are not supported yet)";
+pub const slot_children_message = "slot is a leaf - it takes no children; the use site provides the content";
+pub const empty_document_message = "markup file is empty - define templates (a component file), a view root, or both";
+pub const component_file_view_message = "this file defines templates only (a component file) - a view needs a root element after the templates; import this file from a view instead";
+pub const import_top_level_message = "import is only allowed at the top of the file, before the template definitions and the view root";
+pub const import_src_message = "import requires a src attribute naming a .zml file, relative to this file (subdirectories allowed)";
+pub const import_attrs_message = "import takes only a src attribute";
+pub const import_children_message = "import is a leaf - it takes no children";
+pub const import_src_extension_message = "import src must name a .zml file";
+pub const import_src_absolute_message = "import src must be a relative path (resolved against the importing file) - absolute paths are rejected so markup stays portable";
+pub const import_src_separator_message = "import src uses forward slashes only";
+pub const import_src_escape_message = "import src escapes the markup root (the root view file's directory) - keep component files under it";
+pub const import_src_too_long_message = "import src is too long (over 200 bytes)";
+pub const import_view_root_message = "imported files define templates only - this file has a view root element; move the view to its own file and import just the templates";
+pub const import_depth_message = "imports nest too deeply (over 8 levels) - flatten the component hierarchy";
+pub const import_count_message = "too many imported files (over 32)";
+pub const import_unresolved_message = "this markup imports other files - resolve imports before building (the app runtime, native markup check, and CompiledMarkupImports all do; a bare MarkupView needs resolveImports first)";
+pub const max_templates_message = "too many templates (over 256 in one document, imports included) - split the view or drop generated definitions";
+
+/// Bound on templates per document (also enforced across the resolved
+/// import closure), so a hostile file cannot drive the validator's
+/// quadratic duplicate-name scan or comptime expansion checks unbounded.
+pub const max_document_templates = 256;
+
+/// Where a `<slot/>` node is legal at the current validation position.
+/// Template bodies allow one; use-site children forbid it (no slot
+/// forwarding); everywhere else it is outside any template.
+const SlotRule = enum { forbidden, template_body, use_children };
 
 /// Model-agnostic structural validation: unknown elements or attributes,
-/// malformed expressions, misshapen structure tags, and template/use
+/// malformed expressions, misshapen structure tags, and template/use/slot
 /// wiring. Binding paths and message tags are checked against the concrete
 /// Model/Msg by the interpreter; this pass is what
-/// `native markup check` runs.
+/// `native markup check` runs. On a document with UNRESOLVED imports
+/// (per-file checking) references to templates the imports may provide are
+/// not flagged; the resolved (merged) document gets the strict pass.
 pub fn validate(document: MarkupDocument) ?MarkupErrorInfo {
+    for (document.imports) |import_node| {
+        if (validateImport(import_node)) |info| return info;
+    }
     for (document.templates, 0..) |template_node, index| {
         if (validateTemplate(document, template_node, index)) |info| return info;
     }
-    return validateNode(document, document.root, null, document.templates.len);
+    const root = document.root orelse return null;
+    return validateNode(document, root, null, document.templates.len, .forbidden);
+}
+
+/// Shape-only import checks; existence, cycles, and duplicates are the
+/// resolver's job (it has the other files).
+fn validateImport(node: MarkupNode) ?MarkupErrorInfo {
+    if (node.children.len > 0) return errorAt(node.children[0], import_children_message);
+    var has_src = false;
+    for (node.attrs) |attribute| {
+        if (!std.mem.eql(u8, attribute.name, "src")) {
+            return attrError(node, attribute, import_attrs_message);
+        }
+        has_src = true;
+        if (importSrcShapeError(attribute.value)) |message| {
+            return attrError(node, attribute, message);
+        }
+    }
+    if (!has_src) return errorAt(node, import_src_message);
+    return null;
+}
+
+/// Path-shape rules a src must satisfy before resolution even starts.
+/// Escapes past the markup root need the importing file's directory and
+/// are checked during resolution.
+pub fn importSrcShapeError(src: []const u8) ?[]const u8 {
+    if (src.len == 0) return import_src_message;
+    if (src.len > max_import_path_len) return import_src_too_long_message;
+    if (src[0] == '/') return import_src_absolute_message;
+    if (std.mem.indexOfScalar(u8, src, ':') != null) return import_src_absolute_message;
+    if (std.mem.indexOfScalar(u8, src, '\\') != null) return import_src_separator_message;
+    if (!std.mem.endsWith(u8, src, ".zml")) return import_src_extension_message;
+    return null;
 }
 
 fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?MarkupErrorInfo {
@@ -864,43 +1019,105 @@ fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?M
         if (std.mem.eql(u8, attribute.name, "name")) continue;
         if (std.mem.eql(u8, attribute.name, "args")) {
             var args = templateArgs(node);
-            while (args.next()) |arg_name| {
-                if (!isBindingName(arg_name)) {
-                    return .{ .line = attribute.line, .column = attribute.column, .message = template_args_message };
+            while (args.next()) |token| {
+                const arg = parseTemplateArg(token);
+                if (!isBindingName(arg.name)) {
+                    return attrError(node, attribute, template_args_message);
+                }
+                if (arg.default) |default| {
+                    // Literals only: a default evaluates in no scope, so a
+                    // binding (or equality) there could never resolve.
+                    if (std.mem.indexOfScalar(u8, default, '{') != null) {
+                        return attrError(node, attribute, template_default_literal_message);
+                    }
                 }
             }
             continue;
         }
-        return .{ .line = attribute.line, .column = attribute.column, .message = template_attrs_message };
+        return attrError(node, attribute, template_attrs_message);
     }
     if (node.children.len != 1 or node.children[0].kind != .element) {
         return errorAt(node, template_one_child_message);
+    }
+    if (templateSecondSlot(node.children[0])) |second| {
+        return errorAt(second, template_one_slot_message);
     }
     // The body sees templates defined before this one, which also rules
     // out recursion. The body root has no known parent element, so
     // parent-scoped rules (table-row in table) are checked at use sites of
     // the surrounding markup, not here.
-    return validateNode(document, node.children[0], null, index);
+    return validateNode(document, node.children[0], null, index, .template_body);
+}
+
+/// The second `<slot/>` in a template body, if any: the one-slot rule's
+/// witness, shared by the validator and both engines (comptime-callable).
+pub fn templateSecondSlot(body: MarkupNode) ?MarkupNode {
+    var count: usize = 0;
+    return secondSlot(body, &count);
+}
+
+/// Slots inside use children are rejected by their own error instead.
+fn secondSlot(node: MarkupNode, count: *usize) ?MarkupNode {
+    if (node.kind == .slot_block) {
+        count.* += 1;
+        if (count.* > 1) return node;
+        return null;
+    }
+    if (node.kind == .use_block) return null;
+    for (node.children) |child| {
+        if (secondSlot(child, count)) |found| return found;
+    }
+    return null;
 }
 
 fn validateUse(document: MarkupDocument, node: MarkupNode, template_limit: usize) ?MarkupErrorInfo {
     const name = node.attr("template") orelse return errorAt(node, use_template_attr_message);
-    const index = document.templateIndex(name) orelse return errorAt(node, use_undefined_template_message);
+    const index = document.templateIndex(name) orelse {
+        // Unresolved imports may provide the template; the resolved pass
+        // and the engines still catch a genuinely undefined name.
+        if (document.imports.len > 0) return validateUseChildren(document, node, template_limit);
+        return errorAt(node, use_undefined_template_message);
+    };
     if (index >= template_limit) return errorAt(node, use_earlier_template_message);
-    if (node.children.len != 0) return errorAt(node, use_no_children_message);
     const template_node = document.templates[index];
+    if (node.children.len != 0 and templateSlot(template_node) == null) {
+        return errorAt(node.children[0], use_children_without_slot_message);
+    }
     var args = templateArgs(template_node);
-    while (args.next()) |arg_name| {
-        if (node.attr(arg_name) == null) return errorAt(node, use_missing_arg_message);
+    while (args.next()) |token| {
+        const arg = parseTemplateArg(token);
+        if (node.attr(arg.name) == null and arg.default == null) {
+            return errorAt(node, use_missing_arg_message);
+        }
     }
     for (node.attrs) |attribute| {
         if (std.mem.eql(u8, attribute.name, "template")) continue;
         if (!templateDeclaresArg(template_node, attribute.name)) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = use_extra_arg_message };
+            return attrError(node, attribute, use_extra_arg_message);
         }
         if (parseAttrExpression(attribute.value) == null) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+            return attrError(node, attribute, invalid_expression_message);
         }
+    }
+    return validateUseChildren(document, node, template_limit);
+}
+
+/// Use-site children (slot content) build in the consumer's scope, so they
+/// validate like the surrounding markup — except a literal `<slot/>` is
+/// rejected (no forwarding), which `.use_children` teaches. The insertion
+/// point's parent element is template-side and unknown here, so
+/// parent-scoped rules (table-row in table) are not checked.
+fn validateUseChildren(document: MarkupDocument, node: MarkupNode, template_limit: usize) ?MarkupErrorInfo {
+    var previous_kind: ?MarkupNodeKind = null;
+    for (node.children) |child| {
+        if (child.kind == .else_block and previous_kind != .if_block and previous_kind != .for_block) {
+            return errorAt(child, else_placement_message);
+        }
+        if (child.kind == .text) {
+            return errorAt(child, "text content is only allowed inside text-bearing elements");
+        }
+        if (validateNode(document, child, null, template_limit, .use_children)) |info| return info;
+        previous_kind = child.kind;
     }
     return null;
 }
@@ -920,39 +1137,39 @@ fn validateMarkdown(node: MarkupNode) ?MarkupErrorInfo {
             has_source = true;
             const expression = parseAttrExpression(attribute.value);
             if (expression == null or expression.? != .binding) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_source_message };
+                return attrError(node, attribute, markdown_source_message);
             }
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "on-link")) {
             const expression = parseMessageExpression(attribute.value);
             if (expression == null or expression.?.payload.len != 0) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_on_link_message };
+                return attrError(node, attribute, markdown_on_link_message);
             }
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "on-details")) {
             const expression = parseMessageExpression(attribute.value);
             if (expression == null or expression.?.payload.len != 0) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_on_details_message };
+                return attrError(node, attribute, markdown_on_details_message);
             }
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "details-expanded")) {
             const expression = parseAttrExpression(attribute.value);
             if (expression == null or expression.? != .binding) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_details_expanded_message };
+                return attrError(node, attribute, markdown_details_expanded_message);
             }
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "issue-link-base")) {
             const expression = parseAttrExpression(attribute.value);
             if (expression == null or expression.? == .equals) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = markdown_issue_link_base_message };
+                return attrError(node, attribute, markdown_issue_link_base_message);
             }
             continue;
         }
-        return .{ .line = attribute.line, .column = attribute.column, .message = markdown_attr_message };
+        return attrError(node, attribute, markdown_attr_message);
     }
     if (!has_source) return errorAt(node, markdown_source_message);
     return null;
@@ -967,17 +1184,17 @@ fn validateStepper(node: MarkupNode) ?MarkupErrorInfo {
         if (std.mem.eql(u8, attribute.name, "active")) {
             has_active = true;
             if (parseAttrExpression(attribute.value) == null) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = stepper_active_message };
+                return attrError(node, attribute, stepper_active_message);
             }
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "key") or std.mem.eql(u8, attribute.name, "global-key") or std.mem.eql(u8, attribute.name, "label")) {
             if (parseAttrExpression(attribute.value) == null) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+                return attrError(node, attribute, invalid_expression_message);
             }
             continue;
         }
-        return .{ .line = attribute.line, .column = attribute.column, .message = stepper_attr_message };
+        return attrError(node, attribute, stepper_attr_message);
     }
     if (!has_active) return errorAt(node, stepper_active_message);
     for (node.children) |child| {
@@ -985,7 +1202,7 @@ fn validateStepper(node: MarkupNode) ?MarkupErrorInfo {
             return errorAt(child, stepper_children_message);
         }
         for (child.attrs) |attribute| {
-            return .{ .line = attribute.line, .column = attribute.column, .message = step_attr_message };
+            return attrError(child, attribute, step_attr_message);
         }
         var text_runs: usize = 0;
         for (child.children) |run| {
@@ -1001,7 +1218,7 @@ fn validateStepper(node: MarkupNode) ?MarkupErrorInfo {
 /// `<timeline>` is a list container with a closed attribute set; its
 /// children (timeline-item elements, plus structure tags) validate
 /// through the ordinary pass so `for`/`if` work inside it.
-fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: usize) ?MarkupErrorInfo {
+fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: usize, slot_rule: SlotRule) ?MarkupErrorInfo {
     for (node.attrs) |attribute| {
         const known = std.mem.eql(u8, attribute.name, "gap") or
             std.mem.eql(u8, attribute.name, "grow") or
@@ -1009,10 +1226,10 @@ fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: 
             std.mem.eql(u8, attribute.name, "global-key") or
             std.mem.eql(u8, attribute.name, "label");
         if (!known) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_attr_message };
+            return attrError(node, attribute, timeline_attr_message);
         }
         if (parseAttrExpression(attribute.value) == null) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+            return attrError(node, attribute, invalid_expression_message);
         }
     }
     var previous_kind: ?MarkupNodeKind = null;
@@ -1020,7 +1237,7 @@ fn validateTimeline(document: MarkupDocument, node: MarkupNode, template_limit: 
         if (child.kind == .else_block and previous_kind != .if_block and previous_kind != .for_block) {
             return errorAt(child, else_placement_message);
         }
-        if (validateNode(document, child, "timeline", template_limit)) |info| return info;
+        if (validateNode(document, child, "timeline", template_limit, slot_rule)) |info| return info;
         previous_kind = child.kind;
     }
     return null;
@@ -1037,19 +1254,19 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
         if (std.mem.eql(u8, attribute.name, "title")) {
             has_title = true;
             if (parseAttrExpression(attribute.value) == null) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_title_message };
+                return attrError(node, attribute, timeline_item_title_message);
             }
-            if (attrCoverageError(attribute)) |info| return info;
+            if (attrCoverageError(node, attribute)) |info| return info;
             continue;
         }
         if (std.mem.eql(u8, attribute.name, "on-press")) {
             if (parseMessageExpression(attribute.value) == null) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")" };
+                return attrError(node, attribute, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
             }
             continue;
         }
         if (std.mem.startsWith(u8, attribute.name, "on-")) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_press_only_message };
+            return attrError(node, attribute, timeline_item_press_only_message);
         }
         if (std.mem.eql(u8, attribute.name, "icon")) {
             // Vector icon indicator: the same closed literal vocabulary
@@ -1061,7 +1278,7 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
             else
                 null;
             if (literal == null or !nameInList(literal.?, &known_icon_names)) {
-                return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_message };
+                return attrError(node, attribute, button_icon_message);
             }
             continue;
         }
@@ -1074,12 +1291,12 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
             std.mem.eql(u8, attribute.name, "key") or
             std.mem.eql(u8, attribute.name, "global-key");
         if (!known) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = timeline_item_attr_message };
+            return attrError(node, attribute, timeline_item_attr_message);
         }
         if (parseAttrExpression(attribute.value) == null) {
-            return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+            return attrError(node, attribute, invalid_expression_message);
         }
-        if (attrCoverageError(attribute)) |info| return info;
+        if (attrCoverageError(node, attribute)) |info| return info;
     }
     if (!has_title) return errorAt(node, timeline_item_title_message);
     return null;
@@ -1088,14 +1305,27 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
 /// `parent_element` is the name of the nearest enclosing element, looking
 /// through structure tags (`for`/`if`/`else`), or null at the view root and
 /// at a template body root.
-fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]const u8, template_limit: usize) ?MarkupErrorInfo {
+fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]const u8, template_limit: usize, slot_rule: SlotRule) ?MarkupErrorInfo {
     switch (node.kind) {
         // Literal text content rides the tofu guard: a codepoint
         // the bundled face cannot render is a teaching error at its
         // exact position.
         .text => return textNodeCoverageError(node),
         .template_block => return errorAt(node, template_top_level_message),
+        .import_block => return errorAt(node, import_top_level_message),
         .use_block => return validateUse(document, node, template_limit),
+        .slot_block => {
+            switch (slot_rule) {
+                .forbidden => return errorAt(node, slot_outside_template_message),
+                .use_children => return errorAt(node, slot_in_use_children_message),
+                .template_body => {},
+            }
+            for (node.attrs) |attribute| {
+                return attrError(node, attribute, slot_attrs_message);
+            }
+            if (node.children.len > 0) return errorAt(node.children[0], slot_children_message);
+            return null;
+        },
         .element => {
             if (std.mem.eql(u8, node.name, "markdown")) {
                 return validateMarkdown(node);
@@ -1109,7 +1339,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                 return errorAt(node, step_parent_message);
             }
             if (std.mem.eql(u8, node.name, "timeline")) {
-                return validateTimeline(document, node, template_limit);
+                return validateTimeline(document, node, template_limit, slot_rule);
             }
             if (std.mem.eql(u8, node.name, "timeline-item")) {
                 if (parent_element) |parent_name| {
@@ -1160,40 +1390,40 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
             for (node.attrs) |attribute| {
                 if (std.mem.startsWith(u8, attribute.name, "on-")) {
                     if (!nameInList(attribute.name[3..], &known_events)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = "unknown event attribute" };
+                        return attrError(node, attribute, "unknown event attribute");
                     }
                     if (std.mem.eql(u8, attribute.name, "on-scroll")) {
                         // The runtime emits scroll offsets for scroll
                         // containers only; anywhere else the handler could
                         // never fire.
                         if (!std.mem.eql(u8, node.name, "scroll")) {
-                            return .{ .line = attribute.line, .column = attribute.column, .message = on_scroll_element_message };
+                            return attrError(node, attribute, on_scroll_element_message);
                         }
                     } else if (std.mem.eql(u8, attribute.name, "on-dismiss")) {
                         // Only dismissible surfaces are ever dismissed by
                         // the runtime; anywhere else the Msg could never
                         // fire.
                         if (!nameInList(node.name, &known_dismiss_element_names)) {
-                            return .{ .line = attribute.line, .column = attribute.column, .message = on_dismiss_element_message };
+                            return attrError(node, attribute, on_dismiss_element_message);
                         }
                     } else if (std.mem.eql(u8, attribute.name, "on-reach-end")) {
                         // The approach-end signal (infinite-scroll fetch)
                         // is emitted for scroll containers only.
                         if (!std.mem.eql(u8, node.name, "scroll")) {
-                            return .{ .line = attribute.line, .column = attribute.column, .message = on_reach_end_element_message };
+                            return attrError(node, attribute, on_reach_end_element_message);
                         }
                     } else if (std.mem.eql(u8, attribute.name, "on-resize")) {
                         // The runtime emits fraction changes for split
                         // dividers only; anywhere else the handler could
                         // never fire.
                         if (!std.mem.eql(u8, node.name, "split")) {
-                            return .{ .line = attribute.line, .column = attribute.column, .message = on_resize_element_message };
+                            return attrError(node, attribute, on_resize_element_message);
                         }
                     } else if (nameInList(node.name, &known_non_hit_target_element_names) and deadHandlerOnNonHitTarget(attribute.name)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = non_hit_target_handler_message };
+                        return attrError(node, attribute, non_hit_target_handler_message);
                     }
                     if (parseMessageExpression(attribute.value) == null) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")" };
+                        return attrError(node, attribute, "invalid message expression: on-* takes a Msg tag (\"add\") or tag with one binding payload (\"toggle:{item.id}\")");
                     }
                     continue;
                 }
@@ -1203,7 +1433,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                             (if (expression == .literal) unknown_color_token_message else style_token_literal_message)
                         else
                             style_token_literal_message;
-                        return .{ .line = attribute.line, .column = attribute.column, .message = message };
+                        return attrError(node, attribute, message);
                     }
                     continue;
                 }
@@ -1213,7 +1443,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                             (if (expression == .literal) unknown_radius_token_message else style_token_literal_message)
                         else
                             style_token_literal_message;
-                        return .{ .line = attribute.line, .column = attribute.column, .message = message };
+                        return attrError(node, attribute, message);
                     }
                     continue;
                 }
@@ -1221,7 +1451,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // Built-in vector icon selector, icon-scoped: a closed
                     // literal vocabulary so icon references never rot.
                     if (!std.mem.eql(u8, node.name, "icon")) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = icon_name_element_message };
+                        return attrError(node, attribute, icon_name_element_message);
                     }
                     const expression = parseAttrExpression(attribute.value);
                     const literal = if (expression) |value|
@@ -1229,7 +1459,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     else
                         null;
                     if (literal == null or !nameInList(literal.?, &known_icon_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = icon_name_message };
+                        return attrError(node, attribute, icon_name_message);
                     }
                     continue;
                 }
@@ -1237,10 +1467,10 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // A focus request needs a focusable element; layout
                     // and decoration kinds can never take the keyboard.
                     if (nameInList(node.name, &known_non_hit_target_element_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = autofocus_element_message };
+                        return attrError(node, attribute, autofocus_element_message);
                     }
                     if (parseAttrExpression(attribute.value) == null) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+                        return attrError(node, attribute, invalid_expression_message);
                     }
                     continue;
                 }
@@ -1252,7 +1482,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // element so icon + label are one hit target with one
                     // tint.
                     if (!iconAttrElement(node.name)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_element_message };
+                        return attrError(node, attribute, button_icon_element_message);
                     }
                     const expression = parseAttrExpression(attribute.value);
                     const literal = if (expression) |value|
@@ -1260,7 +1490,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     else
                         null;
                     if (literal == null or !nameInList(literal.?, &known_icon_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = button_icon_message };
+                        return attrError(node, attribute, button_icon_message);
                     }
                     continue;
                 }
@@ -1268,11 +1498,11 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // Runtime image binding, avatar-scoped: ids are model
                     // data the app registered, never markup literals.
                     if (!std.mem.eql(u8, node.name, "avatar")) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = avatar_image_element_message };
+                        return attrError(node, attribute, avatar_image_element_message);
                     }
                     const expression = parseAttrExpression(attribute.value);
                     if (expression == null or expression.? != .binding) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = avatar_image_message };
+                        return attrError(node, attribute, avatar_image_message);
                     }
                     continue;
                 }
@@ -1281,60 +1511,60 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // a literal side so the compiled engine resolves it
                     // at comptime (flip is automatic either way).
                     if (!nameInList(node.name, &known_anchor_element_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_element_message };
+                        return attrError(node, attribute, anchor_element_message);
                     }
                     if (!std.mem.eql(u8, attribute.value, "below") and !std.mem.eql(u8, attribute.value, "above")) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_value_message };
+                        return attrError(node, attribute, anchor_value_message);
                     }
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "anchor-alignment")) {
                     if (!nameInList(node.name, &known_anchor_element_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_element_message };
+                        return attrError(node, attribute, anchor_element_message);
                     }
                     if (node.attr("anchor") == null) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_dependent_attr_message };
+                        return attrError(node, attribute, anchor_dependent_attr_message);
                     }
                     if (!std.mem.eql(u8, attribute.value, "start") and !std.mem.eql(u8, attribute.value, "end") and !std.mem.eql(u8, attribute.value, "stretch")) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_alignment_value_message };
+                        return attrError(node, attribute, anchor_alignment_value_message);
                     }
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "anchor-offset")) {
                     if (!nameInList(node.name, &known_anchor_element_names)) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_element_message };
+                        return attrError(node, attribute, anchor_element_message);
                     }
                     if (node.attr("anchor") == null) {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_dependent_attr_message };
+                        return attrError(node, attribute, anchor_dependent_attr_message);
                     }
                     _ = std.fmt.parseFloat(f32, attribute.value) catch {
-                        return .{ .line = attribute.line, .column = attribute.column, .message = anchor_offset_value_message };
+                        return attrError(node, attribute, anchor_offset_value_message);
                     };
                     continue;
                 }
                 if (std.mem.eql(u8, attribute.name, "gap") and nameInList(node.name, &known_stack_container_element_names)) {
-                    return .{ .line = attribute.line, .column = attribute.column, .message = stack_container_gap_message };
+                    return attrError(node, attribute, stack_container_gap_message);
                 }
                 if (std.mem.eql(u8, attribute.name, "columns") and !std.mem.eql(u8, node.name, "grid")) {
                     // Only the grid layout reads a column count; anywhere
                     // else it would silently do nothing (same policy as
                     // gap on stacking containers).
-                    return .{ .line = attribute.line, .column = attribute.column, .message = grid_columns_element_message };
+                    return attrError(node, attribute, grid_columns_element_message);
                 }
                 if (std.mem.eql(u8, attribute.name, "wrap") and !std.mem.eql(u8, node.name, "text")) {
                     // Only plain text leaves word-wrap; on a container the
                     // option is silently inert and has shipped with
                     // comments asserting wrapping that never happened
                     // (same policy as gap on stacking containers).
-                    return .{ .line = attribute.line, .column = attribute.column, .message = wrap_element_message };
+                    return attrError(node, attribute, wrap_element_message);
                 }
                 if (!nameInList(attribute.name, &known_option_attrs)) {
-                    return .{ .line = attribute.line, .column = attribute.column, .message = "unknown attribute" };
+                    return attrError(node, attribute, "unknown attribute");
                 }
                 if (parseAttrExpression(attribute.value) == null) {
-                    return .{ .line = attribute.line, .column = attribute.column, .message = invalid_expression_message };
+                    return attrError(node, attribute, invalid_expression_message);
                 }
-                if (attrCoverageError(attribute)) |info| return info;
+                if (attrCoverageError(node, attribute)) |info| return info;
             }
         },
         .for_block => {
@@ -1344,7 +1574,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
             if (node.children.len == 0) return errorAt(node, for_children_message);
             for (node.children) |child| {
                 switch (child.kind) {
-                    .element, .use_block, .for_block, .if_block, .else_block => {},
+                    .element, .use_block, .for_block, .if_block, .else_block, .slot_block => {},
                     else => return errorAt(child, for_children_message),
                 }
             }
@@ -1368,7 +1598,7 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
         if (child.kind == .else_block and previous_kind != .if_block and previous_kind != .for_block) {
             return errorAt(child, else_placement_message);
         }
-        if (validateNode(document, child, child_parent, template_limit)) |info| {
+        if (validateNode(document, child, child_parent, template_limit, slot_rule)) |info| {
             return info;
         }
         previous_kind = child.kind;
@@ -1415,5 +1645,429 @@ fn nameInList(name: []const u8, list: []const []const u8) bool {
 }
 
 fn errorAt(node: MarkupNode, message: []const u8) MarkupErrorInfo {
-    return .{ .line = node.line, .column = node.column, .message = message };
+    return .{ .line = node.line, .column = node.column, .message = message, .path = node.src_path };
+}
+
+/// An error positioned at an attribute; the enclosing node carries the
+/// source path (attributes do not).
+fn attrError(node: MarkupNode, attribute: MarkupAttr, message: []const u8) MarkupErrorInfo {
+    return .{ .line = attribute.line, .column = attribute.column, .message = message, .path = node.src_path };
+}
+
+// ---------------------------------------------------------------- imports
+//
+// THE RESOLVER SEAM. An import maps a root-relative path to markup source
+// text; everything else — grammar, ordering, cycles, duplicates, merging —
+// lives here once, and each engine supplies only the mapping:
+//
+//   - compiled engine (`canvas.CompiledMarkupImports`): a comptime source
+//     set the app assembles with `@embedFile` -> `resolveImportsComptime`.
+//   - runtime interpreter (ui_app): the same embedded set for the first
+//     build of a markup-only app, and the file system rooted at the
+//     watched file's directory for hot reload -> `resolveImports` with the
+//     matching `ImportLoader`.
+//   - `native markup check`: the file system rooted at the checked file's
+//     directory -> `resolveImports`.
+//
+// Resolution splices imported templates BEFORE the importing file's own,
+// depth-first in import order (a file's transitive imports land before its
+// own templates) — exactly as if each imported file were pasted at its
+// import site. The merged document is a plain single-file document
+// (`imports` empty), so the engines' template machinery — define-before-use
+// ordering, expansion, structural ids — is untouched: widget ids hash as
+// if every template were defined locally, and the two engines stay in
+// parity by construction. Every node is stamped with its source path so
+// diagnostics name the right file.
+
+/// One markup file in an embedded source set: `path` is relative to the
+/// markup root (the root view file's directory), forward slashes.
+pub const SourceFile = struct {
+    path: []const u8,
+    source: []const u8,
+};
+
+/// Runtime source access for `resolveImports`: returns the source for a
+/// root-relative path, or null when it cannot be read (the resolver turns
+/// that into a teaching error at the import site).
+pub const ImportLoader = struct {
+    context: *const anyopaque,
+    load: *const fn (context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8,
+};
+
+/// Loader over an embedded source set (the runtime mirror of the compiled
+/// engine's comptime lookup). Keep the struct alive for the duration of
+/// the resolve call; `loader()` captures a pointer to it.
+pub const SourceSetLoader = struct {
+    set: []const SourceFile,
+
+    pub fn loader(self: *const SourceSetLoader) ImportLoader {
+        return .{ .context = @ptrCast(self), .load = load };
+    }
+
+    fn load(context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+        _ = arena;
+        const self: *const SourceSetLoader = @ptrCast(@alignCast(context));
+        for (self.set) |file| {
+            if (std.mem.eql(u8, file.path, path)) return file.source;
+        }
+        return null;
+    }
+};
+
+pub const max_import_path_len = 200;
+pub const max_import_path_segments = 24;
+pub const max_import_depth = 8;
+pub const max_imported_files = 32;
+
+pub const ResolveError = error{ MarkupSyntax, MarkupImport, OutOfMemory };
+
+/// Resolve a root document's import closure into one merged document.
+/// `root_name` names the root file for diagnostics AND anchors relative
+/// resolution: imports resolve against the importing file's directory, and
+/// nothing may escape `dirname(root_name)` (the markup root). Failures set
+/// `diagnostic` — position, message, and the source path of the file the
+/// position refers to.
+pub fn resolveImports(
+    arena: std.mem.Allocator,
+    root_name: []const u8,
+    root_source: []const u8,
+    loader: ImportLoader,
+    diagnostic: *MarkupErrorInfo,
+) ResolveError!MarkupDocument {
+    var resolver = ImportResolver{
+        .arena = arena,
+        .root_dir = dirnamePath(root_name),
+        .loader = loader,
+        .diagnostic = diagnostic,
+    };
+    const root = try resolver.visit(root_name, root_source, 0);
+    return .{ .imports = &.{}, .templates = resolver.templates.items, .root = root };
+}
+
+const ImportResolver = struct {
+    arena: std.mem.Allocator,
+    root_dir: []const u8,
+    loader: ImportLoader,
+    diagnostic: *MarkupErrorInfo,
+    templates: std.ArrayListUnmanaged(MarkupNode) = .empty,
+    /// Fully resolved files (dedupe: two files importing the same
+    /// component resolve it once, so its templates splice once).
+    visited: std.ArrayListUnmanaged([]const u8) = .empty,
+    /// The in-progress import chain, for cycle reporting.
+    chain: [max_import_depth][]const u8 = undefined,
+    file_count: usize = 0,
+
+    /// Parse one file, resolve its imports depth-first, splice its
+    /// templates, and return its stamped view root (null for a component
+    /// file). Only the root file (depth 0) may have a view root.
+    fn visit(self: *ImportResolver, path: []const u8, source: []const u8, depth: usize) ResolveError!?MarkupNode {
+        self.chain[depth] = path;
+        var parser = Parser.init(self.arena, source);
+        const document = parser.parse() catch |err| {
+            if (err == error.MarkupSyntax) {
+                self.diagnostic.* = parser.diagnostic;
+                self.diagnostic.path = path;
+            }
+            return err;
+        };
+        for (document.imports) |import_node| {
+            if (validateImport(import_node)) |info| {
+                self.diagnostic.* = info;
+                self.diagnostic.path = path;
+                return error.MarkupImport;
+            }
+            const src = import_node.attr("src").?;
+            var buffer: [max_import_path_len]u8 = undefined;
+            const resolved = switch (resolveImportPath(self.root_dir, path, src, &buffer)) {
+                .path => |normalized| try self.arena.dupe(u8, normalized),
+                .message => |message| return self.fail(path, import_node, message),
+            };
+            var cycle_start: ?usize = null;
+            for (self.chain[0 .. depth + 1], 0..) |ancestor, index| {
+                if (std.mem.eql(u8, ancestor, resolved)) cycle_start = index;
+            }
+            if (cycle_start) |start| {
+                return self.fail(path, import_node, try self.cycleMessage(start, depth, resolved));
+            }
+            if (self.wasVisited(resolved)) continue;
+            if (depth + 1 >= max_import_depth) return self.fail(path, import_node, import_depth_message);
+            self.file_count += 1;
+            if (self.file_count > max_imported_files) return self.fail(path, import_node, import_count_message);
+            const child_source = self.loader.load(self.loader.context, self.arena, resolved) orelse {
+                const message = try std.fmt.allocPrint(self.arena, "unable to read imported file \"{s}\"", .{resolved});
+                return self.fail(path, import_node, message);
+            };
+            _ = try self.visit(resolved, child_source, depth + 1);
+            try self.visited.append(self.arena, resolved);
+        }
+        for (document.templates) |template_node| {
+            if (self.templates.items.len >= max_document_templates) {
+                return self.fail(path, template_node, max_templates_message);
+            }
+            if (template_node.attr("name")) |name| {
+                for (self.templates.items) |existing| {
+                    const existing_name = existing.attr("name") orelse continue;
+                    if (std.mem.eql(u8, existing_name, name)) {
+                        const message = try std.fmt.allocPrint(
+                            self.arena,
+                            "duplicate template name \"{s}\" - also defined at {s}:{d}:{d}; template names are document-wide once imports resolve, so rename one (imports never shadow silently)",
+                            .{ name, existing.src_path, existing.line, existing.column },
+                        );
+                        return self.fail(path, template_node, message);
+                    }
+                }
+            }
+            try self.templates.append(self.arena, try stampSourcePath(self.arena, template_node, path));
+        }
+        if (document.root) |root_node| {
+            if (depth > 0) {
+                self.diagnostic.* = .{
+                    .line = root_node.line,
+                    .column = root_node.column,
+                    .message = import_view_root_message,
+                    .path = path,
+                };
+                return error.MarkupImport;
+            }
+            return try stampSourcePath(self.arena, root_node, path);
+        }
+        return null;
+    }
+
+    fn fail(self: *ImportResolver, path: []const u8, node: MarkupNode, message: []const u8) ResolveError {
+        self.diagnostic.* = .{ .line = node.line, .column = node.column, .message = message, .path = path };
+        return error.MarkupImport;
+    }
+
+    fn wasVisited(self: *const ImportResolver, path: []const u8) bool {
+        for (self.visited.items) |seen| {
+            if (std.mem.eql(u8, seen, path)) return true;
+        }
+        return false;
+    }
+
+    /// "import cycle: a.zml -> b.zml -> a.zml" — the chain from the first
+    /// occurrence of the re-imported file down to the import that closes
+    /// the loop.
+    fn cycleMessage(self: *ImportResolver, start: usize, depth: usize, resolved: []const u8) error{OutOfMemory}![]const u8 {
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        try out.appendSlice(self.arena, "import cycle: ");
+        for (self.chain[start .. depth + 1]) |link| {
+            try out.appendSlice(self.arena, link);
+            try out.appendSlice(self.arena, " -> ");
+        }
+        try out.appendSlice(self.arena, resolved);
+        return out.items;
+    }
+};
+
+fn stampSourcePath(arena: std.mem.Allocator, node: MarkupNode, path: []const u8) error{OutOfMemory}!MarkupNode {
+    // An anonymous root (single-file resolution) keeps diagnostics
+    // path-less, exactly like the unresolved parse — no copy needed.
+    if (path.len == 0) return node;
+    var out = node;
+    out.src_path = path;
+    if (node.children.len > 0) {
+        const children = try arena.alloc(MarkupNode, node.children.len);
+        for (node.children, 0..) |child, index| {
+            children[index] = try stampSourcePath(arena, child, path);
+        }
+        out.children = children;
+    }
+    return out;
+}
+
+pub const ImportPathResult = union(enum) {
+    path: []const u8,
+    message: []const u8,
+};
+
+/// Lexically join `src` against the importing file's directory and
+/// normalize it: "." segments drop, ".." pops, subdirectories stay. The
+/// result must remain under `root_dir` (the markup root — the root view
+/// file's directory); escapes and absolute paths come back as teaching
+/// messages. Comptime-callable; the returned path slices `buffer`.
+pub fn resolveImportPath(root_dir: []const u8, importer_path: []const u8, src: []const u8, buffer: []u8) ImportPathResult {
+    if (importSrcShapeError(src)) |message| return .{ .message = message };
+    var segments: [max_import_path_segments][]const u8 = undefined;
+    var count: usize = 0;
+    var dir_it = std.mem.tokenizeScalar(u8, dirnamePath(importer_path), '/');
+    while (dir_it.next()) |segment| {
+        if (count >= segments.len) return .{ .message = import_src_too_long_message };
+        segments[count] = segment;
+        count += 1;
+    }
+    var src_it = std.mem.tokenizeScalar(u8, src, '/');
+    while (src_it.next()) |segment| {
+        if (std.mem.eql(u8, segment, ".")) continue;
+        if (std.mem.eql(u8, segment, "..")) {
+            if (count == 0) return .{ .message = import_src_escape_message };
+            count -= 1;
+            continue;
+        }
+        if (count >= segments.len) return .{ .message = import_src_too_long_message };
+        segments[count] = segment;
+        count += 1;
+    }
+    var len: usize = 0;
+    for (segments[0..count], 0..) |segment, index| {
+        const extra = segment.len + @intFromBool(index > 0);
+        if (len + extra > buffer.len) return .{ .message = import_src_too_long_message };
+        if (index > 0) {
+            buffer[len] = '/';
+            len += 1;
+        }
+        @memcpy(buffer[len .. len + segment.len], segment);
+        len += segment.len;
+    }
+    const path = buffer[0..len];
+    if (!pathWithinRoot(root_dir, path)) return .{ .message = import_src_escape_message };
+    return .{ .path = path };
+}
+
+fn pathWithinRoot(root_dir: []const u8, path: []const u8) bool {
+    if (root_dir.len == 0) return true;
+    if (!std.mem.startsWith(u8, path, root_dir)) return false;
+    return path.len > root_dir.len and path[root_dir.len] == '/';
+}
+
+fn dirnamePath(path: []const u8) []const u8 {
+    const index = std.mem.lastIndexOfScalar(u8, path, '/') orelse return "";
+    return path[0..index];
+}
+
+// ------------------------------------------------ comptime import resolve
+
+/// Comptime mirror of `resolveImports` for the compiled engine: the source
+/// mapping is an embedded set the app assembles with `@embedFile` (paths
+/// relative to the root file's directory), and every resolution failure is
+/// a compile error carrying the same teaching message the runtime resolver
+/// would report, prefixed with the offending file.
+pub fn resolveImportsComptime(comptime root_name: []const u8, comptime sources: []const SourceFile) MarkupDocument {
+    comptime {
+        var total_len: usize = 0;
+        for (sources) |file| total_len += file.source.len;
+        @setEvalBranchQuota(comptime_parse_quota_base + total_len * comptime_parse_quota_per_byte + (sources.len + 1) * 50_000);
+        const root_source = findSourceComptime(sources, root_name) orelse
+            @compileError("markup import: no embedded source for the root file \"" ++ root_name ++
+                "\" - the source set passed to CompiledMarkupImports must contain it (.{ .path = \"" ++ root_name ++ "\", .source = @embedFile(\"" ++ root_name ++ "\") })");
+        var templates: []const MarkupNode = &.{};
+        var visited: []const []const u8 = &.{};
+        const root = visitComptime(root_name, root_source, sources, dirnamePath(root_name), &templates, &visited, &.{});
+        return .{ .imports = &.{}, .templates = templates, .root = root };
+    }
+}
+
+fn visitComptime(
+    comptime path: []const u8,
+    comptime source: []const u8,
+    comptime sources: []const SourceFile,
+    comptime root_dir: []const u8,
+    comptime templates: *[]const MarkupNode,
+    comptime visited: *[]const []const u8,
+    comptime chain: []const []const u8,
+) ?MarkupNode {
+    comptime {
+        const document = parseComptime(source);
+        for (document.imports) |import_node| {
+            if (validateImport(import_node)) |info| failResolveComptime(path, info.line, info.column, info.message);
+            const src = import_node.attr("src").?;
+            var buffer: [max_import_path_len]u8 = undefined;
+            const resolved = switch (resolveImportPath(root_dir, path, src, &buffer)) {
+                .path => |normalized| freezePathComptime(normalized),
+                .message => |message| failResolveComptime(path, import_node.line, import_node.column, message),
+            };
+            var cycle_start: ?usize = null;
+            const full_chain = chain ++ &[_][]const u8{path};
+            for (full_chain, 0..) |ancestor, index| {
+                if (std.mem.eql(u8, ancestor, resolved)) cycle_start = index;
+            }
+            if (cycle_start) |start| {
+                var message: []const u8 = "import cycle: ";
+                for (full_chain[start..]) |link| message = message ++ link ++ " -> ";
+                failResolveComptime(path, import_node.line, import_node.column, message ++ resolved);
+            }
+            if (containsPathComptime(visited.*, resolved)) continue;
+            if (chain.len + 1 >= max_import_depth) failResolveComptime(path, import_node.line, import_node.column, import_depth_message);
+            if (visited.len >= max_imported_files) failResolveComptime(path, import_node.line, import_node.column, import_count_message);
+            const child_source = findSourceComptime(sources, resolved) orelse
+                @compileError("markup import: no embedded source for \"" ++ resolved ++
+                    "\" (imported by " ++ path ++ ") - add .{ .path = \"" ++ resolved ++ "\", .source = @embedFile(\"" ++ resolved ++ "\") } to the markup source set");
+            _ = visitComptime(resolved, child_source, sources, root_dir, templates, visited, full_chain);
+            visited.* = visited.* ++ &[_][]const u8{resolved};
+        }
+        for (document.templates) |template_node| {
+            if (templates.len >= max_document_templates) {
+                failResolveComptime(path, template_node.line, template_node.column, max_templates_message);
+            }
+            if (template_node.attr("name")) |name| {
+                for (templates.*) |existing| {
+                    const existing_name = existing.attr("name") orelse continue;
+                    if (std.mem.eql(u8, existing_name, name)) {
+                        failResolveComptime(path, template_node.line, template_node.column, std.fmt.comptimePrint(
+                            "duplicate template name \"{s}\" - also defined at {s}:{d}:{d}; template names are document-wide once imports resolve, so rename one (imports never shadow silently)",
+                            .{ name, existing.src_path, existing.line, existing.column },
+                        ));
+                    }
+                }
+            }
+            templates.* = templates.* ++ &[_]MarkupNode{stampSourcePathComptime(template_node, path)};
+        }
+        if (document.root) |root_node| {
+            if (chain.len > 0) {
+                failResolveComptime(path, root_node.line, root_node.column, import_view_root_message);
+            }
+            return stampSourcePathComptime(root_node, path);
+        }
+        return null;
+    }
+}
+
+fn findSourceComptime(comptime sources: []const SourceFile, comptime path: []const u8) ?[]const u8 {
+    comptime {
+        for (sources) |file| {
+            if (std.mem.eql(u8, file.path, path)) return file.source;
+        }
+        return null;
+    }
+}
+
+fn containsPathComptime(comptime paths: []const []const u8, comptime path: []const u8) bool {
+    comptime {
+        for (paths) |candidate| {
+            if (std.mem.eql(u8, candidate, path)) return true;
+        }
+        return false;
+    }
+}
+
+/// Copy a buffer-backed comptime path into interned comptime memory (the
+/// scratch buffer it slices is mutated by the next resolution).
+fn freezePathComptime(comptime path: []const u8) []const u8 {
+    comptime {
+        var out: [path.len]u8 = undefined;
+        @memcpy(&out, path);
+        const frozen = out;
+        return &frozen;
+    }
+}
+
+fn stampSourcePathComptime(comptime node: MarkupNode, comptime path: []const u8) MarkupNode {
+    comptime {
+        if (path.len == 0) return node;
+        var out = node;
+        out.src_path = path;
+        if (node.children.len > 0) {
+            var children: []const MarkupNode = &.{};
+            for (node.children) |child| {
+                children = children ++ &[_]MarkupNode{stampSourcePathComptime(child, path)};
+            }
+            out.children = children;
+        }
+        return out;
+    }
+}
+
+fn failResolveComptime(comptime path: []const u8, comptime line: usize, comptime column: usize, comptime message: []const u8) noreturn {
+    @compileError(std.fmt.comptimePrint("markup error in {s} at line {d}, column {d}: {s}", .{ path, line, column, message }));
 }

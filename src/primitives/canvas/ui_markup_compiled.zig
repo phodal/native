@@ -36,18 +36,40 @@ const Value = interpreter.Value;
 /// A markup view compiled against a concrete Model/Msg pair. `source` is
 /// parsed at comptime (no parser in the binary) and `build` unrolls binding
 /// and message resolution to direct field/method access — what an
-/// equivalent hand-written `view(ui, model)` compiles to.
+/// equivalent hand-written `view(ui, model)` compiles to. Single-file
+/// documents only; a document with `<import>`s names its source set
+/// through `CompiledMarkupImports`.
 pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime source: []const u8) type {
+    const parsed = markup.parseComptime(source);
+    if (parsed.imports.len > 0) {
+        @compileError("this markup imports other files - compile it with canvas.CompiledMarkupImports(Model, Msg, \"root.zml\", &sources), where sources is a markup.SourceFile set embedding the root and every imported file");
+    }
+    return CompiledMarkupDocument(ModelT, MsgT, parsed);
+}
+
+/// The compiled engine's side of the import resolver seam (see the
+/// "imports" section of ui_markup.zig): the app assembles a comptime
+/// source set with `@embedFile` — one entry per file, paths relative to
+/// the root file's directory — and resolution merges the closure at
+/// comptime. The same set drives the runtime interpreter's embedded
+/// resolution (`MarkupOptions.sources`), so both engines see one document.
+pub fn CompiledMarkupImports(comptime ModelT: type, comptime MsgT: type, comptime root_name: []const u8, comptime sources: []const markup.SourceFile) type {
+    return CompiledMarkupDocument(ModelT, MsgT, markup.resolveImportsComptime(root_name, sources));
+}
+
+/// Shared engine over an already-resolved comptime document.
+pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, comptime resolved_document: markup.MarkupDocument) type {
     return struct {
         pub const Ui = canvas.Ui(MsgT);
 
-        pub const document = markup.parseComptime(source);
+        pub const document = resolved_document;
 
-        /// Loop variables and template args in scope at a point in the
-        /// tree. Names, kinds, and item types are comptime; the runtime
-        /// value is a nested struct with one payload per entry: a
-        /// `*const Item` for `for` items, a `Value` for scalar template
-        /// args, and a `[]const Item` for slice-valued template args.
+        /// Loop variables, template args, and slot captures in scope at a
+        /// point in the tree. Names, kinds, and item types are comptime;
+        /// the runtime value is a nested struct with one payload per
+        /// entry: a `*const Item` for `for` items, a `Value` for scalar
+        /// template args, a `[]const Item` for slice-valued template args,
+        /// and the use-site scope chain for slot captures.
         const ScopeEntry = struct {
             name: []const u8,
             kind: Kind,
@@ -56,8 +78,16 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             /// use-site expression (null when only runtime-known, e.g. a
             /// binding through an optional).
             variant: ?ValueVariant = null,
+            /// For slot captures: the `<use>` site's children, the scope
+            /// entries they must build under (the consumer's), and the
+            /// runtime type of the consumer's scope chain. The capture's
+            /// name is empty, which no binding head can equal, so lookups
+            /// skip it.
+            slot_nodes: []const markup.MarkupNode = &.{},
+            slot_entries: []const ScopeEntry = &.{},
+            SiteScope: type = void,
 
-            const Kind = enum { item, value_arg, slice_arg };
+            const Kind = enum { item, value_arg, slice_arg, slot };
         };
 
         fn EntryPayload(comptime entry: ScopeEntry) type {
@@ -65,6 +95,7 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 .item => *const entry.Item,
                 .value_arg => Value,
                 .slice_arg => []const entry.Item,
+                .slot => entry.SiteScope,
             };
         }
 
@@ -82,28 +113,32 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         /// failures latch `ui.failed` (surfaced by `finalize`) exactly like
         /// the builder's own sugar (`ui.fmt`, `ui.each`).
         pub fn build(ui: *Ui, model: *const ModelT) Ui.Node {
+            const root = comptime (document.root orelse @compileError("markup error: " ++ markup.component_file_view_message));
             comptime {
                 checkTemplates();
-                switch (document.root.kind) {
+                switch (root.kind) {
                     .element, .use_block => {},
-                    .template_block => fail(document.root, markup.template_top_level_message),
-                    .text => fail(document.root, "text content is only allowed inside text-bearing elements"),
-                    .for_block, .if_block, .else_block => fail(document.root, "structure tags are only allowed inside an element"),
+                    .template_block => fail(root, markup.template_top_level_message),
+                    .import_block => fail(root, markup.import_top_level_message),
+                    .slot_block => fail(root, markup.slot_outside_template_message),
+                    .text => fail(root, "text content is only allowed inside text-bearing elements"),
+                    .for_block, .if_block, .else_block => fail(root, "structure tags are only allowed inside an element"),
                 }
             }
-            if (comptime (document.root.kind == .use_block)) {
-                return buildUse(document.root, no_entries, ui, model, .{});
+            if (comptime (root.kind == .use_block)) {
+                return buildUse(root, no_entries, ui, model, .{});
             }
-            return buildElement(document.root, no_entries, ui, model, .{});
+            return buildElement(root, no_entries, ui, model, .{});
         }
 
         /// Comptime template wiring checks, mirroring the validator: a
-        /// name, exactly one element child, and uses inside template
-        /// bodies referencing only earlier templates — which also
-        /// guarantees comptime expansion terminates.
+        /// name, exactly one element child, at most one slot, and uses
+        /// inside template bodies referencing only earlier templates —
+        /// which also guarantees comptime expansion terminates (slot
+        /// content is lexical, so it cannot re-enter an expansion).
         fn checkTemplates() void {
             comptime {
-                @setEvalBranchQuota(10_000);
+                @setEvalBranchQuota(50_000 + document.templates.len * 20_000);
                 for (document.templates, 0..) |template_node, index| {
                     const name = template_node.attr("name") orelse fail(template_node, markup.template_name_message);
                     for (document.templates[0..index]) |earlier| {
@@ -112,6 +147,9 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     }
                     if (template_node.children.len != 1 or template_node.children[0].kind != .element) {
                         fail(template_node, markup.template_one_child_message);
+                    }
+                    if (markup.templateSecondSlot(template_node.children[0])) |second| {
+                        fail(second, markup.template_one_slot_message);
                     }
                     checkUseOrder(template_node.children[0], index);
                 }
@@ -241,39 +279,49 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         }
 
         /// One runtime step per child: elements and `use` expansions append
-        /// a node, `for` blocks append per item (with an adjacent `else`
-        /// paired at comptime for the empty case), and an `if` (with its
-        /// adjacent `else` paired at comptime) branches on the test binding.
+        /// a node, `slot` splices the use-site children in place, `for`
+        /// blocks append per item (with an adjacent `else` paired at
+        /// comptime for the empty case), and an `if` (with its adjacent
+        /// `else` paired at comptime) branches on the test binding.
         const ChildStep = union(enum) {
             element: markup.MarkupNode,
             use: markup.MarkupNode,
+            slot: markup.MarkupNode,
             for_block: struct { node: markup.MarkupNode, else_block: ?markup.MarkupNode },
             conditional: struct { if_block: markup.MarkupNode, else_block: ?markup.MarkupNode },
         };
 
-        fn childSteps(comptime node: markup.MarkupNode) []const ChildStep {
+        fn childSteps(comptime children: []const markup.MarkupNode) []const ChildStep {
             comptime {
                 @setEvalBranchQuota(10_000);
                 var steps: []const ChildStep = &.{};
                 var index: usize = 0;
-                while (index < node.children.len) : (index += 1) {
-                    const child = node.children[index];
+                while (index < children.len) : (index += 1) {
+                    const child = children[index];
                     switch (child.kind) {
                         .element => steps = steps ++ &[_]ChildStep{.{ .element = child }},
                         .use_block => steps = steps ++ &[_]ChildStep{.{ .use = child }},
+                        .slot_block => {
+                            // Interpreter and validator parity: a slot is
+                            // an attribute-less, childless leaf.
+                            if (child.attrs.len > 0) fail(child, markup.slot_attrs_message);
+                            if (child.children.len > 0) fail(child.children[0], markup.slot_children_message);
+                            steps = steps ++ &[_]ChildStep{.{ .slot = child }};
+                        },
                         .template_block => fail(child, markup.template_top_level_message),
+                        .import_block => fail(child, markup.import_top_level_message),
                         .for_block => {
                             var else_block: ?markup.MarkupNode = null;
-                            if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
-                                else_block = node.children[index + 1];
+                            if (index + 1 < children.len and children[index + 1].kind == .else_block) {
+                                else_block = children[index + 1];
                                 index += 1;
                             }
                             steps = steps ++ &[_]ChildStep{.{ .for_block = .{ .node = child, .else_block = else_block } }};
                         },
                         .if_block => {
                             var else_block: ?markup.MarkupNode = null;
-                            if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
-                                else_block = node.children[index + 1];
+                            if (index + 1 < children.len and children[index + 1].kind == .else_block) {
+                                else_block = children[index + 1];
                                 index += 1;
                             }
                             steps = steps ++ &[_]ChildStep{.{ .conditional = .{ .if_block = child, .else_block = else_block } }};
@@ -287,7 +335,11 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         }
 
         fn buildChildren(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
-            const steps = comptime childSteps(node);
+            buildChildList(comptime node.children, entries, ui, model, scope, out);
+        }
+
+        fn buildChildList(comptime children: []const markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            const steps = comptime childSteps(children);
             inline for (0..steps.len) |index| {
                 const step = comptime steps[index];
                 if (comptime (step == .element)) {
@@ -302,6 +354,8 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         ui.failed = true;
                         return;
                     };
+                } else if (comptime (step == .slot)) {
+                    buildSlot(comptime step.slot, entries, ui, model, scope, out);
                 } else if (comptime (step == .for_block)) {
                     const item_count = buildFor(comptime step.for_block.node, entries, ui, model, scope, out);
                     if (comptime (step.for_block.else_block != null)) {
@@ -319,6 +373,31 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                         buildChildren(comptime conditional.else_block.?, entries, ui, model, scope, out);
                     }
                 }
+            }
+        }
+
+        /// `<slot/>` in a template body: splice the use-site children (the
+        /// innermost slot capture) IN THE CONSUMER'S SCOPE — the capture
+        /// carries the consumer's comptime entries and its runtime scope
+        /// chain, so content sees the model paths and loop variables where
+        /// the `<use>` was written, while its nodes land at the slot's
+        /// position (structural ids hash identically to the interpreter's).
+        fn buildSlot(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, out: *std.ArrayListUnmanaged(Ui.Node)) void {
+            const capture_index = comptime (innermostSlotIndex(entries) orelse fail(node, markup.slot_outside_template_message));
+            const capture = comptime entries[capture_index];
+            if (comptime (capture.slot_nodes.len == 0)) return;
+            const site_scope = scopePayload(entries, capture_index, scope);
+            buildChildList(comptime capture.slot_nodes, comptime capture.slot_entries, ui, model, site_scope, out);
+        }
+
+        fn innermostSlotIndex(comptime entries: []const ScopeEntry) ?usize {
+            comptime {
+                var index = entries.len;
+                while (index > 0) {
+                    index -= 1;
+                    if (entries[index].kind == .slot) return index;
+                }
+                return null;
             }
         }
 
@@ -685,7 +764,8 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         // ------------------------------------------------------ templates
 
         /// A `<use>` arg as resolved at comptime against the use site: a
-        /// scalar `Value` (literal, equality, or scalar binding) or a
+        /// scalar `Value` (literal, equality, scalar binding, or the
+        /// declaration's literal default when the use site omits it) or a
         /// slice (a model iterable path, or a slice arg re-passed from an
         /// enclosing template).
         const ArgSpec = struct {
@@ -696,6 +776,10 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
             variant: ?ValueVariant = null,
             each: ?EachInfo = null,
             site_index: ?usize = null,
+            /// True when `raw` is the declaration's default literal (the
+            /// use site omitted the arg): evaluated as a literal, never
+            /// parsed as an expression.
+            defaulted: bool = false,
 
             const Kind = enum { value, slice };
         };
@@ -705,8 +789,9 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         /// use-site scope, and inline the template's single element child
         /// in place — structural ids hash through the parent chain at the
         /// expansion site, exactly as if the body were written inline. The
-        /// body's scope holds only the args (plus the model), never the
-        /// use site's loop variables.
+        /// body's scope holds the args plus the slot capture (the use-site
+        /// children and the consumer's scope chain, consumed by the body's
+        /// `<slot/>`), never the use site's loop variables directly.
         fn buildUse(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
             const template_name = comptime (node.attr("template") orelse fail(node, markup.use_template_attr_message));
             const template_index = comptime (document.templateIndex(template_name) orelse fail(node, markup.use_undefined_template_message));
@@ -715,11 +800,22 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 if (template_node.children.len != 1 or template_node.children[0].kind != .element) {
                     fail(template_node, markup.template_one_child_message);
                 }
-                if (node.children.len != 0) fail(node, markup.use_no_children_message);
+                if (node.children.len != 0 and markup.templateSlot(template_node) == null) {
+                    fail(node.children[0], markup.use_children_without_slot_message);
+                }
             }
             const specs = comptime useArgSpecs(node, template_node, entries);
-            const body_entries = comptime argEntries(specs);
-            const body_scope = buildArgScope(specs, entries, node, ui, model, scope);
+            const body_entries = comptime (argEntries(specs) ++ &[_]ScopeEntry{.{
+                .name = "",
+                .kind = .slot,
+                .slot_nodes = node.children,
+                .slot_entries = entries,
+                .SiteScope = @TypeOf(scope),
+            }});
+            const body_scope = .{
+                .parent = buildArgScope(specs, entries, node, ui, model, scope),
+                .item = scope,
+            };
             return buildElement(comptime template_node.children[0], body_entries, ui, model, body_scope);
         }
 
@@ -734,12 +830,37 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                 }
                 var specs: []const ArgSpec = &.{};
                 var args = markup.templateArgs(template_node);
-                while (args.next()) |arg_name| {
-                    const raw = node.attr(arg_name) orelse fail(node, markup.use_missing_arg_message);
-                    specs = specs ++ &[_]ArgSpec{argSpec(node, site_entries, arg_name, raw)};
+                while (args.next()) |token| {
+                    const arg = markup.parseTemplateArg(token);
+                    if (node.attr(arg.name)) |raw| {
+                        specs = specs ++ &[_]ArgSpec{argSpec(node, site_entries, arg.name, raw)};
+                        continue;
+                    }
+                    const default = arg.default orelse fail(node, markup.use_missing_arg_message);
+                    // Defaults are literals only — a default cannot see
+                    // any scope (interpreter and validator parity).
+                    if (std.mem.indexOfScalar(u8, default, '{') != null) {
+                        fail(template_node, markup.template_default_literal_message);
+                    }
+                    specs = specs ++ &[_]ArgSpec{.{
+                        .name = arg.name,
+                        .raw = default,
+                        .kind = .value,
+                        .variant = literalVariant(default),
+                        .defaulted = true,
+                    }};
                 }
                 return specs;
             }
+        }
+
+        fn literalVariant(comptime text: []const u8) ValueVariant {
+            return switch (interpreter.literalValue(text)) {
+                .string => .string,
+                .integer => .integer,
+                .float => .float,
+                .boolean => .boolean,
+            };
         }
 
         /// Comptime mirror of the interpreter's `argPayload` resolution
@@ -813,6 +934,11 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
                     return scopePayload(site_entries, comptime spec.site_index.?, site_scope);
                 }
                 return eachItems(comptime spec.each.?, ui, model);
+            }
+            if (comptime spec.defaulted) {
+                // The declaration's literal default, exactly as the
+                // interpreter evaluates it.
+                return comptime interpreter.literalValue(spec.raw);
             }
             return evalExpr(node, site_entries, spec.raw, ui, model, site_scope);
         }
@@ -1576,6 +1702,14 @@ pub fn CompiledMarkupView(comptime ModelT: type, comptime MsgT: type, comptime s
         // -------------------------------------------------- diagnostics
 
         fn fail(comptime node: markup.MarkupNode, comptime message: []const u8) noreturn {
+            if (node.src_path.len > 0) {
+                @compileError(std.fmt.comptimePrint("markup error in {s} at line {d}, column {d}: {s}", .{
+                    node.src_path,
+                    node.line,
+                    node.column,
+                    message,
+                }));
+            }
             @compileError(std.fmt.comptimePrint("markup error at line {d}, column {d}: {s}", .{
                 node.line,
                 node.column,

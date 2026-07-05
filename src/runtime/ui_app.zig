@@ -258,8 +258,18 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// prefer `canvas.CompiledMarkupView(...).build` on `view`,
             /// which parses at comptime instead.)
             source: []const u8,
-            /// Optional file to poll in dev: when its content changes the
-            /// file is re-parsed and the next rebuild uses the new view,
+            /// Embedded sources for the document's `<import>` closure:
+            /// one entry per imported file, paths relative to the root
+            /// file's directory — the same set `canvas.
+            /// CompiledMarkupImports` takes, so one list feeds both
+            /// engines. Used to resolve the embedded `source`; watch
+            /// reloads resolve against the file system instead (edits to
+            /// imported files hot reload too). Leave empty when the
+            /// markup imports nothing.
+            sources: []const canvas.ui_markup.SourceFile = &.{},
+            /// Optional file to poll in dev: when the file — or any file
+            /// its imports reach — changes on disk, the closure is
+            /// re-resolved and the next rebuild uses the new view,
             /// keeping model state. Parse failures keep the last good view
             /// and set `markup_diagnostic`. Requires `io`. Watching runs a
             /// low-cost repeating runtime timer (`markup_watch_timer_id`),
@@ -515,8 +525,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         markup_view: ?MarkupView = null,
         markup_source_hash: u64 = 0,
         /// Set when the embedded or watched markup failed to parse or build;
-        /// cleared on the next successful parse. Apps may render it.
+        /// cleared on the next successful parse. Apps may render it. The
+        /// message and path slices point into the storage below (the
+        /// resolver formats some messages in the reload arena, which
+        /// resets on the next attempt).
         markup_diagnostic: ?canvas.ui_markup.MarkupErrorInfo = null,
+        markup_diagnostic_message_storage: [512]u8 = undefined,
+        markup_diagnostic_path_storage: [canvas.ui_markup.max_import_path_len]u8 = undefined,
         layout_nodes: [canvas_limits.max_canvas_widget_nodes_per_view]canvas.WidgetLayoutNode = undefined,
         gpu_commands: [canvas_limits.max_canvas_commands_per_view]canvas.CanvasGpuCommand = undefined,
         /// Packet transport buffer, sized for the larger of the two wire
@@ -1356,6 +1371,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                                 .line = view.diagnostic.line,
                                 .column = view.diagnostic.column,
                                 .message = view.diagnostic.message,
+                                .path = view.diagnostic.path,
                             });
                         }
                         return err;
@@ -1367,32 +1383,84 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         }
 
         /// Parse and activate a markup source (the reload seam: hot reload
-        /// and tests go through this). Failures keep the previous view and
-        /// set `markup_diagnostic`.
+        /// and tests go through this). Imports resolve against the
+        /// embedded source set (`MarkupOptions.sources`). Failures keep
+        /// the previous view and set `markup_diagnostic`.
         pub fn reloadMarkup(self: *Self, source: []const u8) anyerror!void {
             if (comptime !features.runtime_markup) return error.MarkupEngineDisabled;
+            const sources: []const canvas.ui_markup.SourceFile = if (self.options.markup) |markup_options| markup_options.sources else &.{};
+            var set_loader = canvas.ui_markup.SourceSetLoader{ .set = sources };
+            var hashing = HashingLoader.init(set_loader.loader(), source, "");
             const next_index = self.markup_arena_index ^ 1;
             _ = self.markup_arenas[next_index].reset(.retain_capacity);
             const arena = self.markup_arenas[next_index].allocator();
             const owned_source = try arena.dupe(u8, source);
             var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
-            const view = MarkupView.initDiagnostic(arena, owned_source, &diagnostic) catch |err| {
-                if (err == error.MarkupSyntax) self.recordMarkupDiagnostic(diagnostic);
+            const document = canvas.ui_markup.resolveImports(arena, "", owned_source, hashing.loader(), &diagnostic) catch |err| {
+                if (err == error.MarkupSyntax or err == error.MarkupImport) self.recordMarkupDiagnostic(diagnostic);
                 return err;
             };
-            self.markup_view = view;
-            self.markup_arena_index = next_index;
-            self.markup_source_hash = std.hash.Wyhash.hash(0, source);
+            self.adoptMarkupDocument(document, next_index, hashing.hasher.final());
+        }
+
+        /// Activate a resolved document built into `arena_index`'s arena.
+        fn adoptMarkupDocument(self: *Self, document: canvas.ui_markup.MarkupDocument, arena_index: usize, closure_hash: u64) void {
+            self.markup_view = MarkupView.fromDocument(document);
+            self.markup_arena_index = arena_index;
+            self.markup_source_hash = closure_hash;
             self.markup_diagnostic = null;
         }
+
+        /// Wraps an ImportLoader so the watch's change signal covers the
+        /// whole import closure: the hash folds in the root source plus
+        /// every file the resolver loads, in resolution order, so an edit
+        /// to an IMPORTED file reloads exactly like an edit to the root.
+        /// Paths hash RELATIVE to the markup root (`strip_prefix` is the
+        /// watched file's directory), so the embedded baseline — whose
+        /// source-set paths are already root-relative — and the disk poll
+        /// agree byte for byte when nothing changed.
+        const HashingLoader = struct {
+            inner: canvas.ui_markup.ImportLoader,
+            hasher: std.hash.Wyhash,
+            strip_prefix: []const u8 = "",
+
+            fn init(inner: canvas.ui_markup.ImportLoader, root_source: []const u8, strip_prefix: []const u8) HashingLoader {
+                var hasher = std.hash.Wyhash.init(0);
+                hasher.update(root_source);
+                return .{ .inner = inner, .hasher = hasher, .strip_prefix = strip_prefix };
+            }
+
+            fn loader(self: *HashingLoader) canvas.ui_markup.ImportLoader {
+                return .{ .context = @ptrCast(self), .load = load };
+            }
+
+            fn load(context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+                const self: *HashingLoader = @constCast(@ptrCast(@alignCast(context)));
+                const source = self.inner.load(self.inner.context, arena, path) orelse return null;
+                var hashed_path = path;
+                if (self.strip_prefix.len > 0 and path.len > self.strip_prefix.len and
+                    std.mem.startsWith(u8, path, self.strip_prefix) and path[self.strip_prefix.len] == '/')
+                {
+                    hashed_path = path[self.strip_prefix.len + 1 ..];
+                }
+                self.hasher.update(hashed_path);
+                self.hasher.update(&[_]u8{0});
+                self.hasher.update(source);
+                return source;
+            }
+        };
 
         /// Store a markup diagnostic and say it out loud once per distinct
         /// failure: build errors recur every frame, and a view that fails
         /// on its FIRST build has no last-good fallback - without a log
         /// line the developer faces a blank window and silence.
+        /// Resolver messages can be arena-formatted (cycle paths, duplicate
+        /// sites) and the arena resets on the next reload attempt, so the
+        /// stored copy owns its bytes.
         fn recordMarkupDiagnostic(self: *Self, info: canvas.ui_markup.MarkupErrorInfo) void {
             const already_reported = if (self.markup_diagnostic) |current|
-                current.line == info.line and current.column == info.column and std.mem.eql(u8, current.message, info.message)
+                current.line == info.line and current.column == info.column and
+                    std.mem.eql(u8, current.message, info.message) and std.mem.eql(u8, current.path, info.path)
             else
                 false;
             if (!already_reported) {
@@ -1400,9 +1468,22 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // ReleaseFast (std.log only passes .err there), while
                 // logged errors fail test suites that exercise bad markup
                 // on purpose. Direct stderr is visible in both.
-                std.debug.print("markup view failed to build ({d}:{d}): {s}\n", .{ info.line, info.column, info.message });
+                if (info.path.len > 0) {
+                    std.debug.print("markup view failed to build ({s}:{d}:{d}): {s}\n", .{ info.path, info.line, info.column, info.message });
+                } else {
+                    std.debug.print("markup view failed to build ({d}:{d}): {s}\n", .{ info.line, info.column, info.message });
+                }
             }
-            self.markup_diagnostic = info;
+            const message_len = @min(info.message.len, self.markup_diagnostic_message_storage.len);
+            @memcpy(self.markup_diagnostic_message_storage[0..message_len], info.message[0..message_len]);
+            const path_len = @min(info.path.len, self.markup_diagnostic_path_storage.len);
+            @memcpy(self.markup_diagnostic_path_storage[0..path_len], info.path[0..path_len]);
+            self.markup_diagnostic = .{
+                .line = info.line,
+                .column = info.column,
+                .message = self.markup_diagnostic_message_storage[0..message_len],
+                .path = self.markup_diagnostic_path_storage[0..path_len],
+            };
         }
 
         /// Dev-mode hot reload: start the repeating runtime timer that polls
@@ -1412,34 +1493,99 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             if (comptime !features.runtime_markup) return;
             const markup_options = self.options.markup orelse return;
             if (markup_options.watch_path == null or markup_options.io == null) return;
-            // With a compiled `view` also set, the embedded source is the
-            // baseline: the interpreter only takes over once the watched
-            // file diverges from it.
+            // With a compiled `view` also set, the embedded sources are
+            // the baseline: the interpreter only takes over once the
+            // watched closure diverges from them. The baseline hash must
+            // be computed the way the poll computes it — over the whole
+            // resolved import closure — or the first poll would flag a
+            // phantom change.
             if (self.options.view != null and self.markup_source_hash == 0) {
-                self.markup_source_hash = std.hash.Wyhash.hash(0, markup_options.source);
+                self.markup_source_hash = self.embeddedMarkupClosureHash(markup_options);
             }
             runtime.startTimer(markup_watch_timer_id, markup_watch_interval_ns, true) catch {};
         }
 
-        /// Timer-driven poll of the watched markup file: re-parse when its
-        /// content changes. A failed parse keeps the last good view running
-        /// and records the diagnostic. A successful reload rebuilds, which
-        /// invalidates the canvas and schedules the presenting frame.
+        fn embeddedMarkupClosureHash(self: *Self, markup_options: MarkupOptions) u64 {
+            if (markup_options.sources.len == 0) {
+                return std.hash.Wyhash.hash(0, markup_options.source);
+            }
+            // Resolve into the inactive scratch arena purely for the
+            // hashing side effect; the arena resets on the next reload.
+            const scratch_index = self.markup_arena_index ^ 1;
+            _ = self.markup_arenas[scratch_index].reset(.retain_capacity);
+            var set_loader = canvas.ui_markup.SourceSetLoader{ .set = markup_options.sources };
+            var hashing = HashingLoader.init(set_loader.loader(), markup_options.source, "");
+            var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+            _ = canvas.ui_markup.resolveImports(
+                self.markup_arenas[scratch_index].allocator(),
+                "",
+                markup_options.source,
+                hashing.loader(),
+                &diagnostic,
+            ) catch {};
+            return hashing.hasher.final();
+        }
+
+        /// Timer-driven poll of the watched markup closure: re-resolve
+        /// from disk (imports relative to the watched file) and re-parse
+        /// when any file in the closure changes. A failed parse or resolve
+        /// keeps the last good view running and records the diagnostic. A
+        /// successful reload rebuilds, which invalidates the canvas and
+        /// schedules the presenting frame.
         fn pollMarkupWatch(self: *Self, runtime: *Runtime, window_id: platform.WindowId) void {
             if (comptime !features.runtime_markup) return;
             const markup_options = self.options.markup orelse return;
             const watch_path = markup_options.watch_path orelse return;
             const io = markup_options.io orelse return;
 
-            var buffer: [256 * 1024]u8 = undefined;
-            const source = readWatchedFile(io, watch_path, &buffer) catch return;
-            const hash = std.hash.Wyhash.hash(0, source);
-            if (hash == self.markup_source_hash) return;
-            self.reloadMarkup(source) catch {
+            const next_index = self.markup_arena_index ^ 1;
+            _ = self.markup_arenas[next_index].reset(.retain_capacity);
+            const arena = self.markup_arenas[next_index].allocator();
+            const source = readMarkupFile(io, arena, watch_path) orelse return;
+            var disk_loader = DiskImportLoader{ .io = io };
+            const watch_dir = std.fs.path.dirname(watch_path) orelse "";
+            var hashing = HashingLoader.init(disk_loader.loader(), source, watch_dir);
+            var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+            const document = canvas.ui_markup.resolveImports(arena, watch_path, source, hashing.loader(), &diagnostic) catch |err| {
+                const hash = hashing.hasher.final();
+                if (hash == self.markup_source_hash) return;
                 self.markup_source_hash = hash;
+                if (err == error.MarkupSyntax or err == error.MarkupImport) {
+                    self.recordMarkupDiagnostic(diagnostic);
+                }
                 return;
             };
+            const hash = hashing.hasher.final();
+            if (hash == self.markup_source_hash) return;
+            self.adoptMarkupDocument(document, next_index, hash);
             if (self.installed) self.rebuild(runtime, window_id) catch {};
+        }
+
+        /// Disk-backed import loader for the watch: paths come out of the
+        /// resolver already relative to the process cwd (they are joined
+        /// against the watched file's path, which is cwd-relative — the
+        /// dev flow runs apps from the app root).
+        const DiskImportLoader = struct {
+            io: std.Io,
+
+            fn loader(self: *DiskImportLoader) canvas.ui_markup.ImportLoader {
+                return .{ .context = @ptrCast(self), .load = load };
+            }
+
+            fn load(context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+                const self: *const DiskImportLoader = @ptrCast(@alignCast(context));
+                return readMarkupFile(self.io, arena, path);
+            }
+        };
+
+        const max_markup_watch_file_bytes = 256 * 1024;
+
+        fn readMarkupFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
+            var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+            defer file.close(io);
+            const buffer = arena.alloc(u8, max_markup_watch_file_bytes) catch return null;
+            const len = file.readPositionalAll(io, buffer, 0) catch return null;
+            return buffer[0..len];
         }
 
         /// Reserved framework timer id for the markup watch poll. Application
@@ -1457,12 +1603,6 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         pub const press_hold_timer_id: u64 = platform.press_hold_timer_id;
         /// dev-2's Menu+primaryAction feel: ~350 ms press-and-hold.
         pub const press_hold_duration_ns: u64 = 350 * std.time.ns_per_ms;
-
-        fn readWatchedFile(io: std.Io, path: []const u8, buffer: []u8) ![]const u8 {
-            var file = try std.Io.Dir.cwd().openFile(io, path, .{});
-            defer file.close(io);
-            return buffer[0..try file.readPositionalAll(io, buffer, 0)];
-        }
 
         /// Install the menu-bar extra once, on the installing frame.
         /// Selecting one of its items dispatches the item's `command`

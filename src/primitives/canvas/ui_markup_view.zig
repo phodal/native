@@ -19,6 +19,9 @@ pub const BuildDiagnostic = struct {
     line: usize = 0,
     column: usize = 0,
     message: []const u8 = "",
+    /// Source file the position refers to (relative to the markup root),
+    /// stamped by import resolution; empty for single-file documents.
+    path: []const u8 = "",
 };
 
 /// A resolved binding value. Enums resolve to their tag name so equality
@@ -71,11 +74,24 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             return .{ .document = document };
         }
 
+        /// Wrap an already-resolved document (the import resolver's
+        /// output, or a parsed single-file document).
+        pub fn fromDocument(document: markup.MarkupDocument) Self {
+            return .{ .document = document };
+        }
+
         /// Build the view for the current model. Compatible with the
         /// hand-written `view(ui, model)` shape.
         pub fn build(self: *Self, ui: *Ui, model: *const ModelT) BuildError!Ui.Node {
+            if (self.document.imports.len > 0) {
+                return self.failNode(self.document.imports[0], markup.import_unresolved_message);
+            }
+            const root = self.document.root orelse {
+                self.diagnostic = .{ .line = 1, .column = 1, .message = markup.component_file_view_message };
+                return error.MarkupBuild;
+            };
             var scope = Scope{ .model = model, .arena = ui.arena };
-            return self.buildNode(ui, &scope, self.document.root);
+            return self.buildNode(ui, &scope, root);
         }
 
         // ------------------------------------------------------- scopes
@@ -92,8 +108,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         /// A named value in scope: a `for` loop item (typed pointer tagged
         /// into `item_types`), a slice-valued template arg (iterable by a
-        /// `for each` inside the template), or a scalar template arg
-        /// (usable in bindings, interpolation, and equality).
+        /// `for each` inside the template), a scalar template arg (usable
+        /// in bindings, interpolation, and equality), or the anonymous
+        /// slot capture a `<use>` with children pushes for its body.
         const ScopeEntry = struct {
             name: []const u8,
             payload: Payload,
@@ -102,10 +119,22 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 item: struct { type_index: usize, ptr: *const anyopaque },
                 slice: struct { type_index: usize, ptr: *const anyopaque, len: usize },
                 value: Value,
+                slot: SlotCapture,
             };
         };
 
-        const max_scope_depth = 8;
+        /// A `<use>` site's children plus the scope state they must build
+        /// under: the consumer's scope, restored when the template body
+        /// reaches its `<slot/>`. Pushed with an empty name (never a
+        /// binding head), so lookups skip it.
+        const SlotCapture = struct {
+            nodes: []const markup.MarkupNode,
+            len: usize,
+            floor: usize,
+            template_ctx: ?usize,
+        };
+
+        const max_scope_depth = 16;
 
         const Scope = struct {
             model: *const ModelT,
@@ -120,16 +149,34 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             /// template body sees its args and its own loop variables but
             /// not the loop variables at the expansion site.
             floor: usize = 0,
-            /// Template expansion depth, bounding runtime recursion on
-            /// documents the validator would reject (uses may only
-            /// reference templates defined earlier in the file).
+            /// Template expansion depth: a hard cap on runtime recursion
+            /// for documents the validator never saw. Legit nesting is
+            /// bounded by define-before-use (checked per expansion via
+            /// `template_ctx`) plus lexical slot-content depth.
             use_depth: usize = 0,
+            /// Index of the template whose body is currently building, or
+            /// null in root/consumer scope. A use inside a body may only
+            /// reference earlier templates (the validator's rule, enforced
+            /// again here so an unvalidated document cannot recurse).
+            template_ctx: ?usize = null,
 
             fn lookup(self: *const Scope, head: []const u8) ?*const ScopeEntry {
                 var index = self.len;
                 while (index > self.floor) {
                     index -= 1;
                     if (std.mem.eql(u8, self.entries[index].name, head)) return &self.entries[index];
+                }
+                return null;
+            }
+
+            /// The innermost slot capture visible to the current template
+            /// body (never looks below the floor: an inner template with
+            /// no use-site children must not see an outer capture).
+            fn slotCapture(self: *const Scope) ?SlotCapture {
+                var index = self.len;
+                while (index > self.floor) {
+                    index -= 1;
+                    if (self.entries[index].payload == .slot) return self.entries[index].payload.slot;
                 }
                 return null;
             }
@@ -142,6 +189,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 .element => return self.buildElement(ui, scope, node),
                 .use_block => return self.buildUse(ui, scope, node),
                 .template_block => return self.failNode(node, markup.template_top_level_message),
+                .import_block => return self.failNode(node, markup.import_top_level_message),
+                .slot_block => return self.failNode(node, markup.slot_outside_template_message),
                 .text => return self.failNode(node, "text content is only allowed inside text-bearing elements"),
                 .for_block, .if_block, .else_block => return self.failNode(node, "structure tags are only allowed inside an element"),
             }
@@ -264,17 +313,23 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn buildChildren(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            return self.buildChildList(ui, scope, node.children, out);
+        }
+
+        fn buildChildList(self: *Self, ui: *Ui, scope: *Scope, children: []const markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
             var index: usize = 0;
-            while (index < node.children.len) : (index += 1) {
-                const child = node.children[index];
+            while (index < children.len) : (index += 1) {
+                const child = children[index];
                 switch (child.kind) {
                     .element => try out.append(ui.arena, try self.buildElement(ui, scope, child)),
                     .use_block => try out.append(ui.arena, try self.buildUse(ui, scope, child)),
                     .template_block => return self.failVoid(child, markup.template_top_level_message),
+                    .import_block => return self.failVoid(child, markup.import_top_level_message),
+                    .slot_block => try self.buildSlot(ui, scope, child, out),
                     .for_block => {
                         var else_node: ?markup.MarkupNode = null;
-                        if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
-                            else_node = node.children[index + 1];
+                        if (index + 1 < children.len and children[index + 1].kind == .else_block) {
+                            else_node = children[index + 1];
                             index += 1;
                         }
                         const item_count = try self.buildFor(ui, scope, child, out);
@@ -290,8 +345,8 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         };
                         const condition = try self.evalAttrExpression(scope, child, test_value);
                         var else_node: ?markup.MarkupNode = null;
-                        if (index + 1 < node.children.len and node.children[index + 1].kind == .else_block) {
-                            else_node = node.children[index + 1];
+                        if (index + 1 < children.len and children[index + 1].kind == .else_block) {
+                            else_node = children[index + 1];
                             index += 1;
                         }
                         if (condition.truthy()) {
@@ -304,6 +359,46 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     .text => return self.failVoid(child, "text content is only allowed inside text-bearing elements"),
                 }
             }
+        }
+
+        /// `<slot/>` in a template body: build the use-site children (the
+        /// slot capture) IN THE CONSUMER'S SCOPE, inline at the slot's
+        /// position — the point of slots is that content sees the model
+        /// paths and loop variables where the `<use>` was written. The
+        /// consumer's scope state is restored around the content build
+        /// (and the body's own entries saved, since the entries array is
+        /// shared), so structural ids and bindings behave exactly as if
+        /// the content were built at the use site and inserted here.
+        fn buildSlot(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, out: *std.ArrayListUnmanaged(Ui.Node)) BuildError!void {
+            if (node.attrs.len > 0) return self.failVoid(node, markup.slot_attrs_message);
+            if (node.children.len > 0) return self.failVoid(node.children[0], markup.slot_children_message);
+            const capture = scope.slotCapture() orelse {
+                if (scope.template_ctx == null) {
+                    return self.failVoid(node, markup.slot_outside_template_message);
+                }
+                // A use with no children: the slot renders empty.
+                return;
+            };
+            if (capture.nodes.len == 0) return;
+            var saved_entries: [max_scope_depth]ScopeEntry = undefined;
+            const saved_len = scope.len;
+            const saved_floor = scope.floor;
+            const saved_ctx = scope.template_ctx;
+            for (scope.entries[capture.len..saved_len], 0..) |entry, offset| {
+                saved_entries[offset] = entry;
+            }
+            scope.len = capture.len;
+            scope.floor = capture.floor;
+            scope.template_ctx = capture.template_ctx;
+            defer {
+                for (saved_entries[0 .. saved_len - capture.len], 0..) |entry, offset| {
+                    scope.entries[capture.len + offset] = entry;
+                }
+                scope.len = saved_len;
+                scope.floor = saved_floor;
+                scope.template_ctx = saved_ctx;
+            }
+            try self.buildChildList(ui, scope, capture.nodes, out);
         }
 
         /// Expands a `for` block: per item, the whole body (one or more
@@ -319,7 +414,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             if (node.children.len == 0) return self.failVoid(node, markup.for_children_message);
             for (node.children) |child| {
                 switch (child.kind) {
-                    .element, .use_block, .for_block, .if_block, .else_block => {},
+                    .element, .use_block, .for_block, .if_block, .else_block, .slot_block => {},
                     else => return self.failVoid(child, markup.for_children_message),
                 }
             }
@@ -704,11 +799,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         // ------------------------------------------------------ templates
 
+        /// A hard cap on template expansion nesting. Legit documents are
+        /// bounded structurally (see `Scope.template_ctx`); the cap turns
+        /// a hostile unvalidated document into an error, never a hang.
+        const max_use_depth = 128;
+
         /// Build a `<use>` site: evaluate the template args against the
-        /// use-site scope, push them as scope entries, and build the
-        /// template's single element child in place — structural ids hash
-        /// through the parent chain at the expansion site, exactly as if
-        /// the body were written inline.
+        /// use-site scope, push them (plus the slot capture when the use
+        /// has children) as scope entries, and build the template's single
+        /// element child in place — structural ids hash through the parent
+        /// chain at the expansion site, exactly as if the body were
+        /// written inline.
         fn buildUse(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
             @setEvalBranchQuota(scan_quota);
             const template_name = node.attr("template") orelse {
@@ -718,14 +819,25 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return self.failNode(node, markup.use_undefined_template_message);
             };
             const template_node = self.document.templates[template_index];
-            if (scope.use_depth >= self.document.templates.len) {
-                return self.failNode(node, markup.use_earlier_template_message);
+            // The validator's define-before-use rule, enforced again at
+            // build time: it is what makes expansion terminate, so an
+            // unvalidated document must not slip past it.
+            if (scope.template_ctx) |ctx_index| {
+                if (template_index >= ctx_index) {
+                    return self.failNode(node, markup.use_earlier_template_message);
+                }
+            }
+            if (scope.use_depth >= max_use_depth) {
+                return self.failNode(node, "template expansion nests too deeply");
             }
             if (template_node.children.len != 1 or template_node.children[0].kind != .element) {
                 return self.failNode(template_node, markup.template_one_child_message);
             }
-            if (node.children.len != 0) {
-                return self.failNode(node, markup.use_no_children_message);
+            if (markup.templateSecondSlot(template_node.children[0])) |second| {
+                return self.failNode(second, markup.template_one_slot_message);
+            }
+            if (node.children.len != 0 and markup.templateSlot(template_node) == null) {
+                return self.failNode(node.children[0], markup.use_children_without_slot_message);
             }
 
             for (node.attrs) |attribute| {
@@ -739,29 +851,52 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             // any entry is pushed, so args cannot see each other.
             const saved_len = scope.len;
             const saved_floor = scope.floor;
+            const saved_ctx = scope.template_ctx;
             var arg_count: usize = 0;
             var args = markup.templateArgs(template_node);
-            while (args.next()) |arg_name| {
-                const raw = node.attr(arg_name) orelse {
-                    return self.failNode(node, markup.use_missing_arg_message);
-                };
+            while (args.next()) |token| {
+                const arg = markup.parseTemplateArg(token);
                 if (saved_len + arg_count >= max_scope_depth) {
                     return self.failNode(node, "template args nest too deep");
                 }
-                scope.entries[saved_len + arg_count] = .{
-                    .name = arg_name,
-                    .payload = try self.argPayload(ui, scope, node, raw),
-                };
+                const payload: ScopeEntry.Payload = if (node.attr(arg.name)) |raw|
+                    try self.argPayload(ui, scope, node, raw)
+                else if (arg.default) |default| blk: {
+                    // Defaults are literals only — a default cannot see
+                    // any scope (validator and compiled-engine parity).
+                    if (std.mem.indexOfScalar(u8, default, '{') != null) {
+                        return self.failNode(template_node, markup.template_default_literal_message);
+                    }
+                    break :blk .{ .value = literalValue(default) };
+                } else return self.failNode(node, markup.use_missing_arg_message);
+                scope.entries[saved_len + arg_count] = .{ .name = arg.name, .payload = payload };
                 arg_count += 1;
             }
+            // The slot capture: the use-site children plus the scope state
+            // to build them under, consumed by the body's <slot/>.
+            if (saved_len + arg_count >= max_scope_depth) {
+                return self.failNode(node, "template args nest too deep");
+            }
+            scope.entries[saved_len + arg_count] = .{
+                .name = "",
+                .payload = .{ .slot = .{
+                    .nodes = node.children,
+                    .len = saved_len,
+                    .floor = saved_floor,
+                    .template_ctx = saved_ctx,
+                } },
+            };
+            arg_count += 1;
 
             scope.len = saved_len + arg_count;
             scope.floor = saved_len;
             scope.use_depth += 1;
+            scope.template_ctx = template_index;
             defer {
                 scope.len = saved_len;
                 scope.floor = saved_floor;
                 scope.use_depth -= 1;
+                scope.template_ctx = saved_ctx;
             }
             return self.buildElement(ui, scope, template_node.children[0]);
         }
@@ -1249,6 +1384,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                         return value;
                     },
                     .slice => return self.failValue(node, "slice-valued template args are only usable with for each"),
+                    // Slot captures carry an empty name, which no binding
+                    // head can equal.
+                    .slot => unreachable,
                 }
             }
             if (resolveOn(ModelT, scope.model, path, arena)) |value| return value;
@@ -1316,7 +1454,7 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         }
 
         fn setDiagnostic(self: *Self, node: markup.MarkupNode, message: []const u8) void {
-            self.diagnostic = .{ .line = node.line, .column = node.column, .message = message };
+            self.diagnostic = .{ .line = node.line, .column = node.column, .message = message, .path = node.src_path };
         }
     };
 }

@@ -193,7 +193,16 @@ pub fn update(model: *Model, msg: Msg) void {
 
 pub const KanbanUi = canvas.Ui(Msg);
 pub const board_markup = @embedFile("board.zml");
-pub const CompiledBoardView = canvas.CompiledMarkupView(Model, Msg, board_markup);
+/// The board's markup source set: the root view plus its import closure,
+/// paths relative to this directory. One list feeds both engines — the
+/// compiled view resolves it at comptime, and the runtime interpreter
+/// resolves the same set for the embedded source (hot reload re-resolves
+/// from disk, so edits to imported files reload too).
+pub const board_markup_files = [_]canvas.ui_markup.SourceFile{
+    .{ .path = "board.zml", .source = board_markup },
+    .{ .path = "components/board-column.zml", .source = @embedFile("components/board-column.zml") },
+};
+pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.zml", &board_markup_files);
 
 /// Debug builds keep the interpreter for .zml hot reload; release builds
 /// ship the comptime-compiled view with no parser in the binary.
@@ -228,7 +237,7 @@ pub fn main(init: std.process.Init) !void {
         .update = update,
         .view = CompiledBoardView.build,
         .markup = if (dev_markup_reload)
-            .{ .source = board_markup, .watch_path = "src/board.zml", .io = init.io }
+            .{ .source = board_markup, .sources = &board_markup_files, .watch_path = "src/board.zml", .io = init.io }
         else
             null,
     });

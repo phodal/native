@@ -137,6 +137,47 @@ When the same subtree repeats with different data, define it once — templates 
 
 A `<use>` is allowed anywhere an element is, and its attributes must match the template's declared `args` exactly. Args bind like `for` variables: a `{binding}` naming an iterable (the same set `for each` accepts) is iterable inside the template; anything else — a literal or a scalar binding — is a value for bindings and interpolation. The body is built in place of the `<use>`, so widget ids are identical to writing it out by hand: converting copy-pasted markup to a template changes no ids. Templates may only reference templates defined earlier in the file, which keeps expansion finite; bindings stay zero-argument, so per-case queries (`todoCards`, `doingCards`) remain named model functions.
 
+An arg can declare a literal default with `name=value`, and a use site may then omit it — `args="title trend=flat"` makes `trend` optional. Defaults are literals only: they evaluate in no scope, so a `{binding}` default is rejected with a teaching error, and a missing arg without a default keeps its error too.
+
+## Components
+
+Templates become shared components through `<import>`, which goes at the very top of a file, before its own templates:
+
+```html
+<import src="components/board-column.zml"/>
+<column gap="12">
+  <use template="board-column" title="Todo" cards="{todoCards}" />
+</column>
+```
+
+Paths resolve relative to the importing file, subdirectories and transitive imports included, and everything must stay under the markup root (the root view file's directory) — absolute paths and escapes are rejected. An imported file defines templates only: it is a component file, valid on its own for `native markup check`, and a view root inside one is an error. Importing splices the file's templates (and transitively its imports') before yours, in import order — exactly as if pasted at the import site — so the define-before-use rule is the only ordering rule to learn. Cycles are reported with the cycle path spelled out, and a template name defined twice is an error naming both definition sites: imports never shadow silently.
+
+Each engine resolves imports through its own source access. The runtime interpreter re-resolves from disk on hot reload, so `native dev` picks up edits to imported files too. The compiled engine takes an embedded source set — one `@embedFile` entry per file — which also feeds the app's markup options, so both engines see the same document:
+
+```zig
+pub const board_markup_files = [_]canvas.ui_markup.SourceFile{
+    .{ .path = "board.zml", .source = @embedFile("board.zml") },
+    .{ .path = "components/board-column.zml", .source = @embedFile("components/board-column.zml") },
+};
+pub const CompiledBoardView = canvas.CompiledMarkupImports(Model, Msg, "board.zml", &board_markup_files);
+```
+
+A template can also take markup children. The body marks the insertion point with a single `<slot/>`, and the use site's children build in the consumer's scope — they see the model paths and loop variables where the `<use>` is written — then land at the slot's position:
+
+```html
+<template name="section" args="title">
+  <column gap="4">
+    <text foreground="text_muted">{title}</text>
+    <slot/>
+  </column>
+</template>
+<use template="section" title="Cards">
+  <for each="cards" as="c"> <text>{c.title}</text> </for>
+</use>
+```
+
+A use with no children renders the slot empty; children passed to a template without a slot are an error; a template body takes at most one `<slot/>` (named slots are not supported yet). Structural widget ids hash exactly as if the slot content were written inline, in both engines.
+
 ## Expressions
 
 Attribute values take a literal or exactly one expression. There are three forms — `{path.to.value}` (a binding), `{a == b}` (equality, for selection states), and `msg` or `msg:{path}` on `on-*` attributes. Text content also interpolates: `{openCount} open`. There is no arithmetic, no other comparisons, and no function calls — anything smarter is a Zig model function you bind to.

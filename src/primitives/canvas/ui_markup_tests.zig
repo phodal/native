@@ -39,7 +39,7 @@ test "parses the inbox mockup into the expected tree shape" {
     defer arena_state.deinit();
 
     const document = try parseSource(arena_state.allocator(), inbox_source);
-    const root = document.root;
+    const root = document.root.?;
 
     try testing.expectEqual(markup.MarkupNodeKind.element, root.kind);
     try testing.expectEqualStrings("column", root.name);
@@ -157,18 +157,27 @@ test "templates parse before the root and expose name and args" {
     try testing.expect(markup.templateDeclaresArg(document.templates[0], "label"));
     try testing.expect(!markup.templateDeclaresArg(document.templates[0], "cards"));
 
-    try testing.expectEqualStrings("row", document.root.name);
-    try testing.expectEqual(markup.MarkupNodeKind.use_block, document.root.children[0].kind);
+    try testing.expectEqualStrings("row", document.root.?.name);
+    try testing.expectEqual(markup.MarkupNodeKind.use_block, document.root.?.children[0].kind);
     try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
 }
 
-test "a template file without a view root is a parse error" {
+test "a template file without a view root parses as a component file" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
+    // Valid as an import target: all templates, no view root. The engines
+    // reject building it as a view with their own teaching error.
     var parser = markup.Parser.init(arena_state.allocator(), "<template name=\"only\"><text>x</text></template>");
-    try testing.expectError(error.MarkupSyntax, parser.parse());
-    try testing.expectEqualStrings("expected a view root element after the template definitions", parser.diagnostic.message);
+    const document = try parser.parse();
+    try testing.expectEqual(@as(?markup.MarkupNode, null), document.root);
+    try testing.expectEqual(@as(usize, 1), document.templates.len);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+
+    // A file with nothing at all stays an error.
+    var empty_parser = markup.Parser.init(arena_state.allocator(), "  <!-- just a comment -->\n");
+    try testing.expectError(error.MarkupSyntax, empty_parser.parse());
+    try testing.expectEqualStrings(markup.empty_document_message, empty_parser.diagnostic.message);
 }
 
 test "template and use misuse is validated with positions and teaching messages" {
@@ -189,7 +198,7 @@ test "template and use misuse is validated with positions and teaching messages"
         .{ .source = "<template name=\"a\"><column><use template=\"b\" /></column></template>\n<template name=\"b\"><text>x</text></template>\n<row />", .message = markup.use_earlier_template_message },
         .{ .source = "<template name=\"t\" args=\"title\"><text>{title}</text></template>\n<row>\n  <use template=\"t\" />\n</row>", .message = markup.use_missing_arg_message },
         .{ .source = "<template name=\"t\"><text>x</text></template>\n<row>\n  <use template=\"t\" extra=\"1\" />\n</row>", .message = markup.use_extra_arg_message },
-        .{ .source = "<template name=\"t\"><text>x</text></template>\n<row>\n  <use template=\"t\"><text>y</text></use>\n</row>", .message = markup.use_no_children_message },
+        .{ .source = "<template name=\"t\"><text>x</text></template>\n<row>\n  <use template=\"t\"><text>y</text></use>\n</row>", .message = markup.use_children_without_slot_message },
         .{ .source = "<template name=\"t\" args=\"title\"><text>{title}</text></template>\n<row>\n  <use template=\"t\" title=\"{a + b}\" />\n</row>", .message = markup.invalid_expression_message },
         // A template using itself is a later-reference error (recursion).
         .{ .source = "<template name=\"loop\"><column><use template=\"loop\" /></column></template>\n<row />", .message = markup.use_earlier_template_message },
@@ -574,5 +583,268 @@ test "stepper and timeline validate structure with teaching messages" {
         const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
         try testing.expectEqualStrings(case.message, info.message);
         try testing.expect(info.line > 0);
+    }
+}
+
+// ----------------------------------------------------------- imports
+
+fn resolveSet(arena: std.mem.Allocator, set: []const markup.SourceFile, root_name: []const u8, diagnostic: *markup.MarkupErrorInfo) markup.ResolveError!markup.MarkupDocument {
+    var loader = markup.SourceSetLoader{ .set = set };
+    const root_source = for (set) |file| {
+        if (std.mem.eql(u8, file.path, root_name)) break file.source;
+    } else return error.MarkupImport;
+    return markup.resolveImports(arena, root_name, root_source, loader.loader(), diagnostic);
+}
+
+test "import resolution merges imported templates before the importer's own" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // view.zml imports components/pills.zml, which imports base.zml from
+    // its own directory (transitive, subdirectory, relative-to-importer).
+    const set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<import src=\"components/pills.zml\"/>\n<template name=\"local\"><text>l</text></template>\n<row>\n  <use template=\"pill-stack\" title=\"T\" />\n</row>" },
+        .{ .path = "components/pills.zml", .source = "<import src=\"base.zml\"/>\n<template name=\"pill-stack\" args=\"title\"><column><use template=\"pill\" label=\"{title}\" /></column></template>" },
+        .{ .path = "components/base.zml", .source = "<template name=\"pill\" args=\"label\"><badge>{label}</badge></template>" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    const document = try resolveSet(arena, &set, "view.zml", &diagnostic);
+
+    // Depth-first splice order: transitive imports first, then the
+    // importer's templates, then the root's own.
+    try testing.expectEqual(@as(usize, 3), document.templates.len);
+    try testing.expectEqualStrings("pill", document.templates[0].attr("name").?);
+    try testing.expectEqualStrings("pill-stack", document.templates[1].attr("name").?);
+    try testing.expectEqualStrings("local", document.templates[2].attr("name").?);
+    try testing.expectEqual(@as(usize, 0), document.imports.len);
+
+    // Every node is stamped with its source file for diagnostics.
+    try testing.expectEqualStrings("components/base.zml", document.templates[0].src_path);
+    try testing.expectEqualStrings("components/pills.zml", document.templates[1].src_path);
+    try testing.expectEqualStrings("view.zml", document.templates[2].src_path);
+    try testing.expectEqualStrings("view.zml", document.root.?.src_path);
+    try testing.expectEqualStrings("components/base.zml", document.templates[0].children[0].src_path);
+
+    // The merged document passes the strict (resolved) validation pass.
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+}
+
+test "import cycles are reported with the cycle path spelled out" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const set = [_]markup.SourceFile{
+        .{ .path = "a.zml", .source = "<import src=\"b.zml\"/>\n<row />" },
+        .{ .path = "b.zml", .source = "<import src=\"a.zml\"/>\n<template name=\"t\"><text>x</text></template>" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "a.zml", &diagnostic));
+    try testing.expectEqualStrings("import cycle: a.zml -> b.zml -> a.zml", diagnostic.message);
+    try testing.expectEqualStrings("b.zml", diagnostic.path);
+
+    // Self-import is the shortest cycle.
+    const self_set = [_]markup.SourceFile{
+        .{ .path = "a.zml", .source = "<import src=\"a.zml\"/>\n<row />" },
+    };
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &self_set, "a.zml", &diagnostic));
+    try testing.expectEqualStrings("import cycle: a.zml -> a.zml", diagnostic.message);
+}
+
+test "duplicate template names across files name both definition sites" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<import src=\"one.zml\"/>\n<import src=\"two.zml\"/>\n<row />" },
+        .{ .path = "one.zml", .source = "<template name=\"card\"><text>1</text></template>" },
+        .{ .path = "two.zml", .source = "<template name=\"card\"><text>2</text></template>" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.zml", &diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "duplicate template name \"card\"") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "one.zml:1:1") != null);
+    try testing.expectEqualStrings("two.zml", diagnostic.path);
+
+    // Import vs local: the local definition collides with the imported one.
+    const local_set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<import src=\"one.zml\"/>\n<template name=\"card\"><text>l</text></template>\n<row />" },
+        .{ .path = "one.zml", .source = "<template name=\"card\"><text>1</text></template>" },
+    };
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &local_set, "view.zml", &diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "duplicate template name \"card\"") != null);
+    try testing.expectEqualStrings("view.zml", diagnostic.path);
+}
+
+test "import path escapes, absolute paths, and bad extensions are teaching errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const cases = [_]struct { src: []const u8, message: []const u8 }{
+        .{ .src = "../secrets.zml", .message = markup.import_src_escape_message },
+        .{ .src = "/etc/passwd.zml", .message = markup.import_src_absolute_message },
+        .{ .src = "c:\\parts.zml", .message = markup.import_src_absolute_message },
+        .{ .src = "parts.txt", .message = markup.import_src_extension_message },
+        .{ .src = "", .message = markup.import_src_message },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(arena, "<import src=\"{s}\"/>\n<row />", .{case.src});
+        const set = [_]markup.SourceFile{.{ .path = "src/view.zml", .source = source }};
+        var diagnostic: markup.MarkupErrorInfo = .{};
+        try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "src/view.zml", &diagnostic));
+        try testing.expectEqualStrings(case.message, diagnostic.message);
+        try testing.expectEqual(@as(usize, 1), diagnostic.line);
+    }
+
+    // Within-root ".." stays legal: components can reach a sibling folder
+    // under the markup root.
+    var buffer: [markup.max_import_path_len]u8 = undefined;
+    const resolved = markup.resolveImportPath("src", "src/components/pills.zml", "../shared/base.zml", &buffer);
+    try testing.expectEqualStrings("src/shared/base.zml", resolved.path);
+    const escaped = markup.resolveImportPath("src", "src/view.zml", "../../other.zml", &buffer);
+    try testing.expectEqualStrings(markup.import_src_escape_message, escaped.message);
+}
+
+test "an imported file with a view root is rejected with the teaching error" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<import src=\"other.zml\"/>\n<row />" },
+        .{ .path = "other.zml", .source = "<template name=\"t\"><text>x</text></template>\n<column />" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "view.zml", &diagnostic));
+    try testing.expectEqualStrings(markup.import_view_root_message, diagnostic.message);
+    try testing.expectEqualStrings("other.zml", diagnostic.path);
+}
+
+test "a missing imported file reports at the importing file's position" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const set = [_]markup.SourceFile{
+        .{ .path = "view.zml", .source = "<row />\n" },
+        .{ .path = "importer.zml", .source = "<import src=\"nope.zml\"/>\n<row />" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &set, "importer.zml", &diagnostic));
+    try testing.expect(std.mem.indexOf(u8, diagnostic.message, "unable to read imported file \"nope.zml\"") != null);
+    try testing.expectEqualStrings("importer.zml", diagnostic.path);
+    try testing.expectEqual(@as(usize, 1), diagnostic.line);
+}
+
+test "hostile import chains and template counts get bounded errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A chain one past max_import_depth errors instead of recursing on.
+    var files: std.ArrayListUnmanaged(markup.SourceFile) = .empty;
+    for (0..markup.max_import_depth + 1) |index| {
+        const path = try std.fmt.allocPrint(arena, "c{d}.zml", .{index});
+        const source = if (index == markup.max_import_depth)
+            try std.fmt.allocPrint(arena, "<template name=\"leaf\"><text>x</text></template>", .{})
+        else
+            try std.fmt.allocPrint(arena, "<import src=\"c{d}.zml\"/>\n<template name=\"t{d}\"><text>x</text></template>", .{ index + 1, index });
+        try files.append(arena, .{ .path = path, .source = source });
+    }
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    try testing.expectError(error.MarkupImport, resolveSet(arena, files.items, "c0.zml", &diagnostic));
+    try testing.expectEqualStrings(markup.import_depth_message, diagnostic.message);
+
+    // A single file with too many templates fails the parse cap.
+    var huge: std.ArrayListUnmanaged(u8) = .empty;
+    for (0..markup.max_document_templates + 1) |index| {
+        try huge.appendSlice(arena, try std.fmt.allocPrint(arena, "<template name=\"t{d}\"><text>x</text></template>\n", .{index}));
+    }
+    try huge.appendSlice(arena, "<row />");
+    var parser = markup.Parser.init(arena, huge.items);
+    try testing.expectError(error.MarkupSyntax, parser.parse());
+    try testing.expectEqualStrings(markup.max_templates_message, parser.diagnostic.message);
+}
+
+test "imports parse at the top only and validate their shape" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // An import after a template is a parse error (position is structure).
+    var parser = markup.Parser.init(arena, "<template name=\"t\"><text>x</text></template>\n<import src=\"a.zml\"/>\n<row />");
+    try testing.expectError(error.MarkupSyntax, parser.parse());
+    try testing.expectEqualStrings(markup.import_top_level_message, parser.diagnostic.message);
+
+    const shape_cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<import/>\n<row />", .message = markup.import_src_message },
+        .{ .source = "<import src=\"a.zml\" extra=\"1\"/>\n<row />", .message = markup.import_attrs_message },
+        .{ .source = "<import src=\"a.zml\"><text>x</text></import>\n<row />", .message = markup.import_children_message },
+        .{ .source = "<column>\n  <import src=\"a.zml\"/>\n</column>", .message = markup.import_top_level_message },
+    };
+    for (shape_cases) |case| {
+        var case_parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try case_parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+    }
+
+    // A view with unresolved imports skips use-reference checks (the
+    // template may come from the import); everything else still validates.
+    var lenient_parser = markup.Parser.init(arena, "<import src=\"a.zml\"/>\n<row>\n  <use template=\"from-import\" whatever=\"1\" />\n</row>");
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try lenient_parser.parse()));
+}
+
+// -------------------------------------------------- defaults and slots
+
+test "template arg defaults parse and validate as literals only" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const arg = markup.parseTemplateArg("trend=flat");
+    try testing.expectEqualStrings("trend", arg.name);
+    try testing.expectEqualStrings("flat", arg.default.?);
+    try testing.expectEqual(@as(?[]const u8, null), markup.parseTemplateArg("trend").default);
+    try testing.expectEqualStrings("", markup.parseTemplateArg("trend=").default.?);
+
+    // Omitting a defaulted arg is fine; omitting a required one is not.
+    var ok_parser = markup.Parser.init(arena, "<template name=\"t\" args=\"title trend=flat\"><text>{title} {trend}</text></template>\n<row>\n  <use template=\"t\" title=\"T\" />\n</row>");
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try ok_parser.parse()));
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<template name=\"t\" args=\"title trend=flat\"><text>{title}</text></template>\n<row>\n  <use template=\"t\" trend=\"up\" />\n</row>", .message = markup.use_missing_arg_message },
+        .{ .source = "<template name=\"t\" args=\"trend={title}\"><text>{trend}</text></template>\n<row />", .message = markup.template_default_literal_message },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+    }
+}
+
+test "slot placement rules validate with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A template with one slot accepts use-site children (built in the
+    // consumer's scope); a slotless template rejects them.
+    var ok_parser = markup.Parser.init(arena, "<template name=\"t\" args=\"title\"><column><text>{title}</text><slot/></column></template>\n<row>\n  <use template=\"t\" title=\"T\"><text>body</text></use>\n</row>");
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try ok_parser.parse()));
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<template name=\"t\"><column><slot/><slot/></column></template>\n<row />", .message = markup.template_one_slot_message },
+        .{ .source = "<row>\n  <slot/>\n</row>", .message = markup.slot_outside_template_message },
+        .{ .source = "<template name=\"t\"><column><slot gap=\"2\"/></column></template>\n<row />", .message = markup.slot_attrs_message },
+        .{ .source = "<template name=\"t\"><column><slot><text>x</text></slot></column></template>\n<row />", .message = markup.slot_children_message },
+        .{ .source = "<template name=\"a\"><column><slot/></column></template>\n<template name=\"b\"><column><use template=\"a\"><slot/></use></column></template>\n<row />", .message = markup.slot_in_use_children_message },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
     }
 }

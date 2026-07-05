@@ -782,7 +782,7 @@ There is no `else-if` chain tag: nest an `<if>`/`<else>` inside the `<else>` bod
 
 ## Templates: `<template>` + `<use>`
 
-When the same subtree repeats with different data (board columns, dashboard sections), define it ONCE at the top of the file — zero or more `<template>` definitions, then exactly one view root:
+When the same subtree repeats with different data (board columns, dashboard sections), define it ONCE at the top of the file — zero or more `<import>` lines, then zero or more `<template>` definitions, then the view root (a file that is ALL templates is a component file, valid only as an import target):
 
 ```html
 <template name="board-column" args="title cards">
@@ -802,12 +802,15 @@ When the same subtree repeats with different data (board columns, dashboard sect
 
 Rules and semantics:
 
-- A template takes `name` (kebab-case), optional `args` (space-separated names), and exactly one element child. `<use template="name">` is allowed anywhere an element is (including as a `for` child or the view root); its other attributes must match the template's `args` exactly — missing or extra args are errors.
+- A template takes `name` (kebab-case), optional `args` (space-separated names, each optionally `name=default`), and exactly one element child. `<use template="name">` is allowed anywhere an element is (including as a `for` child or the view root); its other attributes must match the template's `args` exactly — missing args without a default and extra args are errors.
+- Arg defaults are LITERALS only (`args="title trend=flat count=0"`): a default evaluates in no scope, so `{binding}` defaults are errors. A use site may omit any defaulted arg.
 - The template body is built IN PLACE of the `<use>`: structural widget ids hash through the parent chain at the expansion site, exactly as if you had written the body inline. Two uses at different sites get different ids; the same site is stable across rebuilds. Rewriting copy-pasted markup as a template does not change any widget id.
 - Args bind like `for` variables: an arg whose value is a `{binding}` naming an iterable (model slice/array field, pub decl, or model fn — the same set `for each` accepts) is iterable inside the template (`<for each="cards" ...>`); any other arg (literal or scalar binding) is a value usable in bindings, interpolation, and equality (`{title}`, `label="{title}"`). Args are evaluated at the use site; inside the body only the args, the model, and the body's own loop variables are in scope. Value args are scalars — `{arg.field}` is an error.
 - Uses inside a template body may only reference templates defined EARLIER in the file (this also makes recursion impossible). Bindings stay zero-argument: the template deduplicates the view, the per-case query stays a named model function.
+- SLOTS: a template body may contain one `<slot/>` (attribute-less, childless; named slots do not exist). The `<use>` site's children build IN THE CONSUMER'S SCOPE — they see the model paths and loop variables where the use is written — and land at the slot's position; ids hash as if inlined. A use with no children renders the slot empty; children on a slotless template are an error; a `<slot/>` inside use-site children (forwarding) is an error.
+- IMPORTS: `<import src="components/cards.zml"/>` lines go at the very top of a file, before its templates. Paths are relative to the importing file (subdirectories and transitive imports fine, always under the root view file's directory — absolute paths and escapes are errors). An imported file defines templates ONLY (a component file; a view root inside one is an error, and a component file checks standalone). Importing splices the file's templates (transitively) BEFORE yours, in import order — as if pasted at the import site — so define-before-use stays the only ordering rule. Cycles are reported with the cycle path; duplicate template names are an error naming both definition sites.
 
-Both engines implement templates: the interpreter expands at build time, `CompiledMarkupView` inlines each use at comptime with the identical result. See `examples/kanban/src/board.zml`.
+Both engines implement templates, defaults, slots, and imports: the interpreter expands at build time (hot reload re-resolves imports from disk, so edits to imported files reload), and the compiled engine inlines at comptime with the identical result. A document with imports compiles through `canvas.CompiledMarkupImports(Model, Msg, "root.zml", &sources)` where `sources` is a `canvas.ui_markup.SourceFile` set (`.{ .path = "components/cards.zml", .source = @embedFile("components/cards.zml") }`, paths relative to the root file's directory); pass the same set on `MarkupOptions.sources` for the runtime engine. See `examples/kanban/src/board.zml` + `examples/kanban/src/components/board-column.zml`.
 
 ## Markdown in markup: `<markdown>`
 

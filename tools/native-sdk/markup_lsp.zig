@@ -786,7 +786,7 @@ test "doc tables cover every known element, attribute, and event" {
     for (ui_markup.known_element_names) |name| {
         try testing.expect(elementDoc(name) != null);
     }
-    for ([_][]const u8{ "for", "if", "else", "template", "use", "markdown", "stepper", "step", "timeline", "timeline-item" }) |name| {
+    for ([_][]const u8{ "for", "if", "else", "template", "use", "import", "slot", "markdown", "stepper", "step", "timeline", "timeline-item" }) |name| {
         try testing.expect(elementDoc(name) != null);
     }
     for (ui_markup.known_option_attrs) |name| {
@@ -795,7 +795,7 @@ test "doc tables cover every known element, attribute, and event" {
     for (ui_markup.known_color_style_attrs) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
-    for ([_][]const u8{ "radius", "name", "args", "template" }) |name| {
+    for ([_][]const u8{ "radius", "name", "args", "template", "src" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     // The composite elements' closed attribute sets are documented.

@@ -2170,3 +2170,182 @@ test "split and tree misuse is validated with teaching messages" {
     try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
     try testing.expectEqualStrings(canvas.ui_markup.on_resize_payload_message, view.diagnostic.message);
 }
+
+// ------------------------------------- import/slot/default fixture
+
+/// A three-file document exercising the whole component surface: a
+/// transitive import chain (view -> components/pills.zml -> base.zml,
+/// resolved relative to each importer), an imported template using
+/// another imported template, a defaulted arg (tone=muted), and a slot
+/// whose content builds in the consumer's scope (it sees the `for` loop
+/// variable at the use site) — including a nested `<use>` with the
+/// defaulted arg omitted, and a second use with no children (empty slot).
+pub const import_view_sources = [_]canvas.ui_markup.SourceFile{
+    .{ .path = "view.zml", .source = 
+    \\<import src="components/pills.zml"/>
+    \\<row gap="8">
+    \\  <use template="pill-stack" title="Top">
+    \\    <for each="top" as="f">
+    \\      <use template="pill" label="{f.name}" />
+    \\      <button on-press="pick:{f.id}">{f.name}</button>
+    \\    </for>
+    \\  </use>
+    \\  <use template="pill-stack" title="Bottom" />
+    \\</row>
+    },
+    .{ .path = "components/pills.zml", .source = 
+    \\<import src="base.zml"/>
+    \\<template name="pill-stack" args="title">
+    \\  <column gap="4">
+    \\    <use template="pill" label="{title}" tone="header" />
+    \\    <slot/>
+    \\  </column>
+    \\</template>
+    },
+    .{ .path = "components/base.zml", .source = 
+    \\<template name="pill" args="label tone=muted">
+    \\  <badge radius="md">{label} {tone}</badge>
+    \\</template>
+    },
+};
+
+pub fn resolveImportSet(arena: std.mem.Allocator, set: []const canvas.ui_markup.SourceFile, root_name: []const u8) !canvas.ui_markup.MarkupDocument {
+    var loader = canvas.ui_markup.SourceSetLoader{ .set = set };
+    const root_source = for (set) |file| {
+        if (std.mem.eql(u8, file.path, root_name)) break file.source;
+    } else return error.TestUnexpectedResult;
+    var diagnostic: canvas.ui_markup.MarkupErrorInfo = .{};
+    return canvas.ui_markup.resolveImports(arena, root_name, root_source, loader.loader(), &diagnostic);
+}
+
+/// The hand-written equivalent of the import fixture: expansion happens at
+/// the use site and slot content inlines at the slot position, so ids and
+/// handlers must match this exactly.
+pub fn handImportView(ui: *TemplateUi, model: *const TemplateModel) TemplateUi.Node {
+    return ui.row(.{ .gap = 8 }, .{
+        handPillStack(ui, "Top", model.top),
+        handPillStack(ui, "Bottom", &.{}),
+    });
+}
+
+fn handPillStack(ui: *TemplateUi, title: []const u8, items: []const Fruit) TemplateUi.Node {
+    var children: std.ArrayListUnmanaged(TemplateUi.Node) = .empty;
+    children.append(ui.arena, handPill(ui, title, "header")) catch {
+        ui.failed = true;
+    };
+    for (items) |*fruit| {
+        children.append(ui.arena, handPill(ui, fruit.name, "muted")) catch {
+            ui.failed = true;
+        };
+        children.append(ui.arena, ui.button(.{ .on_press = TemplateMsg{ .pick = fruit.id } }, fruit.name)) catch {
+            ui.failed = true;
+        };
+    }
+    return ui.column(.{ .gap = 4 }, @as([]const TemplateUi.Node, children.items));
+}
+
+fn handPill(ui: *TemplateUi, label: []const u8, tone: []const u8) TemplateUi.Node {
+    var badge = ui.el(.badge, .{ .style_tokens = .{ .radius = .md } }, .{});
+    badge.widget.text = ui.fmt("{s} {s}", .{ label, tone });
+    return badge;
+}
+
+test "imported templates with slots and defaults build the hand-written tree" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = templateTestModel();
+    const TemplateMarkup = markup_view.MarkupView(TemplateModel, TemplateMsg);
+
+    const document = try resolveImportSet(arena, &import_view_sources, "view.zml");
+    var view = TemplateMarkup.fromDocument(document);
+    var markup_ui = TemplateUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = TemplateUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handImportView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+
+    // The defaulted arg: explicit at the header use, defaulted inside
+    // slot content.
+    try testing.expect(findByText(markup_tree.root, .badge, "Top header") != null);
+    try testing.expect(findByText(markup_tree.root, .badge, "apple muted") != null);
+    // Slot content saw the consumer's loop variable; its handler
+    // dispatches the loop item's payload.
+    const pear_button = findByText(markup_tree.root, .button, "pear").?;
+    try testing.expectEqual(@as(u32, 2), markup_tree.msgForPointer(pear_button.id, .up).?.pick);
+    // The childless use renders an empty slot: just the header pill.
+    const bottom = findByText(markup_tree.root, .badge, "Bottom header").?;
+    _ = bottom;
+    try testing.expectEqual(@as(usize, 1), markup_tree.root.children[1].children.len);
+}
+
+test "slot, default, and component-file misuse fails the interpreter build with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            .source = "<template name=\"t\"><text>x</text></template>\n<row>\n  <use template=\"t\"><text>y</text></use>\n</row>",
+            .message = canvas.ui_markup.use_children_without_slot_message,
+        },
+        .{
+            .source = "<template name=\"t\"><column><slot/><slot/></column></template>\n<row>\n  <use template=\"t\" />\n</row>",
+            .message = canvas.ui_markup.template_one_slot_message,
+        },
+        .{
+            .source = "<template name=\"t\" args=\"tone={filter}\"><text>{tone}</text></template>\n<row>\n  <use template=\"t\" />\n</row>",
+            .message = canvas.ui_markup.template_default_literal_message,
+        },
+        .{
+            // A component file (all templates) is not a view.
+            .source = "<template name=\"t\"><text>x</text></template>",
+            .message = canvas.ui_markup.component_file_view_message,
+        },
+        .{
+            // Unresolved imports never reach the interpreter silently.
+            .source = "<import src=\"components.zml\"/>\n<row />",
+            .message = canvas.ui_markup.import_unresolved_message,
+        },
+    };
+    for (cases) |case| {
+        var view = try InboxMarkup.init(arena, case.source);
+        var ui = InboxUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(case.message, view.diagnostic.message);
+        try testing.expect(view.diagnostic.line > 0);
+    }
+}
+
+test "interpreter defaults resolve per use site and literals only" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    const source =
+        \\<template name="tag" args="label trend=flat count=0">
+        \\  <badge>{label} {trend} {count}</badge>
+        \\</template>
+        \\<row gap="4">
+        \\  <use template="tag" label="a" />
+        \\  <use template="tag" label="b" trend="up" count="3" />
+        \\</row>
+    ;
+    var view = try InboxMarkup.init(arena, source);
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    try testing.expect(findByText(tree.root, .badge, "a flat 0") != null);
+    try testing.expect(findByText(tree.root, .badge, "b up 3") != null);
+}

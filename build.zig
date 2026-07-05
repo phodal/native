@@ -147,6 +147,13 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
         .name = "native-sdk",
         .root_module = embed_exports_mod,
+        // The embed C ABI (`native_sdk_app_viewport`) is exactly the
+        // f32-heavy SysV signature Zig 0.16.0's self-hosted x86_64 backend
+        // miscompiles (see useLlvmWorkaround in build/app.zig): without
+        // this, Debug x86_64 libs (Android emulators, Intel simulators)
+        // hand clang hosts corrupted inset/keyboard floats. addMobileLib
+        // already forces LLVM there; the fixed-shell lib must match.
+        .use_llvm = @import("build/app.zig").useLlvmWorkaround(target),
     });
     b.installArtifact(embed_lib);
 
@@ -634,6 +641,7 @@ pub fn build(b: *std.Build) void {
         "examples/ios/NativeSdkIOSExample/SceneDelegate.swift",
         "examples/ios/NativeSdkIOSExample/NativeSdkHostViewController.swift",
         "examples/ios/NativeSdkIOSExample/native_sdk.h",
+        "examples/ios/NativeSdkIOSExample/NativeSdkDyldShim.c",
     });
     addLayoutCheckStep(b, mobile_examples_step, "test-example-android-layout", "Verify Android example layout", &.{
         "examples/android/README.md",

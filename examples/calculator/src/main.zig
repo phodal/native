@@ -103,6 +103,28 @@ fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
 }
 
+// ----------------------------------------------------------------- mobile
+
+/// Mobile embed seam (`zig build lib -Dmobile=true` via `addMobileLib`):
+/// the same Model/Msg/update/view compiled into the embed static library
+/// with the canonical single-surface mobile scene.
+pub fn initModel() Model {
+    return .{};
+}
+
+pub fn mobileOptions() CalculatorApp.Options {
+    return .{
+        .name = "calculator",
+        .scene = native_sdk.embed.mobile_shell_scene,
+        .canvas_label = native_sdk.embed.mobile_gpu_surface_label,
+        .update = update,
+        .view = rootView,
+        .tokens_fn = tokensFromModel,
+        .on_appearance = onAppearance,
+        .on_command = onCommand,
+    };
+}
+
 // ------------------------------------------------------------------- main
 
 pub fn main(init: std.process.Init) !void {

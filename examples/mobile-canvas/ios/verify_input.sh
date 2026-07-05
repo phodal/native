@@ -115,7 +115,9 @@ textbox = find(lambda l: "role=textbox" in l, "draft textbox")
 # Blur target: the empty gap right of the "done" filter tab — inside the
 # app (clear of the system status bar) with no focusable widget under it,
 # so a tap there drops textbox focus without other model effects.
-done_tab = find(lambda l: "role=button" in l and 'name="done"' in l, "done filter button")
+# Segmented filter chips report role=tab (they were role=button before the
+# widgets aligned to their desktop equivalents); accept either.
+done_tab = find(lambda l: ("role=tab" in l or "role=button" in l) and 'name="done"' in l, "done filter tab")
 scroll = find(lambda l: "scroll=[offset=" in l, "scrollable widget")
 
 def emit_point(name, line):
@@ -199,8 +201,11 @@ find "$RUNNER/Frameworks" -maxdepth 1 \( -name "*.framework" -o -name "*.dylib" 
 codesign --force --sign - "$XCTEST_BUNDLE" >/dev/null 2>&1
 codesign --force --sign - "$RUNNER" >/dev/null 2>&1
 
-# Injection coordinates from the current snapshot.
-eval "$(snapshot_facts)"
+# Injection coordinates from the current snapshot. Capture before eval so
+# a failed snapshot query aborts here (`eval "$(...)"` would swallow the
+# python exit status and die later on an unbound variable).
+FACTS="$(snapshot_facts)"
+eval "$FACTS"
 echo "== targets: add=$ADD_POINT textbox=$TEXTBOX_POINT blur=$BLUR_POINT scroll=$SCROLL_FROM->$SCROLL_TO"
 
 write_xctestrun() {

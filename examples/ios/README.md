@@ -30,6 +30,7 @@ Select a simulator or device and run the `NativeSdkIOSExample` scheme.
 
 - `NativeSdkIOSExample/NativeSdkHostViewController.swift` hosts native UIKit chrome, a `WKWebView` workspace, and the Native SDK C ABI.
 - `NativeSdkIOSExample/native_sdk.h` declares the C ABI expected from `libnative-sdk.a`.
+- `NativeSdkIOSExample/NativeSdkDyldShim.c` supplies `_dyld_get_image_header_containing_address` (unavailable in the iOS SDK) via `dladdr` so the static library's panic symbolication links.
 - `app.zon` records the mobile example metadata for Native SDK tooling.
 
 ## Host lifecycle

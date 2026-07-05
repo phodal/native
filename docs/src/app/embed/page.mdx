@@ -74,8 +74,9 @@ The repository includes full mobile host examples:
 
 - `examples/ios` - Xcode project with a Swift `UIViewController`, `WKWebView`, and `native_sdk.h` bridge.
 - `examples/android` - Gradle/Kotlin project with JNI and CMake wiring for `libnative-sdk.a`.
+- `examples/mobile-canvas` - canvas-scene mobile app built with `addMobileLib`: the user's `Model`/`Msg`/`update`/`view` app compiles into the embed static library, renders through the CPU reference renderer, and is presented by a minimal iOS or Android host shim with touch, keyboard, and IME forwarding.
 
-Both examples expect a local `libnative-sdk.a` built from the repository and copied into the path documented in each example README.
+The iOS and Android shell examples expect a local `libnative-sdk.a` built from the repository and copied into the path documented in each example README; the canvas example builds its own library through its `build.zig`.
 
 ## Mobile host contract
 

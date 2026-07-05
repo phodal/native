@@ -11,6 +11,7 @@
 		100000000000000000000002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000012 /* SceneDelegate.swift */; };
 		100000000000000000000003 /* NativeSdkHostViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000013 /* NativeSdkHostViewController.swift */; };
 		100000000000000000000004 /* libnative-sdk.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000015 /* libnative-sdk.a */; };
+		100000000000000000000005 /* NativeSdkDyldShim.c in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000017 /* NativeSdkDyldShim.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		100000000000000000000014 /* native_sdk.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = native_sdk.h; sourceTree = "<group>"; };
 		100000000000000000000015 /* libnative-sdk.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "Libraries/libnative-sdk.a"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		100000000000000000000017 /* NativeSdkDyldShim.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = NativeSdkDyldShim.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +53,7 @@
 				100000000000000000000012 /* SceneDelegate.swift */,
 				100000000000000000000013 /* NativeSdkHostViewController.swift */,
 				100000000000000000000014 /* native_sdk.h */,
+				100000000000000000000017 /* NativeSdkDyldShim.c */,
 				100000000000000000000016 /* Info.plist */,
 			);
 			path = NativeSdkIOSExample;
@@ -124,6 +127,7 @@
 				100000000000000000000001 /* AppDelegate.swift in Sources */,
 				100000000000000000000002 /* SceneDelegate.swift in Sources */,
 				100000000000000000000003 /* NativeSdkHostViewController.swift in Sources */,
+				100000000000000000000005 /* NativeSdkDyldShim.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -15,6 +15,7 @@ const DiffChange = canvas.DiffChange;
 pub const max_canvas_frame_dirty_rects: usize = serialization.max_binary_packet_dirty_rects;
 const DisplayList = canvas.DisplayList;
 const ReferenceImage = canvas.ReferenceImage;
+const ReferenceFont = canvas.ReferenceFont;
 const default_glyph_atlas_cache_retention_frames = canvas.default_glyph_atlas_cache_retention_frames;
 const default_text_layout_cache_retention_frames = canvas.default_text_layout_cache_retention_frames;
 
@@ -304,6 +305,10 @@ pub const CanvasFrame = struct {
     text_layout_plan: TextLayoutPlanSet = .{},
     text_layout_cache_plan: TextLayoutCachePlan = .{},
     image_resources: []const ReferenceImage = &.{},
+    /// Runtime-registered font faces (validated at registration); the
+    /// CPU pixel paths resolve text runs against these before the
+    /// bundled faces, exactly like `image_resources` feeds image draws.
+    font_resources: []const ReferenceFont = &.{},
     changes: []const DiffChange = &.{},
     dirty_bounds: ?geometry.RectF = null,
     /// Optional refinement of `dirty_bounds`: the exact rects this
@@ -462,6 +467,7 @@ pub const CanvasFrameOptions = struct {
     previous_glyph_atlas_cache: []const GlyphAtlasCacheEntry = &.{},
     previous_text_layout_cache: []const TextLayoutCacheEntry = &.{},
     image_resources: []const ReferenceImage = &.{},
+    font_resources: []const ReferenceFont = &.{},
     glyph_atlas_cache_retention_frames: u64 = default_glyph_atlas_cache_retention_frames,
     text_layout_cache_retention_frames: u64 = default_text_layout_cache_retention_frames,
     text_layout_options: TextLayoutOptions = .{},
@@ -628,6 +634,7 @@ pub fn buildCanvasFrame(previous: ?DisplayList, next: DisplayList, options: Canv
         .text_layout_plan = text_layout_plan,
         .text_layout_cache_plan = text_layout_cache_plan,
         .image_resources = options.image_resources,
+        .font_resources = options.font_resources,
         .changes = changes,
         .dirty_bounds = dirty_bounds,
         .budget = options.budget,

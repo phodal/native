@@ -159,6 +159,37 @@ fn coreTextLineWidthEm(font: ?*anyopaque, size: f64, text: []const u8) !f64 {
     return CTLineGetTypographicBounds(line, null, null, null) / size;
 }
 
+test "face estimator measures a registered face with its own advances" {
+    // The registered-font measure path: the mono face measured through
+    // the face-generic estimator charges the mono pitch for every
+    // covered glyph — not the sans advances the id-keyed estimator would
+    // guess for an unknown id.
+    const mono = &font_ttf.geist_mono;
+    const width = text_metrics.estimateTextWidthForFace(mono, "Hello", 10.0);
+    try testing.expectApproxEqAbs(@as(f32, 5 * 10.0 * canvas.mono_advance_em), width, 0.001);
+
+    // Covered multibyte codepoints charge the face's hmtx advance.
+    const arrow_face = &font_ttf.geist_regular;
+    const arrow_glyph = arrow_face.glyphIndex(0x2192);
+    try testing.expect(arrow_glyph != 0);
+    const arrow_em = arrow_face.advance(arrow_glyph) / arrow_face.units_per_em;
+    try testing.expectApproxEqAbs(arrow_em, text_metrics.estimateTextWidthForFace(arrow_face, "→", 1.0), 0.0001);
+
+    // Uncovered codepoints keep the documented fallback classes, with
+    // THIS face's notdef advance as the base class.
+    const notdef_em = mono.advance(0) / mono.units_per_em;
+    try testing.expectApproxEqAbs(@as(f32, 1.0), text_metrics.estimateTextWidthForFace(mono, "\u{4E2D}", 1.0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), text_metrics.estimateTextWidthForFace(mono, "\u{2611}", 1.0), 0.0001);
+    try testing.expectApproxEqAbs(notdef_em, text_metrics.estimateTextWidthForFace(mono, "\x01", 1.0), 0.0001);
+
+    // Truncated trailing cluster: notdef, never a decode crash.
+    const truncated = "→"[0..2];
+    try testing.expectApproxEqAbs(notdef_em, text_metrics.estimateTextWidthForFace(mono, truncated, 1.0), 0.0001);
+
+    // Empty text measures zero.
+    try testing.expectEqual(@as(f32, 0), text_metrics.estimateTextWidthForFace(mono, "", 12.0));
+}
+
 test "estimator agrees with CoreText shaping the bundled face" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
 

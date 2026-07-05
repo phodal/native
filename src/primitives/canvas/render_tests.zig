@@ -1465,6 +1465,46 @@ test "glyph atlas plan deduplicates shaped glyph keys" {
     try std.testing.expectEqual(@as(u8, 2), plan.entries[2].key.subpixel_x);
 }
 
+test "glyph atlas keys and fingerprints keep fonts sharing glyph indices apart" {
+    // Two faces routinely share raw glyph INDICES (index 10 in face A is
+    // a different outline than index 10 in face B), so every cache seam
+    // that stores rasterized glyphs or diffing fingerprints must key the
+    // font id alongside the glyph id — a registered font id colliding
+    // with a built-in's glyph indices must never share cache entries.
+    const fingerprints = @import("render_fingerprints.zig");
+    const glyphs = [_]Glyph{
+        .{ .id = 10, .x = 0, .y = 0, .advance = 8 },
+        .{ .id = 11, .x = 8, .y = 0, .advance = 8 },
+    };
+    const sans_text = text_model.DrawText{
+        .id = 1,
+        .font_id = default_sans_font_id,
+        .size = 16,
+        .origin = geometry.PointF.init(12, 24),
+        .color = Color.rgb8(15, 23, 42),
+        .glyphs = &glyphs,
+    };
+    var registered_text = sans_text;
+    registered_text.font_id = canvas.min_registered_font_id;
+
+    // Same glyph ids, same size, same subpixel buckets — the plan still
+    // carries one atlas entry per (font id, glyph id) pair.
+    const commands = [_]CanvasCommand{
+        .{ .draw_text = sans_text },
+        .{ .draw_text = registered_text },
+    };
+    var entries: [4]GlyphAtlasEntry = undefined;
+    const plan = try (DisplayList{ .commands = &commands }).glyphAtlasPlan(&entries);
+    try std.testing.expectEqual(@as(usize, 4), plan.entryCount());
+    try std.testing.expectEqual(default_sans_font_id, plan.entries[0].key.font_id);
+    try std.testing.expectEqual(canvas.min_registered_font_id, plan.entries[2].key.font_id);
+    try std.testing.expectEqual(plan.entries[0].key.glyph_id, plan.entries[2].key.glyph_id);
+
+    // Retained-diff fingerprints split on font id too, so a font swap on
+    // an otherwise identical run repaints instead of skipping.
+    try std.testing.expect(fingerprints.drawTextFingerprint(sans_text) != fingerprints.drawTextFingerprint(registered_text));
+}
+
 test "glyph atlas plan honors shaped fallback font overrides" {
     const glyphs = [_]Glyph{
         .{ .id = 41, .x = 0, .y = 0, .advance = 8 },

@@ -78,6 +78,17 @@ pub fn onCommand(name: []const u8) ?Msg {
 
 pub const CalculatorApp = native_sdk.UiApp(Model, Msg);
 
+/// App-registered fonts (the registered-font seam): the display face
+/// behind `theme.display_font_id`, registered on the installing frame so
+/// the first layout already measures with it. The bytes are the
+/// SDK-bundled Geist Mono face — a real app would `@embedFile` its own
+/// asset here; the registration path is identical.
+const app_fonts = [_]CalculatorApp.FontRegistration{.{
+    .id = theme.display_font_id,
+    .name = "GeistMono-Regular.ttf",
+    .ttf = canvas.font_ttf.geist_mono_bytes,
+}};
+
 pub fn calculatorOptions() CalculatorApp.Options {
     return .{
         .name = "calculator",
@@ -86,6 +97,7 @@ pub fn calculatorOptions() CalculatorApp.Options {
         .update = update,
         .view = rootView,
         .tokens_fn = tokensFromModel,
+        .fonts = &app_fonts,
         .on_appearance = onAppearance,
         .on_command = onCommand,
     };
@@ -120,6 +132,7 @@ pub fn mobileOptions() CalculatorApp.Options {
         .update = update,
         .view = rootView,
         .tokens_fn = tokensFromModel,
+        .fonts = &app_fonts,
         .on_appearance = onAppearance,
         .on_command = onCommand,
     };

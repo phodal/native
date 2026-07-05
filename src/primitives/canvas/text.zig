@@ -47,6 +47,7 @@ pub const measureTextWidthForFont = text_layout.measureTextWidthForFont;
 pub const measureTextAdvance = text_layout.measureTextAdvance;
 pub const estimateTextWidth = text_layout.estimateTextWidth;
 pub const estimateTextWidthForFont = text_layout.estimateTextWidthForFont;
+pub const estimateTextWidthForFace = text_layout.estimateTextWidthForFace;
 pub const mono_advance_em = text_layout.mono_advance_em;
 pub const estimateTextAdvanceForBytes = text_layout.estimateTextAdvanceForBytes;
 pub const estimatedGlyphAdvance = text_layout.estimatedGlyphAdvance;

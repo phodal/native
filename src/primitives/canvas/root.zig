@@ -71,6 +71,14 @@ pub const default_sans_bold_italic_font_id: FontId = 6;
 pub const default_sans_font_family = FontFamily.geist;
 pub const default_mono_font_family = FontFamily.geist_mono;
 
+/// The first font id apps may register faces under. Ids below this are
+/// reserved for built-in faces (1-6 are assigned today; the rest of the
+/// range keeps future built-ins from colliding with app fonts). A
+/// registered id plugs in everywhere a `FontId` rides: token overrides
+/// (`TypographyTokenOverrides.font_id`/`mono_font_id`), draw commands,
+/// atlas keys, and fingerprints.
+pub const min_registered_font_id: FontId = 64;
+
 pub const default_glyph_atlas_cache_retention_frames: u64 = 120;
 pub const default_text_layout_cache_retention_frames: u64 = 120;
 
@@ -115,6 +123,7 @@ pub const TextLayoutOptions = text_model.TextLayoutOptions;
 pub const TextMeasureProvider = text_model.TextMeasureProvider;
 pub const measureTextWidthForFont = text_model.measureTextWidthForFont;
 pub const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
+pub const estimateTextWidthForFace = text_model.estimateTextWidthForFace;
 /// The fixed pitch (em units) mono runs measure and ink at.
 pub const mono_advance_em = text_model.mono_advance_em;
 pub const TextLine = text_model.TextLine;
@@ -252,6 +261,7 @@ pub const renderCommandIntersectsDirtyBounds = gpu_model.renderCommandIntersects
 
 // Reference raster renderer lives in reference.zig; root keeps the public API stable.
 pub const ReferenceImage = reference_model.ReferenceImage;
+pub const ReferenceFont = reference_model.ReferenceFont;
 pub const ReferenceRenderSurface = reference_model.ReferenceRenderSurface;
 
 // Deterministic CPU path rasterizer (bezier flattening, scanline AA fill,

@@ -2353,6 +2353,18 @@ int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host
     return 0;
 }
 
+/* The Chromium host has no packet text renderer and reports no host text
+ * metrics (see native_sdk_appkit_measure_text below), so a registered
+ * face has no host-side consumer: the engine's font-aware provider
+ * measures registered ids and the reference path inks them. Accept the
+ * registration so `Options.fonts` apps start identically under both
+ * hosts; refusing here would fail startup for a face this host never
+ * resolves. */
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len) {
+    if (font_id == 0 || !bytes || bytes_len == 0) return 0;
+    return 1;
+}
+
 /* The Chromium host has no packet text renderer, so there are no host
  * metrics to match: return the documented negative sentinel and the canvas
  * provider uses its estimator (the same fallback the AppKit host takes for

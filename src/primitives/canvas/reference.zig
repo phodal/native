@@ -61,12 +61,22 @@ pub const ReferenceImage = struct {
     pixels: []const u8,
 };
 
+/// One runtime-registered font face the reference renderer resolves text
+/// runs against: a `FontId` mapped to a parsed TrueType face. The face
+/// (and the bytes it borrows) must outlive the surface; runtimes own
+/// both in their registered-font pool.
+pub const ReferenceFont = struct {
+    id: canvas.FontId,
+    face: *const font_ttf.Face,
+};
+
 pub const ReferenceRenderSurface = struct {
     width: usize,
     height: usize,
     pixels: []u8,
     scratch: ?[]u8 = null,
     images: []const ReferenceImage = &.{},
+    fonts: []const ReferenceFont = &.{},
 
     pub fn init(width: usize, height: usize, pixels: []u8) Error!ReferenceRenderSurface {
         const len = std.math.mul(usize, std.math.mul(usize, width, height) catch return error.ReferenceRenderSurfaceTooSmall, 4) catch return error.ReferenceRenderSurfaceTooSmall;
@@ -88,6 +98,14 @@ pub const ReferenceRenderSurface = struct {
     pub fn withImages(self: ReferenceRenderSurface, images: []const ReferenceImage) ReferenceRenderSurface {
         var next = self;
         next.images = images;
+        return next;
+    }
+
+    /// Runtime-registered faces text runs resolve against before the
+    /// bundled fallback mapping (see `referenceFaceForFontId`).
+    pub fn withFonts(self: ReferenceRenderSurface, fonts: []const ReferenceFont) ReferenceRenderSurface {
+        var next = self;
+        next.fonts = fonts;
         return next;
     }
 
@@ -489,7 +507,7 @@ pub const ReferenceRenderSurface = struct {
         baseline: f32,
         cell_advance: f32,
     ) bool {
-        const face = referenceFaceForFontId(value.font_id);
+        const face = referenceFaceForFontId(self.fonts, value.font_id);
         const glyph = face.glyphIndex(codepoint);
         if (glyph == 0) return false;
 
@@ -658,11 +676,19 @@ fn isReferenceTextSpace(byte: u8) bool {
     return byte == '\n' or byte == '\r' or byte == '\t' or byte == ' ';
 }
 
-/// The bundled face a run's font id inks with: the mono face for the
-/// reserved mono id, the sans face for everything else (the weight and
-/// italic span variants keep the regular outlines at their estimator
-/// advances, exactly as before).
-fn referenceFaceForFontId(font_id: canvas.FontId) *const font_ttf.Face {
+/// The face a run's font id inks with: a runtime-registered face when
+/// the id matches one (validated at registration, so a registered id
+/// always resolves — no render-time fallback decision), otherwise the
+/// bundled mapping — the mono face for the reserved mono id, the sans
+/// face for everything else (the weight and italic span variants keep
+/// the regular outlines at their estimator advances, exactly as before).
+/// Glyphs missing from whichever face wins keep the per-glyph notdef
+/// block fallback in `drawGlyphBox`; a registered face never cascades
+/// into the bundled faces mid-run.
+fn referenceFaceForFontId(fonts: []const ReferenceFont, font_id: canvas.FontId) *const font_ttf.Face {
+    for (fonts) |font| {
+        if (font.id == font_id) return font.face;
+    }
     if (font_id == canvas.default_mono_font_id) return &font_ttf.geist_mono;
     return &font_ttf.geist_regular;
 }

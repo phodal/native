@@ -212,6 +212,54 @@ test "corrupt font bytes fail to parse without crashing" {
     try std.testing.expectError(error.FontParseFailed, font_ttf.Face.parse(&truncated));
 }
 
+test "truncated font prefixes never crash the parser" {
+    // Every prefix of a real face is either rejected or parses into a
+    // Face whose reads stay bounds-checked; none may crash. Walk a
+    // coarse stride plus the interesting first bytes.
+    var len: usize = 0;
+    while (len < font_ttf.geist_mono_bytes.len) : (len += if (len < 64) 1 else 977) {
+        _ = font_ttf.Face.parse(font_ttf.geist_mono_bytes[0..len]) catch continue;
+    }
+}
+
+test "parseFailureReason teaches the first thing wrong and matches parse" {
+    // Clean bundled faces: no reason, and parse agrees.
+    try std.testing.expectEqual(@as(?[]const u8, null), font_ttf.parseFailureReason(font_ttf.geist_regular_bytes));
+    try std.testing.expectEqual(@as(?[]const u8, null), font_ttf.parseFailureReason(font_ttf.geist_mono_bytes));
+
+    // Truncations and hostile headers: a reason exists whenever parse
+    // fails, and the sentence names the failure class.
+    const tiny = font_ttf.parseFailureReason(font_ttf.geist_regular_bytes[0..8]).?;
+    try std.testing.expect(std.mem.indexOf(u8, tiny, "truncated") != null);
+
+    var otto: [512]u8 = undefined;
+    @memcpy(otto[0..512], font_ttf.geist_regular_bytes[0..512]);
+    @memcpy(otto[0..4], "OTTO");
+    const cff = font_ttf.parseFailureReason(&otto).?;
+    try std.testing.expect(std.mem.indexOf(u8, cff, "CFF") != null);
+
+    var woff: [512]u8 = undefined;
+    @memcpy(woff[0..512], font_ttf.geist_regular_bytes[0..512]);
+    @memcpy(woff[0..4], "wOFF");
+    const compressed = font_ttf.parseFailureReason(&woff).?;
+    try std.testing.expect(std.mem.indexOf(u8, compressed, "WOFF") != null);
+
+    // A directory whose table ranges run past the file.
+    var chopped: [1024]u8 = undefined;
+    @memcpy(chopped[0..1024], font_ttf.geist_regular_bytes[0..1024]);
+    try std.testing.expectError(error.FontParseFailed, font_ttf.Face.parse(&chopped));
+    try std.testing.expect(font_ttf.parseFailureReason(&chopped) != null);
+
+    // Contract: parse and the diagnostic never disagree, across a sweep
+    // of truncation lengths.
+    var len: usize = 0;
+    while (len < 4096) : (len += 199) {
+        const bytes = font_ttf.geist_regular_bytes[0..len];
+        const parses = if (font_ttf.Face.parse(bytes)) |_| true else |_| false;
+        try std.testing.expectEqual(parses, font_ttf.parseFailureReason(bytes) == null);
+    }
+}
+
 test "out of range glyph ids error instead of reading wild" {
     const face = &font_ttf.geist_regular;
     var builder = vector.PathBuilder(256){};

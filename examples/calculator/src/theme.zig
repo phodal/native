@@ -16,6 +16,15 @@ const native_sdk = @import("native_sdk");
 const canvas = native_sdk.canvas;
 const Color = canvas.Color;
 
+/// The app-registered face behind every mono run (the scaled result
+/// line, the memory readout): the bundled Geist Mono bytes registered
+/// through `Options.fonts` under an app-owned id, exercising the
+/// registered-font seam end to end — this id flows from the token
+/// through layout, both renderers, and (on macOS) the host's font
+/// resolution, so the display inks the exact registered face even where
+/// the family is not installed system-wide.
+pub const display_font_id: canvas.FontId = canvas.min_registered_font_id;
+
 pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
     var out = canvas.DesignTokens.theme(.{
         .color_scheme = switch (scheme) {
@@ -52,6 +61,9 @@ pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion
     }
     // Calculator keys carry 18px glyphs; the sm theme button derives 17.
     out.typography.button_size = 18;
+    // Mono runs resolve through the app-registered face (see
+    // `display_font_id`).
+    out.typography.mono_font_id = display_font_id;
     out.radius = .{ .sm = 7, .md = 10, .lg = 14, .xl = 18 };
     out.pixel_snap = .{ .geometry = true, .text = true, .scale = 1 };
     return out;

@@ -152,6 +152,7 @@ extern fn native_sdk_appkit_set_webview_layer(host: *AppKitHost, window_id: u64,
 extern fn native_sdk_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn native_sdk_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
 extern fn native_sdk_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
+extern fn native_sdk_appkit_register_font(font_id: u64, bytes: [*]const u8, bytes_len: usize) c_int;
 extern fn native_sdk_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn native_sdk_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
 extern fn native_sdk_appkit_clipboard_read_data(host: *AppKitHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
@@ -412,6 +413,7 @@ pub const MacPlatform = struct {
                 .present_gpu_surface_packet_binary_fn = presentGpuSurfacePacketBinary,
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
+                .register_gpu_surface_font_fn = registerGpuSurfaceFont,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
                 .measure_text_fn = measureText,
                 .decode_image_fn = decodeImage,
@@ -1111,6 +1113,14 @@ fn removeGpuSurfaceImage(context: ?*anyopaque, id: u64) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     if (self.web_engine != .system) return error.UnsupportedService;
     if (native_sdk_appkit_remove_gpu_surface_image(self.host, id) == 0) return error.InvalidGpuSurfaceImage;
+}
+
+/// Registered canvas fonts feed the host's single font-resolution seam
+/// (measurement AND packet text drawing), which exists on both web
+/// engines, so this is deliberately not gated on `web_engine`.
+fn registerGpuSurfaceFont(context: ?*anyopaque, font: platform_mod.GpuSurfaceFontData) anyerror!void {
+    _ = context;
+    if (native_sdk_appkit_register_font(font.id, font.ttf.ptr, font.ttf.len) == 0) return error.InvalidGpuSurfaceFont;
 }
 
 fn updateWidgetAccessibility(context: ?*anyopaque, snapshot: platform_mod.WidgetAccessibilitySnapshot) anyerror!void {

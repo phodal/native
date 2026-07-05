@@ -132,6 +132,51 @@ pub fn estimateTextAdvanceForBytes(font_id: FontId, bytes: []const u8, size: f32
     return size * clusterAdvanceEm(bytes) * weight;
 }
 
+/// Deterministic width of `text` measured against an arbitrary parsed
+/// face — the registered-font counterpart of `estimateTextWidthForFont`.
+/// Same contract as the bundled-face estimator: covered codepoints charge
+/// the face's own `hmtx` advance (so layout measures exactly what the
+/// reference renderer inks), uncovered codepoints take the same three
+/// documented fallback classes (East Asian wide 1.0 em, uncovered
+/// symbol/pictograph blocks 0.8 em, everything else that face's own
+/// `.notdef` advance).
+pub fn estimateTextWidthForFace(face: *const font_ttf.Face, text: []const u8, size: f32) f32 {
+    var width: f32 = 0;
+    var index: usize = 0;
+    while (index < text.len) {
+        const next = @min(text.len, index + utf8SequenceLength(text[index]));
+        width += size * clusterAdvanceEmForFace(face, text[index..next]);
+        index = next;
+    }
+    return width;
+}
+
+/// Em-unit advance of one UTF-8 cluster against an arbitrary face: the
+/// runtime mirror of `clusterAdvanceEm`, with the face's own `.notdef`
+/// advance standing in for the bundled face's.
+fn clusterAdvanceEmForFace(face: *const font_ttf.Face, bytes: []const u8) f32 {
+    if (bytes.len == 0) return 0;
+    const face_notdef_em = faceAdvanceEm(face, 0);
+    if (bytes.len == 1) {
+        const byte = bytes[0];
+        if (byte >= 0x20 and byte < 0x7F) {
+            const glyph = face.glyphIndex(byte);
+            if (glyph != 0) return faceAdvanceEm(face, glyph);
+        }
+        return face_notdef_em;
+    }
+    // Truncated clusters at the end of a run take the notdef fallback
+    // explicitly, mirroring the bundled-face path (`utf8Decode` asserts
+    // on length mismatch rather than erroring).
+    if (bytes.len != utf8SequenceLength(bytes[0])) return face_notdef_em;
+    const codepoint = std.unicode.utf8Decode(bytes) catch return face_notdef_em;
+    const glyph = face.glyphIndex(codepoint);
+    if (glyph != 0) return faceAdvanceEm(face, glyph);
+    if (isEastAsianWideCodepoint(codepoint)) return 1.0;
+    if (isSymbolPictographCodepoint(codepoint)) return 0.8;
+    return face_notdef_em;
+}
+
 /// Em-unit advance of one UTF-8 cluster, derived from the bundled face:
 /// a comptime `hmtx` table for printable ASCII, a runtime lookup against
 /// the embedded face for every other covered codepoint (so the estimate

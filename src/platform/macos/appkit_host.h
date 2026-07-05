@@ -351,6 +351,11 @@ void native_sdk_appkit_wake(native_sdk_appkit_host_t *host);
 int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const native_sdk_appkit_widget_accessibility_node_t *nodes, size_t node_count);
 size_t native_sdk_appkit_clipboard_read(native_sdk_appkit_host_t *host, char *buffer, size_t buffer_len);
 double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len);
+
+// Register engine-validated TrueType bytes under a canvas font id so
+// measurement and packet text drawing resolve the id to this exact face.
+// Returns 1 on success, 0 when CoreText rejects the data.
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len);
 /* Decode encoded image bytes (PNG, JPEG, ... — whatever ImageIO supports)
  * through CGImageSource into tightly packed, row-major, straight-alpha
  * (non-premultiplied) RGBA8 written into `pixels`. Returns 1 on success

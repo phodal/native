@@ -109,6 +109,10 @@ const runtime_canvas_images = @import("canvas_images.zig");
 pub const RegisteredCanvasImage = runtime_canvas_images.RegisteredCanvasImage;
 pub const max_registered_canvas_images = runtime_canvas_images.max_registered_canvas_images;
 pub const max_registered_canvas_image_pixel_bytes = runtime_canvas_images.max_registered_canvas_image_pixel_bytes;
+
+const runtime_canvas_fonts = @import("canvas_fonts.zig");
+pub const max_registered_canvas_fonts = runtime_canvas_fonts.max_registered_canvas_fonts;
+pub const max_registered_canvas_font_bytes = runtime_canvas_fonts.max_registered_canvas_font_bytes;
 pub const testing = core.testing;
 pub const canvasSurfacePixelSize = core.canvasSurfacePixelSize;
 pub const canvasFramePixelSize = core.canvasFramePixelSize;

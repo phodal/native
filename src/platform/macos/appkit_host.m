@@ -1508,13 +1508,77 @@ static NSFont *NativeSdkWeightedSansFont(NSArray<NSString *> *names, NSFont *bas
     return [NSFont systemFontOfSize:size weight:systemWeight];
 }
 
+// Runtime-registered font faces (the engine's canvas font registry,
+// pushed through native_sdk_appkit_register_font before any layout can
+// reference the id): parsed CTFontDescriptors keyed by canvas font id,
+// plus a per-(id, size) NSFont cache. One table guards both with
+// @synchronized because registration arrives on the runtime loop thread
+// while packet drawing and measurement resolve on the main thread.
+static NSMutableDictionary<NSNumber *, id> *NativeSdkRegisteredFontDescriptors(void) {
+    static NSMutableDictionary<NSNumber *, id> *table = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        table = [[NSMutableDictionary alloc] init];
+    });
+    return table;
+}
+
+// The registered face for a canvas font id at `size`, or nil when the id
+// has no registered face. Checked BEFORE the built-in candidates and
+// their cache so a registered id can never be masked by a font resolved
+// for that id earlier (ids are engine-validated and permanent, so cached
+// NSFonts here never go stale).
+static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat size) {
+    NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
+    static NSMutableDictionary<NSString *, NSFont *> *sizeCache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sizeCache = [[NSMutableDictionary alloc] init];
+    });
+    @synchronized (table) {
+        id descriptorObject = table[@(value)];
+        if (!descriptorObject) return nil;
+        NSString *key = [NSString stringWithFormat:@"%llu/%.3f", value, (double)size];
+        NSFont *cached = sizeCache[key];
+        if (cached) return cached;
+        CTFontRef created = CTFontCreateWithFontDescriptor((__bridge CTFontDescriptorRef)descriptorObject, size, NULL);
+        if (!created) return nil;
+        NSFont *font = (__bridge_transfer NSFont *)created;
+        sizeCache[key] = font;
+        return font;
+    }
+}
+
+// Engine-validated TrueType bytes for a registered canvas font id: parse
+// them into a font descriptor once and key it by id, so measurement and
+// packet text drawing resolve the id to this exact face. Returns 1 on
+// success, 0 when CoreText rejects the data — the engine already parsed
+// the face, so a rejection here is surfaced as a loud registration
+// error engine-side, never a silent fallback at draw time.
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len) {
+    if (font_id == 0 || !bytes || bytes_len == 0) return 0;
+    @autoreleasepool {
+        NSData *data = [NSData dataWithBytes:bytes length:bytes_len];
+        CTFontDescriptorRef descriptor = CTFontManagerCreateFontDescriptorFromData((__bridge CFDataRef)data);
+        if (!descriptor) return 0;
+        NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
+        @synchronized (table) {
+            table[@(font_id)] = (__bridge_transfer id)descriptor;
+        }
+        return 1;
+    }
+}
+
 // Resolves a canvas font id to the NSFont presentation draws with. Both
 // packet text drawing and native_sdk_appkit_measure_text go through this
 // single function so measured layout and drawn glyphs share font
 // resolution. Ids 3-6 are the reserved sans span variants (medium, bold,
 // italic, bold italic); everything else keeps the regular sans/mono
-// candidates. Resolved fonts are cached per (font id, size).
+// candidates. Registered faces win first (see above). Resolved
+// built-in fonts are cached per (font id, size).
 static NSFont *NativeSdkFontForFontId(unsigned long long value, CGFloat size) {
+    NSFont *registered = NativeSdkRegisteredFontForId(value, size);
+    if (registered) return registered;
     static NSCache<NSString *, NSFont *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{

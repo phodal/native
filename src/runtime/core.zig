@@ -15,6 +15,7 @@ const shell_layout = @import("shell_layout.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const runtime_canvas_images = @import("canvas_images.zig");
+const runtime_canvas_fonts = @import("canvas_fonts.zig");
 const runtime_canvas_widget_context_menu = @import("canvas_widget_context_menu.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
@@ -284,6 +285,17 @@ pub const Runtime = struct {
     canvas_image_count: usize = 0,
     canvas_image_pixels: [canvas_limits.max_registered_canvas_images][canvas_limits.max_registered_canvas_image_pixel_bytes]u8 = undefined,
     canvas_image_resources_scratch: [canvas_limits.max_registered_canvas_images]canvas.ReferenceImage = undefined,
+    /// Runtime-registered canvas fonts (see canvas_fonts.zig): entry
+    /// metadata, the per-slot TrueType byte pool with parsed face views
+    /// over it, the `ReferenceFont` scratch the frame planner hands to
+    /// renderers, and the font-aware measure provider installed on first
+    /// registration for platforms without host-side text measurement.
+    canvas_font_entries: [canvas_limits.max_registered_canvas_fonts]runtime_canvas_fonts.CanvasFontEntry = [_]runtime_canvas_fonts.CanvasFontEntry{.{}} ** canvas_limits.max_registered_canvas_fonts,
+    canvas_font_count: usize = 0,
+    canvas_font_bytes: [canvas_limits.max_registered_canvas_fonts][canvas_limits.max_registered_canvas_font_bytes]u8 = undefined,
+    canvas_font_faces: [canvas_limits.max_registered_canvas_fonts]canvas.font_ttf.Face = undefined,
+    canvas_font_resources_scratch: [canvas_limits.max_registered_canvas_fonts]canvas.ReferenceFont = undefined,
+    canvas_font_measure_provider: canvas.TextMeasureProvider = .{ .measure_fn = runtime_canvas_fonts.unboundCanvasFontMeasure },
     /// Platform text measurement captured at init and owned by the
     /// runtime so pointers stamped into design tokens stay valid for the
     /// runtime's lifetime. Null when the platform has no `measure_text_fn`
@@ -504,14 +516,20 @@ pub const Runtime = struct {
         return self.options.platform.services.cancelTimer(id);
     }
 
-    /// The platform's text measurement wrapped as a canvas provider, or
-    /// null when the platform has none (null platform, tests): layout then
-    /// stays on the deterministic estimator. The provider value lives on
-    /// the runtime (captured at init), so the returned pointer is stable
-    /// for the runtime's lifetime and tokens stamped with it compare equal
-    /// frame to frame.
+    /// The platform's text measurement wrapped as a canvas provider; on
+    /// platforms without one (null platform, tests), the runtime's
+    /// font-aware provider once fonts are registered (registered ids
+    /// measure with their parsed face, everything else keeps the
+    /// deterministic estimator — see canvas_fonts.zig); otherwise null,
+    /// keeping layout on the estimator exactly as before. Platforms WITH
+    /// host measurement keep it for registered ids too: the host learned
+    /// the face at registration, so measurement and drawing share one
+    /// resolution. Provider values live on the runtime, so returned
+    /// pointers are stable for the runtime's lifetime and tokens stamped
+    /// with them compare equal frame to frame.
     pub fn textMeasureProvider(self: *const Runtime) ?*const canvas.TextMeasureProvider {
         if (self.text_measure_provider) |*provider| return provider;
+        if (self.canvas_font_count > 0) return &self.canvas_font_measure_provider;
         return null;
     }
 
@@ -579,6 +597,12 @@ pub const Runtime = struct {
     pub const registeredCanvasImage = CanvasImageMethods.registeredCanvasImage;
     pub const registeredCanvasImageCount = CanvasImageMethods.registeredCanvasImageCount;
     pub const canvasImageRegistryBinding = CanvasImageMethods.canvasImageRegistryBinding;
+
+    const CanvasFontMethods = runtime_canvas_fonts.RuntimeCanvasFonts(Runtime);
+    pub const registerCanvasFont = CanvasFontMethods.registerCanvasFont;
+    pub const registeredCanvasFonts = CanvasFontMethods.registeredCanvasFonts;
+    pub const registeredCanvasFontFace = CanvasFontMethods.registeredCanvasFontFace;
+    pub const registeredCanvasFontCount = CanvasFontMethods.registeredCanvasFontCount;
 
     const CanvasWidgetStateMethods = runtime_canvas_widget_state.RuntimeCanvasWidgetState(Runtime);
     pub const setCanvasWidgetLayout = CanvasWidgetStateMethods.setCanvasWidgetLayout;

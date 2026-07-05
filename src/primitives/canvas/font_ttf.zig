@@ -421,6 +421,55 @@ fn emitContour(transform: Affine, sink: anytype, flags: []const u8, xs: []const 
     try sink.close();
 }
 
+/// Why `Face.parse` rejects `bytes`, as a self-contained teaching
+/// sentence for registration-time diagnostics, or null when the bytes
+/// parse cleanly (`parse` is the single authority; this never disagrees
+/// with it). Kept out of `parse` itself so the render-path error stays a
+/// cheap enum while registration (a startup, once-per-font event) can
+/// afford the prose.
+pub fn parseFailureReason(bytes: []const u8) ?[]const u8 {
+    // `parse` is the single authority: bytes it accepts never get a
+    // reason (a recognizable-but-parseable oddity like a swapped magic
+    // is not a failure), and bytes it rejects always get one.
+    _ = Face.parse(bytes) catch return diagnoseParseFailure(bytes);
+    return null;
+}
+
+fn diagnoseParseFailure(bytes: []const u8) []const u8 {
+    if (bytes.len < 12) return "file is truncated before the TrueType table directory (fewer than 12 bytes)";
+    if (std.mem.eql(u8, bytes[0..4], "OTTO")) return "font carries CFF/PostScript outlines ('OTTO'); only TrueType 'glyf' outlines are supported - use a TrueType build of the family";
+    if (std.mem.eql(u8, bytes[0..4], "wOFF") or std.mem.eql(u8, bytes[0..4], "wOF2")) return "font is WOFF/WOFF2-compressed; decompress to a raw .ttf before registering";
+    if (std.mem.eql(u8, bytes[0..4], "ttcf")) return "font is a TrueType collection (.ttc); extract the single face to register";
+
+    const table_count = readU16(bytes, 4) catch return "table directory is truncated";
+    const required = [_]struct { tag: []const u8, teach: []const u8 }{
+        .{ .tag = "head", .teach = "missing required table 'head' (font header)" },
+        .{ .tag = "maxp", .teach = "missing required table 'maxp' (glyph counts)" },
+        .{ .tag = "cmap", .teach = "missing required table 'cmap' (codepoint mapping)" },
+        .{ .tag = "loca", .teach = "missing required table 'loca' (glyph offsets); CFF-only or bitmap fonts are not supported" },
+        .{ .tag = "glyf", .teach = "missing required table 'glyf' (TrueType outlines); CFF-only or bitmap fonts are not supported" },
+        .{ .tag = "hmtx", .teach = "missing required table 'hmtx' (horizontal advances)" },
+        .{ .tag = "hhea", .teach = "missing required table 'hhea' (horizontal header)" },
+    };
+    var found = [_]bool{false} ** required.len;
+    var index: usize = 0;
+    while (index < table_count) : (index += 1) {
+        const record = 12 + index * 16;
+        const tag = readBytes(bytes, record, 4) catch return "table directory is truncated (a table record runs past the end of the file)";
+        const offset = readU32(bytes, record + 8) catch return "table directory is truncated (a table record runs past the end of the file)";
+        const length = readU32(bytes, record + 12) catch return "table directory is truncated (a table record runs past the end of the file)";
+        if (offset + length > bytes.len) return "a table's declared range runs past the end of the file (truncated download?)";
+        for (required, 0..) |entry, slot| {
+            if (std.mem.eql(u8, tag, entry.tag)) found[slot] = true;
+        }
+    }
+    for (required, 0..) |entry, slot| {
+        if (!found[slot]) return entry.teach;
+    }
+    // Structure looks complete, so the failure is field-level.
+    return "font tables are present but malformed: needs a nonzero units-per-em, at least one horizontal metric, and a Unicode format-4 'cmap' subtable";
+}
+
 const Range = struct {
     offset: usize,
     len: usize,

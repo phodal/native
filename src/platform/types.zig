@@ -64,6 +64,7 @@ pub const Error = error{
     InvalidGpuSurfacePixels,
     InvalidGpuSurfacePacket,
     InvalidGpuSurfaceImage,
+    InvalidGpuSurfaceFont,
 };
 
 pub const WebEngine = enum {
@@ -209,6 +210,10 @@ pub const max_gpu_present_fallback_detail_bytes: usize = 32;
 /// matches the runtime registry's per-slot bound
 /// (`canvas_limits.max_registered_canvas_image_pixel_bytes`).
 pub const max_gpu_surface_image_pixel_bytes: usize = 1024 * 1024;
+/// Per-font bound for the gpu-surface font registration side-channel;
+/// matches the runtime registry's per-slot bound
+/// (`canvas_limits.max_registered_canvas_font_bytes`).
+pub const max_gpu_surface_font_bytes: usize = 2 * 1024 * 1024;
 
 pub const ShortcutModifiers = struct {
     primary: bool = false,
@@ -1461,6 +1466,18 @@ pub const GpuSurfaceImagePixels = struct {
     }
 };
 
+/// One runtime-registered font face for the gpu-surface font
+/// side-channel (`register_gpu_surface_font_fn`): raw TrueType bytes
+/// keyed by the canvas font id host-wide. The engine validates the bytes
+/// (a parseable TrueType face under the registry bounds) before this
+/// call, so hosts may treat a decode failure as a hard error rather than
+/// a fallback. Ids are permanent for the process — the engine never
+/// re-registers an id with different bytes.
+pub const GpuSurfaceFontData = struct {
+    id: u64,
+    ttf: []const u8,
+};
+
 pub const GpuSurfacePacket = struct {
     window_id: WindowId = 1,
     label: []const u8,
@@ -1784,6 +1801,17 @@ pub const PlatformServices = struct {
     /// Drop the host texture for a previously uploaded image id (the
     /// unregister path). Removing an unknown id is a no-op, not an error.
     remove_gpu_surface_image_fn: ?*const fn (context: ?*anyopaque, id: u64) anyerror!void = null,
+    /// Register a runtime-registered font face with the host so the
+    /// host-side text pipeline (measurement AND packet text drawing)
+    /// resolves the font id to this exact face. Required on platforms
+    /// that provide `measure_text_fn` — a host that measures and draws
+    /// with its own font resolution but cannot learn a registered face
+    /// would silently substitute the default family, so the runtime
+    /// fails font registration loudly there instead. Null on platforms
+    /// without host-side text (GTK/Win32/null default), where the engine
+    /// measures with the parsed face and inks it through the reference
+    /// renderer.
+    register_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, font: GpuSurfaceFontData) anyerror!void = null,
     update_widget_accessibility_fn: ?*const fn (context: ?*anyopaque, snapshot: WidgetAccessibilitySnapshot) anyerror!void = null,
     /// Reconcile the native scroll drivers for a gpu-surface view against
     /// the full desired set: create missing drivers, update frames /
@@ -2168,6 +2196,13 @@ pub const PlatformServices = struct {
         if (id == 0) return error.InvalidGpuSurfaceImage;
         const remove_fn = self.remove_gpu_surface_image_fn orelse return error.UnsupportedService;
         return remove_fn(self.context, id);
+    }
+
+    pub fn registerGpuSurfaceFont(self: PlatformServices, font: GpuSurfaceFontData) anyerror!void {
+        if (font.id == 0) return error.InvalidGpuSurfaceFont;
+        if (font.ttf.len == 0 or font.ttf.len > max_gpu_surface_font_bytes) return error.InvalidGpuSurfaceFont;
+        const register_fn = self.register_gpu_surface_font_fn orelse return error.UnsupportedService;
+        return register_fn(self.context, font);
     }
 
     pub fn updateWidgetAccessibility(self: PlatformServices, snapshot: WidgetAccessibilitySnapshot) anyerror!void {

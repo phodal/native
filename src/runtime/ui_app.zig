@@ -83,6 +83,30 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// for capacities and semantics.
         pub const Effects = runtime_effects.Effects(MsgT);
 
+        /// One app font face registered on the installing frame (see
+        /// `Options.fonts`). The face parses at registration —
+        /// registration is where invalid files fail, loudly, with a
+        /// teaching error naming this entry's `name` — and the id then
+        /// resolves everywhere a `canvas.FontId` rides: token overrides
+        /// (`typography.font_id` / `mono_font_id`), both renderers,
+        /// atlas keys, fingerprints. Glyphs the face does not cover keep
+        /// the same per-glyph notdef fallback as the built-in faces —
+        /// a registered face never silently cascades into another
+        /// family.
+        pub const FontRegistration = struct {
+            /// App-chosen id, at or above `canvas.min_registered_font_id`
+            /// (lower ids are reserved for built-in faces). Permanent for
+            /// the app's lifetime; store it in tokens, not handles.
+            id: canvas.FontId,
+            /// Human name for teaching errors — the asset's file name is
+            /// the right choice. Never rendered.
+            name: []const u8,
+            /// Raw TrueType (`glyf`) bytes: `@embedFile` of a bundled
+            /// asset, or bytes loaded before the app starts. Copied at
+            /// registration, so transient buffers are fine.
+            ttf: []const u8,
+        };
+
         pub const ChromeOptions = struct {
             /// Number of chrome commands preserved in front of the
             /// widget-generated commands.
@@ -255,6 +279,16 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// scale afterwards: the model owns scheme/contrast/motion,
             /// the runtime owns the surface scale.
             tokens_fn: ?*const fn (model: *const ModelT) canvas.DesignTokens = null,
+            /// App font faces registered once, on the installing frame,
+            /// BEFORE the first view build — so the very first layout
+            /// already measures (and the first paint inks) with them.
+            /// Reference the entries' ids from `tokens`/`tokens_fn`
+            /// (`typography.font_id` for body, `mono_font_id` for mono
+            /// runs). A registration failure is a teaching error naming
+            /// the font and what is wrong, surfaced through the dispatch
+            /// error channel — it never crashes the app and never
+            /// silently substitutes a face at render time.
+            fonts: []const FontRegistration = &.{},
             /// Non-widget chrome (backgrounds, gradients, titles) rebuilt
             /// together with the widget display list on install, resize,
             /// and every model rebuild via `setCanvasDisplayList` +
@@ -461,6 +495,11 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         canvas_size: geometry.SizeF = .{ .width = 1, .height = 1 },
         canvas_window_id: platform.WindowId = 1,
         installed: bool = false,
+        /// Exactly-once guard for `Options.fonts`: registration must not
+        /// retry on every frame after a teaching failure (ids that DID
+        /// register would then fail `FontIdInUse` and bury the real
+        /// error).
+        fonts_registered: bool = false,
         /// Exactly-once guard for `Options.init_fx`, independent of
         /// `installed` so a failed install rebuild cannot rerun it.
         init_fx_ran: bool = false,
@@ -1571,6 +1610,51 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             }
         }
 
+        /// Register the app's declared font faces (`Options.fonts`) with
+        /// the runtime, translating each failure into a teaching error
+        /// naming the font and what is wrong before propagating it.
+        fn registerDeclaredFonts(self: *Self, runtime: *Runtime) anyerror!void {
+            for (self.options.fonts) |font| {
+                runtime.registerCanvasFont(font.id, font.ttf) catch |err| {
+                    switch (err) {
+                        error.FontParseFailed => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: {s}",
+                            .{ font.name, font.id, canvas.font_ttf.parseFailureReason(font.ttf) orelse "not a parseable TrueType face" },
+                        ),
+                        error.FontTooLarge => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: the file is {d} bytes but the per-font budget is {d} bytes (canvas_limits.max_registered_canvas_font_bytes)",
+                            .{ font.name, font.id, font.ttf.len, canvas_limits.max_registered_canvas_font_bytes },
+                        ),
+                        error.FontRegistryFull => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: all {d} registered-font slots are in use (canvas_limits.max_registered_canvas_fonts)",
+                            .{ font.name, font.id, canvas_limits.max_registered_canvas_fonts },
+                        ),
+                        error.InvalidFontId => ui_app_log.warn(
+                            "font \"{s}\" failed to register: font id 0 is the \"inherit run font\" sentinel; choose an id at or above {d} (canvas.min_registered_font_id)",
+                            .{ font.name, canvas.min_registered_font_id },
+                        ),
+                        error.ReservedFontId => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: ids below {d} are reserved for built-in faces; choose an id at or above {d} (canvas.min_registered_font_id)",
+                            .{ font.name, font.id, canvas.min_registered_font_id, canvas.min_registered_font_id },
+                        ),
+                        error.FontIdInUse => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: that id already holds a registered face, and registered ids are permanent (atlas caches key glyphs by font id) — give each face its own id",
+                            .{ font.name, font.id },
+                        ),
+                        error.FontHostRegistrationUnsupported => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: this platform measures and draws text host-side but cannot learn app fonts, so the face could not be honored pixel-honestly",
+                            .{ font.name, font.id },
+                        ),
+                        else => ui_app_log.warn(
+                            "font \"{s}\" (id {d}) failed to register: {s}",
+                            .{ font.name, font.id, @errorName(err) },
+                        ),
+                    }
+                    return err;
+                };
+            }
+        }
+
         fn handleFrame(self: *Self, runtime: *Runtime, frame_event: platform.GpuSurfaceFrameEvent) anyerror!void {
             if (!std.mem.eql(u8, frame_event.label, self.options.canvas_label)) {
                 return self.handleWindowSlotFrame(runtime, frame_event);
@@ -1586,6 +1670,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 installing = true;
                 self.canvas_size = frame_event.size;
                 self.pixel_snap_scale = scale;
+                // Fonts first: the installing rebuild below is the first
+                // layout, and it must already measure with the registered
+                // faces. Exactly-once, like init_fx — a failure surfaces
+                // through the dispatch error channel and does not retry
+                // every frame.
+                if (!self.fonts_registered) {
+                    self.fonts_registered = true;
+                    try registerDeclaredFonts(self, runtime);
+                }
                 if (self.options.init_fx) |init_fx| {
                     if (!self.init_fx_ran) {
                         self.init_fx_ran = true;

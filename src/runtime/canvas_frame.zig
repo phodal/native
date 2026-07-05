@@ -378,7 +378,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 try canvas.ReferenceRenderSurface.initWithScratch(pixel_size.width, pixel_size.height, pixels, scratch)
             else
                 try canvas.ReferenceRenderSurface.init(pixel_size.width, pixel_size.height, pixels);
-            surface = surface.withImages(canvas_frame.image_resources);
+            surface = surface.withImages(canvas_frame.image_resources).withFonts(canvas_frame.font_resources);
             // Frame-profile `present` stage for the CPU pixel path: the
             // reference raster + the host present call (the software
             // equivalent of the packet host's decode+draw).
@@ -743,7 +743,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 try canvas.ReferenceRenderSurface.initWithScratch(pixel_size.width, pixel_size.height, pixels, scratch)
             else
                 try canvas.ReferenceRenderSurface.init(pixel_size.width, pixel_size.height, pixels);
-            surface = surface.withImages(canvas_frame.image_resources);
+            surface = surface.withImages(canvas_frame.image_resources).withFonts(canvas_frame.font_resources);
             try surface.renderPass(canvas_frame.renderPass(), self.views[index].canvas_clear_color);
             return .{
                 .width = pixel_size.width,
@@ -790,6 +790,12 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
             if (frame_options.image_resources.len == 0) {
                 frame_options.image_resources = self.registeredCanvasImages();
             }
+            // Runtime-registered fonts feed every view the same way: the
+            // CPU pixel paths resolve registered font ids from the
+            // planned frame's `font_resources`.
+            if (frame_options.font_resources.len == 0) {
+                frame_options.font_resources = self.registeredCanvasFonts();
+            }
             if (canvasFrameBudgetIsUnset(frame_options.budget)) {
                 frame_options.budget = self.views[index].canvas_frame_budget;
             }
@@ -833,6 +839,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                     .scale = frame_options.scale,
                     .display_list = display_list,
                     .image_resources = frame_options.image_resources,
+                    .font_resources = frame_options.font_resources,
                     .changes = storage.changes[0..0],
                     .budget = frame_options.budget,
                 };
@@ -1029,6 +1036,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 .text_layout_plan = text_layout_plan,
                 .text_layout_cache_plan = text_layout_cache_plan,
                 .image_resources = frame_options.image_resources,
+                .font_resources = frame_options.font_resources,
                 .changes = changes,
                 .dirty_bounds = dirty_bounds,
                 .dirty_rects = dirty_rects,

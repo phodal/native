@@ -364,6 +364,9 @@ pub const attrs = [_]AttrInfo{
     .{ .code = 64, .name = "color", .class = .token_color, .group = .composite },
     // Scroll-region edge behavior (scroll only; the validator scopes it).
     .{ .code = 65, .name = "overscroll", .class = .option, .group = .option, .field = "overscroll" },
+    // 66: two same-day waves both minted 65; icon-placement re-minted at
+    // birth here, before either landed anywhere serialized.
+    .{ .code = 66, .name = "icon-placement", .class = .option, .group = .option, .field = "icon_placement" },
 };
 
 // ----------------------------------------------------------------- events
@@ -417,12 +420,13 @@ pub const icon_names = [_][]const u8{
     "alert",       "archive",       "arrow-down",   "arrow-right",      "arrow-up",
     "check",       "check-circle",  "chevron-down", "chevron-left",     "chevron-right",
     "chevron-up",  "circle-dot",    "clock",        "copy",             "download",
-    "edit",        "external-link", "eye",          "file-text",        "folder",
-    "folder-open", "git-branch",    "git-merge",    "git-pull-request", "info",
-    "menu",        "moon",          "music",        "pause",            "play",
-    "plus",        "refresh-cw",    "repeat",       "save",             "search",
-    "send",        "settings",      "shuffle",      "skip-back",        "skip-forward",
-    "sun",         "trash",         "volume",       "x",                "x-circle",
+    "edit",        "ellipsis",      "external-link", "eye",             "file-text",
+    "folder",      "folder-open",   "git-branch",   "git-merge",        "git-pull-request",
+    "info",        "menu",          "moon",         "music",            "pause",
+    "play",        "plus",          "refresh-cw",   "repeat",           "save",
+    "search",      "send",          "settings",     "shuffle",          "skip-back",
+    "skip-forward", "sun",          "trash",        "volume",           "x",
+    "x-circle",
 };
 
 /// The semantic role vocabulary the `role` attribute accepts: the field

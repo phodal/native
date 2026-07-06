@@ -33,7 +33,8 @@ const catalog_card_gap_y = model.catalog_card_gap_y;
 const catalog_preview_y = model.catalog_preview_y;
 const catalog_preview_width = model.catalog_preview_width;
 const refresh_command = model.refresh_command;
-const theme_command = model.theme_command;
+const themeModeCommand = model.themeModeCommand;
+const themeModeTriggerId = model.themeModeTriggerId;
 const environment_toggle_command = model.environment_toggle_command;
 const surface_dialog_command = model.surface_dialog_command;
 const surface_drawer_command = model.surface_drawer_command;
@@ -53,6 +54,7 @@ const canvas_sidebar_resize_line_id = model.canvas_sidebar_resize_line_id;
 const canvas_sidebar_resize_handle_id = model.canvas_sidebar_resize_handle_id;
 const canvas_status_text_id = model.canvas_status_text_id;
 const environment_select_id = model.environment_select_id;
+const environment_stack_id = model.environment_stack_id;
 const environment_menu_id = model.environment_menu_id;
 const content_scroll_id = model.content_scroll_id;
 const surface_overlay_backdrop_id = model.surface_overlay_backdrop_id;
@@ -121,7 +123,7 @@ const catalog_avatar_children = [_]canvas.Widget{canvas.builtinComponentWidget(.
 })};
 const catalog_badge_children = [_]canvas.Widget{canvas.builtinComponentWidget(.badge, .{
     .id = 18401,
-    .frame = rect(0, catalog_preview_y + 4, 72, 24),
+    .frame = rect(0, catalog_preview_y + 6, 64, 20),
     .text = "Active",
     .variant = .secondary,
 })};
@@ -157,7 +159,7 @@ const catalog_button_group_children = [_]canvas.Widget{canvas.builtinComponentWi
     .children = &catalog_button_group_items,
 })};
 const catalog_card_preview_children = [_]canvas.Widget{
-    .{ .id = 18902, .kind = .badge, .frame = rect(0, 28, 66, 24), .text = "Pro", .variant = .secondary },
+    .{ .id = 18902, .kind = .badge, .frame = rect(0, 28, 56, 20), .text = "Pro", .variant = .secondary },
 };
 const catalog_card_children = [_]canvas.Widget{canvas.builtinComponentWidget(.card, .{
     .id = 18901,
@@ -207,10 +209,15 @@ const catalog_input_children = [_]canvas.Widget{canvas.builtinComponentWidget(.i
     .frame = rect(0, catalog_preview_y, 172, 34),
     .text = "native-sdk",
 })};
+// The reference pagination row: ghost chevrons for previous/next, ghost
+// page numbers with the current page carrying the outline variant, and
+// an ellipsis cell standing in for the collapsed range.
 const catalog_pagination_items = [_]canvas.Widget{
-    .{ .id = 19601, .kind = .button, .text = "1", .size = .sm, .state = .{ .selected = true } },
-    .{ .id = 19602, .kind = .button, .text = "2", .size = .sm, .variant = .outline },
-    .{ .id = 19603, .kind = .button, .text = "Next", .size = .sm, .variant = .ghost },
+    .{ .id = 19601, .kind = .icon_button, .icon = "chevron-left", .size = .sm, .variant = .ghost, .semantics = .{ .label = "Previous page" } },
+    .{ .id = 19602, .kind = .button, .text = "1", .size = .sm, .variant = .outline, .state = .{ .selected = true } },
+    .{ .id = 19603, .kind = .button, .text = "2", .size = .sm, .variant = .ghost },
+    .{ .id = 19604, .kind = .icon, .icon = "ellipsis", .semantics = .{ .label = "More pages" } },
+    .{ .id = 19605, .kind = .icon_button, .icon = "chevron-right", .size = .sm, .variant = .ghost, .semantics = .{ .label = "Next page" } },
 };
 const catalog_pagination_children = [_]canvas.Widget{canvas.builtinComponentWidget(.pagination, .{
     .id = 19600,
@@ -219,7 +226,7 @@ const catalog_pagination_children = [_]canvas.Widget{canvas.builtinComponentWidg
 })};
 const catalog_progress_children = [_]canvas.Widget{canvas.builtinComponentWidget(.progress, .{
     .id = 19701,
-    .frame = rect(0, catalog_preview_y + 13, 172, 8),
+    .frame = rect(0, catalog_preview_y + 15, 172, 4),
     .value = 0.62,
 })};
 const catalog_radio_group_items = [_]canvas.Widget{
@@ -471,19 +478,9 @@ pub fn buildComponentsDisplayList(builder: *canvas.Builder, layout: canvas.Widge
 pub fn buildComponentsDisplayListForSize(builder: *canvas.Builder, layout: canvas.WidgetLayoutTree, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
     const size = componentSurfaceSize(surface_size);
     try builder.fillRect(.{ .id = canvas_background_id, .rect = rect(0, 0, size.width, size.height), .fill = .{ .color = tokens.colors.background } });
+    // The band carries only the app's real controls (theme strip +
+    // refresh): a window never labels itself with its own name.
     try builder.fillRect(.{ .id = canvas_toolbar_id, .rect = rect(0, 0, size.width, toolbar_height), .fill = .{ .color = tokens.colors.surface } });
-    try builder.drawText(.{
-        .id = canvas_toolbar_title_id,
-        .font_id = tokens.typography.font_id,
-        .size = 16,
-        .origin = geometry.PointF.init(18, 33),
-        .color = tokens.colors.text,
-        .text = "GPU Components",
-        .text_layout = .{
-            .max_width = 260,
-            .line_height = 20,
-        },
-    });
     try builder.fillRect(.{ .id = canvas_toolbar_separator_id, .rect = rect(0, toolbar_height - 1, size.width, 1), .fill = .{ .color = tokens.colors.border } });
     try layout.emitDisplayList(builder, tokens);
 }
@@ -713,6 +710,25 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         .{ .id = 169, .kind = .radio, .text = "Card", .state = .{ .selected = true }, .semantics = .{ .label = "Card layout" } },
         .{ .id = 170, .kind = .radio, .text = "List", .semantics = .{ .label = "List layout" } },
     };
+    const environment_menu_items = [_]canvas.Widget{
+        .{ .id = environmentOptionId(0), .kind = .menu_item, .text = environment_options[0], .command = environment_option_commands[0], .state = .{ .selected = ui_state.environment_index == 0 }, .semantics = .{ .label = environment_options[0] } },
+        .{ .id = environmentOptionId(1), .kind = .menu_item, .text = environment_options[1], .command = environment_option_commands[1], .state = .{ .selected = ui_state.environment_index == 1 }, .semantics = .{ .label = environment_options[1] } },
+        .{ .id = environmentOptionId(2), .kind = .menu_item, .text = environment_options[2], .command = environment_option_commands[2], .state = .{ .selected = ui_state.environment_index == 2 }, .semantics = .{ .label = environment_options[2] } },
+    };
+    // The house select composition: the trigger and its anchored menu
+    // are siblings in a stack, the menu floating below the trigger and
+    // stretched to its width, mounted only while the model holds it
+    // open — so the engine's open-select keymap (arrows walk in, Enter
+    // commits, Escape dismisses back to the trigger) applies as-is.
+    const environment_select_trigger = canvas.Widget{ .id = environment_select_id, .kind = .select, .frame = rect(0, 0, 180, 34), .text = environmentLabel(ui_state.environment_index), .command = environment_toggle_command, .state = .{ .expanded = ui_state.environment_select_open }, .semantics = .{ .label = "Environment select" } };
+    const environment_closed_children = [_]canvas.Widget{environment_select_trigger};
+    const environment_open_children = [_]canvas.Widget{ environment_select_trigger, canvas.builtinComponentWidget(.dropdown_menu, .{
+        .id = environment_menu_id,
+        .frame = rect(0, 0, 180, 96),
+        .layout = .{ .anchor = .{ .placement = .below, .alignment = .stretch } },
+        .semantics = .{ .label = "Environment options" },
+        .children = &environment_menu_items,
+    }) };
     const form_controls = [_]canvas.Widget{
         .{ .id = 111, .kind = .input, .frame = rect(0, 0, 148, 34), .text = "native-sdk", .semantics = .{ .label = "Project name" } },
         .{ .id = 112, .kind = .combobox, .frame = rect(166, 0, 172, 34), .text = "components", .semantics = .{ .label = "Component combobox" } },
@@ -720,7 +736,7 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         .{ .id = 114, .kind = .switch_control, .frame = rect(166, 52, 116, 30), .text = "Live", .value = 1, .state = .{ .selected = true }, .semantics = .{ .label = "Live switch" } },
         .{ .id = 215, .kind = .toggle_button, .frame = rect(292, 52, 60, 30), .text = "Bold", .state = .{ .selected = true }, .semantics = .{ .label = "Bold toggle" } },
         .{ .id = 115, .kind = .slider, .frame = rect(0, 108, 176, 28), .value = 0.62, .semantics = .{ .label = "Density slider" } },
-        .{ .id = 116, .kind = .progress, .frame = rect(202, 118, 134, 8), .value = 1, .semantics = .{ .label = "Build progress" } },
+        .{ .id = 116, .kind = .progress, .frame = rect(202, 120, 134, 4), .value = 1, .semantics = .{ .label = "Build progress" } },
         .{ .id = 167, .kind = .radio_group, .frame = rect(0, 148, 160, 28), .layout = .{ .gap = 10, .cross_alignment = .center }, .semantics = .{ .label = "Layout radio group" }, .children = &radio_controls },
         // The house TabsList hug: triggers sit 3px inside the container
         // (raw widget trees bypass the builder defaults, so the inset is
@@ -728,13 +744,13 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         // stay concentric with the container's rounding.
         .{ .id = 168, .kind = .tabs, .frame = rect(0, 200, 148, 34), .layout = .{ .padding = .{ .top = 3, .right = 3, .bottom = 3, .left = 3 } }, .semantics = .{ .label = "Density tabs" }, .children = &segment_controls },
         .{ .id = 171, .kind = .textarea, .frame = rect(0, 246, 336, 72), .text = "Compose a native-rendered message", .semantics = .{ .label = "Message textarea" } },
-        .{ .id = environment_select_id, .kind = .select, .frame = rect(0, 330, 180, 34), .text = environmentLabel(ui_state.environment_index), .command = environment_toggle_command, .state = .{ .expanded = ui_state.environment_select_open }, .semantics = .{ .label = "Environment select" } },
+        .{ .id = environment_stack_id, .kind = .stack, .frame = rect(0, 330, 180, 34), .children = if (ui_state.environment_select_open) &environment_open_children else &environment_closed_children },
     };
     const card_preview_children = [_]canvas.Widget{
-        .{ .id = 231, .kind = .badge, .frame = rect(176, 0, 66, 24), .text = "Active", .variant = .secondary, .semantics = .{ .label = "Plan status active" } },
+        .{ .id = 231, .kind = .badge, .frame = rect(186, 0, 56, 20), .text = "Active", .variant = .secondary, .semantics = .{ .label = "Plan status active" } },
         .{ .id = 232, .kind = .text, .frame = rect(0, 40, 220, 28), .text = "$29 / month", .size = .lg },
         .{ .id = 233, .kind = .text, .frame = rect(0, 72, 220, 20), .text = "8 of 12 seats used", .size = .sm },
-        .{ .id = 234, .kind = .progress, .frame = rect(0, 102, 244, 8), .value = 0.67, .semantics = .{ .label = "Seat usage" } },
+        .{ .id = 234, .kind = .progress, .frame = rect(0, 104, 244, 4), .value = 0.67, .semantics = .{ .label = "Seat usage" } },
     };
     const menu_items = [_]canvas.Widget{
         .{ .id = 142, .kind = .menu_item, .text = "Copy invite link" },
@@ -779,11 +795,6 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
     const data_panel_children = [_]canvas.Widget{
         .{ .id = 150, .kind = .table, .frame = rect(0, 0, 360, 28), .text = "Finished component behavior", .value = virtual_scroll.data, .layout = .{ .virtualized = true, .virtual_item_extent = 28, .virtual_overscan = 0 }, .children = &data_rows },
         .{ .id = 160, .kind = .tooltip, .frame = rect(392, 0, 176, 32), .text = "Tooltip rendered on GPU", .semantics = .{ .label = "GPU tooltip" } },
-    };
-    const environment_menu_items = [_]canvas.Widget{
-        .{ .id = environmentOptionId(0), .kind = .menu_item, .text = environment_options[0], .command = environment_option_commands[0], .state = .{ .selected = ui_state.environment_index == 0 }, .semantics = .{ .label = environment_options[0] } },
-        .{ .id = environmentOptionId(1), .kind = .menu_item, .text = environment_options[1], .command = environment_option_commands[1], .state = .{ .selected = ui_state.environment_index == 1 }, .semantics = .{ .label = environment_options[1] } },
-        .{ .id = environmentOptionId(2), .kind = .menu_item, .text = environment_options[2], .command = environment_option_commands[2], .state = .{ .selected = ui_state.environment_index == 2 }, .semantics = .{ .label = environment_options[2] } },
     };
     const size = componentSurfaceSize(surface_size);
     const content_y = componentContentYForSize(size);
@@ -848,16 +859,6 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         },
     }
 
-    if (ui_state.environment_select_open and (ui_state.section == .controls or ui_state.section == .inputs)) {
-        try appendComponentWidget(&content_widgets, &content_widget_count, .{
-            .id = environment_menu_id,
-            .kind = .dropdown_menu,
-            .frame = rect(64, 494, 180, 104),
-            .layout = canvas.builtinComponentWidget(.dropdown_menu, .{}).layout,
-            .semantics = .{ .label = "Environment options" },
-            .children = &environment_menu_items,
-        });
-    }
     const content_width = @max(1, size.width - sidebar_width);
     const content_height = @max(content_height_available, componentSectionContentHeight(ui_state.section));
     var content_children: [canvas.builtin_component_names.len + 17]canvas.Widget = undefined;
@@ -870,15 +871,23 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
     for (content_widgets[0..content_widget_count], 0..) |widget, index| {
         content_children[index + 1] = widget;
     }
+    const theme_triggers = [_]canvas.Widget{
+        .{ .id = themeModeTriggerId(.light), .kind = .segmented_control, .text = "Light", .size = .sm, .command = themeModeCommand(.light), .state = .{ .selected = ui_state.theme_mode == .light }, .semantics = .{ .label = "Light theme" } },
+        .{ .id = themeModeTriggerId(.dark), .kind = .segmented_control, .text = "Dark", .size = .sm, .command = themeModeCommand(.dark), .state = .{ .selected = ui_state.theme_mode == .dark }, .semantics = .{ .label = "Dark theme" } },
+        .{ .id = themeModeTriggerId(.high), .kind = .segmented_control, .text = "High", .size = .sm, .command = themeModeCommand(.high), .state = .{ .selected = ui_state.theme_mode == .high }, .semantics = .{ .label = "High contrast theme" } },
+    };
     var root_widgets: [9]canvas.Widget = undefined;
     var root_widget_count: usize = 0;
+    // The theme choice is mutually exclusive, so it renders as a REAL
+    // segmented strip (the house TabsList hug) whose selected trigger is
+    // the active theme — each trigger dispatches its own mode command.
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_toolbar_theme_id,
-        .kind = .segmented_control,
+        .kind = .tabs,
         .frame = rect(292, 11, 174, 30),
-        .text = "Light|Dark|High",
-        .command = theme_command,
+        .layout = .{ .padding = .{ .top = 3, .right = 3, .bottom = 3, .left = 3 } },
         .semantics = .{ .label = "Theme mode" },
+        .children = &theme_triggers,
     });
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_toolbar_refresh_id,

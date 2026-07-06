@@ -44,14 +44,15 @@ test "registry codes are stable: assigned at birth, never renumbered or renamed"
     // the new fingerprint ONLY for additions; renames/renumbers are
     // schema-version-bump events, not silent edits.
     try testing.expectEqual(@as(usize, 61), schema.elements.len);
-    try testing.expectEqual(@as(usize, 65), schema.attrs.len);
+    try testing.expectEqual(@as(usize, 66), schema.attrs.len);
     try testing.expectEqual(@as(usize, 10), schema.events.len);
     try testing.expectEqual(
         @as(u64, 0xd7afff46ae86e077),
         tableFingerprint(schema.ElementInfo, &schema.elements),
     );
+    // Re-pinned for the icon-placement addition (fresh code 65).
     try testing.expectEqual(
-        @as(u64, 0x3629706fecb6efe3),
+        @as(u64, 0x73dc1b00aea1754d),
         tableFingerprint(schema.AttrInfo, &schema.attrs),
     );
     try testing.expectEqual(

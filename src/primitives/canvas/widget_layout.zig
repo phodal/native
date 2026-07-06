@@ -1112,7 +1112,7 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .icon => geometry.SizeF.init(intrinsicIconExtent(widget, tokens), intrinsicIconExtent(widget, tokens)),
         .avatar => intrinsicAvatarWidgetSize(widget, tokens),
         .badge => intrinsicBadgeWidgetSize(widget, tokens),
-        .button, .toggle_button => intrinsicButtonWidgetSize(widget, tokens),
+        .button, .toggle_button, .toggle => intrinsicButtonWidgetSize(widget, tokens),
         .icon_button => intrinsicSquareControlSize(widget, tokens),
         .select => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 200), widgetControlHeight(widget, tokens)),
         .input, .text_field => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetControlHeight(widget, tokens)),
@@ -1132,14 +1132,18 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
             paddedIntrinsicSize(widget, intrinsicTextWidgetSize(widget, tokens, widgetBodyTextSize(widget, tokens)))
         else
             intrinsicRowTextWidgetSize(widget, tokens),
-        .data_row => geometry.SizeF.init(0, widgetDefaultRowHeight(widget, tokens)),
+        // Table rows sit taller than list rows: the comfortable row
+        // band with tight cell padding, the reference table rhythm.
+        .data_row => geometry.SizeF.init(0, widgetSizedDensityValue(widget, tokens, 36)),
         .status_bar => intrinsicStatusBarWidgetSize(widget, tokens),
         .segmented_control => intrinsicSegmentedControlSize(widget, tokens),
         .checkbox => intrinsicCheckboxWidgetSize(widget, tokens),
         .radio => intrinsicRadioWidgetSize(widget, tokens),
-        .switch_control, .toggle => intrinsicToggleWidgetSize(widget, tokens),
+        .switch_control => intrinsicToggleWidgetSize(widget, tokens),
         .slider => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), @max(widgetSizedDensityValue(widget, tokens, 28), widgetSizedDensityValue(widget, tokens, 20))),
-        .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 8)),
+        // A 4px rail: the display-only bar is half the slider track so a
+        // read-out never outweighs the control that edits the value.
+        .progress => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), widgetSizedDensityValue(widget, tokens, 4)),
         .separator => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 160), controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline)),
         .skeleton => geometry.SizeF.init(widgetSizedDensityValue(widget, tokens, 120), widgetSizedDensityValue(widget, tokens, 20)),
         .spinner => intrinsicSpinnerWidgetSize(widget, tokens),
@@ -1429,7 +1433,7 @@ fn intrinsicAvatarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
 }
 
 fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
-    const text_width = measuredTextWidth(tokens, widget.text, widgetLabelTextSize(widget, tokens));
+    const text_width = measuredTextWidth(tokens, widget.text, widget_metrics.widgetBadgeTextSize(widget, tokens));
     const inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
     // An inline icon widens the badge by the same shared metrics
     // the renderer paints with (gap only when a label follows).
@@ -1437,7 +1441,9 @@ fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF
         widget_metrics.widgetBadgeIconExtent(widget, tokens) + (if (widget.text.len > 0) widget_metrics.widgetBadgeIconGap(widget, tokens) else 0)
     else
         0;
-    return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), icon_width + text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 22));
+    // The compact chip: a 20px band (the reference badge height) with
+    // the tight 8px side insets.
+    return geometry.SizeF.init(@max(widgetSizedDensityValue(widget, tokens, 24), icon_width + text_width + inset * 2), widgetSizedDensityValue(widget, tokens, 20));
 }
 
 fn intrinsicSquareControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {

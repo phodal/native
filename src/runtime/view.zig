@@ -181,8 +181,8 @@ pub const RuntimeView = struct {
     /// Arc command ids of the spinners currently carrying the looping
     /// rotation animation, so display-list refreshes can remove the
     /// animations of spinners that unmounted (and the view goes idle).
-    canvas_widget_spinner_ids: [canvas_limits.max_canvas_widget_spinner_animations_per_view]canvas.ObjectId = undefined,
-    canvas_widget_spinner_count: usize = 0,
+    canvas_widget_loop_animation_ids: [canvas_limits.max_canvas_widget_loop_animations_per_view]canvas.ObjectId = undefined,
+    canvas_widget_loop_animation_count: usize = 0,
     canvas_render_animation_dirty_bounds: [max_canvas_render_animation_dirty_bounds_per_view]CanvasRenderAnimationDirtyBounds = undefined,
     canvas_render_animation_dirty_bounds_count: usize = 0,
     canvas_frame_render_overrides: [max_canvas_render_overrides_per_view]canvas.CanvasRenderOverride = undefined,
@@ -475,6 +475,9 @@ pub const RuntimeView = struct {
     pub const dismissCanvasWidgetSurfaceAtIndex = CanvasWidgetTreeMethods.dismissCanvasWidgetSurfaceAtIndex;
     pub const canvasWidgetDismissibleSurfaceIndexForTarget = CanvasWidgetTreeMethods.canvasWidgetDismissibleSurfaceIndexForTarget;
     pub const canvasWidgetAnchoredDismissibleChildIndex = CanvasWidgetTreeMethods.canvasWidgetAnchoredDismissibleChildIndex;
+    pub const canvasWidgetOwnedMenuSurfaceIndex = CanvasWidgetTreeMethods.canvasWidgetOwnedMenuSurfaceIndex;
+    pub const canvasWidgetMenuSurfaceEntryId = CanvasWidgetTreeMethods.canvasWidgetMenuSurfaceEntryId;
+    pub const canvasWidgetAnchorTriggerFocusId = CanvasWidgetTreeMethods.canvasWidgetAnchorTriggerFocusId;
     pub const canvasWidgetTopmostAnchoredDismissibleIndex = CanvasWidgetTreeMethods.canvasWidgetTopmostAnchoredDismissibleIndex;
     pub const canvasWidgetRouteDescendsFromIndex = CanvasWidgetTreeMethods.canvasWidgetRouteDescendsFromIndex;
     pub const canvasWidgetScopedFocusTarget = CanvasWidgetTreeMethods.canvasWidgetScopedFocusTarget;

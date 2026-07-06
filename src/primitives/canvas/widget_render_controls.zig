@@ -172,12 +172,27 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         const available = @max(0, widget.frame.width - text_inset * 2);
         const content_width = @min(available, icon_extent + gap + text_width);
         const start_x = widget.frame.x + text_inset + @max(0, (available - content_width) * 0.5);
-        const icon_frame = geometry.RectF.init(start_x, icon_y, icon_extent, icon_extent);
+        // Icon slot side: leading puts the glyph before the label,
+        // trailing after it (the next-page chevron) — same centered
+        // icon+label block either way.
+        const icon_x = if (widget.icon_placement == .trailing)
+            start_x + (content_width - icon_extent)
+        else
+            start_x;
+        const text_x = if (widget.icon_placement == .trailing)
+            start_x
+        else
+            start_x + icon_extent + gap;
+        const text_max_x = if (widget.icon_placement == .trailing)
+            icon_x - gap
+        else
+            widget.frame.maxX() - text_inset;
+        const icon_frame = geometry.RectF.init(icon_x, icon_y, icon_extent, icon_extent);
         try emitVectorIcon(builder, widget.id, 5, icon_frame, content_color, resolved);
         const text_frame = geometry.RectF.init(
-            start_x + icon_extent + gap,
+            text_x,
             widget.frame.y,
-            @max(1, widget.frame.maxX() - text_inset - (start_x + icon_extent + gap)),
+            @max(1, text_max_x - text_x),
             widget.frame.height,
         );
         try builder.drawText(.{
@@ -634,7 +649,10 @@ pub fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignToken
     const visual = try emitDataCellWidgetChrome(builder, widget, tokens);
     if (widget.text.len > 0) {
         const text_size = widgetBodyTextSize(widget, tokens);
-        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
+        // Tight cell padding on the comfortable row band — the table
+        // register — and the cell honors its authored alignment, so
+        // numeric columns right-align with `text-alignment="end"`.
+        const text_inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
         try builder.drawText(.{
             .id = widgetPartId(widget.id, 4),
             .font_id = tokens.typography.font_id,
@@ -642,7 +660,7 @@ pub fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignToken
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, tokens),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, widget.text_alignment, .none, tokens),
         });
     }
 }
@@ -661,14 +679,20 @@ pub fn emitDataCellWidgetChrome(builder: *Builder, widget: Widget, tokens: Desig
             .fill = widgetBackgroundFill(widget, state_fill),
         });
     }
-    try builder.strokeRect(.{
-        .id = widgetPartId(widget.id, 2),
-        .rect = widget.frame,
-        .stroke = .{
-            .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
-            .width = controlStrokeWidth(widget, visual, tokens.stroke.hairline),
-        },
-    });
+    // Borderless by default: the table's chrome is its hairline ROW
+    // separators, never a grid of cell boxes. A theme or per-widget
+    // border/stroke opts a cell back into an edge.
+    const wants_stroke = widget.style.border != null or visual.border != null or widget.style.stroke_width != null or visual.stroke_width != null;
+    if (wants_stroke) {
+        try builder.strokeRect(.{
+            .id = widgetPartId(widget.id, 2),
+            .rect = widget.frame,
+            .stroke = .{
+                .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
+                .width = controlStrokeWidth(widget, visual, tokens.stroke.hairline),
+            },
+        });
+    }
     if (widget.state.focused) try emitWidgetFocusRing(builder, widget, tokens, 3);
     return visual;
 }
@@ -996,14 +1020,14 @@ pub fn emitProgressWidget(builder: *Builder, widget: Widget, tokens: DesignToken
     const visual = selectionControlVisualTokens(widget, tokens);
     const radius = controlRadius(widget, visual, @min(tokens.radius.md, widget.frame.height * 0.5));
     if (progress < 1) {
-        // The unfilled track is the primary at 20% alpha, so the bar
-        // reads as one hue (filled primary ahead of its own tint) rather
-        // than primary-on-gray.
+        // The unfilled track sits on the muted wash (the same rail the
+        // slider uses), so the primary indicator reads against a quiet
+        // gray rather than against a tint of itself.
         try builder.fillRoundedRect(.{
             .id = widgetPartId(widget.id, 1),
             .rect = widget.frame,
             .radius = radius,
-            .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse widget_render_style.colorWithAlpha(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), 0.2))),
+            .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_subtle)),
         });
     }
     if (progress > 0) {

@@ -297,9 +297,10 @@ fn tableHeading(ui: *Ui, model: *const Model, shown: usize) Ui.Node {
     });
 }
 
-/// The table is ONE flat surface: the column headings sit above a
-/// hairline, and the rows are flat `list_item` composites — no borders,
-/// no per-row card chrome; hover is a full-width edge-to-edge wash. The
+/// The table is the REAL table register: `table` > `data_row` >
+/// `data_cell`, so the engine owns the chrome — hairline separators
+/// under every row but the last (the header's line comes free), a
+/// full-width hover wash per row, no outer box, no cell gridlines. The
 /// scroll is CONTROLLED (the model stores the applied offset and echoes
 /// it back), so the 2 s sample rebuild can never reset the table
 /// mid-gesture.
@@ -309,19 +310,20 @@ fn processList(ui: *Ui, model: *const Model, rows: []const model_mod.TableRow) U
         .value = model.table_scroll,
         .on_scroll = Ui.scrollMsg(.table_scrolled),
         .semantics = .{ .label = "Process table" },
-    }, ui.column(.{}, .{
+    }, ui.el(.table, .{ .semantics = .{ .label = "Processes by CPU" } }, .{
         columnHeadings(ui),
-        ui.separator(.{}),
-        ui.el(.list, .{ .semantics = .{ .role = .list, .label = "Processes by CPU" } }, ui.each(rows, rowKey, rowView)),
+        ui.each(rows, rowKey, rowView),
     }));
 }
 
+/// The muted small header row; numeric columns right-align like the
+/// values under them.
 fn columnHeadings(ui: *Ui) Ui.Node {
-    return ui.row(.{ .height = 24, .padding = 8, .gap = 12, .cross = .center }, .{
-        ui.text(.{ .width = 64, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "PID"),
-        ui.text(.{ .grow = 1, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Command"),
-        alignedCell(ui, 64, "CPU %", .text_muted),
-        alignedCell(ui, 84, "Memory", .text_muted),
+    return ui.el(.data_row, .{ .height = 32, .gap = 12, .cross = .center }, .{
+        ui.el(.data_cell, .{ .text = "PID", .width = 80, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+        ui.el(.data_cell, .{ .text = "Command", .grow = 1, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+        ui.el(.data_cell, .{ .text = "CPU %", .width = 80, .size = .sm, .text_alignment = .end, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+        ui.el(.data_cell, .{ .text = "Memory", .width = 100, .size = .sm, .text_alignment = .end, .style_tokens = .{ .foreground = .text_muted } }, .{}),
     });
 }
 
@@ -340,16 +342,16 @@ fn rowKey(row: *const model_mod.TableRow) canvas.UiKey {
     return canvas.uiKey(row.pid);
 }
 
-/// One process row: a FLAT list row (the list_item composite — no
-/// border, no card chrome; hover is a full-width wash), with the table
-/// cells flowing horizontally inside the wash. The native context menu
-/// is the kill seam: Terminate opens the confirmation dialog (never the
-/// signal directly), Copy Name runs the clipboard effect.
+/// One process row on the table register: a `data_row` whose hover wash
+/// the engine paints full-width, with `data_cell` columns (fixed widths
+/// keep the numeric right edges aligned regardless of digit count). The
+/// native context menu is the kill seam: Terminate opens the
+/// confirmation dialog (never the signal directly), Copy Name runs the
+/// clipboard effect.
 fn rowView(ui: *Ui, row: *const model_mod.TableRow) Ui.Node {
-    return ui.el(.list_item, .{
+    return ui.el(.data_row, .{
         .global_key = canvas.uiKey(row.pid),
         .height = table_row_height,
-        .padding = 8,
         .gap = 12,
         .cross = .center,
         .context_menu = &.{
@@ -357,22 +359,13 @@ fn rowView(ui: *Ui, row: *const model_mod.TableRow) Ui.Node {
             .{ .separator = true },
             .{ .label = "Copy Name", .msg = Msg{ .copy_name = row.pid } },
         },
-        .semantics = .{ .role = .listitem, .label = ui.fmt("{s} pid {s}", .{ row.name, row.pid_text }) },
+        .semantics = .{ .label = ui.fmt("{s} pid {s}", .{ row.name, row.pid_text }) },
     }, .{
-        ui.text(.{ .width = 64, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, row.pid_text),
-        ui.text(.{ .grow = 1 }, row.name),
-        alignedCell(ui, 64, row.cpu_text, .text),
-        alignedCell(ui, 84, row.mem_text, .text_muted),
+        ui.el(.data_cell, .{ .text = row.pid_text, .width = 80, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+        ui.el(.data_cell, .{ .text = row.name, .grow = 1 }, .{}),
+        ui.el(.data_cell, .{ .text = row.cpu_text, .width = 80, .size = .sm, .text_alignment = .end }, .{}),
+        ui.el(.data_cell, .{ .text = row.mem_text, .width = 100, .size = .sm, .text_alignment = .end, .style_tokens = .{ .foreground = .text_muted } }, .{}),
     });
-}
-
-/// Right-aligned fixed-width numeric cell. The fixed width is a table
-/// column: it keeps every row's value right edge aligned regardless of
-/// digit count, sized for the widest plausible value.
-fn alignedCell(ui: *Ui, width: f32, text: []const u8, tone: canvas.ColorTokenName) Ui.Node {
-    var node = ui.text(.{ .width = width, .size = .sm, .style_tokens = .{ .foreground = tone } }, text);
-    node.widget.text_alignment = .end;
-    return node;
 }
 
 fn emptyState(ui: *Ui, model: *const Model) Ui.Node {

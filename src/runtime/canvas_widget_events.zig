@@ -674,10 +674,19 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
 
         pub fn dispatchCanvasWidgetCommandFromKeyboard(self: *Runtime, app: runtime_api.App(Runtime), keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {
             if (keyboard_event.keyboard.phase != .key_down or keyboard_event.keyboard.modifiers.hasNavigationModifier()) return;
-            if (!canvas.isWidgetActivationKey(keyboard_event.keyboard.key)) return;
+            const target = keyboard_event.target orelse return;
+            // Activation keys press any commandable target; the menu-open
+            // arrows press select/combobox triggers too — the same keymap
+            // the control-intent resolver applies for `on_press`, kept in
+            // lockstep so command-string apps open their pickers from the
+            // keyboard exactly like TEA apps.
+            const arrow_opens = (target.kind == .select or target.kind == .combobox) and
+                canvas.isWidgetMenuOpenArrowKey(keyboard_event.keyboard.key) and
+                !(target.state.expanded orelse false);
+            if (!canvas.isWidgetActivationKey(keyboard_event.keyboard.key) and !arrow_opens) return;
+            if (arrow_opens and keyboard_event.keyboard.focus_moved) return;
             const index = runtimeFindViewIndex(self, keyboard_event.window_id, keyboard_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
-            const target = keyboard_event.target orelse return;
             try dispatchCanvasWidgetCommandForId(self, app, index, target.id);
         }
 
@@ -714,6 +723,19 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, target.id);
             }
             const direction = canvasWidgetSpatialFocusDirection(input_event) orelse return false;
+            // The open-select keymap: ArrowDown/Up on a select/combobox
+            // trigger whose anchored menu is MOUNTED moves the keyboard
+            // into the menu (the marked row when one is selected, else
+            // the first/last row). Without a mounted menu the arrows fall
+            // through to the control resolver, which turns them into the
+            // trigger's press — the model-owned open.
+            if ((focused.kind == .select or focused.kind == .combobox) and (direction == .down or direction == .up)) {
+                if (self.views[index].canvasWidgetOwnedMenuSurfaceIndex(focused.index)) |surface_index| {
+                    if (self.views[index].canvasWidgetMenuSurfaceEntryId(surface_index, direction == .up)) |entry_id| {
+                        return try setCanvasWidgetFocusFromKeyboardMoved(self, index, current_id, entry_id);
+                    }
+                }
+            }
             // The ARIA tree keymap first: Up/Down walk the scope's
             // visible rows, Left/Right move to parent / first child when
             // they are moves (collapse/expand stay routed intents).

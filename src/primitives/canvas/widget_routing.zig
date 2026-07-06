@@ -16,6 +16,7 @@ const DesignTokens = token_model.DesignTokens;
 const Widget = widget_model.Widget;
 const WidgetLayoutNode = event_model.WidgetLayoutNode;
 const WidgetHit = event_model.WidgetHit;
+const WidgetKind = widget_model.WidgetKind;
 const WidgetPointerEvent = event_model.WidgetPointerEvent;
 const WidgetKeyboardEvent = event_model.WidgetKeyboardEvent;
 const WidgetFileDropEvent = event_model.WidgetFileDropEvent;
@@ -128,7 +129,27 @@ pub fn widgetPressTargetForHit(layout: anytype, hit: WidgetHit) ?WidgetHit {
 /// (static text keeps its selection affordance).
 pub fn widgetHoverTargetForHit(layout: anytype, hit: WidgetHit) WidgetHit {
     if (hit.role == .link and !hit.state.disabled) return hit;
-    return widgetPressTargetForHit(layout, hit) orelse hit;
+    const target = widgetPressTargetForHit(layout, hit) orelse hit;
+    // A table row hovers as ONE unit: a hit that resolves to a cell (a
+    // plain cell claims nothing, so the fall-through keeps the raw hit)
+    // attributes hover to its `data_row`, the full-width row wash. A
+    // cell with its own press handler still routes the CLICK to itself;
+    // only the wash lifts to the row.
+    if (target.kind == .data_cell) {
+        if (widgetAncestorHitOfKind(layout, target.index, .data_row)) |row_hit| return row_hit;
+    }
+    return target;
+}
+
+/// The nearest ancestor of `node_index` with the given kind, as a hit.
+fn widgetAncestorHitOfKind(layout: anytype, node_index: usize, kind: WidgetKind) ?WidgetHit {
+    var current: ?usize = if (node_index < layout.nodes.len) layout.nodes[node_index].parent_index else null;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return null;
+        if (layout.nodes[index].widget.kind == kind) return widgetHitFromNode(layout.nodes[index], index);
+        current = layout.nodes[index].parent_index;
+    }
+    return null;
 }
 
 /// The window-drag region a press that hit `node_index` lands on, if

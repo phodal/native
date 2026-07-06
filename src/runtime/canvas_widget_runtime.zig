@@ -917,7 +917,7 @@ pub fn canvasWidgetBooleanSelected(widget: canvas.Widget) bool {
 }
 
 pub fn canvasWidgetSwitchControlKind(kind: canvas.WidgetKind) bool {
-    return kind == .switch_control or kind == .toggle;
+    return kind == .switch_control;
 }
 
 pub fn canvasWidgetSelectableSelected(widget: canvas.Widget) bool {

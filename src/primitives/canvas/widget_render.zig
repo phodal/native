@@ -203,7 +203,15 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .grid, .data_grid, .table, .list, .breadcrumb, .button_group, .pagination, .radio_group, .toggle_group, .data_row, .split, .tree => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
+        .stack, .row, .column, .grid, .list, .breadcrumb, .button_group, .pagination, .radio_group, .toggle_group, .split, .tree => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
+        .table, .data_grid => {
+            try emitWidgetClippedChildren(builder, paint_widget, tokens, depth);
+            try emitTableRowSeparators(builder, paint_widget.children, tokens);
+        },
+        .data_row => {
+            try emitDataRowWidgetWash(builder, paint_widget, tokens);
+            try emitWidgetClippedChildren(builder, paint_widget, tokens, depth);
+        },
         .tabs => try emitTabsWidget(builder, paint_widget, tokens, depth),
         .scroll_view => try emitScrollViewWidget(builder, paint_widget, tokens, depth),
         .alert => try emitAlertWidget(builder, paint_widget, tokens, depth),
@@ -220,7 +228,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .image => try emitImageWidget(builder, paint_widget),
         .avatar => try emitAvatarWidget(builder, paint_widget, tokens),
         .badge => try emitBadgeWidget(builder, paint_widget, tokens),
-        .button, .toggle_button => try widget_render_controls.emitButtonWidget(builder, paint_widget, tokens),
+        .button, .toggle_button, .toggle => try widget_render_controls.emitButtonWidget(builder, paint_widget, tokens),
         .icon_button => try widget_render_controls.emitIconButtonWidget(builder, paint_widget, tokens),
         .select => try widget_render_controls.emitSelectWidget(builder, paint_widget, tokens),
         .input, .text_field, .textarea => try widget_render_controls.emitTextFieldWidget(builder, paint_widget, tokens),
@@ -238,7 +246,7 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
         .segmented_control => try widget_render_controls.emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try widget_render_controls.emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try widget_render_controls.emitRadioWidget(builder, paint_widget, tokens),
-        .switch_control, .toggle => try widget_render_controls.emitToggleWidget(builder, paint_widget, tokens),
+        .switch_control => try widget_render_controls.emitToggleWidget(builder, paint_widget, tokens),
         .slider => try widget_render_controls.emitSliderWidget(builder, paint_widget, tokens),
         .progress => try widget_render_controls.emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
@@ -326,9 +334,20 @@ fn emitWidgetLayoutNodeContent(
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .breadcrumb, .button_group, .pagination, .radio_group, .toggle_group, .data_row, .split, .tree => {},
+        .stack, .row, .column, .breadcrumb, .button_group, .pagination, .radio_group, .toggle_group, .split, .tree => {},
+        .data_row => try emitDataRowWidgetWash(builder, paint_widget, tokens),
         .tabs => try widget_render_surfaces.emitTabsListWidgetChrome(builder, paint_widget, tokens),
-        .grid, .data_grid, .table, .list => if (paint_widget.layout.virtualized) {
+        .table, .data_grid => {
+            if (paint_widget.layout.virtualized) {
+                try emitWidgetLayoutScrollableChildren(builder, layout, node_index, tokens, state, paint_widget);
+                try emitTableRowSeparatorsLayout(builder, layout, node_index, tokens, paint_widget, true);
+                return;
+            }
+            try emitWidgetLayoutClippedChildren(builder, layout, node_index, tokens, state, paint_widget);
+            try emitTableRowSeparatorsLayout(builder, layout, node_index, tokens, paint_widget, false);
+            return;
+        },
+        .grid, .list => if (paint_widget.layout.virtualized) {
             try emitWidgetLayoutScrollableChildren(builder, layout, node_index, tokens, state, paint_widget);
             return;
         },
@@ -365,7 +384,7 @@ fn emitWidgetLayoutNodeContent(
         .image => try emitImageWidget(builder, paint_widget),
         .avatar => try emitAvatarWidget(builder, paint_widget, tokens),
         .badge => try emitBadgeWidget(builder, paint_widget, tokens),
-        .button, .toggle_button => try widget_render_controls.emitButtonWidget(builder, paint_widget, tokens),
+        .button, .toggle_button, .toggle => try widget_render_controls.emitButtonWidget(builder, paint_widget, tokens),
         .icon_button => try widget_render_controls.emitIconButtonWidget(builder, paint_widget, tokens),
         .select => try widget_render_controls.emitSelectWidget(builder, paint_widget, tokens),
         .input, .text_field, .textarea => try widget_render_controls.emitTextFieldWidget(builder, paint_widget, tokens),
@@ -378,7 +397,7 @@ fn emitWidgetLayoutNodeContent(
         .segmented_control => try widget_render_controls.emitSegmentedControlWidget(builder, paint_widget, tokens),
         .checkbox => try widget_render_controls.emitCheckboxWidget(builder, paint_widget, tokens),
         .radio => try widget_render_controls.emitRadioWidget(builder, paint_widget, tokens),
-        .switch_control, .toggle => try widget_render_controls.emitToggleWidget(builder, paint_widget, tokens),
+        .switch_control => try widget_render_controls.emitToggleWidget(builder, paint_widget, tokens),
         .slider => try widget_render_controls.emitSliderWidget(builder, paint_widget, tokens),
         .progress => try widget_render_controls.emitProgressWidget(builder, paint_widget, tokens),
         .separator => try emitSeparatorWidget(builder, paint_widget, tokens),
@@ -570,6 +589,16 @@ fn emitPanelWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, dept
     try emitWidgetClippedChildren(builder, widget, tokens, depth);
 }
 
+// Disclosure is DISCRETE by design, not animated: render animations are
+// post-layout overrides (opacity/transform/rotation on already-laid-out
+// commands) and never relayout, while an animated panel height is a
+// layout change every frame — the accordion's intrinsic height drives
+// where every sibling below it sits, and collapsed content is pruned
+// before layout, so there is nothing painted to clip a reveal from. A
+// height-reveal needs either an animated layout input (per-frame
+// relayout, which the animation system's no-rebuild invariant forbids)
+// or a clip override channel plus laying out hidden content; both are
+// new machinery, so open/close snaps between its two honest states.
 fn emitAccordionWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     try widget_render_surfaces.emitAccordionWidgetChrome(builder, widget, tokens);
     if (!accordionChildrenVisible(widget)) return;
@@ -932,7 +961,7 @@ fn emitAvatarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Err
 fn emitBadgeWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = componentControlVisualTokens(widget, tokens);
     const radius = componentPillRadius(widget, visual, widget.frame.height * 0.5);
-    const text_size = widgetLabelTextSize(widget, tokens);
+    const text_size = widget_metrics.widgetBadgeTextSize(widget, tokens);
     const text_inset = widgetControlInset(widget, tokens, tokens.spacing.sm);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
@@ -1113,6 +1142,13 @@ pub fn widgetStatusBarPadding(widget: Widget) geometry.InsetsF {
     return padding;
 }
 
+/// The command id of a skeleton's placeholder fill — the target of the
+/// runtime's looping pulse animation, published so the animation and
+/// the emitter can never drift apart.
+pub fn skeletonWidgetFillCommandId(id: ObjectId) ObjectId {
+    return widgetPartId(id, 1);
+}
+
 fn emitSkeletonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = componentControlVisualTokens(widget, tokens);
     try builder.fillRoundedRect(.{
@@ -1120,6 +1156,66 @@ fn emitSkeletonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) E
         .rect = widget.frame,
         .radius = controlRadius(widget, visual, tokens.radius.md),
         .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_subtle)),
+    });
+}
+
+/// A row's own state wash: hover and selection paint the FULL row band
+/// edge to edge (the table register's row hover), square-cornered so
+/// adjacent rows tile. Rows at rest draw nothing.
+fn emitDataRowWidgetWash(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    const fill = widget_render_style.listItemFillColor(widget, tokens, widget.state);
+    if (fill.a <= 0) return;
+    try builder.fillRect(.{
+        .id = widgetPartId(widget.id, 1),
+        .rect = widget.frame,
+        .fill = colorFill(fill),
+    });
+}
+
+/// The table's chrome: a hairline separator under every row but the
+/// last — never an outer box, never per-cell gridlines. The separator
+/// is a part of the ROW above it (stable command id per row), drawn by
+/// the table so the last row can stay open-edged.
+fn emitTableRowSeparators(builder: *Builder, children: []const Widget, tokens: DesignTokens) Error!void {
+    var last_row_index: ?usize = null;
+    for (children, 0..) |child, index| {
+        if (child.kind == .data_row and !child.semantics.hidden) last_row_index = index;
+    }
+    for (children, 0..) |child, index| {
+        if (child.kind != .data_row or child.semantics.hidden) continue;
+        if (last_row_index != null and index == last_row_index.?) continue;
+        try emitTableRowSeparatorLine(builder, child.id, child.frame, tokens);
+    }
+}
+
+fn emitTableRowSeparatorsLayout(builder: *Builder, layout: anytype, table_index: usize, tokens: DesignTokens, table: Widget, clip_to_table: bool) Error!void {
+    if (clip_to_table) try builder.pushClip(.{ .id = widgetPartId(table.id, 9), .rect = table.frame });
+    var last_row_index: ?usize = null;
+    for (layout.nodes, 0..) |node, index| {
+        if (node.parent_index != table_index) continue;
+        if (node.widget.kind == .data_row and !node.widget.semantics.hidden) last_row_index = index;
+    }
+    for (layout.nodes, 0..) |node, index| {
+        if (node.parent_index != table_index) continue;
+        if (node.widget.kind != .data_row or node.widget.semantics.hidden) continue;
+        if (last_row_index != null and index == last_row_index.?) continue;
+        try emitTableRowSeparatorLine(builder, node.widget.id, node.frame, tokens);
+    }
+    if (clip_to_table) try builder.popClip();
+}
+
+fn emitTableRowSeparatorLine(builder: *Builder, row_id: ObjectId, row_frame: geometry.RectF, tokens: DesignTokens) Error!void {
+    const frame = row_frame.normalized();
+    if (frame.isEmpty()) return;
+    const y = frame.maxY();
+    try builder.drawLine(.{
+        .id = widgetPartId(row_id, 2),
+        .from = pixelSnapGeometryPoint(tokens, geometry.PointF.init(frame.x, y)),
+        .to = pixelSnapGeometryPoint(tokens, geometry.PointF.init(frame.maxX(), y)),
+        .stroke = .{
+            .fill = colorFill(tokens.colors.border),
+            .width = tokens.stroke.hairline,
+        },
     });
 }
 
@@ -1504,7 +1600,7 @@ pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
 }
 
 fn widgetSwitchControlKind(kind: WidgetKind) bool {
-    return kind == .switch_control or kind == .toggle;
+    return kind == .switch_control;
 }
 
 pub fn widgetPartId(id: ObjectId, slot: ObjectId) ObjectId {

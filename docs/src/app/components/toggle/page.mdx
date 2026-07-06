@@ -3,7 +3,7 @@ import { AttrTable } from "@/components/attr-table";
 
 # Toggle
 
-Three related controls: `toggle` is a text-bearing toggle whose label is the element's content, `toggle-button` is its pressed-state chip variant, and `toggle-group` is a row container that groups toggle-buttons into one segmented strip. All of them dispatch `on-toggle`; the model owns the state and renders it back through `checked` (standalone toggles) or `selected` (usually a `{a == b}` equality inside a group).
+Three related controls, all pressed-state buttons: `toggle` is the standalone form whose label is the element's content, `toggle-button` is the chip form for grouped use, and `toggle-group` is a row container that groups toggle-buttons into one segmented strip. All of them dispatch `on-toggle`; the model owns the state and renders it back through `checked` (standalone toggles) or `selected` (usually a `{a == b}` equality inside a group). For a sliding on/off control use [switch](/components/switch) — a toggle is a button that stays pressed, not a switch.
 
 <ComponentPreview name="toggle-group" alt="A toggle group rendered by the engine" caption="toggle-buttons in a toggle-group; the model drives selected" />
 

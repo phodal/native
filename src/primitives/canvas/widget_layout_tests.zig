@@ -994,13 +994,16 @@ test "widget data grid exposes rows cells semantics and display list" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 8), display_list.commandCount());
+    // Borderless cells (text only) plus ONE hairline row separator under
+    // the first row — the table register: no cell boxes, no line under
+    // the last row.
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
     switch (display_list.commands[0]) {
-        .stroke_rect => |stroke| try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 2)), stroke.id),
+        .draw_text => |text| try std.testing.expectEqualStrings("Name", text.text),
         else => return error.UnexpectedCommand,
     }
-    switch (display_list.commands[1]) {
-        .draw_text => |text| try std.testing.expectEqualStrings("Name", text.text),
+    switch (display_list.commands[4]) {
+        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(2, 2)), line.id),
         else => return error.UnexpectedCommand,
     }
 }

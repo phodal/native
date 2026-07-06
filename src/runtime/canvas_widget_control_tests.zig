@@ -362,7 +362,7 @@ test "runtime batches pointer widget display list refreshes" {
 
     const controls = [_]canvas.Widget{.{
         .id = 4,
-        .kind = .toggle,
+        .kind = .switch_control,
         .frame = geometry.RectF.init(10, 20, 112, 32),
         .text = "Live",
     }};

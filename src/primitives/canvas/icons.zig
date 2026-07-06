@@ -49,6 +49,7 @@ const clock = builtin("clock");
 const copy = builtin("copy");
 const download = builtin("download");
 const edit = builtin("edit");
+const ellipsis = builtin("ellipsis");
 const external_link = builtin("external-link");
 const eye = builtin("eye");
 const file_text = builtin("file-text");
@@ -98,6 +99,7 @@ pub const entries = [_]Entry{
     .{ .name = "copy", .icon = &copy },
     .{ .name = "download", .icon = &download },
     .{ .name = "edit", .icon = &edit },
+    .{ .name = "ellipsis", .icon = &ellipsis },
     .{ .name = "external-link", .icon = &external_link },
     .{ .name = "eye", .icon = &eye },
     .{ .name = "file-text", .icon = &file_text },

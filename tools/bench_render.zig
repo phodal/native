@@ -285,7 +285,7 @@ fn bigFormView(ui: *BigFormUi, model: *const BigFormModel) BigFormUi.Node {
                 .semantics = .{ .label = "Bench field" },
                 .on_submit = BigFormMsg.submit,
             }, "seed"),
-            bigFormTextLeaf(ui, .toggle, .{
+            bigFormTextLeaf(ui, .switch_control, .{
                 .checked = model.flag,
                 .value = if (model.flag) 1 else 0,
                 .semantics = .{ .label = "Bench toggle" },
@@ -551,7 +551,7 @@ fn scenarioKeystroke() !ScenarioReport {
 fn scenarioToggle() !ScenarioReport {
     var bench = try Bench(BigFormApp).create(bigFormOptions());
     defer bench.destroy();
-    const toggle_id = try widgetIdByKind(&bench, .toggle);
+    const toggle_id = try widgetIdByKind(&bench, .switch_control);
     var buffer: [96]u8 = undefined;
     const line = try std.fmt.bufPrint(&buffer, "widget-click {s} {d}", .{ canvas_label, toggle_id });
     toggle_click_line = line;

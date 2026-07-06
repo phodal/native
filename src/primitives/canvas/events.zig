@@ -325,7 +325,19 @@ pub fn widgetKeyboardControlIntent(widget: Widget, keyboard: WidgetKeyboardEvent
         if (widgetTreeItemKeyboardControlIntent(widget, keyboard)) |intent| return intent;
     }
     return switch (widget.kind) {
-        .button, .icon_button, .select, .combobox => if (isWidgetActivationKey(keyboard.key))
+        .button, .icon_button => if (isWidgetActivationKey(keyboard.key))
+            .{ .kind = .press, .actions = .{ .press = true } }
+        else
+            null,
+        // The closed-trigger open keys: Enter/Space press, and
+        // ArrowDown/Up ALSO press so an arrow on a closed select opens
+        // its model-owned picker. With the picker mounted the runtime's
+        // focus step consumes the arrows first (they walk into the
+        // anchored menu), and a trigger marked `expanded` never
+        // re-presses from an arrow — pressing an open trigger would
+        // toggle it closed.
+        .select, .combobox => if (isWidgetActivationKey(keyboard.key) or
+            (isWidgetMenuOpenArrowKey(keyboard.key) and !(widget.state.expanded orelse false)))
             .{ .kind = .press, .actions = .{ .press = true } }
         else
             null,
@@ -432,6 +444,12 @@ fn widgetSemanticPressControlIntent(widget: Widget, actions: WidgetActions) Widg
 
 pub fn isWidgetActivationKey(key: []const u8) bool {
     return std.ascii.eqlIgnoreCase(key, "space") or std.ascii.eqlIgnoreCase(key, "enter");
+}
+
+/// The arrow keys that open a closed select/combobox trigger's picker
+/// (and, once it is mounted, walk into it).
+pub fn isWidgetMenuOpenArrowKey(key: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(key, "arrowdown") or std.ascii.eqlIgnoreCase(key, "arrowup");
 }
 
 pub fn widgetSliderKeyboardValue(current: f32, keyboard: WidgetKeyboardEvent) ?f32 {

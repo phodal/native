@@ -873,10 +873,12 @@ test "built-in component factory applies house composite defaults" {
 
     const row_components = [_]BuiltinComponentKind{ .breadcrumb, .pagination, .radio_group, .toggle_group };
     const row_kinds = [_]WidgetKind{ .breadcrumb, .pagination, .radio_group, .toggle_group };
-    for (row_components, row_kinds) |kind, widget_kind| {
+    // Pagination sits on the tighter 2px rhythm; the other strips keep 4.
+    const row_gaps = [_]f32{ 4, 2, 4, 4 };
+    for (row_components, row_kinds, row_gaps) |kind, widget_kind, gap| {
         const component = builtinComponentWidget(kind, .{});
         try std.testing.expectEqual(widget_kind, component.kind);
-        try std.testing.expectEqual(@as(f32, 4), component.layout.gap);
+        try std.testing.expectEqual(gap, component.layout.gap);
         try std.testing.expectEqual(WidgetCrossAlignment.center, component.layout.cross_alignment);
         try std.testing.expectEqual(WidgetRole.group, component.semantics.role);
     }
@@ -1992,7 +1994,7 @@ test "design token overrides compose with built-in themes" {
                 .foreground = Color.rgb8(249, 251, 253),
                 .border = Color.rgb8(78, 90, 102),
             },
-            .toggle = .{
+            .switch_control = .{
                 .background = Color.rgb8(50, 56, 64),
                 .active_background = Color.rgb8(58, 72, 86),
                 .foreground = Color.rgb8(252, 252, 253),
@@ -2179,9 +2181,9 @@ test "design token overrides compose with built-in themes" {
     try std.testing.expectEqualDeep(Color.rgb8(46, 58, 70), tokens.controls.radio.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(249, 251, 253), tokens.controls.radio.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(78, 90, 102), tokens.controls.radio.border.?);
-    try std.testing.expectEqualDeep(Color.rgb8(50, 56, 64), tokens.controls.toggle.background.?);
-    try std.testing.expectEqualDeep(Color.rgb8(58, 72, 86), tokens.controls.toggle.active_background.?);
-    try std.testing.expectEqualDeep(Color.rgb8(252, 252, 253), tokens.controls.toggle.foreground.?);
+    try std.testing.expectEqualDeep(Color.rgb8(50, 56, 64), tokens.controls.switch_control.background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(58, 72, 86), tokens.controls.switch_control.active_background.?);
+    try std.testing.expectEqualDeep(Color.rgb8(252, 252, 253), tokens.controls.switch_control.foreground.?);
     try std.testing.expectEqualDeep(Color.rgb8(52, 58, 64), tokens.controls.slider.background.?);
     try std.testing.expectEqualDeep(Color.rgb8(62, 78, 94), tokens.controls.slider.active_background.?);
     try std.testing.expectEqualDeep(Color.rgb8(245, 248, 250), tokens.controls.slider.foreground.?);

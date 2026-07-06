@@ -3,7 +3,7 @@ import { AttrTable } from "@/components/attr-table";
 
 # Skeleton
 
-A loading placeholder block — size it with `width` and `height` to sketch the shape of the content it stands in for, and swap it for the real widgets (behind an `if`) when the data lands. For indeterminate work with no shape to sketch, use [spinner](/components/spinner); when there is a measurable fraction, use [progress](/components/progress).
+Loading states. The skeleton is a placeholder block — size it with `width` and `height` to sketch the shape of the content it stands in for, and swap it for the real widgets (behind an `if`) when the data lands. While mounted it pulses gently (an engine-owned opacity oscillation, like the spinner's spin — no wiring, and reduce-motion renders it static). The spinner is an indeterminate progress leaf for work with no measurable fraction; when there is one, use [progress](/components/progress) instead.
 
 <ComponentPreview name="skeleton" alt="Skeleton placeholders rendered by the engine" caption="an avatar-and-two-lines skeleton, the shape of the loaded row" />
 

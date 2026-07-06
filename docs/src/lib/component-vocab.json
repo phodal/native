@@ -389,6 +389,10 @@
       "doc": "button, toggle-button, list-item, menu-item: built-in vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot; literal name, comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw). Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint."
     },
     {
+      "name": "icon-placement",
+      "doc": "Icon slot side on label-bearing buttons/toggle-buttons: leading (default) draws the icon before the label, trailing after it — the next-page chevron. Icon-only buttons center the glyph regardless."
+    },
+    {
       "name": "window-drag",
       "doc": "Marks the element as a window-drag surface (the hidden-titlebar pattern): pressing its background - or plain text/icons inside - moves the window; double-click zooms per the OS convention. Buttons and other press-claiming children inside stay clickable. macOS-only; elsewhere the press is dead space."
     },
@@ -1099,6 +1103,7 @@
     "copy",
     "download",
     "edit",
+    "ellipsis",
     "external-link",
     "eye",
     "file-text",

@@ -243,6 +243,27 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             // pattern (`copyCanvasDisplayList` counts before it copies).
             try validateWidgetLayoutPoolBudgets(layout, &index_scratch.texts);
 
+            // Keyboard-focus return for unmounting anchored surfaces:
+            // when the focus sits INSIDE an anchored menu that this
+            // rebuild removes (the commit-closes-the-picker flow), the
+            // focus returns to the surface's trigger instead of dropping
+            // to nothing. Captured against the OLD tree before the pools
+            // reset.
+            var focus_return_id: canvas.ObjectId = 0;
+            if (self.canvas_widget_focused_id != 0) {
+                if (self.canvasWidgetNodeIndexById(self.canvas_widget_focused_id)) |focused_index| {
+                    var current: ?usize = self.widget_layout_nodes[focused_index].parent_index;
+                    while (current) |ancestor_index| {
+                        const ancestor = self.widget_layout_nodes[ancestor_index].widget;
+                        if (canvas.widgetIsAnchored(ancestor) and canvasWidgetDismissibleSurfaceKind(ancestor.kind)) {
+                            focus_return_id = self.canvasWidgetAnchorTriggerFocusId(ancestor_index) orelse 0;
+                            break;
+                        }
+                        current = self.widget_layout_nodes[ancestor_index].parent_index;
+                    }
+                }
+            }
+
             self.widget_layout_node_count = 0;
             self.widget_semantics_node_count = 0;
             self.widget_text_len = 0;
@@ -273,8 +294,9 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             applyCanvasWidgetSourceScrollSemantics(self.widget_semantics_nodes[0..semantics.len], &index_scratch.semantics);
             self.widget_semantics_node_count = semantics.len;
             if (self.canvas_widget_focused_id != 0 and self.widgetLayoutTree().focusTargetById(self.canvas_widget_focused_id) == null) {
-                self.canvas_widget_focused_id = 0;
-                self.canvas_widget_focus_visible_id = 0;
+                const return_id = if (focus_return_id != 0 and self.widgetLayoutTree().focusTargetById(focus_return_id) != null) focus_return_id else 0;
+                self.canvas_widget_focused_id = return_id;
+                self.canvas_widget_focus_visible_id = return_id;
             }
             if (self.canvas_widget_focus_visible_id != 0 and (self.canvas_widget_focus_visible_id != self.canvas_widget_focused_id or self.widgetLayoutTree().focusTargetById(self.canvas_widget_focus_visible_id) == null)) {
                 self.canvas_widget_focus_visible_id = 0;
@@ -414,8 +436,13 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             const dirty = self.canvasWidgetDirtyBounds(surface_index, surface.frame) orelse surface.frame;
             self.widget_layout_nodes[surface_index].widget.semantics.hidden = true;
             if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focused_id, surface_index)) {
-                self.canvas_widget_focused_id = 0;
-                self.canvas_widget_focus_visible_id = 0;
+                // A dismissal that swallows the focus returns it to the
+                // surface's own trigger when the surface is anchored (the
+                // Escape-closes-the-picker flow keeps the keyboard on the
+                // select), and clears it otherwise.
+                const return_id = self.canvasWidgetAnchorTriggerFocusId(surface_index) orelse 0;
+                self.canvas_widget_focused_id = return_id;
+                self.canvas_widget_focus_visible_id = return_id;
             }
             if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focus_visible_id, surface_index)) self.canvas_widget_focus_visible_id = 0;
             if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_hovered_id, surface_index)) {
@@ -460,6 +487,60 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 found = index;
             }
             return found;
+        }
+
+        /// The anchored menu surface a trigger owns: the topmost visible
+        /// anchored `menu_surface`/`dropdown_menu` hanging off the trigger
+        /// itself or off its parent — the stack wrapping trigger + surface
+        /// in the composed select/combobox pattern.
+        pub fn canvasWidgetOwnedMenuSurfaceIndex(self: *const RuntimeView, trigger_index: usize) ?usize {
+            if (trigger_index >= self.widget_layout_node_count) return null;
+            if (canvasWidgetAnchoredMenuChildIndex(self, trigger_index)) |surface_index| return surface_index;
+            const parent_index = self.widget_layout_nodes[trigger_index].parent_index orelse return null;
+            const surface_index = canvasWidgetAnchoredMenuChildIndex(self, parent_index) orelse return null;
+            return if (surface_index == trigger_index) null else surface_index;
+        }
+
+        fn canvasWidgetAnchoredMenuChildIndex(self: *const RuntimeView, anchor_index: usize) ?usize {
+            const surface_index = self.canvasWidgetAnchoredDismissibleChildIndex(anchor_index) orelse return null;
+            const kind = self.widget_layout_nodes[surface_index].widget.kind;
+            if (kind != .menu_surface and kind != .dropdown_menu) return null;
+            return surface_index;
+        }
+
+        /// Keyboard entry point into an anchored menu surface: the marked
+        /// (`selected`) row when the menu has one, otherwise the first
+        /// focusable row for an ArrowDown entry or the last for ArrowUp —
+        /// the open-select keymap.
+        pub fn canvasWidgetMenuSurfaceEntryId(self: *const RuntimeView, surface_index: usize, from_end: bool) ?canvas.ObjectId {
+            var first: ?canvas.ObjectId = null;
+            var last: ?canvas.ObjectId = null;
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, node_index| {
+                if (node.widget.kind != .menu_item and node.widget.kind != .list_item) continue;
+                if (!self.canvasWidgetNodeIndexDescendsFrom(node_index, surface_index)) continue;
+                if (self.widgetLayoutTree().focusTargetById(node.widget.id) == null) continue;
+                if (node.widget.state.selected) return node.widget.id;
+                if (first == null) first = node.widget.id;
+                last = node.widget.id;
+            }
+            return if (from_end) last else first;
+        }
+
+        /// The focusable trigger the dismissed anchored surface returns
+        /// keyboard focus to: the surface's anchor when the anchor itself
+        /// takes focus, otherwise the anchor's first focusable child
+        /// OUTSIDE the surface (the select trigger in the stack pattern).
+        pub fn canvasWidgetAnchorTriggerFocusId(self: *const RuntimeView, surface_index: usize) ?canvas.ObjectId {
+            if (surface_index >= self.widget_layout_node_count) return null;
+            if (!canvas.widgetIsAnchored(self.widget_layout_nodes[surface_index].widget)) return null;
+            const anchor_index = self.widget_layout_nodes[surface_index].parent_index orelse return null;
+            const anchor_id = self.widget_layout_nodes[anchor_index].widget.id;
+            if (self.widgetLayoutTree().focusTargetById(anchor_id) != null) return anchor_id;
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, node_index| {
+                if (node.parent_index != anchor_index or node_index == surface_index) continue;
+                if (self.widgetLayoutTree().focusTargetById(node.widget.id) != null) return node.widget.id;
+            }
+            return null;
         }
 
         /// The topmost visible anchored dismissible surface in the whole

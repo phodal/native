@@ -280,11 +280,13 @@ fn buildButtonStates(ui: *Ui) Node {
 }
 
 fn buildButtonGroup(ui: *Ui) Node {
+    // Attached ACTIONS, not an exclusive choice: a group member never
+    // carries `selected` state — that is the toggle-group's job.
     return tile(ui, .{
         ui.el(.button_group, .{}, .{
-            ui.button(.{ .variant = .outline }, "Years"),
-            ui.button(.{ .variant = .outline, .selected = true }, "Months"),
-            ui.button(.{ .variant = .outline }, "Days"),
+            ui.button(.{ .variant = .outline }, "Cut"),
+            ui.button(.{ .variant = .outline }, "Copy"),
+            ui.button(.{ .variant = .outline }, "Paste"),
         }),
     });
 }
@@ -627,7 +629,8 @@ fn buildPagination(ui: *Ui) Node {
             ui.button(.{ .variant = .outline, .selected = true }, "1"),
             ui.button(.{ .variant = .ghost }, "2"),
             ui.button(.{ .variant = .ghost }, "3"),
-            ui.button(.{ .variant = .ghost, .icon = "chevron-right" }, "Next"),
+            ui.icon(.{}, "ellipsis"),
+            ui.button(.{ .variant = .ghost, .icon = "chevron-right", .icon_placement = .trailing }, "Next"),
         }),
     });
 }
@@ -672,26 +675,28 @@ fn buildVirtualList(ui: *Ui) Node {
 
 fn buildTable(ui: *Ui) Node {
     return tile(ui, .{
+        // The table register: a muted small header row, right-aligned
+        // numeric column, hairline separators from the engine.
         ui.el(.table, .{ .width = 420 }, .{
             ui.el(.data_row, .{}, .{
-                ui.el(.data_cell, .{ .text = "Invoice", .grow = 1 }, .{}),
-                ui.el(.data_cell, .{ .text = "Status", .grow = 1 }, .{}),
-                ui.el(.data_cell, .{ .text = "Amount", .grow = 1 }, .{}),
+                ui.el(.data_cell, .{ .text = "Invoice", .grow = 1, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+                ui.el(.data_cell, .{ .text = "Status", .grow = 1, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, .{}),
+                ui.el(.data_cell, .{ .text = "Amount", .grow = 1, .size = .sm, .text_alignment = .end, .style_tokens = .{ .foreground = .text_muted } }, .{}),
             }),
             ui.el(.data_row, .{}, .{
                 ui.el(.data_cell, .{ .text = "INV-001", .grow = 1 }, .{}),
                 ui.el(.data_cell, .{ .text = "Paid", .grow = 1 }, .{}),
-                ui.el(.data_cell, .{ .text = "$250.00", .grow = 1 }, .{}),
+                ui.el(.data_cell, .{ .text = "$250.00", .grow = 1, .text_alignment = .end }, .{}),
             }),
             ui.el(.data_row, .{ .selected = true }, .{
                 ui.el(.data_cell, .{ .text = "INV-002", .grow = 1 }, .{}),
                 ui.el(.data_cell, .{ .text = "Pending", .grow = 1 }, .{}),
-                ui.el(.data_cell, .{ .text = "$150.00", .grow = 1 }, .{}),
+                ui.el(.data_cell, .{ .text = "$150.00", .grow = 1, .text_alignment = .end }, .{}),
             }),
             ui.el(.data_row, .{}, .{
                 ui.el(.data_cell, .{ .text = "INV-003", .grow = 1 }, .{}),
                 ui.el(.data_cell, .{ .text = "Unpaid", .grow = 1 }, .{}),
-                ui.el(.data_cell, .{ .text = "$350.00", .grow = 1 }, .{}),
+                ui.el(.data_cell, .{ .text = "$350.00", .grow = 1, .text_alignment = .end }, .{}),
             }),
         }),
     });

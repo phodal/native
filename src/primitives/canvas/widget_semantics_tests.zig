@@ -720,7 +720,9 @@ test "widget controls expose roles values focus and hit testing" {
     try std.testing.expect(semantics[2].focusable);
     try std.testing.expect(semantics[2].actions.select);
     try std.testing.expect(!semantics[2].actions.toggle);
-    try std.testing.expectEqual(WidgetRole.switch_control, semantics[3].role);
+    // `toggle` is the pressed-state button family; the switch role
+    // belongs to `switch_control` alone.
+    try std.testing.expectEqual(WidgetRole.button, semantics[3].role);
     try std.testing.expectEqual(@as(?f32, 0), semantics[3].value);
     try std.testing.expect(semantics[3].actions.toggle);
     try std.testing.expectEqual(WidgetRole.slider, semantics[4].role);
@@ -1844,10 +1846,10 @@ test "widget data grids expose row and column semantics" {
 
     var nodes: [8]WidgetLayoutNode = undefined;
     const layout = try layoutWidgetTree(grid, geometry.RectF.init(0, 0, 320, 180), &nodes);
-    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 320, 28));
-    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 0, 160, 28));
-    try expectLayoutFrame(layout, 5, geometry.RectF.init(0, 30, 320, 28));
-    try expectLayoutFrame(layout, 6, geometry.RectF.init(0, 30, 160, 28));
+    try expectLayoutFrame(layout, 2, geometry.RectF.init(0, 0, 320, 36));
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 0, 160, 36));
+    try expectLayoutFrame(layout, 5, geometry.RectF.init(0, 38, 320, 36));
+    try expectLayoutFrame(layout, 6, geometry.RectF.init(0, 38, 160, 36));
     var semantics_buffer: [8]WidgetSemanticsNode = undefined;
     const semantics = try layout.collectSemantics(&semantics_buffer);
 
@@ -1903,10 +1905,10 @@ test "widget tables expose grid semantics and scroll intents" {
 
     var nodes: [8]WidgetLayoutNode = undefined;
     const layout = try layoutWidgetTree(table, table.frame, &nodes);
-    try expectLayoutFrame(layout, 22, geometry.RectF.init(0, 0, 320, 28));
-    try expectLayoutFrame(layout, 23, geometry.RectF.init(0, 0, 160, 28));
-    try expectLayoutFrame(layout, 25, geometry.RectF.init(0, 30, 320, 28));
-    try expectLayoutFrame(layout, 26, geometry.RectF.init(0, 30, 160, 28));
+    try expectLayoutFrame(layout, 22, geometry.RectF.init(0, 0, 320, 36));
+    try expectLayoutFrame(layout, 23, geometry.RectF.init(0, 0, 160, 36));
+    try expectLayoutFrame(layout, 25, geometry.RectF.init(0, 38, 320, 36));
+    try expectLayoutFrame(layout, 26, geometry.RectF.init(0, 38, 160, 36));
 
     var semantics_buffer: [8]WidgetSemanticsNode = undefined;
     const semantics = try layout.collectSemantics(&semantics_buffer);

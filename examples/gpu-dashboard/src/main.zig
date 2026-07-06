@@ -49,8 +49,11 @@ const dashboard_chrome_prefix_commands: usize = 5;
 // UNSELECTED segmented control is transparent (its muted wash moved to
 // the tabs-list container), so the toolbar's mode trigger paints one
 // fewer fill.
-const expected_dashboard_command_count: usize = 71;
-const expected_dashboard_interaction_command_count: usize = 71;
+// 70 after the table register: the single-row data grid's cell dropped
+// its default box stroke (tabular chrome is hairline ROW separators now,
+// and a lone last row draws none).
+const expected_dashboard_command_count: usize = 70;
+const expected_dashboard_interaction_command_count: usize = 70;
 // Regenerated 2026-07-04: layout measures with the bundled face's real
 // advance table (estimator wave); spot-reviewed before/after — sub-pixel
 // text shifts only, no layout change.
@@ -80,7 +83,15 @@ const expected_dashboard_interaction_command_count: usize = 71;
 // — checked/filled-primary states and accent-inked chrome move from the
 // blue-violet to the register's near-black/porcelain pair; geometry is
 // unchanged. Reviewed via the automation screenshot pass.
-const expected_dashboard_reference_signature: u64 = 3801279993758385369;
+// Regenerated 2026-07-06 (component fidelity round): the conversion bar
+// renders as the intrinsic 4px progress rail on the muted track (and the
+// auto-refresh control is spelled `switch_control`, the sliding-control
+// kind). Spot pixels below still guard visibility; reviewed via the
+// regenerated docs progress previews (same emitter, same reference
+// renderer).
+// Re-pinned same day for the badge + table register (borderless data
+// cells); reviewed via the regenerated docs table previews.
+const expected_dashboard_reference_signature: u64 = 16406295259929365813;
 const expected_dashboard_widget_node_count: usize = 48;
 const expected_dashboard_snapshot_widget_count: usize = 48;
 const refresh_command = "dashboard.refresh";
@@ -408,7 +419,6 @@ fn mainColumn(ui: *DashboardUi, model: *const Model) DashboardUi.Node {
         metricsGrid(ui, model),
         ui.el(.progress, .{
             .value = 0.68,
-            .height = 10,
             .semantics = .{ .label = "Conversion progress" },
         }, .{}),
         trendPanel(ui),
@@ -455,7 +465,7 @@ fn forecastPanel(ui: *DashboardUi, model: *const Model) DashboardUi.Node {
             .semantics = .{ .label = "Segment search" },
             .on_submit = .submit_search,
         }, "enterprise"),
-        textLeaf(ui, .toggle, .{
+        textLeaf(ui, .switch_control, .{
             .checked = model.auto_refresh,
             .value = if (model.auto_refresh) 1 else 0,
             .semantics = .{ .label = "Auto refresh" },
@@ -1057,7 +1067,7 @@ test "gpu dashboard flex layout keeps controls visually separated" {
     const popover = findWidgetByKind(tree.root, .popover).?;
     const forecast_field = findWidgetByKind(tree.root, .text_field).?;
     const search_field = findWidgetByKind(tree.root, .search_field).?;
-    const auto_toggle = findWidgetByKind(tree.root, .toggle).?;
+    const auto_toggle = findWidgetByKind(tree.root, .switch_control).?;
     const slider = findWidgetByKind(tree.root, .slider).?;
     const status_text = findWidgetByLabel(tree.root, initial_dashboard_status_text).?;
 
@@ -1170,7 +1180,7 @@ test "gpu dashboard typed messages drive the model" {
     try std.testing.expectEqual(@as(u32, 2), model.refresh_count);
 
     // Space on the focused toggle flips auto refresh.
-    const auto_toggle = findWidgetByKind(tree.root, .toggle).?;
+    const auto_toggle = findWidgetByKind(tree.root, .switch_control).?;
     const space_down = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "space" };
     update(&model, tree.msgForKeyboard(auto_toggle.id, space_down).?);
     try std.testing.expect(!model.auto_refresh);
@@ -1237,11 +1247,12 @@ test "gpu dashboard display list renders through the reference surface" {
     try std.testing.expect(frame.batch_plan.batchCount() >= 8);
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
     try std.testing.expect(frame.pipeline_cache_plan.uploadCount() >= 4);
-    // Five layers: the vector magnifier and the search field's built-in
-    // clear affordance each draw under their own transform, splitting
-    // the otherwise-identity command run.
-    try std.testing.expectEqual(@as(usize, 5), frame.layer_plan.layerCount());
-    try std.testing.expectEqual(@as(usize, 5), frame.layer_cache_plan.uploadCount());
+    // Three layers since the conversion bar dropped to the intrinsic
+    // 4px progress rail: the reflow pulled the panels up enough that
+    // one previously split command run merged back into its neighbors
+    // (the icon transforms still split the identity run).
+    try std.testing.expectEqual(@as(usize, 3), frame.layer_plan.layerCount());
+    try std.testing.expectEqual(@as(usize, 3), frame.layer_cache_plan.uploadCount());
     try std.testing.expect(frame.resource_plan.resourceCount() >= 8);
     try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
     try std.testing.expect(frame.visual_effect_plan.shadowCount() >= 3);
@@ -1331,9 +1342,12 @@ test "gpu dashboard render overrides animate without rebuilding commands" {
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expect(frame.pipeline_cache_plan.entryCount() >= 4);
-    try std.testing.expectEqual(@as(usize, 7), frame.layer_plan.layerCount());
-    try std.testing.expectEqual(@as(usize, 7), frame.layer_cache_plan.uploadCount());
-    try std.testing.expectEqual(@as(usize, 7), frame.renderPass().layerActionCount());
+    // 4 = the static frame's 3 plus the animated override's own layer
+    // (same reflow note as the static test: the intrinsic 4px progress
+    // rail merged one split run away).
+    try std.testing.expectEqual(@as(usize, 4), frame.layer_plan.layerCount());
+    try std.testing.expectEqual(@as(usize, 4), frame.layer_cache_plan.uploadCount());
+    try std.testing.expectEqual(@as(usize, 4), frame.renderPass().layerActionCount());
     try std.testing.expect(frame.visual_effect_plan.effectCount() >= 4);
     try std.testing.expectEqual(@as(usize, 0), frame.changes.len);
     try std.testing.expect(frame.dirty_bounds != null);
@@ -1432,7 +1446,7 @@ test "gpu dashboard app registers canvas display list on first gpu frame" {
 
     const tree = app.tree.?;
     const live_button = findWidgetKindText(tree.root, .button, "Live render").?;
-    const auto_toggle = findWidgetByKind(tree.root, .toggle).?;
+    const auto_toggle = findWidgetByKind(tree.root, .switch_control).?;
     const slider = findWidgetByKind(tree.root, .slider).?;
     const scroll = findWidgetByKind(tree.root, .scroll_view).?;
     const forecast_field = findWidgetByKind(tree.root, .text_field).?;

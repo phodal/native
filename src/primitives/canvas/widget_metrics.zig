@@ -35,6 +35,12 @@ pub fn widgetLabelTextSize(widget: Widget, tokens: DesignTokens) f32 {
     return widgetTypographySize(widget, tokens.typography.label_size);
 }
 
+/// Badge text sits one rung below the label size (12 on the default
+/// scale) — the compact chip register.
+pub fn widgetBadgeTextSize(widget: Widget, tokens: DesignTokens) f32 {
+    return widgetTypographySize(widget, @max(8, tokens.typography.label_size - 1));
+}
+
 pub fn widgetTypographySize(widget: Widget, base: f32) f32 {
     return switch (widget.size) {
         .sm => @max(8, base - 1),

@@ -352,6 +352,12 @@ pub const WidgetVariant = enum {
     destructive,
 };
 
+/// Icon slot side for label-bearing controls (`Widget.icon_placement`).
+pub const WidgetIconPlacement = enum {
+    leading,
+    trailing,
+};
+
 /// The `size` register. Two axes share it deliberately: the CONTROL
 /// scale (`default`/`sm`/`lg`/`icon` — inset, height, and radius steps on
 /// buttons, inputs, and the other chrome-bearing controls) and the
@@ -678,6 +684,12 @@ pub const Widget = struct {
     /// boot-time act; the markup engines and `Ui.icon` validate
     /// built-in names up front).
     icon: []const u8 = "",
+    /// Which side of the label the icon sits on, for the label-bearing
+    /// icon slots (buttons and toggle buttons): `.leading` is the
+    /// default reading-order slot, `.trailing` puts the icon after the
+    /// label — the next-page chevron, the open-below affordance.
+    /// Icon-only buttons center the glyph regardless.
+    icon_placement: WidgetIconPlacement = .leading,
     text_alignment: TextAlign = .start,
     /// Honest single-line mode for plain `.text` leaves
     /// (`ElementOptions.wrap = false` / markup `wrap="false"`): the
@@ -1140,9 +1152,15 @@ fn builtinComponentLayout(kind: BuiltinComponentKind, size: WidgetSize, layout: 
             .gap = 2,
             .clip_content = true,
         },
+        // Page cells sit on a 2px rhythm — tighter than the other strips
+        // so the row reads as one control with the current page's outline
+        // (not gaps) doing the separating.
+        .pagination => .{
+            .gap = 2,
+            .cross_alignment = .center,
+        },
         .breadcrumb,
         .button_group,
-        .pagination,
         .radio_group,
         .toggle_group,
         => .{

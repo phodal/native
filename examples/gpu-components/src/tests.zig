@@ -32,7 +32,7 @@ const component_chrome_suffix_commands = model.component_chrome_suffix_commands;
 const catalog_card_width = model.catalog_card_width;
 const catalog_card_height = model.catalog_card_height;
 const refresh_command = model.refresh_command;
-const theme_command = model.theme_command;
+const themeModeTriggerId = model.themeModeTriggerId;
 const environment_toggle_command = model.environment_toggle_command;
 const surface_dialog_command = model.surface_dialog_command;
 const surface_drawer_command = model.surface_drawer_command;
@@ -234,7 +234,9 @@ test "gpu components display list covers finished live controls" {
     try std.testing.expect(display_list.commandCount() >= 53);
     try std.testing.expect(display_list.commandCount() <= max_component_commands);
     try std.testing.expect(display_list.findCommandById(canvas_toolbar_id) != null);
-    try std.testing.expect(display_list.findCommandById(canvas_toolbar_title_id) != null);
+    // The band never draws the app's own name; its content is the real
+    // controls (theme strip + refresh).
+    try std.testing.expect(display_list.findCommandById(canvas_toolbar_title_id) == null);
     try std.testing.expect(display_list.findCommandById(canvas_toolbar_separator_id) != null);
     try std.testing.expect(display_list.findCommandById(canvas_status_separator_id) != null);
     try std.testing.expect(display_list.findCommandById(primary_button_fill_id) != null);
@@ -291,7 +293,7 @@ test "gpu components layout keeps finished controls visually separated" {
     try expectComponentWidgetFrame(layout, 114, contentRect(230, 176, 116, 30));
     try expectComponentWidgetFrame(layout, 215, contentRect(356, 176, 60, 30));
     try expectComponentWidgetFrame(layout, 115, contentRect(64, 232, 176, 28));
-    try expectComponentWidgetFrame(layout, 116, contentRect(266, 242, 134, 8));
+    try expectComponentWidgetFrame(layout, 116, contentRect(266, 244, 134, 4));
     try expectComponentWidgetFrame(layout, 167, contentRect(64, 272, 160, 28));
     try expectComponentWidgetFrame(layout, 168, contentRect(64, 324, 148, 34));
     try expectComponentWidgetFrame(layout, 171, contentRect(64, 370, 336, 72));
@@ -360,10 +362,12 @@ test "gpu components layout keeps finished controls visually separated" {
     const open_select = open_layout.findById(environment_select_id).?.widget;
     try std.testing.expectEqualStrings("Preview", open_select.text);
     try std.testing.expectEqual(@as(?bool, true), open_select.state.expanded);
-    try expectComponentWidgetFrame(open_layout, environment_menu_id, contentRect(64, 494, 180, 104));
-    try expectComponentWidgetFrame(open_layout, environmentOptionId(0), contentRect(68, 498, 172, 28));
-    try expectComponentWidgetFrame(open_layout, environmentOptionId(1), contentRect(68, 528, 172, 28));
-    try expectComponentWidgetFrame(open_layout, environmentOptionId(2), contentRect(68, 558, 172, 28));
+    // The menu now floats ANCHORED below the trigger stack (gap 4,
+    // stretched to the trigger width) instead of a hand-placed frame.
+    try expectComponentWidgetFrame(open_layout, environment_menu_id, contentRect(64, 492, 180, 96));
+    try expectComponentWidgetFrame(open_layout, environmentOptionId(0), contentRect(68, 496, 172, 28));
+    try expectComponentWidgetFrame(open_layout, environmentOptionId(1), contentRect(68, 526, 172, 28));
+    try expectComponentWidgetFrame(open_layout, environmentOptionId(2), contentRect(68, 556, 172, 28));
     try std.testing.expect(!open_layout.findById(environmentOptionId(0)).?.widget.state.selected);
     try std.testing.expect(open_layout.findById(environmentOptionId(1)).?.widget.state.selected);
     try std.testing.expect(!open_layout.findById(environmentOptionId(2)).?.widget.state.selected);
@@ -619,7 +623,25 @@ test "gpu components display list renders stable reference snapshot" {
     // the blue-violet (the catalog's inline dialog/drawer/sheet specimens
     // opt out of the modal scrim, so no scrim commands land here). Both
     // sides spot-reviewed via reference captures before blessing.
-    try std.testing.expectEqual(@as(u64, 3467125292675679099), referenceSurfaceSignature(pixels));
+    // Regenerated 2026-07-06 (component fidelity round): progress drops
+    // to the 4px muted-track rail; the pagination preview takes the
+    // reference shape (ghost chevron prev/next, ghost pages with the
+    // outline current page, an ellipsis cell) on the 2px pagination gap;
+    // selected outline/ghost NAV buttons stop wearing the muted wash
+    // (currency shows through the variant; toggles keep the wash); the
+    // `toggle` kind renders as the pressed-state button family (the
+    // sliding control is `switch` alone); the environment picker floats
+    // ANCHORED below its trigger; and the header band drops the drawn
+    // app title and carries a real three-trigger theme strip. Reviewed
+    // via regenerated docs previews AND live light/dark captures of the
+    // running app before blessing.
+    // Re-pinned same day for the badge + table register: badges compact
+    // to the 20px chip (small text, quiet borderless secondary and
+    // destructive-wash variants), and tables/data grids drop per-cell
+    // boxes for engine-drawn hairline row separators with row-level
+    // hover washes and right-alignable cells. Reviewed via regenerated
+    // docs badge/table previews and the live system-monitor capture.
+    try std.testing.expectEqual(@as(u64, 7647413355359718732), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -688,7 +710,10 @@ test "gpu components semantics cover retained widget families" {
     const semantics = try layout.collectSemantics(&semantics_buffer);
 
     try expectSemanticRole(semantics, content_scroll_id, .group);
-    try expectSemanticRole(semantics, canvas_toolbar_theme_id, .tab);
+    try expectSemanticRole(semantics, canvas_toolbar_theme_id, .group);
+    try expectSemanticRole(semantics, themeModeTriggerId(.light), .tab);
+    try expectSemanticRole(semantics, themeModeTriggerId(.dark), .tab);
+    try expectSemanticRole(semantics, themeModeTriggerId(.high), .tab);
     try expectSemanticRole(semantics, canvas_toolbar_refresh_id, .button);
     try expectSemanticRole(semantics, canvas_sidebar_id, .group);
     try expectSemanticRole(semantics, componentSectionNavId(.controls), .listitem);
@@ -1328,7 +1353,7 @@ test "gpu components native theme command updates retained design tokens" {
 
     resetComponentDirty(&harness.runtime);
     const packet_count_before_dark = harness.null_platform.gpu_surface_packet_present_count;
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, themeModeTriggerId(.dark));
 
     try std.testing.expectEqual(ComponentThemeMode.dark, app.theme_mode);
     try std.testing.expectEqual(@as(u32, 1), app.theme_count);
@@ -1339,7 +1364,7 @@ test "gpu components native theme command updates retained design tokens" {
     try expectComponentStatusContains(&harness.runtime, "GPU component theme: Dark from native_view");
 
     const packet_count_before_high = harness.null_platform.gpu_surface_packet_present_count;
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, themeModeTriggerId(.high));
 
     try std.testing.expectEqual(ComponentThemeMode.high, app.theme_mode);
     try std.testing.expectEqual(@as(u32, 2), app.theme_count);
@@ -1390,7 +1415,7 @@ test "gpu components follow system appearance until toolbar theme override" {
     try std.testing.expect(harness.null_platform.gpu_surface_packet_present_count > packet_count_before_light);
     try expectComponentStatusContains(&harness.runtime, "GPU component theme: Light from system appearance.");
 
-    try dispatchComponentPointerClick(&harness.runtime, app_handle, canvas_toolbar_theme_id);
+    try dispatchComponentPointerClick(&harness.runtime, app_handle, themeModeTriggerId(.dark));
     try std.testing.expect(app.theme_overridden);
     try std.testing.expectEqual(ComponentThemeMode.dark, app.theme_mode);
 
@@ -1610,58 +1635,48 @@ test "gpu components keyboard navigates and dismisses environment dropdown" {
         .nonblank = true,
     } });
 
+    // The engine's open-select keymap end to end: ArrowDown on the
+    // focused closed trigger presses it (the command-owned open).
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app_handle, "widget-action components-canvas 172 focus");
-    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-action components-canvas 172 press");
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
     var snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(app.environment_select_open);
     try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
     try std.testing.expectEqual(@as(?bool, true), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
 
+    // With the anchored menu mounted, the next ArrowDown walks INTO it
+    // at the selected option, and another moves to the next option —
+    // focus travel only, the model's selection does not move yet.
     resetComponentDirty(&harness.runtime);
     try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
-    snapshot = harness.runtime.automationSnapshot("Components");
-    var layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expect(app.environment_select_open);
-    try std.testing.expectEqual(@as(usize, 1), app.environment_index);
-    try std.testing.expect(layout.findById(environmentOptionId(1)).?.widget.state.selected);
-    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
-
-    resetComponentDirty(&harness.runtime);
-    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowup");
-    snapshot = harness.runtime.automationSnapshot("Components");
-    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expect(app.environment_select_open);
+    try std.testing.expectEqual(environmentOptionId(0), harness.runtime.views[0].canvas_widget_focused_id);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
+    try std.testing.expectEqual(environmentOptionId(1), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(usize, 0), app.environment_index);
-    try std.testing.expect(layout.findById(environmentOptionId(0)).?.widget.state.selected);
-    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
 
+    // Enter commits the focused option: the model picks it, the menu
+    // closes, and the keyboard returns to the trigger.
     resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas enter");
+    snapshot = harness.runtime.automationSnapshot("Components");
+    try std.testing.expectEqual(@as(usize, 1), app.environment_index);
+    try std.testing.expect(!app.environment_select_open);
+    try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
+    try std.testing.expectEqual(environment_select_id, harness.runtime.views[0].canvas_widget_focused_id);
+
+    // Reopen from the keyboard; Escape dismisses through the model and
+    // keeps the keyboard on the trigger.
+    resetComponentDirty(&harness.runtime);
+    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
+    try std.testing.expect(app.environment_select_open);
     try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas escape");
     snapshot = harness.runtime.automationSnapshot("Components");
     try std.testing.expect(!app.environment_select_open);
     try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
     try std.testing.expectEqual(@as(?bool, false), componentSnapshotWidget(snapshot, environment_select_id).?.expanded);
-    try std.testing.expect(componentSnapshotWidget(snapshot, environment_select_id).?.focused);
-
-    resetComponentDirty(&harness.runtime);
-    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas arrowdown");
-    snapshot = harness.runtime.automationSnapshot("Components");
-    layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
-    try std.testing.expect(app.environment_select_open);
-    try std.testing.expectEqual(@as(usize, 1), app.environment_index);
-    try std.testing.expect(layout.findById(environmentOptionId(1)).?.widget.state.selected);
-
-    resetComponentDirty(&harness.runtime);
-    try harness.runtime.dispatchAutomationCommand(app_handle, "widget-key components-canvas tab");
-    snapshot = harness.runtime.automationSnapshot("Components");
-    try std.testing.expect(!app.environment_select_open);
-    try std.testing.expect(componentSnapshotWidget(snapshot, environment_menu_id) == null);
-    const select = componentSnapshotWidget(snapshot, environment_select_id).?;
-    try std.testing.expectEqual(@as(?bool, false), select.expanded);
-    try std.testing.expect(!select.focused);
+    try std.testing.expectEqual(environment_select_id, harness.runtime.views[0].canvas_widget_focused_id);
 }
-
 test "gpu components surface launchers open and close overlays" {
     const harness = try native_sdk.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(window_width, window_height) });
     defer harness.destroy(std.testing.allocator);

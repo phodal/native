@@ -22,7 +22,7 @@ pub const max_component_pipelines: usize = 8;
 pub const max_component_commands: usize = native_sdk.runtime.max_canvas_commands_per_view;
 pub const max_component_glyphs: usize = native_sdk.runtime.max_canvas_glyphs_per_view;
 pub const max_component_widgets: usize = native_sdk.runtime.max_canvas_widget_nodes_per_view;
-pub const component_chrome_prefix_commands: usize = 4;
+pub const component_chrome_prefix_commands: usize = 3;
 pub const component_chrome_suffix_commands: usize = 0;
 pub const catalog_grid_columns: usize = 3;
 pub const catalog_card_width: f32 = 256;
@@ -32,7 +32,22 @@ pub const catalog_card_gap_y: f32 = 18;
 pub const catalog_preview_y: f32 = 40;
 pub const catalog_preview_width: f32 = catalog_card_width - 32;
 pub const refresh_command = "components.refresh";
-pub const theme_command = "components.theme";
+pub const theme_mode_commands = [_][]const u8{
+    "components.theme.light",
+    "components.theme.dark",
+    "components.theme.high",
+};
+
+pub fn themeModeCommand(mode: ComponentThemeMode) []const u8 {
+    return theme_mode_commands[@intFromEnum(mode)];
+}
+
+pub fn themeModeFromCommand(name: []const u8) ?ComponentThemeMode {
+    for (theme_mode_commands, 0..) |command, index| {
+        if (std.mem.eql(u8, name, command)) return @enumFromInt(index);
+    }
+    return null;
+}
 pub const environment_toggle_command = "components.environment.toggle";
 pub const surface_dialog_command = "components.surface.dialog";
 pub const surface_drawer_command = "components.surface.drawer";
@@ -60,6 +75,7 @@ pub const data_cell_text_id: canvas.ObjectId = 156 * 16 + 4;
 pub const environment_select_id: canvas.ObjectId = 172;
 pub const environment_select_text_id: canvas.ObjectId = environment_select_id * 16 + 3;
 pub const environment_menu_id: canvas.ObjectId = 216;
+pub const environment_stack_id: canvas.ObjectId = 217;
 pub const environment_option_base_id: canvas.ObjectId = 21601;
 pub const content_scroll_id: canvas.ObjectId = 90;
 pub const canvas_sidebar_id: canvas.ObjectId = 92;
@@ -69,6 +85,11 @@ pub const canvas_background_id: canvas.ObjectId = 79;
 pub const canvas_toolbar_id: canvas.ObjectId = 80;
 pub const canvas_toolbar_title_id: canvas.ObjectId = 81;
 pub const canvas_toolbar_theme_id: canvas.ObjectId = 82;
+/// The three theme triggers inside the toolbar tab strip (85..87 =
+/// light, dark, high).
+pub fn themeModeTriggerId(mode: ComponentThemeMode) canvas.ObjectId {
+    return 85 + @as(canvas.ObjectId, @intFromEnum(mode));
+}
 pub const canvas_toolbar_refresh_id: canvas.ObjectId = 83;
 pub const canvas_toolbar_separator_id: canvas.ObjectId = 84;
 pub const canvas_sidebar_resize_line_id: canvas.ObjectId = 88;
@@ -115,6 +136,7 @@ pub const ComponentVirtualScroll = struct {
 };
 
 pub const ComponentUiState = struct {
+    theme_mode: ComponentThemeMode = .light,
     environment_select_open: bool = false,
     environment_index: usize = 0,
     surface_overlay: ComponentSurfaceOverlay = .none,

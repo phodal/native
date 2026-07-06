@@ -1837,7 +1837,7 @@ test "widget emitter applies selection and range control tokens" {
                 .foreground = Color.rgb8(250, 252, 255),
                 .border = Color.rgb8(88, 104, 120),
             },
-            .toggle = .{
+            .switch_control = .{
                 .background = Color.rgb8(48, 54, 60),
                 .active_background = Color.rgb8(34, 70, 108),
                 .foreground = Color.rgb8(248, 250, 252),
@@ -1860,7 +1860,7 @@ test "widget emitter applies selection and range control tokens" {
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, .{ .id = 60, .kind = .segmented_control, .frame = geometry.RectF.init(0, 0, 120, 32), .text = "Open", .state = .{ .selected = true } }, tokens);
     try emitWidgetTree(&builder, .{ .id = 61, .kind = .checkbox, .frame = geometry.RectF.init(0, 40, 140, 32), .text = "Check", .state = .{ .selected = true } }, tokens);
-    try emitWidgetTree(&builder, .{ .id = 62, .kind = .toggle, .frame = geometry.RectF.init(0, 80, 140, 32), .text = "Live", .value = 1 }, tokens);
+    try emitWidgetTree(&builder, .{ .id = 62, .kind = .switch_control, .frame = geometry.RectF.init(0, 80, 140, 32), .text = "Live", .value = 1 }, tokens);
     try emitWidgetTree(&builder, .{ .id = 63, .kind = .slider, .frame = geometry.RectF.init(0, 124, 160, 32), .value = 0.25 }, tokens);
     try emitWidgetTree(&builder, .{ .id = 64, .kind = .progress, .frame = geometry.RectF.init(0, 172, 160, 8), .value = 0.5 }, tokens);
 
@@ -2455,7 +2455,7 @@ test "widget explicit layers override token defaults for overlay ordering" {
     try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTest(geometry.PointF.init(20, 20)).?.id);
 }
 
-test "widget emitter renders checkbox radio toggle and slider controls" {
+test "widget emitter renders checkbox radio switch and slider controls" {
     const tokens = DesignTokens{
         .colors = .{
             .accent = Color.rgb8(10, 20, 30),
@@ -2482,7 +2482,7 @@ test "widget emitter renders checkbox radio toggle and slider controls" {
     }, tokens);
     try emitWidgetTree(&builder, .{
         .id = 12,
-        .kind = .toggle,
+        .kind = .switch_control,
         .frame = geometry.RectF.init(0, 80, 120, 32),
         .text = "Mode",
         .value = 1,

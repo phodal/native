@@ -17,7 +17,7 @@ const max_component_widgets = model.max_component_widgets;
 const component_chrome_prefix_commands = model.component_chrome_prefix_commands;
 const component_chrome_suffix_commands = model.component_chrome_suffix_commands;
 const refresh_command = model.refresh_command;
-const theme_command = model.theme_command;
+const themeModeFromCommand = model.themeModeFromCommand;
 const environment_toggle_command = model.environment_toggle_command;
 const surface_dialog_command = model.surface_dialog_command;
 const surface_drawer_command = model.surface_drawer_command;
@@ -36,6 +36,7 @@ const surface_overlay_content_parts = model.surface_overlay_content_parts;
 const max_surface_overlay_animations = model.max_surface_overlay_animations;
 const preview_images = component_scene.preview_images;
 const environment_options = model.environment_options;
+const environment_menu_id = model.environment_menu_id;
 const initial_component_status_text = model.initial_component_status_text;
 const max_component_status_text = model.max_component_status_text;
 const ComponentVirtualScroll = model.ComponentVirtualScroll;
@@ -45,8 +46,6 @@ const ComponentSection = model.ComponentSection;
 const ComponentThemeMode = model.ComponentThemeMode;
 const environmentLabel = model.environmentLabel;
 const environmentOptionIndex = model.environmentOptionIndex;
-const environmentNextIndex = model.environmentNextIndex;
-const environmentPreviousIndex = model.environmentPreviousIndex;
 const environmentCommandIndex = model.environmentCommandIndex;
 const componentSectionLabel = model.componentSectionLabel;
 const componentSectionFromCommand = model.componentSectionFromCommand;
@@ -173,8 +172,8 @@ pub const GpuComponentsApp = struct {
                     try self.closeSurfaceOverlay(runtime, command);
                 } else if (std.mem.eql(u8, command.name, refresh_command)) {
                     try self.refresh(runtime, command);
-                } else if (std.mem.eql(u8, command.name, theme_command)) {
-                    try self.changeTheme(runtime, command);
+                } else if (themeModeFromCommand(command.name)) |mode| {
+                    try self.changeTheme(runtime, command, mode);
                 } else if (componentSectionFromCommand(command.name)) |section| {
                     try self.changeSection(runtime, command, section);
                 }
@@ -182,8 +181,9 @@ pub const GpuComponentsApp = struct {
             .gpu_surface_frame => |frame_event| try self.handleGpuFrame(runtime, frame_event),
             .canvas_widget_pointer => |pointer_event| try self.handleWidgetPointer(runtime, pointer_event),
             .canvas_widget_keyboard => |keyboard_event| try self.handleWidgetKeyboard(runtime, keyboard_event),
+            .canvas_widget_dismiss => |dismiss_event| try self.handleWidgetDismiss(runtime, dismiss_event),
             .appearance_changed => |appearance| try self.applySystemAppearance(runtime, appearance),
-            .gpu_surface_resized, .gpu_surface_input, .shortcut, .timer, .effects_wake, .files_dropped, .canvas_widget_scroll, .canvas_widget_file_drop, .canvas_widget_drag, .canvas_widget_context_menu, .canvas_widget_context_menu_request, .canvas_widget_dismiss, .canvas_widget_context_press, .canvas_widget_resize, .window_closed, .automation_provenance, .lifecycle => {},
+            .gpu_surface_resized, .gpu_surface_input, .shortcut, .timer, .effects_wake, .files_dropped, .canvas_widget_scroll, .canvas_widget_file_drop, .canvas_widget_drag, .canvas_widget_context_menu, .canvas_widget_context_menu_request, .canvas_widget_context_press, .canvas_widget_resize, .window_closed, .automation_provenance, .lifecycle => {},
         }
     }
 
@@ -233,6 +233,9 @@ pub const GpuComponentsApp = struct {
                 }
                 if (target.id == environment_select_id or
                     target.id == canvas_toolbar_theme_id or
+                    target.id == model.themeModeTriggerId(.light) or
+                    target.id == model.themeModeTriggerId(.dark) or
+                    target.id == model.themeModeTriggerId(.high) or
                     target.id == canvas_toolbar_refresh_id or
                     environmentOptionIndex(target.id) != null or
                     target.id == 175 or
@@ -264,44 +267,21 @@ pub const GpuComponentsApp = struct {
     fn handleWidgetKeyboard(self: *@This(), runtime: *native_sdk.Runtime, keyboard_event: native_sdk.runtime.CanvasWidgetKeyboardEvent) anyerror!void {
         if (!std.mem.eql(u8, keyboard_event.view_label, canvas_label)) return;
         if (keyboard_event.keyboard.phase != .key_down) return;
-        if (try self.handleEnvironmentKeyboard(runtime, keyboard_event)) return;
         const target = keyboard_event.target orelse return;
         const scrolled_id = try self.scrollVirtualWidgetFromKeyboard(runtime, keyboard_event) orelse target.id;
         try self.reportWidgetInteraction(runtime, keyboard_event.window_id, "Keyed", scrolled_id);
     }
 
-    fn handleEnvironmentKeyboard(self: *@This(), runtime: *native_sdk.Runtime, keyboard_event: native_sdk.runtime.CanvasWidgetKeyboardEvent) anyerror!bool {
-        const key = keyboard_event.keyboard.key;
-        if (std.ascii.eqlIgnoreCase(key, "tab")) {
-            if (!self.environment_select_open) return false;
-            self.environment_select_open = false;
-            try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
-            try self.updateStatus(runtime, keyboard_event.window_id, "Environment menu closed.");
-            return true;
-        }
-
-        if (std.ascii.eqlIgnoreCase(key, "escape")) {
-            if (!self.environment_select_open) return false;
-            self.environment_select_open = false;
-            try self.updateComponentsCanvasModel(runtime, keyboard_event.window_id);
-            try self.updateStatus(runtime, keyboard_event.window_id, "Environment menu closed.");
-            return true;
-        }
-
-        const target = keyboard_event.target orelse return false;
-        if (target.id != environment_select_id and environmentOptionIndex(target.id) == null) return false;
-
-        if (std.ascii.eqlIgnoreCase(key, "arrowdown")) {
-            try self.moveEnvironmentSelection(runtime, keyboard_event.window_id, environmentNextIndex(self.environment_index));
-            return true;
-        }
-
-        if (std.ascii.eqlIgnoreCase(key, "arrowup")) {
-            try self.moveEnvironmentSelection(runtime, keyboard_event.window_id, environmentPreviousIndex(self.environment_index));
-            return true;
-        }
-
-        return false;
+    /// The engine's dismissal (Escape, outside click, automation) hands
+    /// the surface id back so the MODEL closes it — the app clears the
+    /// open flag and rebuilds, agreeing with the optimistic hide.
+    fn handleWidgetDismiss(self: *@This(), runtime: *native_sdk.Runtime, dismiss_event: native_sdk.runtime.CanvasWidgetDismissEvent) anyerror!void {
+        if (!std.mem.eql(u8, dismiss_event.view_label, canvas_label)) return;
+        if (dismiss_event.id != environment_menu_id) return;
+        if (!self.environment_select_open) return;
+        self.environment_select_open = false;
+        try self.updateComponentsCanvasModel(runtime, dismiss_event.window_id);
+        try self.updateStatus(runtime, dismiss_event.window_id, "Environment menu closed.");
     }
 
     fn reportWidgetInteraction(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, action: []const u8, id: canvas.ObjectId) anyerror!void {
@@ -466,17 +446,6 @@ pub const GpuComponentsApp = struct {
         try self.updateEnvironmentSelectedStatus(runtime, command.window_id);
     }
 
-    fn moveEnvironmentSelection(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId, index: usize) anyerror!void {
-        if (self.environment_select_open) {
-            self.environment_select_open = false;
-            try self.updateComponentsCanvasModel(runtime, window_id);
-        }
-        self.environment_index = @min(index, environment_options.len - 1);
-        self.environment_select_open = true;
-        try self.updateComponentsCanvasModel(runtime, window_id);
-        try self.updateEnvironmentSelectedStatus(runtime, window_id);
-    }
-
     fn updateEnvironmentSelectedStatus(self: *@This(), runtime: *native_sdk.Runtime, window_id: native_sdk.WindowId) anyerror!void {
         var status_buffer: [96]u8 = undefined;
         const status = try std.fmt.bufPrint(&status_buffer, "Environment selected: {s}.", .{environmentLabel(self.environment_index)});
@@ -522,10 +491,10 @@ pub const GpuComponentsApp = struct {
         _ = try runtime.setCanvasRenderAnimations(window_id, canvas_label, animations[0..count]);
     }
 
-    fn changeTheme(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent) anyerror!void {
+    fn changeTheme(self: *@This(), runtime: *native_sdk.Runtime, command: native_sdk.CommandEvent, mode: ComponentThemeMode) anyerror!void {
         self.theme_count += 1;
         self.theme_overridden = true;
-        self.theme_mode = self.theme_mode.next();
+        self.theme_mode = mode;
         const gpu_frame = try runtime.gpuSurfaceFrame(command.window_id, canvas_label);
         _ = self.updateCanvasSize(componentSurfaceSize(gpu_frame.size));
         try installComponentsCanvasModel(runtime, command.window_id, self.virtual_scroll, self.componentUiState(), self.componentTokens(), self.canvas_size);
@@ -697,6 +666,7 @@ pub const GpuComponentsApp = struct {
 
     pub fn componentUiState(self: *const @This()) ComponentUiState {
         return .{
+            .theme_mode = self.theme_mode,
             .environment_select_open = self.environment_select_open,
             .environment_index = self.environment_index,
             .surface_overlay = self.surface_overlay,

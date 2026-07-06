@@ -213,13 +213,13 @@ pub const max_canvas_widget_anchored_per_view: usize = 16;
 /// anyway).
 pub const max_canvas_widget_autofocus_per_view: usize = 16;
 
-/// Spinners carrying the looping rotation render animation per view.
-/// Each armed spinner is one render animation slot plus one dirty-bounds
-/// entry, sampled every frame while visible — a view showing more than 8
-/// simultaneous activity indicators is a design smell, so the extras
-/// render as static arcs (deterministic pose from `widget.value`)
-/// instead of degrading the frame budget.
-pub const max_canvas_widget_spinner_animations_per_view: usize = 8;
+/// Widgets carrying an engine-armed LOOPING render animation per view
+/// (spinner rotations and skeleton pulses). Each armed widget is one
+/// render animation slot plus one dirty-bounds entry, sampled every
+/// frame while visible — a view showing more than 16 simultaneous
+/// indicators/placeholders is a design smell, so the extras render
+/// static instead of degrading the frame budget.
+pub const max_canvas_widget_loop_animations_per_view: usize = 16;
 
 // Widget provenance (write-back's read half; `UiApp` retains it only in
 // markup-interpreter builds, and only fills it when automation is on).

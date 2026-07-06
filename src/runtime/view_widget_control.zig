@@ -276,7 +276,7 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
         pub fn toggleCanvasWidgetBooleanControl(self: *RuntimeView, id: canvas.ObjectId) anyerror!?geometry.RectF {
             const index = self.canvasWidgetNodeIndexById(id) orelse return null;
             const widget = self.widget_layout_nodes[index].widget;
-            if ((widget.kind != .accordion and widget.kind != .checkbox and widget.kind != .toggle_button and !canvasWidgetSwitchControlKind(widget.kind)) or widget.state.disabled) return null;
+            if ((widget.kind != .accordion and widget.kind != .checkbox and widget.kind != .toggle_button and widget.kind != .toggle and !canvasWidgetSwitchControlKind(widget.kind)) or widget.state.disabled) return null;
 
             const selected = canvasWidgetBooleanSelected(widget);
             self.widget_layout_nodes[index].widget.state.selected = !selected;

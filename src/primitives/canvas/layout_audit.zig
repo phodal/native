@@ -224,11 +224,11 @@ fn auditNodeTextOverflow(layout: WidgetLayoutTree, node_index: usize, tokens: De
         // means visible truncation or bleed. (`select`, inputs, and
         // textareas are exempt: their content scrolls or is placeholder
         // text by design.)
-        .button, .toggle_button => {
+        .button, .toggle_button, .toggle => {
             if (widget.size == .icon) return;
             auditControlLabelOverflow(widget, frame, node_index, tokens, sink);
         },
-        .badge, .checkbox, .radio, .switch_control, .toggle, .segmented_control, .tooltip, .menu_item, .status_bar => {
+        .badge, .checkbox, .radio, .switch_control, .segmented_control, .tooltip, .menu_item, .status_bar => {
             auditControlLabelOverflow(widget, frame, node_index, tokens, sink);
         },
         // Text-leaf list items and classic (span-less) table cells paint

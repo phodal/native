@@ -76,8 +76,8 @@ fn pickerView(ui: *PickerApp.Ui, model: *const PickerModel) PickerApp.Ui.Node {
             .height = 90,
             .on_dismiss = .close_picker,
         }, .{
-            ui.el(.menu_item, .{ .key = .{ .int = 0 }, .text = "Alpha", .height = 26, .on_press = PickerMsg{ .pick = 0 } }, .{}),
-            ui.el(.menu_item, .{ .key = .{ .int = 1 }, .text = "Beta", .height = 26, .on_press = PickerMsg{ .pick = 1 } }, .{}),
+            ui.el(.menu_item, .{ .key = .{ .int = 0 }, .text = "Alpha", .height = 26, .selected = model.picked == 0, .on_press = PickerMsg{ .pick = 0 } }, .{}),
+            ui.el(.menu_item, .{ .key = .{ .int = 1 }, .text = "Beta", .height = 26, .selected = model.picked == 1, .on_press = PickerMsg{ .pick = 1 } }, .{}),
         }),
     }) else ui.stack(.{ .height = 28 }, .{trigger});
 
@@ -191,6 +191,14 @@ const Fixture = struct {
     fn clickWidget(self: Fixture, id: canvas.ObjectId) !void {
         const frame = (try self.retainedFrame(id)) orelse return error.TestUnexpectedResult;
         try self.click(frame.center());
+    }
+
+    fn key(self: Fixture, name: []const u8) !void {
+        try self.harness.runtime.dispatchPlatformEvent(self.app, .{ .gpu_surface_input = .{
+            .label = canvas_label,
+            .kind = .key_down,
+            .key = name,
+        } });
     }
 };
 
@@ -330,6 +338,77 @@ test "anchored picker: automation clicks land on the floating menu item" {
     try fixture.harness.runtime.dispatchAutomationCommand(fixture.app, beta_click);
     try std.testing.expectEqual(@as(u32, 1), fixture.app_state.model.picked);
     try std.testing.expect(!fixture.app_state.model.open);
+}
+
+test "anchored picker: the open-select keymap opens, walks, commits, and returns focus" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    // Focus the closed trigger, then ArrowDown: the arrow presses the
+    // trigger (the model-owned open), exactly like Enter would.
+    const trigger_id = fixture.widgetIdByText(.select, "Repo").?;
+    var command_buffer: [96]u8 = undefined;
+    const focus_command = try std.fmt.bufPrint(&command_buffer, "widget-action {s} {d} focus", .{ canvas_label, trigger_id });
+    try fixture.harness.runtime.dispatchAutomationCommand(fixture.app, focus_command);
+    try fixture.key("arrowdown");
+    try std.testing.expect(fixture.app_state.model.open);
+    try std.testing.expectEqual(trigger_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+
+    // With the menu mounted the next ArrowDown walks INTO it: nothing
+    // is marked selected yet (picked starts sentinel), so the first row
+    // takes the keyboard.
+    const alpha_id = fixture.widgetIdByText(.menu_item, "Alpha").?;
+    const beta_id = fixture.widgetIdByText(.menu_item, "Beta").?;
+    try fixture.key("arrowdown");
+    try std.testing.expectEqual(alpha_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+
+    // Arrows walk the rows; Home/End jump to the edges.
+    try fixture.key("arrowdown");
+    try std.testing.expectEqual(beta_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+    try fixture.key("home");
+    try std.testing.expectEqual(alpha_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+    try fixture.key("end");
+    try std.testing.expectEqual(beta_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+
+    // Enter commits the focused row: the model picks and closes, and
+    // the keyboard returns to the trigger the menu came from.
+    try fixture.key("enter");
+    try std.testing.expectEqual(@as(u32, 1), fixture.app_state.model.picked);
+    try std.testing.expect(!fixture.app_state.model.open);
+    try std.testing.expect(fixture.widgetIdByText(.menu_item, "Beta") == null);
+    try std.testing.expectEqual(trigger_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+}
+
+test "anchored picker: arrows enter at the marked row and escape returns focus to the trigger" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    const trigger_id = fixture.widgetIdByText(.select, "Repo").?;
+    var command_buffer: [96]u8 = undefined;
+    const focus_command = try std.fmt.bufPrint(&command_buffer, "widget-action {s} {d} focus", .{ canvas_label, trigger_id });
+    try fixture.harness.runtime.dispatchAutomationCommand(fixture.app, focus_command);
+
+    // Commit Beta once so the reopened menu carries a marked row.
+    try fixture.key("arrowup");
+    try std.testing.expect(fixture.app_state.model.open);
+    try fixture.key("arrowdown");
+    try fixture.key("arrowdown");
+    try fixture.key("enter");
+    try std.testing.expectEqual(@as(u32, 1), fixture.app_state.model.picked);
+
+    // Reopen: the entry arrow lands on the SELECTED row, not the first.
+    try fixture.key("arrowdown");
+    try std.testing.expect(fixture.app_state.model.open);
+    const beta_id = fixture.widgetIdByText(.menu_item, "Beta").?;
+    try fixture.key("arrowdown");
+    try std.testing.expectEqual(beta_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
+
+    // Escape dismisses through the model and hands the keyboard back to
+    // the trigger, ready to reopen.
+    try fixture.key("escape");
+    try std.testing.expect(!fixture.app_state.model.open);
+    try std.testing.expectEqual(@as(u32, 1), fixture.app_state.model.dismissals);
+    try std.testing.expectEqual(trigger_id, fixture.harness.runtime.views[0].canvas_widget_focused_id);
 }
 
 test "press-and-hold fires through the runtime timer path and suppresses the release press" {

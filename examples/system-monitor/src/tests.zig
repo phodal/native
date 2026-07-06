@@ -81,7 +81,9 @@ fn findTextContaining(widget: canvas.Widget, needle: []const u8) ?canvas.Widget 
 
 fn countListItems(widget: canvas.Widget) usize {
     var total: usize = 0;
-    if (widget.semantics.role == .listitem) total += 1;
+    // Process rows are table rows on the table register (the header
+    // data_row carries no per-process label, so exclude it by kind+label).
+    if (widget.kind == .data_row and widget.semantics.label.len > 0) total += 1;
     for (widget.children) |child| total += countListItems(child);
     return total;
 }
@@ -510,18 +512,19 @@ test "search filters by name and pid through typed dispatch" {
     try testing.expect(findByLabel(tree.root, "No processes match") != null);
 }
 
-test "the process rows are flat list rows and the table scroll is controlled" {
+test "the process rows are table rows and the table scroll is controlled" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var model = edgeModel();
 
-    // Rows are the flat list_item composite (one full-width wash per
-    // row, no per-row card chrome) with the table cells as children.
+    // Rows are real table rows (data_row > data_cell): the engine owns
+    // the chrome — full-width hover wash, hairline separators, no
+    // per-row card boxes.
     var tree = try buildTree(arena, &model);
     const row = findByLabel(tree.root, "renderfarm-worker pid 842").?;
-    try testing.expectEqual(canvas.WidgetKind.list_item, row.kind);
-    try testing.expect(findByText(row, .text, "renderfarm-worker") != null);
+    try testing.expectEqual(canvas.WidgetKind.data_row, row.kind);
+    try testing.expect(findByText(row, .data_cell, "renderfarm-worker") != null);
 
     // The scroll echoes the model-owned offset: the applied offset lands
     // in the model and the next build carries it.

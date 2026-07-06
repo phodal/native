@@ -418,6 +418,11 @@ pub fn Ui(comptime Msg: type) type {
             /// icon; unknown names draw nothing (a Debug-build warning
             /// names them).
             icon: []const u8 = "",
+            /// Icon slot side on the label-bearing controls: `.leading`
+            /// (default) draws the icon before the label, `.trailing`
+            /// after it — the next-page chevron. Icon-only controls
+            /// center the glyph regardless.
+            icon_placement: canvas.WidgetIconPlacement = .leading,
             /// Source-driven focus request: when this turns on for the
             /// element (it mounts with the flag set, or the value flips
             /// false→true), the runtime moves keyboard focus to it on
@@ -2238,6 +2243,7 @@ pub fn Ui(comptime Msg: type) type {
                 .text = options.text,
                 .placeholder = options.placeholder,
                 .icon = options.icon,
+                .icon_placement = options.icon_placement,
                 .text_alignment = options.text_alignment,
                 .autofocus = options.autofocus,
                 .image_id = options.image,

@@ -434,7 +434,11 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // (still underlined, so links stay distinguishable from body text);
 // no metric feeding markdown layout changed, so glyph and rule
 // geometry are byte-identical.
-const dev2_readme_reference_signature: u64 = 3649472737707445406;
+// Re-pinned 2026-07-06 (table register): the README's GFM table renders
+// borderless cells on hairline row separators with the comfortable row
+// band and tight cell padding — no per-cell boxes. Reviewed via the
+// regenerated docs markdown/table previews (same emitters).
+const dev2_readme_reference_signature: u64 = 7783065737068287902;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

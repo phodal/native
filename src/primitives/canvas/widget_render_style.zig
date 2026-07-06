@@ -120,6 +120,13 @@ pub fn controlStrokeWidth(widget: Widget, visual: ControlVisualTokens, fallback:
 pub fn buttonFill(widget: Widget, tokens: DesignTokens) Fill {
     if (widget.state.disabled) return colorFill(tokens.colors.disabled);
     const active = widget.state.pressed or widget.state.selected;
+    // On the quiet variants `selected` means two different things by
+    // kind: a toggle's on-state earns the muted wash, while a nav
+    // button's currency (the current page, the open trigger) shows
+    // through its variant chrome alone — a permanently washed page
+    // number would read as stuck hover.
+    const toggle_kind = widget.kind == .toggle_button or widget.kind == .toggle;
+    const quiet_active = widget.state.pressed or (widget.state.selected and toggle_kind);
     const visual = buttonControlVisualTokens(widget, tokens);
     return switch (widget.variant) {
         .default => if (active)
@@ -133,8 +140,8 @@ pub fn buttonFill(widget: Widget, tokens: DesignTokens) Fill {
         // deepens on dark ones without a second color per scheme.
         .primary => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, hoverWash(tokens.colors.accent, active, widget.state.hovered, 0.9)))),
         .secondary => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active) tokens.colors.surface_pressed else hoverWash(tokens.colors.surface_subtle, false, widget.state.hovered, 0.8)))),
-        .outline => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
-        .ghost => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
+        .outline => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, quiet_active, widget.state.hovered, if (quiet_active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
+        .ghost => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, quiet_active, widget.state.hovered, if (quiet_active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
         .destructive => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, hoverWash(tokens.colors.destructive, active, widget.state.hovered, 0.9)))),
     };
 }
@@ -201,7 +208,7 @@ pub fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVi
         .ghost => tokens.controls.button_ghost,
         .destructive => tokens.controls.button_destructive,
     };
-    if (widget.kind == .toggle_button) return controlVisualTokensWithFallback(tokens.controls.toggle_button, variant);
+    if (widget.kind == .toggle_button or widget.kind == .toggle) return controlVisualTokensWithFallback(tokens.controls.toggle_button, variant);
     return variant;
 }
 
@@ -288,7 +295,7 @@ pub fn selectionControlVisualTokens(widget: Widget, tokens: DesignTokens) Contro
         .segmented_control => tokens.controls.segmented_control,
         .checkbox => tokens.controls.checkbox,
         .radio => tokens.controls.radio,
-        .switch_control, .toggle => tokens.controls.toggle,
+        .switch_control => tokens.controls.switch_control,
         .slider => tokens.controls.slider,
         .progress => tokens.controls.progress,
         else => .{},
@@ -341,7 +348,11 @@ pub fn badgeBackgroundColor(widget: Widget, tokens: DesignTokens, visual: Contro
         .default, .primary => widgetAccentColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.accent)),
         .secondary => widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface_subtle)),
         .outline, .ghost => widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, if (widget.state.hovered or widget.state.pressed) tokens.colors.surface_subtle else transparentColor())),
-        .destructive => widgetAccentColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.destructive)),
+        // The QUIET destructive chip: a translucent destructive wash
+        // under destructive text (the composite tracks the scheme —
+        // pale pink on light pages, a dark red tint on dark ones)
+        // instead of a filled alarm block.
+        .destructive => widgetAccentColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, colorWithAlpha(tokens.colors.destructive, 0.12))),
     };
 }
 
@@ -357,7 +368,8 @@ pub fn badgeTextColor(widget: Widget, tokens: DesignTokens, visual: ControlVisua
     if (widget.state.disabled) return tokens.colors.text_muted;
     return switch (widget.variant) {
         .default, .primary => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text),
-        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive_text),
+        // Ink on the quiet wash, not knockout text on a filled block.
+        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive),
         else => widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
     };
 }
@@ -365,9 +377,11 @@ pub fn badgeTextColor(widget: Widget, tokens: DesignTokens, visual: ControlVisua
 pub fn badgeStrokeWidth(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) f32 {
     if (widget.style.stroke_width) |width| return nonNegative(width);
     if (visual.stroke_width) |width| return nonNegative(width);
+    // Only the outline variant wears a border; the filled and quiet
+    // chips are borderless (the reference badge's transparent border).
     return switch (widget.variant) {
-        .ghost => 0,
-        else => tokens.stroke.hairline,
+        .outline => tokens.stroke.hairline,
+        else => 0,
     };
 }
 

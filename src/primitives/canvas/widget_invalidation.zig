@@ -499,7 +499,7 @@ fn widgetInteractiveStatePaintBounds(widget: Widget, tokens: DesignTokens) geome
     return switch (widget.kind) {
         .checkbox => checkboxWidgetBoxRect(widget, tokens),
         .radio => radioWidgetCircleRect(widget, tokens),
-        .switch_control, .toggle => toggleWidgetTrackRect(widget, tokens),
+        .switch_control => toggleWidgetTrackRect(widget, tokens),
         .slider => sliderWidgetKnobRect(widget, tokens),
         else => widget.frame,
     };
@@ -509,7 +509,7 @@ fn widgetChromeStrokeRect(widget: Widget, tokens: DesignTokens) geometry.RectF {
     return switch (widget.kind) {
         .checkbox => checkboxWidgetBoxRect(widget, tokens),
         .radio => radioWidgetCircleRect(widget, tokens),
-        .switch_control, .toggle => toggleWidgetTrackRect(widget, tokens),
+        .switch_control => toggleWidgetTrackRect(widget, tokens),
         .slider => sliderWidgetKnobRect(widget, tokens),
         else => widget.frame,
     };
@@ -519,7 +519,7 @@ fn widgetFocusPaintRect(widget: Widget, tokens: DesignTokens) geometry.RectF {
     return switch (widget.kind) {
         .checkbox => checkboxWidgetBoxRect(widget, tokens),
         .radio => radioWidgetCircleRect(widget, tokens),
-        .switch_control, .toggle => toggleWidgetTrackRect(widget, tokens),
+        .switch_control => toggleWidgetTrackRect(widget, tokens),
         .slider => sliderWidgetKnobRect(widget, tokens),
         else => widget.frame,
     };
@@ -528,12 +528,12 @@ fn widgetFocusPaintRect(widget: Widget, tokens: DesignTokens) geometry.RectF {
 fn widgetFrameStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.kind) {
         .accordion, .alert, .bubble, .card, .dialog, .drawer, .sheet, .resizable, .panel, .popover, .menu_surface, .dropdown_menu => controlStrokeWidth(widget, surfaceControlVisualTokens(widget, tokens), tokens.stroke.hairline),
-        .button, .toggle_button, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
+        .button, .toggle_button, .toggle, .icon_button => if (widget.state.focused) tokens.stroke.focus else buttonStrokeWidth(widget, tokens),
         .select => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectControlVisualTokens(tokens), tokens.stroke.regular),
         .input, .text_field, .search_field, .combobox, .textarea => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, textInputControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .segmented_control => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .data_cell => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, listItemControlVisualTokens(widget, tokens), tokens.stroke.hairline),
-        .checkbox, .radio, .switch_control, .toggle, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
+        .checkbox, .radio, .switch_control, .slider => if (widget.state.focused) tokens.stroke.focus else controlStrokeWidth(widget, selectionControlVisualTokens(widget, tokens), tokens.stroke.regular),
         .avatar, .badge => controlStrokeWidth(widget, componentControlVisualTokens(widget, tokens), tokens.stroke.hairline),
         .list_item, .menu_item => if (widget.state.focused) tokens.stroke.focus else 0,
         else => 0,

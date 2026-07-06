@@ -209,6 +209,10 @@ pub fn spinnerWidgetArcCommandId(id: ObjectId) ObjectId {
     return widget_render.spinnerWidgetArcCommandId(id);
 }
 
+pub fn skeletonWidgetFillCommandId(id: ObjectId) ObjectId {
+    return widget_render.skeletonWidgetFillCommandId(id);
+}
+
 pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometry.PointF {
     return widget_render.spinnerWidgetRotationCenter(widget, tokens);
 }
@@ -226,7 +230,7 @@ pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
 /// control glyph for those kinds; everything else keeps the frame center.
 pub fn widgetControlAimPoint(widget: Widget, tokens: DesignTokens) geometry.PointF {
     return switch (widget.kind) {
-        .switch_control, .toggle => widget_render.toggleWidgetTrackRect(widget, tokens).center(),
+        .switch_control => widget_render.toggleWidgetTrackRect(widget, tokens).center(),
         .checkbox => widget_render.checkboxWidgetBoxRect(widget, tokens).center(),
         .radio => widget_render.radioWidgetCircleRect(widget, tokens).center(),
         else => widget.frame.normalized().center(),

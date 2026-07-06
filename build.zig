@@ -325,6 +325,21 @@ pub fn build(b: *std.Build) void {
         .root_module = file_contains_checker_mod,
     });
 
+    // Registry pin printer: emits the ui_schema table counts and
+    // fingerprints in the exact form ui_schema_tests.zig pins, plus the
+    // next free code per table for reserving codes ahead of parallel
+    // work. `zig build print-pins` after registry additions.
+    const print_pins_mod = module(b, host_target, optimize, "tools/print_pins.zig");
+    print_pins_mod.addImport("ui_schema", module(b, host_target, optimize, "src/primitives/canvas/ui_schema.zig"));
+    const print_pins_exe = b.addExecutable(.{
+        .name = "print-pins",
+        .root_module = print_pins_mod,
+    });
+    const run_print_pins = b.addRunArtifact(print_pins_exe);
+    run_print_pins.has_side_effects = true;
+    const print_pins_step = b.step("print-pins", "Print registry counts and fingerprints in pin-ready form");
+    print_pins_step.dependOn(&run_print_pins.step);
+
     const platform_arg = switch (selected_platform) {
         .auto => unreachable,
         .null => "null",

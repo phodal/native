@@ -707,6 +707,35 @@ pub const color_style_field_pairs = pairsWhere(styleColorAttr);
 // names are unique per table. Reuse of a retired code or a copy-pasted
 // duplicate cannot compile.
 
+/// Order-independent fingerprint over a table's (code, name) pairs,
+/// sorted by code: reordering a table is free (codes carry the meaning),
+/// renumbering or renaming an existing entry is not. Stated once here so
+/// the stability test (ui_schema_tests.zig) and the `zig build
+/// print-pins` step can never disagree about what a fingerprint is.
+pub fn tableFingerprint(comptime Entry: type, entries: []const Entry) u64 {
+    var codes: [256]u16 = undefined;
+    var names: [256][]const u8 = undefined;
+    for (entries, 0..) |entry, index| {
+        codes[index] = entry.code;
+        names[index] = entry.name;
+    }
+    // Insertion sort by code (tables are small and this is tooling-only).
+    for (1..entries.len) |i| {
+        var j = i;
+        while (j > 0 and codes[j - 1] > codes[j]) : (j -= 1) {
+            std.mem.swap(u16, &codes[j - 1], &codes[j]);
+            std.mem.swap([]const u8, &names[j - 1], &names[j]);
+        }
+    }
+    var hasher = std.hash.Wyhash.init(0);
+    for (codes[0..entries.len], names[0..entries.len]) |code, name| {
+        hasher.update(std.mem.asBytes(&code));
+        hasher.update(name);
+        hasher.update(&.{0});
+    }
+    return hasher.final();
+}
+
 comptime {
     @setEvalBranchQuota(derivation_quota);
     for (elements, 0..) |entry, index| {

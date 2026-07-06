@@ -100,16 +100,16 @@ Both engines produce the identical widget tree — same structural ids, same typ
 
 ## Hybrid views: a Zig root composing markup fragments
 
-Compiled markup views compose the other way too: a hand-written Zig builder root can build markup fragments as ordinary children. This is the pattern for charts-in-markup apps and any UI that mixes custom Zig panes with declarative markup — the root places what the closed grammar cannot express (a `ui.chart` pane, a scaled display block), and the markup keeps everything it can:
+Compiled markup views compose the other way too: a hand-written Zig builder root can build markup fragments as ordinary children. This is the pattern for any UI that mixes custom Zig panes with declarative markup — the root places what the closed grammar cannot express (a scaled `ui.paragraph` display block, a `.band`-series `ui.chart`, per-row native context menus), and the markup keeps everything it can:
 
 ```zig
 const CompiledHeaderView = canvas.CompiledMarkupView(Model, Msg, @embedFile("header.native"));
 
 pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     return ui.column(.{ .gap = 12, .grow = 1 }, .{
-        CompiledHeaderView.build(ui, model),   // the markup fragment, as a child
-        ui.chart(.{ .grow = 1, .height = 220, .y_min = 0 }, &.{
-            .{ .kind = .line, .values = model.cpuHistory(), .fill = true, .color = .accent, .label = "cpu" },
+        CompiledHeaderView.build(ui, model), // the markup fragment, as a child
+        ui.paragraph(.{}, &.{
+            .{ .text = model.readout(ui.arena), .monospace = true, .scale = 1.6 },
         }),
     });
 }

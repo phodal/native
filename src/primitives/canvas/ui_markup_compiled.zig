@@ -190,6 +190,13 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
             if (comptime std.mem.eql(u8, node.name, "timeline-item")) {
                 return buildTimelineItem(node, entries, ui, model, scope);
             }
+            if (comptime std.mem.eql(u8, node.name, "chart")) {
+                return buildChart(node, entries, ui, model, scope);
+            }
+            if (comptime std.mem.eql(u8, node.name, "series")) {
+                // Series inside a chart are consumed by buildChart.
+                comptime fail(node, markup.series_parent_message);
+            }
             const kind = comptime (interpreter.elementKind(node.name) orelse fail(node, "unknown element"));
             comptime {
                 // Interpreter parity: value/text handlers on
@@ -768,6 +775,168 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
                 options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
             }
             return ui.timelineItem(options);
+        }
+
+        // ---------------------------------------------------------- chart
+
+        /// Comptime mirror of the interpreter's `buildChart`: the closed
+        /// attribute set, the static series children, and every series'
+        /// kind/color/values resolution happen at comptime; only the data
+        /// slices and scalar bindings are read at runtime. Misuse fails
+        /// compilation with the interpreter's message.
+        fn buildChart(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) Ui.Node {
+            comptime {
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                        fail(node, markup.chart_display_only_message);
+                    }
+                    const known = std.mem.eql(u8, attribute.name, "y-min") or
+                        std.mem.eql(u8, attribute.name, "y-max") or
+                        std.mem.eql(u8, attribute.name, "grid-lines") or
+                        std.mem.eql(u8, attribute.name, "baseline") or
+                        std.mem.eql(u8, attribute.name, "stroke-width") or
+                        std.mem.eql(u8, attribute.name, "width") or
+                        std.mem.eql(u8, attribute.name, "height") or
+                        std.mem.eql(u8, attribute.name, "grow") or
+                        std.mem.eql(u8, attribute.name, "padding") or
+                        std.mem.eql(u8, attribute.name, "key") or
+                        std.mem.eql(u8, attribute.name, "global-key") or
+                        std.mem.eql(u8, attribute.name, "label");
+                    if (!known) fail(node, markup.chart_attr_message);
+                }
+                if (node.children.len == 0) fail(node, markup.chart_series_required_message);
+                for (node.children) |child| {
+                    if (child.kind != .element or !std.mem.eql(u8, child.name, "series")) {
+                        fail(child, markup.chart_children_message);
+                    }
+                }
+            }
+            var options: Ui.ChartOptions = .{};
+            if (comptime (node.attr("y-min") != null)) {
+                options.y_min = floatAttr(node, entries, comptime node.attr("y-min").?, ui, model, scope);
+            }
+            if (comptime (node.attr("y-max") != null)) {
+                options.y_max = floatAttr(node, entries, comptime node.attr("y-max").?, ui, model, scope);
+            }
+            if (comptime (node.attr("grid-lines") != null)) {
+                const raw = comptime node.attr("grid-lines").?;
+                comptime requireVariant(exprVariant(node, entries, raw), &.{.integer}, node, "expected a whole number");
+                options.grid_lines = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                    .integer => |int| if (int < 0 or int > std.math.maxInt(u8)) runtimeFail(u8, ui) else @intCast(int),
+                    else => runtimeFail(u8, ui),
+                };
+            }
+            if (comptime (node.attr("baseline") != null)) {
+                options.baseline = evalExpr(node, entries, comptime node.attr("baseline").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("stroke-width") != null)) {
+                options.stroke_width = floatAttr(node, entries, comptime node.attr("stroke-width").?, ui, model, scope);
+            }
+            if (comptime (node.attr("width") != null)) {
+                options.width = floatAttr(node, entries, comptime node.attr("width").?, ui, model, scope);
+            }
+            if (comptime (node.attr("height") != null)) {
+                options.height = floatAttr(node, entries, comptime node.attr("height").?, ui, model, scope);
+            }
+            if (comptime (node.attr("grow") != null)) {
+                options.grow = floatAttr(node, entries, comptime node.attr("grow").?, ui, model, scope);
+            }
+            if (comptime (node.attr("padding") != null)) {
+                options.padding = floatAttr(node, entries, comptime node.attr("padding").?, ui, model, scope);
+            }
+            if (comptime (node.attr("key") != null)) {
+                options.key = attrKey(node, entries, comptime node.attr("key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("global-key") != null)) {
+                options.global_key = attrKey(node, entries, comptime node.attr("global-key").?, ui, model, scope, "keys must be integers or strings");
+            }
+            if (comptime (node.attr("label") != null)) {
+                options.semantics.label = stringAttr(node, entries, comptime node.attr("label").?, ui, model, scope, "label expects text");
+            }
+            const series = ui.arena.alloc(canvas.ChartSeries, node.children.len) catch {
+                ui.failed = true;
+                return ui.el(.row, .{}, .{});
+            };
+            inline for (0..node.children.len) |index| {
+                series[index] = buildSeries(comptime node.children[index], entries, ui, model, scope);
+            }
+            return ui.chart(options, series);
+        }
+
+        /// Comptime mirror of the interpreter's `buildSeries`: kind and
+        /// color are closed literal vocabularies resolved at comptime,
+        /// values must name an f32 iterable, label is ordinary text.
+        fn buildSeries(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.ChartSeries {
+            comptime {
+                if (node.children.len != 0) fail(node.children[0], markup.series_children_message);
+                if (node.attr("values") == null) fail(node, markup.series_values_message);
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                    if (std.mem.eql(u8, attribute.name, "values")) continue;
+                    if (std.mem.eql(u8, attribute.name, "color")) continue;
+                    if (std.mem.eql(u8, attribute.name, "label")) continue;
+                    fail(node, markup.series_attr_message);
+                }
+            }
+            var series = canvas.ChartSeries{};
+            if (comptime (node.attr("kind") != null)) {
+                const spelled = comptime blk: {
+                    const expression = markup.parseAttrExpression(node.attr("kind").?) orelse fail(node, markup.series_kind_message);
+                    if (expression != .literal) fail(node, markup.series_kind_message);
+                    break :blk expression.literal;
+                };
+                if (comptime std.mem.eql(u8, spelled, "line")) {
+                    series.kind = .line;
+                } else if (comptime std.mem.eql(u8, spelled, "area")) {
+                    // Area is the markup spelling of a filled line.
+                    series.kind = .line;
+                    series.fill = true;
+                } else if (comptime std.mem.eql(u8, spelled, "bar")) {
+                    series.kind = .bar;
+                } else {
+                    comptime fail(node, markup.series_kind_message);
+                }
+            }
+            series.values = chartValuesItems(node, entries, comptime node.attr("values").?, ui, model, scope);
+            if (comptime (node.attr("color") != null)) {
+                series.color = comptime blk: {
+                    const expression = markup.parseAttrExpression(node.attr("color").?) orelse fail(node, markup.series_color_message);
+                    if (expression != .literal) fail(node, markup.series_color_message);
+                    break :blk std.meta.stringToEnum(canvas.ChartSeriesColor, expression.literal) orelse
+                        fail(node, markup.series_color_message);
+                };
+            }
+            if (comptime (node.attr("label") != null)) {
+                series.label = stringAttr(node, entries, comptime node.attr("label").?, ui, model, scope, markup.series_label_message);
+            }
+            return series;
+        }
+
+        /// Resolve a series `values` binding through the same sources
+        /// `for each` accepts (scope slice args shadow model iterables),
+        /// requiring an f32 element type at comptime.
+        fn chartValuesItems(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) []const f32 {
+            const path = comptime blk: {
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.series_values_message);
+                if (expression != .binding) fail(node, markup.series_values_message);
+                break :blk expression.binding;
+            };
+            const scope_index_opt = comptime scopeIndex(entries, path);
+            if (comptime (scope_index_opt != null)) {
+                const scope_index = comptime scope_index_opt.?;
+                comptime {
+                    if (entries[scope_index].kind != .slice_arg or entries[scope_index].Item != f32) {
+                        fail(node, markup.series_values_message);
+                    }
+                }
+                return scopePayload(entries, scope_index, scope);
+            }
+            const info = comptime (eachInfo(path) orelse fail(node, markup.series_values_message));
+            comptime {
+                if (info.Item != f32) fail(node, markup.series_values_message);
+            }
+            return eachItems(info, ui, model);
         }
 
         fn stringAttr(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype, comptime message: []const u8) []const u8 {

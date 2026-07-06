@@ -10,11 +10,11 @@
 //! history, and a top-CPU process table with search, sort toggles, and a
 //! confirmed SIGTERM context-menu action.
 //!
-//! Authoring split (markup-first): the header is a comptime-compiled
-//! `.native` view; the tiles, sparklines (bar charts built in Zig views —
-//! one token-tinted bar widget per sample), toolbar (vector icons paired
-//! with press handlers), table, and the confirmation overlay are Zig.
-//! See `src/view.zig`.
+//! Authoring split (markup-first): the header and the three sparkline
+//! charts are comptime-compiled `.native` views (each sparkline is one
+//! `<chart>` binding the model's NaN-padded sample window); the tiles,
+//! toolbar (vector icons paired with press handlers), table, and the
+//! confirmation overlay are Zig. See `src/view.zig`.
 
 const std = @import("std");
 const runner = @import("runner");

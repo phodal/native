@@ -321,6 +321,10 @@ pub const Server = struct {
                     for (timeline_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline attribute", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "timeline-item")) {
                     for (timeline_item_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "timeline-item attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "chart")) {
+                    for (chart_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "chart attribute", doc.doc);
+                } else if (std.mem.eql(u8, element_name, "series")) {
+                    for (series_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "series attribute", doc.doc);
                 } else if (std.mem.eql(u8, element_name, "avatar")) {
                     for (avatar_attr_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "avatar attribute", doc.doc);
                     for (attribute_docs) |doc| try writeCompletionItem(&js, doc.name, .property, "markup attribute", doc.doc);
@@ -592,6 +596,8 @@ pub const timeline_attr_docs = markup_docs.timeline_attr_docs;
 pub const timeline_item_attr_docs = markup_docs.timeline_item_attr_docs;
 pub const avatar_attr_docs = markup_docs.avatar_attr_docs;
 pub const anchor_attr_docs = markup_docs.anchor_attr_docs;
+pub const chart_attr_docs = markup_docs.chart_attr_docs;
+pub const series_attr_docs = markup_docs.series_attr_docs;
 pub const event_docs = markup_docs.event_docs;
 pub const elementDoc = markup_docs.elementDoc;
 pub const attributeDoc = markup_docs.attributeDoc;
@@ -838,7 +844,7 @@ test "doc tables cover every known element, attribute, and event" {
     for (ui_markup.known_element_names) |name| {
         try testing.expect(elementDoc(name) != null);
     }
-    for ([_][]const u8{ "for", "if", "else", "template", "use", "import", "slot", "markdown", "stepper", "step", "timeline", "timeline-item" }) |name| {
+    for ([_][]const u8{ "for", "if", "else", "template", "use", "import", "slot", "markdown", "stepper", "step", "timeline", "timeline-item", "chart", "series" }) |name| {
         try testing.expect(elementDoc(name) != null);
     }
     for (ui_markup.known_option_attrs) |name| {
@@ -855,6 +861,9 @@ test "doc tables cover every known element, attribute, and event" {
         try testing.expect(attributeDoc(name) != null);
     }
     for ([_][]const u8{ "active", "title", "description", "meta", "indicator", "connector", "image" }) |name| {
+        try testing.expect(attributeDoc(name) != null);
+    }
+    for ([_][]const u8{ "values", "y-min", "y-max", "grid-lines", "baseline", "stroke-width", "color" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

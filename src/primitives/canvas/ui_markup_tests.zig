@@ -774,6 +774,47 @@ test "stepper and timeline validate structure with teaching messages" {
     }
 }
 
+test "chart and series validate structure with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const valid_sources = [_][]const u8{
+        "<column>\n  <chart y-min=\"0\" y-max=\"1\" grid-lines=\"4\" baseline=\"true\" width=\"239\" height=\"32\" label=\"CPU history\">\n    <series kind=\"bar\" values=\"{cpu_history}\" color=\"accent\" label=\"cpu\" />\n    <series kind=\"area\" values=\"{latency}\" />\n  </chart>\n</column>",
+        "<column>\n  <chart grow=\"1\" stroke-width=\"2\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "<column>\n  <chart gap=\"4\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.chart_attr_message },
+        .{ .source = "<column>\n  <chart on-press=\"pick\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.chart_display_only_message },
+        .{ .source = "<column>\n  <chart />\n</column>", .message = markup.chart_series_required_message },
+        .{ .source = "<column>\n  <chart>\n    <text>x</text>\n  </chart>\n</column>", .message = markup.chart_children_message },
+        // The series set is static: dynamic composition stays with the
+        // Zig builder, so structure tags inside a chart teach that.
+        .{ .source = "<column>\n  <chart>\n    <for each=\"rows\" as=\"row\">\n      <series values=\"{row.levels}\" />\n    </for>\n  </chart>\n</column>", .message = markup.chart_children_message },
+        .{ .source = "<column>\n  <series values=\"{levels}\" />\n</column>", .message = markup.series_parent_message },
+        .{ .source = "<column>\n  <chart>\n    <series />\n  </chart>\n</column>", .message = markup.series_values_message },
+        .{ .source = "<column>\n  <chart>\n    <series values=\"7\" />\n  </chart>\n</column>", .message = markup.series_values_message },
+        // Band envelopes need a paired lower edge; the teaching error
+        // names the Zig builder as the home.
+        .{ .source = "<column>\n  <chart>\n    <series kind=\"band\" values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.series_kind_message },
+        .{ .source = "<column>\n  <chart>\n    <series kind=\"{kind}\" values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.series_kind_message },
+        .{ .source = "<column>\n  <chart>\n    <series values=\"{levels}\" color=\"magenta\" />\n  </chart>\n</column>", .message = markup.series_color_message },
+        .{ .source = "<column>\n  <chart>\n    <series values=\"{levels}\" fill=\"true\" />\n  </chart>\n</column>", .message = markup.series_attr_message },
+        .{ .source = "<column>\n  <chart>\n    <series values=\"{levels}\">\n      <text>x</text>\n    </series>\n  </chart>\n</column>", .message = markup.series_children_message },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}
+
 // ----------------------------------------------------------- imports
 
 fn resolveSet(arena: std.mem.Allocator, set: []const markup.SourceFile, root_name: []const u8, diagnostic: *markup.MarkupErrorInfo) markup.ResolveError!markup.MarkupDocument {

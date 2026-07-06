@@ -1,16 +1,50 @@
 import { ComponentPreview } from "@/components/component-preview";
+import { AttrTable } from "@/components/attr-table";
 
 # Chart
 
-A data chart leaf: line (with optional area fill), bar, and band series over uniform x steps, drawn through the vector path pipeline with token-driven colors. Series are copied into the build arena and downsampled deterministically to the per-series point budget (index-bucket min/max, spikes preserved), so a 10k-point series renders instead of erroring. Display-only and not a hit target — presses fall through like text. Compose axis labels from `text` widgets around the plot; the widget itself draws no text.
-
-Chart is **builder-only**: there is no `chart` markup element, because series are float arrays that markup's scalar bindings cannot carry. A charts-in-markup app uses the hybrid pattern — the root view is a Zig builder function that places the `ui.chart` panes and builds the markup fragments in as `CompiledMarkupView(...).build(ui, model)` children (see [App Model: Hybrid views](/app-model#hybrid-views-a-zig-root-composing-markup-fragments); `examples/system-monitor` and `examples/soundboard` are live references).
+A data chart: line, area (a line filled to the baseline), and bar series over uniform x steps, drawn through the vector path pipeline with token-driven colors — charts retheme with the palette, repaint exactly when their data changes, and report a series summary to automation and assistive tech. Series are copied into the build arena and downsampled deterministically to the per-series point budget (index-bucket min/max, spikes preserved), so a 10k-point series renders instead of erroring. Display-only and not a hit target — presses fall through like text. Compose axis labels from `text` elements around the plot; the chart itself draws no text.
 
 <ComponentPreview name="chart" alt="A chart rendered by the engine" caption="a filled line series and a bar series with gridlines and a baseline" />
 
+## Markup
+
+A `<chart>` takes one or more `<series>` children. Each series binds its data with `values="{binding}"` naming a model iterable of `f32` — a field, a public declaration, or a function (arena functions work), the same sources `for each` accepts. Axis bounds are literals or scalar bindings.
+
+```html
+<chart height="160" grid-lines="3" baseline="true" label="Build load">
+  <series kind="area" values="{cpu_samples}" label="cpu" />
+  <series kind="bar" values="{job_counts}" color="text_muted" label="jobs" />
+</chart>
+```
+
+The series set is static — the plot's shape is part of the design, and the data varies through the bindings. `NaN` samples pass through and draw nothing, so a history shorter than its window enters from the right edge: pad the leading gap in a model function.
+
+```zig
+/// The 60-sample window, NaN-padded at the front while samples accumulate.
+pub fn cpuSpark(model: *const Model, arena: std.mem.Allocator) []const f32 {
+    const out = arena.alloc(f32, 60) catch return &.{};
+    @memset(out, std.math.nan(f32));
+    @memcpy(out[60 - model.cpu_len ..], model.cpuHistory());
+    return out;
+}
+```
+
+Unlabeled charts get a generated series summary (`chart: line cpu 60 pts last 0.42`) as their accessible name, so automation can assert on the data without pixels; `label` replaces it.
+
+## Attributes
+
+<AttrTable element="chart" attrs={["y-min", "y-max", "grid-lines", "baseline", "stroke-width", "width", "height", "grow", "padding", "key", "global-key", "label"]} />
+
+### Series
+
+`values` is required on every series.
+
+<AttrTable element="series" attrs={["kind", "values", "color", "label"]} />
+
 ## Zig builder
 
-`ui.chart` takes `ChartOptions` and a slice of `canvas.ChartSeries` (kinds `.line`, `.bar`, `.band`; `fill` shades the area under a line, `color` names a color token per series).
+The builder is the escape hatch for what markup deliberately excludes: `.band` series (a min/max envelope needs a paired lower-edge slice per point) and series sets composed dynamically at view time. `ui.chart` takes `ChartOptions` and a slice of `canvas.ChartSeries` (kinds `.line`, `.bar`, `.band`; `fill` shades the area under a line — markup's `kind="area"`).
 
 ```zig
 ui.chart(.{ .width = 420, .height = 160, .grid_lines = 3, .baseline = true }, &.{
@@ -21,7 +55,7 @@ ui.chart(.{ .width = 420, .height = 160, .grid_lines = 3, .baseline = true }, &.
 
 ## Options
 
-`ChartOptions` fields (the builder-side equivalent of an attributes table):
+`ChartOptions` fields (the builder-side equivalent of the attributes table):
 
 | Option | Description |
 | --- | --- |

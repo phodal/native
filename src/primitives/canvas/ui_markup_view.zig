@@ -226,6 +226,13 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             if (std.mem.eql(u8, node.name, "timeline-item")) {
                 return self.buildTimelineItem(ui, scope, node);
             }
+            if (std.mem.eql(u8, node.name, "chart")) {
+                return self.buildChart(ui, scope, node);
+            }
+            if (std.mem.eql(u8, node.name, "series")) {
+                // Series inside a chart are consumed by buildChart.
+                return self.failNode(node, markup.series_parent_message);
+            }
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
@@ -768,6 +775,156 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             }
             if (!has_title) return self.failNode(node, markup.timeline_item_title_message);
             return ui.timelineItem(options);
+        }
+
+        // ---------------------------------------------------------- chart
+
+        /// `<chart y-min="0" grid-lines="4"><series kind="area"
+        /// values="{cpuHistory}" color="accent"/></chart>`: the
+        /// data-visualization composite, lowered through `Ui.chart` so
+        /// markup charts get the same downsampling, semantics summary, and
+        /// invalidation as Zig-built ones. Series values bind model
+        /// iterables of f32 through the SAME resolution set as `for each`
+        /// (slice-valued template args included); the series set itself is
+        /// static — the data varies, the plot shape does not.
+        fn buildChart(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!Ui.Node {
+            var options: Ui.ChartOptions = .{};
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) continue;
+                if (std.mem.startsWith(u8, attribute.name, "on-")) {
+                    return self.failNode(node, markup.chart_display_only_message);
+                }
+                if (std.mem.eql(u8, attribute.name, "y-min")) {
+                    options.y_min = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "y-max")) {
+                    options.y_max = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "grid-lines")) {
+                    const value = try self.evalAttrExpression(scope, node, attribute);
+                    options.grid_lines = switch (value) {
+                        .integer => |int| if (int < 0 or int > std.math.maxInt(u8))
+                            return self.failNode(node, "expected a non-negative whole number")
+                        else
+                            @intCast(int),
+                        else => return self.failNode(node, "expected a whole number"),
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "baseline")) {
+                    options.baseline = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "stroke-width")) {
+                    options.stroke_width = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "width")) {
+                    options.width = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "height")) {
+                    options.height = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "grow")) {
+                    options.grow = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "padding")) {
+                    options.padding = try self.floatAttr(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "key")) {
+                    options.key = try self.attrKey(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "global-key")) {
+                    options.global_key = try self.attrKey(scope, node, attribute);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "label")) {
+                    options.semantics.label = try self.stringAttr(scope, node, attribute, "label expects text");
+                    continue;
+                }
+                return self.failNode(node, markup.chart_attr_message);
+            }
+            if (node.children.len == 0) return self.failNode(node, markup.chart_series_required_message);
+            const series = try ui.arena.alloc(canvas.ChartSeries, node.children.len);
+            for (node.children, 0..) |child, index| {
+                if (child.kind != .element or !std.mem.eql(u8, child.name, "series")) {
+                    return self.failNode(child, markup.chart_children_message);
+                }
+                series[index] = try self.buildSeries(ui, scope, child);
+            }
+            return ui.chart(options, series);
+        }
+
+        fn buildSeries(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.ChartSeries {
+            if (node.children.len != 0) {
+                return self.failVoid(node.children[0], markup.series_children_message);
+            }
+            var series = canvas.ChartSeries{};
+            var has_values = false;
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "kind")) {
+                    // Closed literal vocabulary: area is the markup
+                    // spelling of a filled line; band stays with the
+                    // builder (it needs a paired lower edge).
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .literal) return self.failVoid(node, markup.series_kind_message);
+                    if (std.mem.eql(u8, typed.literal, "line")) {
+                        series.kind = .line;
+                    } else if (std.mem.eql(u8, typed.literal, "area")) {
+                        series.kind = .line;
+                        series.fill = true;
+                    } else if (std.mem.eql(u8, typed.literal, "bar")) {
+                        series.kind = .bar;
+                    } else {
+                        return self.failVoid(node, markup.series_kind_message);
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "values")) {
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failVoid(node, markup.series_values_message);
+                    series.values = try self.f32Items(ui, scope, node, typed.binding);
+                    has_values = true;
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "color")) {
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .literal) return self.failVoid(node, markup.series_color_message);
+                    series.color = std.meta.stringToEnum(canvas.ChartSeriesColor, typed.literal) orelse {
+                        return self.failVoid(node, markup.series_color_message);
+                    };
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "label")) {
+                    series.label = try self.stringAttr(scope, node, attribute, markup.series_label_message);
+                    continue;
+                }
+                return self.failVoid(node, markup.series_attr_message);
+            }
+            if (!has_values) return self.failVoid(node, markup.series_values_message);
+            return series;
+        }
+
+        /// Resolve a series `values` binding to an f32 slice through the
+        /// same sources `for each` accepts (scope slice args shadow model
+        /// fields, pub decls, and fns).
+        fn f32Items(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8) BuildError![]const f32 {
+            @setEvalBranchQuota(scan_quota);
+            inline for (item_types, 0..) |Item, type_index| {
+                if (comptime (Item == f32)) {
+                    if (try self.iterateItems(ui, f32, type_index, scope, path)) |items| {
+                        return items;
+                    }
+                }
+            }
+            return self.failText(node, markup.series_values_message);
         }
 
         fn stringAttr(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr, message: []const u8) BuildError![]const u8 {

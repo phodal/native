@@ -257,6 +257,31 @@ pub const Model = struct {
         return model.proc_history[0..model.proc_history_len];
     }
 
+    // The NaN-padded sparkline windows the markup charts bind
+    // (`<series values="{cpuSpark}"/>`): histories shorter than the
+    // window pad with leading NaN — missing samples draw nothing — so
+    // the trace enters from the right edge as samples accumulate.
+
+    pub fn cpuSpark(model: *const Model, arena: std.mem.Allocator) []const f32 {
+        return paddedWindow(arena, model.cpuHistory());
+    }
+
+    pub fn memSpark(model: *const Model, arena: std.mem.Allocator) []const f32 {
+        return paddedWindow(arena, model.memHistory());
+    }
+
+    pub fn procSpark(model: *const Model, arena: std.mem.Allocator) []const f32 {
+        return paddedWindow(arena, model.procHistory());
+    }
+
+    fn paddedWindow(arena: std.mem.Allocator, history: []const f32) []const f32 {
+        const out = arena.alloc(f32, history_len) catch return &.{};
+        @memset(out, std.math.nan(f32));
+        const start = out.len - @min(history.len, out.len);
+        @memcpy(out[start..], history[history.len - (out.len - start) ..]);
+        return out;
+    }
+
     // Sort chip selection (used by the view's toggle buttons).
     pub fn sortedByCpu(model: *const Model) bool {
         return model.sort_key == .cpu;

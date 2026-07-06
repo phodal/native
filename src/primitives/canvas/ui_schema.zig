@@ -159,9 +159,9 @@ pub const ElementInfo = struct {
     /// Markup element name (kebab-case).
     name: []const u8,
     /// `canvas.WidgetKind` tag name this element lowers to; empty for
-    /// composite elements, which lower through their library views
-    /// (markdown, stepper, timeline) or are consumed by a parent
-    /// composite (step, timeline-item).
+    /// composite elements, which lower through their library views or
+    /// builder sugar (markdown, stepper, timeline, chart) or are consumed
+    /// by a parent composite (step, timeline-item, series).
     widget_kind: []const u8 = "",
     /// Content is a single run of text (with interpolation); no element
     /// children (unless `takes_children` also holds).
@@ -202,7 +202,7 @@ pub const ElementInfo = struct {
 // --------------------------------------------------------------- elements
 //
 // Codes 1..53 are the plain elements (assigned at birth in the vocabulary's
-// documented grouping); 54..58 are the composites. The grouping comments
+// documented grouping); 54..60 are the composites. The grouping comments
 // mirror the authoring docs; they carry no meaning — codes do.
 
 pub const elements = [_]ElementInfo{
@@ -275,6 +275,8 @@ pub const elements = [_]ElementInfo{
     .{ .code = 56, .name = "step", .rule_hook = "step" },
     .{ .code = 57, .name = "timeline", .rule_hook = "timeline" },
     .{ .code = 58, .name = "timeline-item", .rule_hook = "timeline-item" },
+    .{ .code = 59, .name = "chart", .rule_hook = "chart" },
+    .{ .code = 60, .name = "series", .rule_hook = "series" },
 };
 
 // ------------------------------------------------------------- attributes
@@ -282,7 +284,8 @@ pub const elements = [_]ElementInfo{
 // Codes 1..28 are the generic option attributes (the order is also the
 // did-you-mean/completion display order), 29..35 the style-token
 // references, 36..41 the element-scoped specials, 42..50 the composite
-// attributes, and 51..57 the structure/tooling attributes.
+// attributes, 51..57 the structure/tooling attributes, and 58..64 the
+// chart composite attributes.
 
 pub const attrs = [_]AttrInfo{
     .{ .code = 1, .name = "text", .class = .text, .group = .option, .field = "text", .rendered_text = true },
@@ -346,6 +349,14 @@ pub const attrs = [_]AttrInfo{
     .{ .code = 55, .name = "args", .class = .text, .group = .structure },
     .{ .code = 56, .name = "src", .class = .text, .group = .structure },
     .{ .code = 57, .name = "kind", .class = .text, .group = .structure },
+    // Chart composite attributes (fresh codes, assigned at birth).
+    .{ .code = 58, .name = "values", .class = .binding_only, .group = .composite },
+    .{ .code = 59, .name = "y-min", .class = .number, .group = .composite },
+    .{ .code = 60, .name = "y-max", .class = .number, .group = .composite },
+    .{ .code = 61, .name = "grid-lines", .class = .whole, .group = .composite },
+    .{ .code = 62, .name = "baseline", .class = .flag, .group = .composite },
+    .{ .code = 63, .name = "stroke-width", .class = .number, .group = .composite },
+    .{ .code = 64, .name = "color", .class = .token_color, .group = .composite },
 };
 
 // ----------------------------------------------------------------- events

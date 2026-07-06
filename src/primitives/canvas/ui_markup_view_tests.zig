@@ -1046,10 +1046,10 @@ test "the registry's takes-children predicate matches the interpreter's takes-ch
 ///   menu case).
 /// - segmented_control: engine kind for shell chrome segments; tabs and
 ///   toggle-group cover the component catalog's use cases.
-/// - chart: series data is model-derived float arrays, and markup's
-///   scalar bindings cannot carry arrays (the documented select-options
-///   constraint, one level deeper). Charts are Zig views via `Ui.chart`;
-///   a markup chart element waits for an array-binding channel.
+/// - chart: expressible as the `<chart>` COMPOSITE (series children whose
+///   values bind model f32 iterables, lowered through `Ui.chart`), so no
+///   plain element maps to the kind here — like the other composites, the
+///   bespoke builder is the channel, not the element table.
 /// - split_divider: never authored — the builder synthesizes the drag
 ///   handle between a split's two panes, so both markup engines get it
 ///   through the same finalize that Zig views do.
@@ -2578,4 +2578,231 @@ test "binding a TextBuffer field directly fails with the edit-model teaching mes
     var good_ui = DraftUi.init(arena);
     const tree = try good_ui.finalize(try good.build(&good_ui, &model));
     try testing.expect(findByText(tree.root, .text, "hello") != null);
+}
+
+// ------------------------------------------------------------ chart fixture
+
+pub const ChartMsg = union(enum) {
+    refresh,
+};
+
+pub const ChartModel = struct {
+    /// A history window with a NaN-padded leading gap: missing samples
+    /// draw nothing, so the trace enters from the right edge (the padding
+    /// idiom the markup docs teach as a model fn).
+    cpu_history: [6]f32 = .{ std.math.nan(f32), std.math.nan(f32), 0.2, 0.4, 0.35, 0.8 },
+    latency: []const f32 = &.{ 12, 18, 9, 22 },
+    names: []const []const u8 = &.{ "cpu", "mem" },
+    limit: f32 = 1,
+
+    /// Arena-computed series: the same fn shape `for each` accepts.
+    pub fn load(model: *const ChartModel, arena: std.mem.Allocator) []const f32 {
+        const out = arena.alloc(f32, model.latency.len) catch return &.{};
+        for (model.latency, out) |sample, *slot| slot.* = sample / 2;
+        return out;
+    }
+};
+
+pub const chart_markup_source =
+    \\<column gap="8">
+    \\  <chart width="240" height="48" y-min="0" y-max="{limit}" grid-lines="2" baseline="true" label="CPU history">
+    \\    <series kind="bar" values="{cpu_history}" color="accent" label="cpu" />
+    \\    <series kind="area" values="{load}" color="info" />
+    \\  </chart>
+    \\  <chart grow="1" stroke-width="2">
+    \\    <series values="{latency}" />
+    \\  </chart>
+    \\</column>
+;
+
+pub const ChartUi = canvas.Ui(ChartMsg);
+
+/// The hand-written equivalent of the chart markup: both engines must
+/// build exactly what direct `Ui.chart` calls produce (area is the markup
+/// spelling of a filled line).
+pub fn handChartView(ui: *ChartUi, model: *const ChartModel) ChartUi.Node {
+    return ui.column(.{ .gap = 8 }, .{
+        ui.chart(.{
+            .width = 240,
+            .height = 48,
+            .y_min = 0,
+            .y_max = model.limit,
+            .grid_lines = 2,
+            .baseline = true,
+            .semantics = .{ .label = "CPU history" },
+        }, &.{
+            .{ .kind = .bar, .values = &model.cpu_history, .color = .accent, .label = "cpu" },
+            .{ .kind = .line, .fill = true, .values = model.load(ui.arena), .color = .info },
+        }),
+        ui.chart(.{ .grow = 1, .stroke_width = 2 }, &.{
+            .{ .kind = .line, .values = model.latency },
+        }),
+    });
+}
+
+fn collectChartWidgets(widget: canvas.Widget, out: *std.ArrayListUnmanaged(canvas.Widget), allocator: std.mem.Allocator) !void {
+    if (widget.kind == .chart) try out.append(allocator, widget);
+    for (widget.children) |child| {
+        try collectChartWidgets(child, out, allocator);
+    }
+}
+
+test "the chart element builds the hand-written Ui.chart tree with series bindings" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = ChartModel{};
+    const ChartMarkup = markup_view.MarkupView(ChartModel, ChartMsg);
+
+    var view = try ChartMarkup.init(arena, chart_markup_source);
+    var markup_ui = ChartUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = ChartUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handChartView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+    try testing.expectEqual(hand_tree.handlers.len, markup_tree.handlers.len);
+
+    var charts: std.ArrayListUnmanaged(canvas.Widget) = .empty;
+    defer charts.deinit(testing.allocator);
+    try collectChartWidgets(markup_tree.root, &charts, testing.allocator);
+    try testing.expectEqual(@as(usize, 2), charts.items.len);
+
+    // The first chart: options and both series land exactly as the
+    // builder call would set them.
+    const cpu_chart = charts.items[0];
+    try testing.expectEqual(@as(?f32, 0), cpu_chart.chart.y_min);
+    try testing.expectEqual(@as(?f32, 1), cpu_chart.chart.y_max);
+    try testing.expectEqual(@as(u8, 2), cpu_chart.chart.grid_lines);
+    try testing.expect(cpu_chart.chart.baseline);
+    try testing.expectEqualStrings("CPU history", cpu_chart.semantics.label);
+    try testing.expectEqual(@as(usize, 2), cpu_chart.chart.series.len);
+    const bar_series = cpu_chart.chart.series[0];
+    try testing.expectEqual(canvas.ChartSeriesKind.bar, bar_series.kind);
+    try testing.expectEqual(canvas.ChartSeriesColor.accent, bar_series.color);
+    try testing.expectEqualStrings("cpu", bar_series.label);
+    // NaN gaps pass through the binding untouched: missing samples draw
+    // nothing instead of a zero bar.
+    try testing.expectEqual(@as(usize, 6), bar_series.values.len);
+    try testing.expect(std.math.isNan(bar_series.values[0]));
+    try testing.expectEqual(@as(f32, 0.8), bar_series.values[5]);
+    // Area is the markup spelling of a filled line, over the arena fn.
+    const area_series = cpu_chart.chart.series[1];
+    try testing.expectEqual(canvas.ChartSeriesKind.line, area_series.kind);
+    try testing.expect(area_series.fill);
+    try testing.expectEqual(canvas.ChartSeriesColor.info, area_series.color);
+    try testing.expectEqual(@as(f32, 6), area_series.values[0]);
+
+    // The second chart: unlabeled charts get the builder's generated
+    // series summary, so automation reads the data without pixels.
+    const latency_chart = charts.items[1];
+    var hand_charts: std.ArrayListUnmanaged(canvas.Widget) = .empty;
+    defer hand_charts.deinit(testing.allocator);
+    try collectChartWidgets(hand_tree.root, &hand_charts, testing.allocator);
+    try testing.expectEqualStrings(hand_charts.items[1].semantics.label, latency_chart.semantics.label);
+    try testing.expectEqualStrings("chart: line 4 pts last 22.00", latency_chart.semantics.label);
+    try testing.expectEqual(@as(?f32, 2), latency_chart.style.stroke_width);
+}
+
+test "chart misuse fails the build with teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = ChartModel{};
+    const ChartMarkup = markup_view.MarkupView(ChartModel, ChartMsg);
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{
+            // values must name an f32 iterable (names iterates strings).
+            .source = "<column>\n  <chart>\n    <series values=\"{names}\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_values_message,
+        },
+        .{
+            // A scalar binding is not a series.
+            .source = "<column>\n  <chart>\n    <series values=\"{limit}\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_values_message,
+        },
+        .{
+            // Missing values entirely.
+            .source = "<column>\n  <chart>\n    <series kind=\"bar\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_values_message,
+        },
+        .{
+            // Band needs a paired lower edge: builder territory.
+            .source = "<column>\n  <chart>\n    <series kind=\"band\" values=\"{latency}\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_kind_message,
+        },
+        .{
+            // Closed chart attribute set.
+            .source = "<column>\n  <chart gap=\"8\">\n    <series values=\"{latency}\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.chart_attr_message,
+        },
+        .{
+            // Charts are display-only; presses fall through like text.
+            .source = "<column>\n  <chart on-press=\"refresh\">\n    <series values=\"{latency}\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.chart_display_only_message,
+        },
+        .{
+            // A chart with no series can never draw anything.
+            .source = "<column>\n  <chart />\n</column>",
+            .message = canvas.ui_markup.chart_series_required_message,
+        },
+        .{
+            // Only series children; the series set is static.
+            .source = "<column>\n  <chart>\n    <text>x</text>\n  </chart>\n</column>",
+            .message = canvas.ui_markup.chart_children_message,
+        },
+        .{
+            // Series outside a chart have no plot to land in.
+            .source = "<column>\n  <series values=\"{latency}\" />\n</column>",
+            .message = canvas.ui_markup.series_parent_message,
+        },
+        .{
+            // Closed series attribute set (fill is spelled kind="area").
+            .source = "<column>\n  <chart>\n    <series values=\"{latency}\" fill=\"true\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_attr_message,
+        },
+        .{
+            // Series colors are the closed token vocabulary.
+            .source = "<column>\n  <chart>\n    <series values=\"{latency}\" color=\"magenta\" />\n  </chart>\n</column>",
+            .message = canvas.ui_markup.series_color_message,
+        },
+    };
+    for (cases) |case| {
+        var view = try ChartMarkup.init(arena, case.source);
+        var ui = ChartUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(case.message, view.diagnostic.message);
+        try testing.expect(view.diagnostic.line > 0);
+    }
+}
+
+test "chart series values resolve through slice-valued template args" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = ChartModel{};
+    const ChartMarkup = markup_view.MarkupView(ChartModel, ChartMsg);
+
+    // The values binding resolves through the SAME set as `for each`:
+    // a slice-valued template arg shadows the model here.
+    const source =
+        "<template name=\"spark\" args=\"data\"><chart height=\"32\"><series kind=\"area\" values=\"{data}\" /></chart></template>\n" ++
+        "<column>\n  <use template=\"spark\" data=\"{latency}\" />\n</column>";
+    var view = try ChartMarkup.init(arena, source);
+    var ui = ChartUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const chart_widget = findByKind(tree.root, .chart).?;
+    try testing.expectEqual(@as(usize, 1), chart_widget.chart.series.len);
+    try testing.expectEqual(@as(f32, 12), chart_widget.chart.series[0].values[0]);
+    try testing.expect(chart_widget.chart.series[0].fill);
 }

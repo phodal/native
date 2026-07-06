@@ -76,6 +76,8 @@ pub const element_docs = [_]Doc{
     .{ .name = "step", .doc = "One stepper stage; only allowed inside a stepper, the label is the text content (supports {} interpolation), state derives from the stepper's active index." },
     .{ .name = "timeline", .doc = "Ledger/timeline list container; children are timeline-item elements (for/if work). Takes gap, grow, key, global-key, label." },
     .{ .name = "timeline-item", .doc = "One timeline/ledger item: title (required), description, meta, indicator + variant color the leading badge, connector=\"false\" ends the rail; on-press makes the whole item pressable with a trailing chevron." },
+    .{ .name = "chart", .doc = "Data chart: series children bind model f32 iterables and draw as token-colored line/area/bar plots (lowered through Ui.chart — same downsampling, theming, and semantics summary). Takes y-min, y-max, grid-lines, baseline, stroke-width, width, height, grow, padding, key, global-key, label. Display-only; the series set is static." },
+    .{ .name = "series", .doc = "One chart series (chart children only): values is one {binding} naming a []const f32 iterable (the same sources for each accepts; NaN samples draw nothing), kind is line, area, or bar, color a token name, label the semantics name." },
 };
 
 pub const structure_docs = [_]Doc{
@@ -186,6 +188,28 @@ pub const avatar_attr_docs = [_]Doc{
     .{ .name = "image", .doc = "avatar: one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes); 0 renders the initials fallback." },
 };
 
+pub const chart_attr_docs = [_]Doc{
+    .{ .name = "y-min", .doc = "chart: explicit y-domain floor (a number or one {binding}); omit to derive from the data. Bars always force 0 into a derived domain." },
+    .{ .name = "y-max", .doc = "chart: explicit y-domain ceiling (a number or one {binding}); omit to derive from the data." },
+    .{ .name = "grid-lines", .doc = "chart: horizontal token-hairline gridlines at even divisions (whole number; 0/omitted = none — gridlines are opt-in)." },
+    .{ .name = "baseline", .doc = "chart: draw a hairline at the baseline (zero clamped into the domain); true/false or a {binding}." },
+    .{ .name = "stroke-width", .doc = "chart: line stroke width override (plain number; default 1.5)." },
+    .{ .name = "width", .doc = "Definite width (plain number); 0/omitted keeps the intrinsic sparkline-sized default (160x48)." },
+    .{ .name = "height", .doc = "Definite height (plain number); 0/omitted keeps the intrinsic sparkline-sized default (160x48)." },
+    .{ .name = "grow", .doc = "Flex grow factor." },
+    .{ .name = "padding", .doc = "Uniform padding (plain number)." },
+    .{ .name = "key", .doc = "Sibling-scoped identity key." },
+    .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
+    .{ .name = "label", .doc = "Accessible name; omitted charts get a generated series summary (\"chart: line cpu 60 pts last 0.42\") so automation reads the data without pixels." },
+};
+
+pub const series_attr_docs = [_]Doc{
+    .{ .name = "kind", .doc = "series: line, area, or bar (literal; default line). Area is a line filled to the baseline; band envelopes stay with the Zig builder (ui.chart)." },
+    .{ .name = "values", .doc = "series: one {binding} naming a []const f32 iterable (a model field, pub decl, or fn - the same sources for each accepts). Required. Pad a short history's leading gap with NaN samples - they draw nothing." },
+    .{ .name = "color", .doc = "series: literal color token name (a canvas ColorTokens field, e.g. accent, info, success, text_muted); default accent. Series retheme with the palette." },
+    .{ .name = "label", .doc = "series: name for the chart's semantics summary (\"cpu\", \"stars\"); the kind tag stands in when empty." },
+};
+
 pub const anchor_attr_docs = [_]Doc{
     .{ .name = "anchor", .doc = "dropdown-menu: floats the surface against its PARENT's frame instead of the flow (literal below or above; either side auto-flips at the window edges). Late z-pass above the whole tree, window-clipped — never cropped by a scroll pane, never reflows siblings. Put the dropdown beside its trigger inside a stack." },
     .{ .name = "anchor-alignment", .doc = "dropdown-menu (with anchor): horizontal alignment against the anchor - start, end, or stretch (stretch also widens the surface to at least the anchor's width, the select-menu look)." },
@@ -221,6 +245,8 @@ pub fn attributeDoc(name: []const u8) ?[]const u8 {
     if (findDoc(&timeline_item_attr_docs, name)) |doc| return doc;
     if (findDoc(&avatar_attr_docs, name)) |doc| return doc;
     if (findDoc(&anchor_attr_docs, name)) |doc| return doc;
+    if (findDoc(&chart_attr_docs, name)) |doc| return doc;
+    if (findDoc(&series_attr_docs, name)) |doc| return doc;
     return findDoc(&if_attr_docs, name);
 }
 

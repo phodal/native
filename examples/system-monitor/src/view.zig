@@ -1,13 +1,11 @@
 //! system-monitor views. Markup-first where markup fits: the header bar
-//! (brand, status line, theme chips) is a compiled `.native` view. Everything
+//! (brand, status line, theme chips) and the three sparkline charts (one
+//! `<chart>` per tile: token-tinted bar/area series binding the model's
+//! NaN-padded sample windows) are compiled `.native` views. Everything
 //! else is Zig because it needs what the closed markup grammar excludes —
-//! vector icons paired with press handlers, the sparkline charts (one
-//! `ui.chart` widget per tile: token-tinted bar/line series in the
-//! retained widget tree, so the charts get layout, theming, invalidation,
-//! and automation semantics for free — this replaced the hand-built
-//! per-sample bar widgets that predated the chart primitive), per-row
-//! native context menus, and the modal SIGTERM confirmation overlaid
-//! through a z-stack root.
+//! vector icons paired with press handlers, the scaled tile paragraphs,
+//! per-row native context menus, and the modal SIGTERM confirmation
+//! overlaid through a z-stack root.
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
@@ -23,12 +21,22 @@ pub const Ui = canvas.Ui(Msg);
 pub const header_markup = @embedFile("header.native");
 pub const CompiledHeaderView = canvas.CompiledMarkupView(Model, Msg, header_markup);
 
+// The sparkline charts, one compiled markup fragment per stat tile:
+// each is a single `<chart>` whose series binds the model's NaN-padded
+// window (cpuSpark/memSpark/procSpark), built into the Zig tile chrome
+// as an ordinary child.
+pub const CpuSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark_cpu.native"));
+pub const MemSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark_mem.native"));
+pub const ProcSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark_proc.native"));
+
 // ------------------------------------------------------- layout constants
 // Precision layout, calculator-style: the sparkline geometry drives the
 // tile width and the tile row drives the window. The tests assert the
-// tiles land exactly on these frames. The 239 width is inherited from the
-// pre-primitive bar geometry (60 x 3px bars + 59 x 1px gaps), kept so the
-// window layout is byte-stable across the chart retrofit.
+// tiles land exactly on these frames (the spark_*.native charts carry
+// the same 239x32 box as literals; the frame tests hold the two equal).
+// The 239 width is inherited from the pre-primitive bar geometry
+// (60 x 3px bars + 59 x 1px gaps), kept so the window layout is
+// byte-stable across the chart retrofit.
 
 pub const spark_samples = model_mod.history_len;
 pub const spark_height: f32 = 32;
@@ -80,42 +88,31 @@ fn tilesView(ui: *Ui, model: *const Model) Ui.Node {
             .label = "CPU",
             .value = model.cpuValue(ui.arena),
             .detail = model.cpuDetail(ui.arena),
-            .history = model.cpuHistory(),
-            .scale = .fraction,
+            .spark = CpuSparkView.build(ui, model),
         }),
         statTile(ui, .{
             .label = "Memory",
             .value = model.memValue(ui.arena),
             .detail = model.memDetail(ui.arena),
-            .history = model.memHistory(),
-            .scale = .fraction,
+            .spark = MemSparkView.build(ui, model),
         }),
         statTile(ui, .{
             .label = "Processes",
             .value = model.procValue(ui.arena),
             .detail = ui.fmt("top {d} by CPU shown", .{model_mod.max_table_rows}),
-            .history = model.procHistory(),
-            .scale = .window_band,
+            .spark = ProcSparkView.build(ui, model),
         }),
         uptimeTile(ui, model),
     });
 }
 
-/// How a stat's history scales. `fraction` values are already 0..1 of an
-/// absolute scale (percent of all cores / of total memory) and draw as
-/// zero-baseline bars pinned to that domain; `window_band` stats (process
-/// counts have no natural ceiling and barely move — an absolute scale
-/// would draw a featureless block) draw as a filled line against the
-/// chart's auto domain, the window's own min..max, so the drift reads
-/// like a scope trace (documented in the README).
-const SparkScale = enum { fraction, window_band };
-
 const TileSpec = struct {
     label: []const u8,
     value: []const u8,
     detail: []const u8,
-    history: []const f32,
-    scale: SparkScale,
+    /// The tile's sparkline: a compiled markup `<chart>` fragment built
+    /// against the model, placed as an ordinary child.
+    spark: Ui.Node,
 };
 
 fn statTile(ui: *Ui, spec: TileSpec) Ui.Node {
@@ -131,7 +128,7 @@ fn statTile(ui: *Ui, spec: TileSpec) Ui.Node {
             .{ .text = spec.value, .weight = .bold, .scale = 1.55 },
         }),
         ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, spec.detail),
-        sparklineView(ui, spec.label, spec.history, spec.scale),
+        spec.spark,
     }));
 }
 
@@ -156,36 +153,6 @@ fn uptimeTile(ui: *Ui, model: *const Model) Ui.Node {
             })),
         }),
     }));
-}
-
-// ------------------------------------------------------------ sparklines
-
-/// One sparkline: a single `ui.chart` widget over the 60-sample window
-/// (chart-widget retrofit — this used to be sixty hand-built bar widgets
-/// per tile). Absolute-scale stats (`fraction`: percent of all cores, of
-/// total memory) draw zero-baseline bars pinned to the 0..1 domain;
-/// window-band stats (process counts, no natural ceiling) draw a filled
-/// line against the window's own min..max — the auto domain — so drift
-/// reads like a scope trace. Histories shorter than the window pad with
-/// leading NaN (missing samples draw nothing), so the trace still enters
-/// from the right edge as samples accumulate.
-fn sparklineView(ui: *Ui, label: []const u8, history: []const f32, scale: SparkScale) Ui.Node {
-    var padded: [model_mod.history_len]f32 = undefined;
-    @memset(&padded, std.math.nan(f32));
-    const start = padded.len - @min(history.len, padded.len);
-    @memcpy(padded[start..], history[history.len - (padded.len - start) ..]);
-
-    const series = [_]canvas.ChartSeries{switch (scale) {
-        .fraction => .{ .kind = .bar, .values = &padded, .color = .accent },
-        .window_band => .{ .kind = .line, .values = &padded, .fill = true, .color = .accent },
-    }};
-    return ui.chart(.{
-        .width = spark_width,
-        .height = spark_height,
-        .y_min = if (scale == .fraction) 0 else null,
-        .y_max = if (scale == .fraction) 1 else null,
-        .semantics = .{ .label = ui.fmt("{s} history", .{label}) },
-    }, &series);
 }
 
 // --------------------------------------------------------------- toolbar

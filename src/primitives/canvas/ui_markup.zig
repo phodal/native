@@ -1558,6 +1558,17 @@ pub const timeline_item_attr_message = "unknown attribute for timeline-item - it
 pub const timeline_item_text_attr_message = "title, description, meta, and indicator expect text (a literal or one {binding})";
 pub const timeline_item_children_message = "timeline-item takes no children - the title, description, and meta attributes provide the content";
 pub const timeline_item_press_only_message = "timeline-item dispatches presses only - use on-press (other on-* events have no surface here)";
+pub const chart_attr_message = "unknown attribute for chart - it takes y-min, y-max, grid-lines, baseline, stroke-width, width, height, grow, padding, key, global-key, and label";
+pub const chart_children_message = "chart takes only series children - one <series values=\"{binding}\"/> per plotted series; the series set is static (vary the DATA through bindings), and dynamic series composition stays with the Zig builder (ui.chart)";
+pub const chart_series_required_message = "chart requires at least one series child (<series values=\"{history}\"/>)";
+pub const chart_display_only_message = "chart is display-only - presses fall through it like text, so on-* handlers have no surface here; put on-press on a container around it";
+pub const series_parent_message = "series is only allowed inside a chart";
+pub const series_attr_message = "unknown attribute for series - it takes kind, values, color, and label";
+pub const series_kind_message = "series kind takes a literal: line, area, or bar (area is a line filled to the baseline; band envelopes need a paired lower-edge slice per point and stay with the Zig builder, ui.chart)";
+pub const series_values_message = "series requires a values attribute with one {binding} naming a []const f32 iterable (a model field, pub decl, or fn - the same sources for each accepts); pad the window's leading gap with NaN samples, which draw nothing";
+pub const series_color_message = "series color takes a literal color token name (a canvas ColorTokens field, e.g. accent, info, success, text_muted)";
+pub const series_label_message = "series label expects text (a literal or one {binding}) - it names the series in the chart's semantics summary";
+pub const series_children_message = "series is a leaf - it takes no children; the values binding carries its data";
 pub const text_leaf_children_message = "this element takes text content only - wrap element children in a container (row, column, stack)";
 pub const text_leaf_single_run_message = "text elements take a single run of text";
 pub const text_or_children_content_message = "this element takes either one run of text or element children - not both; move the text into a <text> child (and keep label= for the accessible name)";
@@ -1976,10 +1987,110 @@ fn validateTimelineItem(node: MarkupNode) ?MarkupErrorInfo {
     return null;
 }
 
+/// The series kinds the markup `<chart>` accepts, in teaching order.
+/// `area` is the markup spelling of a filled line (`ChartSeries.fill` on a
+/// `.line` series — one blessed spelling, no separate fill flag); `band`
+/// needs a paired lower-edge slice per point and stays with the Zig
+/// builder (`ui.chart`). Shared by the validator and both engines.
+pub const chart_series_kind_names = [_][]const u8{ "line", "area", "bar" };
+
+/// `<chart>` is the data-visualization composite: a closed attribute set
+/// mirroring `Ui.ChartOptions`, and only `<series>` children whose values
+/// bind model iterables of f32. The series SET is static — data varies
+/// through bindings — so structure tags inside a chart are a teaching
+/// error naming the Zig builder as the home for dynamic composition.
+fn validateChart(node: MarkupNode) ?MarkupErrorInfo {
+    for (node.attrs) |attribute| {
+        if (std.mem.startsWith(u8, attribute.name, "on-")) {
+            return attrError(node, attribute, chart_display_only_message);
+        }
+        const known = std.mem.eql(u8, attribute.name, "y-min") or
+            std.mem.eql(u8, attribute.name, "y-max") or
+            std.mem.eql(u8, attribute.name, "grid-lines") or
+            std.mem.eql(u8, attribute.name, "baseline") or
+            std.mem.eql(u8, attribute.name, "stroke-width") or
+            std.mem.eql(u8, attribute.name, "width") or
+            std.mem.eql(u8, attribute.name, "height") or
+            std.mem.eql(u8, attribute.name, "grow") or
+            std.mem.eql(u8, attribute.name, "padding") or
+            std.mem.eql(u8, attribute.name, "key") or
+            std.mem.eql(u8, attribute.name, "global-key") or
+            std.mem.eql(u8, attribute.name, "label");
+        if (!known) {
+            return attrError(node, attribute, chart_attr_message);
+        }
+        if (attrExpressionError(attribute.value, invalid_expression_message)) |message| {
+            return attrError(node, attribute, message);
+        }
+        if (attrCoverageError(node, attribute)) |info| return info;
+    }
+    var series_count: usize = 0;
+    for (node.children) |child| {
+        if (child.kind != .element or !std.mem.eql(u8, child.name, "series")) {
+            return errorAt(child, chart_children_message);
+        }
+        if (validateSeries(child)) |info| return info;
+        series_count += 1;
+    }
+    if (series_count == 0) return errorAt(node, chart_series_required_message);
+    return null;
+}
+
+/// One `<series>` inside a chart: a leaf whose data is the `values`
+/// binding. Kind and color are closed literal vocabularies (a typo can
+/// never rot silently), label is ordinary text.
+fn validateSeries(node: MarkupNode) ?MarkupErrorInfo {
+    for (node.children) |child| {
+        return errorAt(child, series_children_message);
+    }
+    var has_values = false;
+    for (node.attrs) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "kind")) {
+            const expression = parseAttrExpression(attribute.value);
+            const literal = if (expression) |value|
+                (if (value == .literal) value.literal else null)
+            else
+                null;
+            if (literal == null or !nameInList(literal.?, &chart_series_kind_names)) {
+                return attrError(node, attribute, series_kind_message);
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "values")) {
+            has_values = true;
+            const expression = parseAttrExpression(attribute.value);
+            if (expression == null or expression.? != .binding) {
+                return attrError(node, attribute, series_values_message);
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "color")) {
+            const expression = parseAttrExpression(attribute.value);
+            const literal = if (expression) |value|
+                (if (value == .literal) value.literal else null)
+            else
+                null;
+            if (literal == null or !nameInList(literal.?, &known_color_token_names)) {
+                return attrError(node, attribute, series_color_message);
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "label")) {
+            if (attrExpressionError(attribute.value, series_label_message)) |message| {
+                return attrError(node, attribute, message);
+            }
+            continue;
+        }
+        return attrError(node, attribute, series_attr_message);
+    }
+    if (!has_values) return errorAt(node, series_values_message);
+    return null;
+}
+
 /// The rule hooks the composite registry entries name. A registry entry
 /// whose hook this table does not implement is a compile error (below),
 /// so attachment and implementation can never drift.
-const rule_hook_names = [_][]const u8{ "markdown", "stepper", "step", "timeline", "timeline-item" };
+const rule_hook_names = [_][]const u8{ "markdown", "stepper", "step", "timeline", "timeline-item", "chart", "series" };
 
 comptime {
     for (schema.elements) |entry| {
@@ -2013,6 +2124,12 @@ fn validateRuleHook(hook: []const u8, document: MarkupDocument, node: MarkupNode
             }
         }
         return validateTimelineItem(node);
+    }
+    if (std.mem.eql(u8, hook, "chart")) return validateChart(node);
+    if (std.mem.eql(u8, hook, "series")) {
+        // Series inside a chart are consumed by validateChart; one
+        // reaching the generic pass sits outside a chart.
+        return errorAt(node, series_parent_message);
     }
     // The comptime check above proves every registry hook lands in one of
     // the branches; a name reaching here is not a registry hook at all.

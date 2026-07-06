@@ -331,6 +331,16 @@ pub const Model = struct {
         return out;
     }
 
+    /// The peak-hold trace the spectrum chart's line series binds: each
+    /// band's cap, a hair above the bar. Derived from the bands, so it
+    /// freezes with them when the progress clock stops.
+    pub fn spectrumPeaks(model: *const Model, arena: std.mem.Allocator) []const f32 {
+        const levels = model.spectrumLevels(arena);
+        const out = arena.alloc(f32, levels.len) catch return levels;
+        for (levels, out) |level, *peak| peak.* = @min(1, level + 0.04);
+        return out;
+    }
+
     /// Output meter level: the mean of the current spectrum, scaled by
     /// the volume fader — display state for the VU strip.
     pub fn outputLevel(model: *const Model, arena: std.mem.Allocator) f32 {

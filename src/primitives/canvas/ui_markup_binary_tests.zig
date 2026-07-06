@@ -287,3 +287,47 @@ test "the schema version constant is 1 and the registry backs the wire" {
     for (schema.elements) |entry| try testing.expect(entry.code != 0);
     for (schema.attrs) |entry| try testing.expect(entry.code != 0);
 }
+
+test "NSUI round-trips chart composites through registry codes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\<column>
+        \\  <chart y-min="0" y-max="1" grid-lines="4" baseline="true" stroke-width="2" label="CPU history">
+        \\    <series kind="area" values="{cpu_history}" color="accent" label="cpu" />
+        \\    <series kind="bar" values="{latency}" />
+        \\  </chart>
+        \\</column>
+    ;
+    const document = try parseSource(arena, source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+
+    var diagnostic = nsui.CodecDiagnostic{};
+    const bytes = try nsui.encode(arena, document, .{}, &diagnostic);
+    const decoded = try nsui.decode(arena, bytes, &diagnostic);
+    try expectNodesEqual(document.root.?, decoded.root.?);
+
+    // The chart element and its series attrs ride registry codes, so the
+    // decoded names are the registry's spellings, not the source bytes.
+    const chart_node = decoded.root.?.children[0];
+    try testing.expectEqualStrings("chart", chart_node.name);
+    try testing.expectEqualStrings("series", chart_node.children[0].name);
+    try testing.expect(chart_node.children[0].attrEntry("values").?.typed.?.* == .binding);
+
+    // Determinism, and hash coverage over the chart vocabulary: a series
+    // attribute edit is a structural change.
+    const again = try nsui.encode(arena, document, .{}, &diagnostic);
+    try testing.expectEqualSlices(u8, bytes, again);
+    const base_hash = try nsui.documentHash(arena, document);
+    const edited_source =
+        \\<column>
+        \\  <chart y-min="0" y-max="1" grid-lines="4" baseline="true" stroke-width="2" label="CPU history">
+        \\    <series kind="bar" values="{cpu_history}" color="accent" label="cpu" />
+        \\    <series kind="bar" values="{latency}" />
+        \\  </chart>
+        \\</column>
+    ;
+    const edited = try parseSource(arena, edited_source);
+    try testing.expect(base_hash != try nsui.documentHash(arena, edited));
+}

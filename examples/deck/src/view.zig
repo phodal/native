@@ -3,11 +3,11 @@
 //! the device) and a matching playlist rack unit declared through
 //! `windows_fn` while the model says it is open.
 //!
-//! Markup-first where markup fits (the playlist's status strip is a
-//! compiled `.native` view); everything else is Zig because the faceplate
-//! needs what the closed markup grammar excludes — the `ui.chart`
-//! spectrum analyzer, mono paragraph readouts at custom scales, per-row
-//! native context menus, the registered-texture image leaf, and
+//! Markup-first where markup fits (the playlist's status strip and the
+//! spectrum analyzer chart are compiled `.native` views); everything else
+//! is Zig because the faceplate needs what the closed markup grammar
+//! excludes — mono paragraph readouts at custom scales, per-row native
+//! context menus, the registered-texture image leaf, and
 //! model-conditional plate styling.
 //!
 //! Every color in this file is a design-token reference (`style_tokens`);
@@ -31,6 +31,11 @@ pub const Ui = canvas.Ui(Msg);
 
 pub const statusbar_markup = @embedFile("statusbar.native");
 pub const CompiledStatusBarView = canvas.CompiledMarkupView(Model, Msg, statusbar_markup);
+
+/// The spectrum analyzer chart: a compiled `.native` fragment (one
+/// `<chart>` with bar + peak-line series binding model fns), built into
+/// the Zig glass-panel chrome as an ordinary child.
+pub const CompiledSpectrumView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spectrum.native"));
 
 /// The chassis layout table (see layout.zig): re-exported so app wiring
 /// and the tests read the same constants the views are built from.
@@ -155,27 +160,17 @@ fn vfdPanel(ui: *Ui, model: *const Model) Ui.Node {
     }));
 }
 
-/// The live spectrum: one `.chart` widget over the model's 32
-/// deterministic band levels — phosphor bars plus a paper-white
-/// peak-trace line riding their caps.
+/// The live spectrum: one markup `<chart>` (see spectrum.native) over the
+/// model's 32 deterministic band levels — phosphor bars plus a
+/// paper-white peak-trace line riding their caps.
 fn spectrumPanel(ui: *Ui, model: *const Model) Ui.Node {
-    const levels = model.spectrumLevels(ui.arena);
-    const peaks = peakTrace(ui, levels);
     return ui.panel(.{
         .width = layout.spectrum_width,
         .padding = layout.glass_inset,
         .style_tokens = .{ .background = .background, .radius = .sm },
         .semantics = .{ .label = "Spectrum panel" },
     }, ui.column(.{ .gap = 4, .grow = 1 }, .{
-        ui.chart(.{
-            .grow = 1,
-            .y_min = 0,
-            .y_max = 1,
-            .semantics = .{ .label = "Spectrum analyzer" },
-        }, &.{
-            .{ .kind = .bar, .values = levels, .color = .accent, .label = "spectrum" },
-            .{ .kind = .line, .values = peaks, .color = .text, .label = "peaks" },
-        }),
+        CompiledSpectrumView.build(ui, model),
         ui.row(.{ .cross = .center }, .{
             engravedCaption(ui, "SPECTRUM//32"),
             ui.spacer(1),
@@ -461,14 +456,6 @@ fn engravedCaption(ui: *Ui, text: []const u8) Ui.Node {
     return ui.paragraph(.{}, &.{
         .{ .text = text, .monospace = true, .color = .text_muted, .scale = caption_scale },
     });
-}
-
-/// The peak-hold trace: each band's cap, a hair above the bar. Arena
-/// exhaustion degrades to tracing the bars exactly — never a build error.
-fn peakTrace(ui: *Ui, levels: []const f32) []const f32 {
-    const out = ui.arena.alloc(f32, levels.len) catch return levels;
-    for (levels, out) |level, *peak| peak.* = @min(1, level + 0.04);
-    return out;
 }
 
 /// ASCII-uppercase into the build arena (library strings are ASCII).

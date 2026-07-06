@@ -158,8 +158,9 @@ The deepest declaring widget on the hit route wins; disabled items and separator
 | `markdown` | rendered markdown subtree | leaf; `source` is one `{binding}` — see "Markdown in markup" |
 | `stepper` > `step` | composite stage track | `active="{index}"` (required) derives each step's completed/active/pending state; steps are text leaves (no attributes) joined by connectors; stepper also takes `key`, `global-key`, `label` |
 | `timeline` > `timeline-item` | composite ledger list | items only inside a timeline (for/if fine); items are leaves — `title` (required), `description`, `meta`, `indicator`, `variant`, `connector="false"` on the last item, `selected`; `on-press` makes the whole item pressable with a trailing chevron |
+| `chart` > `series` | composite data chart | series only inside a chart, and only series (the set is static — data varies through bindings); each series is a leaf — `values="{binding}"` (required) names a model `[]const f32` iterable, `kind` is `line`/`area`/`bar` (literal), `color` a token name, `label` the semantics name; chart takes `y-min`, `y-max`, `grid-lines`, `baseline`, `stroke-width`, box options, `label` — see "Charts" |
 
-Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `image` (needs `ImageId` pixel references, runtime-registered — see the Images section), `icon_button` (`<button icon="...">` with empty content is the declarative icon button), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (use `tabs`/`toggle-group`: `<button>` children of `<tabs>` lower to segmented triggers automatically, so the active tab lifts per the house treatment), `chart` (series are model-derived float arrays; markup's scalar bindings cannot carry arrays — a charts-in-markup app makes its ROOT a Zig builder view that places `ui.chart` panes and builds the markup fragments in as `CompiledMarkupView(...).build(ui, model)` children; see the Charts section). Built-in vector icons ARE expressible: `<icon name="search"/>` (closed, compile-checked name set; `Ui.icon` is the Zig-view equivalent). App-authored icons: `canvas.svg_icon.parseComptime(@embedFile("icons/logo.svg"))` parses any SVG in the common 24x24 stroke-icon dialect at comptime; register the parsed table once at boot with `canvas.icons.registerAppIcons(&table)` and draw by name via `ui.appIcon(.{...}, "logo")` or `ElementOptions.icon` — registered names render exactly like built-ins on every draw path. Markup `<icon>`/`<button icon>` stay built-in-only (the compiled engine validates names at comptime, where runtime registrations cannot exist — engine parity). The one image binding markup DOES carry is the avatar's: `<avatar image="{user_image}">CT</avatar>` binds a `u64` ImageId model field/fn (the id is just model data; 0 keeps the initials fallback) — the embedded-asset exclusion stays.
+Not markup-expressible (deliberately — write these as Zig view functions with `canvas.Ui`): `image` (needs `ImageId` pixel references, runtime-registered — see the Images section), `icon_button` (`<button icon="...">` with empty content is the declarative icon button), `data_grid` (per-column cell templates), `popover`/`menu_surface` (anchored to runtime geometry), `segmented_control` (use `tabs`/`toggle-group`: `<button>` children of `<tabs>` lower to segmented triggers automatically, so the active tab lifts per the house treatment). Charts ARE expressible: `<chart>` with `<series values="{binding}">` children binding model f32 iterables — see the Charts section (`.band` series and dynamic series composition stay with `ui.chart`). Built-in vector icons ARE expressible: `<icon name="search"/>` (closed, compile-checked name set; `Ui.icon` is the Zig-view equivalent). App-authored icons: `canvas.svg_icon.parseComptime(@embedFile("icons/logo.svg"))` parses any SVG in the common 24x24 stroke-icon dialect at comptime; register the parsed table once at boot with `canvas.icons.registerAppIcons(&table)` and draw by name via `ui.appIcon(.{...}, "logo")` or `ElementOptions.icon` — registered names render exactly like built-ins on every draw path. Markup `<icon>`/`<button icon>` stay built-in-only (the compiled engine validates names at comptime, where runtime registrations cannot exist — engine parity). The one image binding markup DOES carry is the avatar's: `<avatar image="{user_image}">CT</avatar>` binds a `u64` ImageId model field/fn (the id is just model data; 0 keeps the initials fallback) — the embedded-asset exclusion stays.
 
 ## Attributes
 
@@ -867,31 +868,32 @@ Three composites for pipeline/run UIs — pure compositions of existing widgets 
 - Zig: `ui.stepper(.{ .active = ... }, &.{ .{ .label = "Work" }, ... })`, `ui.timeline(options, items)`, `ui.timelineItem(.{ .title = ..., .on_press = ... })`.
 - Nav (Zig-only; markup swaps with `<if>`): `ui.nav(.{ .active = model.nav_depth, .retain = true }, .{ pageA, pageB })` — the model owns the stack; pages are index-keyed so widget ids (and engine scroll/text state) are stable across swaps; `retain=true` keeps inactive pages mounted-but-hidden (state preserved, excluded from render/hit-test/focus/semantics), default unmounts. Instant swap, no animation in v1; move focus in `update` when pushing/popping if the focused widget lives on the outgoing page.
 
-## Charts (Zig views)
+## Charts
 
-`ui.chart` is the data-visualization leaf (`.chart` widget kind): model-derived series drawn through the vector path pipeline with token colors — charts retheme with the palette, repaint exactly when their data changes (value equality, not identity), and report series semantics to automation. Zig-only: markup bindings are scalar, so a charts-in-markup app inverts the composition — the ROOT view is a Zig builder fn that places the `ui.chart` panes, and the markup fragments compile in via `canvas.CompiledMarkupView(Model, Msg, source)` and build as ordinary children (`CompiledHeaderView.build(ui, model)`); `examples/calculator`, `system-monitor`, and `soundboard` are the live pattern.
+`<chart>` is the data-visualization composite: `<series>` children bind model `[]const f32` iterables and draw through the vector path pipeline with token colors — charts retheme with the palette, repaint exactly when their data changes (value equality, not identity), and report series semantics to automation. Both engines lower it through `ui.chart`, so markup charts and Zig charts are pixel- and semantics-identical.
 
-```zig
-// Star-history: cumulative stars per repo. 10k-point series are fine —
-// ui.chart downsamples deterministically past 256 points per series.
-ui.chart(.{ .grow = 1, .height = 220, .y_min = 0, .grid_lines = 3 }, &.{
-    .{ .kind = .line, .values = model.starsFor(0), .fill = true, .color = .accent, .label = "native-sdk" },
-    .{ .kind = .line, .values = model.starsFor(1), .color = .info, .label = "ovation" },
-})
-// Sparkline tile: zero-baseline bars pinned to an absolute 0..1 domain.
-ui.chart(.{ .width = 239, .height = 32, .y_min = 0, .y_max = 1 }, &.{
-    .{ .kind = .bar, .values = model.cpuHistory(), .color = .accent },
-})
+```html
+<!-- Star-history: cumulative stars per repo. 10k-point series are fine —
+     charts downsample deterministically past 256 points per series. -->
+<chart grow="1" height="220" y-min="0" grid-lines="3" label="Star history">
+  <series kind="area" values="{sdkStars}" color="accent" label="native-sdk" />
+  <series kind="line" values="{ovationStars}" color="info" label="ovation" />
+</chart>
+<!-- Sparkline tile: zero-baseline bars pinned to an absolute 0..1 domain. -->
+<chart width="239" height="32" y-min="0" y-max="1" label="CPU history">
+  <series kind="bar" values="{cpuSpark}" />
+</chart>
 ```
 
-- Kinds: `.line` (polyline; `fill = true` adds a translucent area to the baseline; one sample draws a dot), `.bar` (one bar per value, ALWAYS anchored at zero — the auto domain forces 0 in, negatives hang below; a zero value draws nothing), `.band` (min/max envelope: `values` upper, `low` lower).
-- Data: `values: []const f32` at uniform x steps, oldest first. `NaN` = missing sample, draws a gap — pad a filling ring with leading `NaN` so the trace enters from the right (see examples/system-monitor).
-- Domain: derived per side from the data unless `y_min`/`y_max` pin it; a flat series expands symmetrically. `grid_lines = N` draws N horizontal token hairlines (opt-in, none by default); `baseline = true` marks the zero line.
-- Options: `ChartOptions` carries the common box options alongside the chart-specific ones — `width`/`height` (definite; 0 keeps the intrinsic 160x48 sparkline default), `grow` (flexes the pane like any element — `.grow = 1` is how a chart fills its column), `padding`, `key`/`global_key`, and `semantics`, plus `y_min`/`y_max`, `grid_lines`, `baseline`, `stroke_width`.
-- Colors are token refs (`.accent`, `.info`, `.success`, `.warning`, `.destructive`, ...) — never raw colors — so both themes hold up.
+- Kinds (literal): `line` (polyline; one sample draws a dot), `area` (a line filled to the baseline — the builder's `fill = true`), `bar` (one bar per value, ALWAYS anchored at zero — the auto domain forces 0 in, negatives hang below; a zero value draws nothing).
+- Data: `values` takes one `{binding}` naming an f32 iterable — a model field (slice or array), pub decl, or fn (arena fns work), the SAME resolution set as `for each` (slice-valued template args included). Values are y samples at uniform x steps, oldest first. `NaN` = missing sample, draws a gap — pad a filling window with leading `NaN` in a model fn so the trace enters from the right (see examples/system-monitor). The series SET is static: the data varies through bindings, and dynamic series composition stays with the Zig builder.
+- Domain: derived per side from the data unless `y-min`/`y-max` pin it (literals or scalar bindings); a flat series expands symmetrically. `grid-lines="N"` draws N horizontal token hairlines (opt-in, none by default); `baseline="true"` marks the zero line; `stroke-width` overrides the 1.5 default.
+- Box: `width`/`height` (definite; omitted keeps the intrinsic 160x48 sparkline default), `grow` (flexes the pane like any element — `grow="1"` is how a chart fills its column), `padding`, `key`/`global-key`, `label`.
+- Colors are token names (`accent`, `info`, `success`, `warning`, `destructive`, ...) — never raw colors — so both themes hold up; default `accent`.
 - Downsampling: past 256 points per series, deterministic index-bucket min/max decimation (spikes survive; same series → same pixels, golden-testable). The generated semantics summary still describes the SOURCE series.
-- Semantics: role `chart`; label = a generated summary (`"chart: stars 10000 pts last 9999.00"`) unless `semantics.label` is set; accessibility value = the first series' latest point — assert live data from snapshots without pixels.
-- Display-only: never a hit target; clicks fall through to the nearest pressable ancestor, so charts inside pressable rows keep the row clickable. Axis labels are composition — put `text` widgets around the plot; the chart draws no text.
+- Semantics: role `chart`; label = a generated summary (`"chart: stars 10000 pts last 9999.00"`) unless `label` is set; accessibility value = the first series' latest point — assert live data from snapshots without pixels.
+- Display-only: never a hit target and no `on-*` events; clicks fall through to the nearest pressable ancestor, so charts inside pressable rows keep the row clickable. Axis labels are composition — put `text` elements around the plot; the chart draws no text.
+- Zig escape hatch: `ui.chart(ChartOptions, &.{canvas.ChartSeries...})` is the same code with the same options, plus what markup deliberately excludes — `.band` series (min/max envelope: `values` upper, `low` lower — a PAIRED second slice per point) and series lists composed at view time (`examples/deck` builds its peak-trace series data in the model; a truly dynamic series COUNT is builder territory).
 
 ## Rich text: inline spans and markdown (Zig views)
 

@@ -1065,6 +1065,7 @@ const Checker = struct {
         if (std.mem.eql(u8, node.name, "markdown")) return self.checkMarkdown(node);
         if (std.mem.eql(u8, node.name, "stepper")) return self.checkStepper(node);
         if (std.mem.eql(u8, node.name, "timeline-item")) return self.checkTimelineItem(node);
+        if (std.mem.eql(u8, node.name, "chart")) return self.checkChart(node);
         if (std.mem.eql(u8, node.name, "timeline")) {
             for (node.attrs) |attribute| {
                 if (std.mem.eql(u8, attribute.name, "gap") or std.mem.eql(u8, attribute.name, "grow")) {
@@ -1178,6 +1179,70 @@ const Checker = struct {
             for (child.children) |run| {
                 if (run.kind == .text) try self.checkTextRun(run);
             }
+        }
+    }
+
+    /// `<chart>` and its `<series>` children: options resolve like the
+    /// engines' (numbers, whole numbers, truthy flags, text), and every
+    /// series `values` binding must name an f32 iterable — a wrong item
+    /// type fails with the model type named, so the fix is visible from
+    /// the finding.
+    fn checkChart(self: *Checker, node: markup.MarkupNode) CheckErr!void {
+        for (node.attrs) |attribute| {
+            const number_attr = std.mem.eql(u8, attribute.name, "y-min") or
+                std.mem.eql(u8, attribute.name, "y-max") or
+                std.mem.eql(u8, attribute.name, "stroke-width") or
+                std.mem.eql(u8, attribute.name, "width") or
+                std.mem.eql(u8, attribute.name, "height") or
+                std.mem.eql(u8, attribute.name, "grow") or
+                std.mem.eql(u8, attribute.name, "padding");
+            if (number_attr) {
+                try self.checkClassAttr(node, attribute, .number);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "grid-lines")) {
+                try self.checkClassAttr(node, attribute, .whole);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "baseline")) {
+                _ = try self.attrKind(node, attribute, attribute.value);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "key") or std.mem.eql(u8, attribute.name, "global-key")) {
+                try self.checkKeyAttr(node, attribute);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "label")) {
+                const kind = try self.attrKind(node, attribute, attribute.value);
+                try self.requireAttrKind(node, attribute, kind, &.{.string}, label_attr_message);
+            }
+        }
+        for (node.children) |child| {
+            if (child.kind != .element or !std.mem.eql(u8, child.name, "series")) continue;
+            try self.checkSeries(child);
+        }
+    }
+
+    fn checkSeries(self: *Checker, node: markup.MarkupNode) CheckErr!void {
+        for (node.attrs) |attribute| {
+            if (std.mem.eql(u8, attribute.name, "values")) {
+                const expression = markup.parseAttrExpression(attribute.value) orelse continue;
+                if (expression != .binding) continue;
+                const item = try self.resolveIterable(node, expression.binding, markup.series_values_message);
+                if (!std.mem.eql(u8, item.type_name, "f32")) {
+                    const message = std.fmt.allocPrint(self.arena, "{s} (\"{s}\" iterates {s})", .{
+                        markup.series_values_message, expression.binding, item.type_name,
+                    }) catch return error.OutOfMemory;
+                    return self.failAttr(node, attribute, message);
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "label")) {
+                const kind = try self.attrKind(node, attribute, attribute.value);
+                try self.requireAttrKind(node, attribute, kind, &.{.string}, markup.series_label_message);
+            }
+            // kind and color are closed literal vocabularies — the
+            // structural validator's job.
         }
     }
 

@@ -1230,3 +1230,107 @@ test "compiled slot content follows model changes like the interpreter" {
     const quince_button = fixture.findByText(compiled.root, .button, "quince").?;
     try testing.expectEqual(@as(u32, 9), compiled.msgForPointer(quince_button.id, .up).?.pick);
 }
+
+// ---------------------------------------------------- chart fixture parity
+
+const ChartUi = fixture.ChartUi;
+const ChartInterpreter = markup_view.MarkupView(fixture.ChartModel, fixture.ChartMsg);
+const ChartCompiled = canvas.CompiledMarkupView(fixture.ChartModel, fixture.ChartMsg, fixture.chart_markup_source);
+
+fn interpretChart(arena: std.mem.Allocator, model: *const fixture.ChartModel) !ChartUi.Tree {
+    var view = try ChartInterpreter.init(arena, fixture.chart_markup_source);
+    var ui = ChartUi.init(arena);
+    return ui.finalize(try view.build(&ui, model));
+}
+
+fn compileChart(arena: std.mem.Allocator, model: *const fixture.ChartModel) !ChartUi.Tree {
+    var ui = ChartUi.init(arena);
+    return ui.finalize(ChartCompiled.build(&ui, model));
+}
+
+fn expectSameChartData(expected: canvas.ChartData, actual: canvas.ChartData) !void {
+    try testing.expectEqual(expected.y_min, actual.y_min);
+    try testing.expectEqual(expected.y_max, actual.y_max);
+    try testing.expectEqual(expected.grid_lines, actual.grid_lines);
+    try testing.expectEqual(expected.baseline, actual.baseline);
+    try testing.expectEqual(expected.series.len, actual.series.len);
+    for (expected.series, actual.series) |expected_series, actual_series| {
+        try testing.expectEqual(expected_series.kind, actual_series.kind);
+        try testing.expectEqual(expected_series.fill, actual_series.fill);
+        try testing.expectEqual(expected_series.color, actual_series.color);
+        try testing.expectEqualStrings(expected_series.label, actual_series.label);
+        try testing.expectEqual(expected_series.values.len, actual_series.values.len);
+        for (expected_series.values, actual_series.values) |expected_value, actual_value| {
+            // NaN gaps compare as gaps: both engines pass them through.
+            if (std.math.isNan(expected_value)) {
+                try testing.expect(std.math.isNan(actual_value));
+            } else {
+                try testing.expectEqual(expected_value, actual_value);
+            }
+        }
+    }
+}
+
+fn firstChartWidget(widget: canvas.Widget) ?canvas.Widget {
+    return fixture.findByKind(widget, .chart);
+}
+
+test "compiled charts match the interpreter and the hand-written Ui.chart tree" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.ChartModel{};
+
+    const interpreted = try interpretChart(arena, &model);
+    const compiled = try compileChart(arena, &model);
+    var hand_ui = ChartUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handChartView(&hand_ui, &model));
+
+    try expectSameTree(fixture.ChartMsg, hand, interpreted);
+    try expectSameTree(fixture.ChartMsg, hand, compiled);
+
+    // Chart payload parity: options, series kinds/colors/labels, and the
+    // bound data (NaN gaps included) agree across all three engines.
+    const interpreted_chart = firstChartWidget(interpreted.root).?;
+    const compiled_chart = firstChartWidget(compiled.root).?;
+    const hand_chart = firstChartWidget(hand.root).?;
+    try expectSameChartData(hand_chart.chart, interpreted_chart.chart);
+    try expectSameChartData(hand_chart.chart, compiled_chart.chart);
+    try testing.expectEqualStrings(hand_chart.semantics.label, compiled_chart.semantics.label);
+    // The chart role derives from the widget KIND at semantics
+    // publication (widget_semantics maps .chart kind -> .chart role), so
+    // the markup path carries the same accessibility surface as the
+    // builder: same kind, same label, same derived role.
+    try testing.expectEqual(hand_chart.semantics.role, compiled_chart.semantics.role);
+    try testing.expectEqual(canvas.WidgetKind.chart, compiled_chart.kind);
+}
+
+const chart_template_markup =
+    \\<template name="spark" args="data"><chart height="32"><series kind="area" values="{data}" /></chart></template>
+    \\<column>
+    \\  <use template="spark" data="{latency}" />
+    \\</column>
+;
+
+const ChartTemplateCompiled = canvas.CompiledMarkupView(fixture.ChartModel, fixture.ChartMsg, chart_template_markup);
+
+test "compiled chart series resolve through slice-valued template args like the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.ChartModel{};
+
+    var view = try ChartInterpreter.init(arena, chart_template_markup);
+    var interpreted_ui = ChartUi.init(arena);
+    const interpreted = try interpreted_ui.finalize(try view.build(&interpreted_ui, &model));
+
+    var compiled_ui = ChartUi.init(arena);
+    const compiled = try compiled_ui.finalize(ChartTemplateCompiled.build(&compiled_ui, &model));
+
+    try expectSameTree(fixture.ChartMsg, interpreted, compiled);
+    const compiled_chart = firstChartWidget(compiled.root).?;
+    try expectSameChartData(firstChartWidget(interpreted.root).?.chart, compiled_chart.chart);
+    try testing.expectEqual(@as(f32, 12), compiled_chart.chart.series[0].values[0]);
+}

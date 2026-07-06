@@ -67,6 +67,7 @@ const Model = struct {
     profile: Profile = .{},
     cards: [2]Card = .{ .{ .id = 1 }, .{ .id = 2 } },
     hidden: u8 = 0,
+    history: [4]f32 = .{ 0.1, 0.4, 0.2, 0.8 },
     draft_buffer: canvas.TextBuffer(16) = .{},
 
     pub fn total(model: *const Model) i64 {
@@ -390,6 +391,50 @@ const fixtures = [_]Fixture{
         \\</column>
         ,
         .expect = "template arg values have no fields",
+    },
+    .{
+        .name = "a chart with f32 series bindings accepts",
+        .source =
+        \\<column>
+        \\  <chart y-min="0" y-max="{ratio}" grid-lines="2" baseline="true" label="History">
+        \\    <series kind="area" values="{history}" color="accent" label="load" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = null,
+    },
+    .{
+        .name = "a series values binding to a non-f32 iterable rejects",
+        .source =
+        \\<column>
+        \\  <chart>
+        \\    <series values="{cards}" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = markup.series_values_message,
+    },
+    .{
+        .name = "a series values binding to a scalar rejects",
+        .source =
+        \\<column>
+        \\  <chart>
+        \\    <series values="{ratio}" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = markup.series_values_message,
+    },
+    .{
+        .name = "a chart y bound that is not a number rejects",
+        .source =
+        \\<column>
+        \\  <chart y-min="{name}">
+        \\    <series values="{history}" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = "expected a number",
     },
 };
 
@@ -722,4 +767,24 @@ test "hashSourceDir changes when a source file changes and ignores non-Zig files
     // ...while any Zig edit must.
     try tmp.dir.writeFile(io, .{ .sub_path = "a.zig", .data = "pub const x = 2;\n" });
     try testing.expect(first != try contract.hashSourceDirAt(arena, io, tmp.dir, "."));
+}
+
+test "a wrong-typed series values binding names the model item type" {
+    // The teaching error carries the fix: the binding named, and what it
+    // actually iterates.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const document = try parseFixture(arena,
+        \\<column>
+        \\  <chart>
+        \\    <series values="{cards}" />
+        \\  </chart>
+        \\</column>
+    );
+    const message = (try contractMessage(arena, document, null)).?;
+    try testing.expect(std.mem.startsWith(u8, message, markup.series_values_message));
+    try testing.expect(std.mem.indexOf(u8, message, "\"cards\" iterates") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "Card") != null);
 }

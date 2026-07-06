@@ -155,7 +155,7 @@ fn uptimeTile(ui: *Ui, model: *const Model) Ui.Node {
         ui.paragraph(.{ .width = spark_width, .size = .heading, .semantics = .{ .label = model.uptimeValue(ui.arena) } }, &.{
             .{ .text = model.uptimeValue(ui.arena), .weight = .bold },
         }),
-        // One-line tile caption: clip at the tile width, never wrap
+        // One-line tile caption: elide at the tile width, never wrap
         // over the caption line below.
         ui.text(.{ .width = spark_width, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, "since boot (pid 1 elapsed time)"),
         ui.column(.{ .height = spark_height, .main = .end, .gap = 3 }, .{
@@ -331,7 +331,7 @@ fn columnHeadings(ui: *Ui) Ui.Node {
 /// `text_alignment = .end` needs a frame wider than the content to have
 /// an edge to align against.
 fn rightAlignedHint(ui: *Ui, text: []const u8) Ui.Node {
-    // Width-constrained one-line hint: clip rather than wrap over the
+    // Width-constrained one-line hint: elide rather than wrap over the
     // table header below.
     var node = ui.text(.{ .width = 380, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, text);
     node.widget.text_alignment = .end;

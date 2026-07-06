@@ -375,6 +375,10 @@ pub const attrs = [_]AttrInfo{
     // 66: two same-day waves both minted 65; icon-placement re-minted at
     // birth here, before either landed anywhere serialized.
     .{ .code = 66, .name = "icon-placement", .class = .option, .group = .option, .field = "icon_placement" },
+    // Single-line text overflow policy (text leaves only; the validator
+    // scopes it): ellipsis (the default) or clip. 67: re-minted at birth
+    // from a same-day 66 collision, before landing anywhere serialized.
+    .{ .code = 67, .name = "overflow", .class = .option, .group = .option, .field = "overflow" },
 };
 
 // ----------------------------------------------------------------- events

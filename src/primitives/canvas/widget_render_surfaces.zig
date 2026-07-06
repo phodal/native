@@ -323,6 +323,7 @@ pub fn emitAccordionWidgetChrome(builder: *Builder, widget: Widget, tokens: Desi
                 .line_height = widgetLineHeight(text_size),
                 .wrap = .none,
                 .alignment = widget.text_alignment,
+                .overflow = widget.text_overflow,
                 .measure = tokens.text_measure,
             },
         });

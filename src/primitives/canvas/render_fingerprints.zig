@@ -139,6 +139,12 @@ fn resourceHashOptionalTextLayoutOptions(hash: u64, options: ?TextLayoutOptions)
         next = resourceHashF32(next, nonNegative(value.line_height));
         next = resourceHashEnum(next, @intFromEnum(value.wrap));
         next = resourceHashEnum(next, @intFromEnum(value.alignment));
+        // The default overflow stays out of the hash so fingerprints of
+        // runs untouched by elision keep their pinned values; a
+        // non-default (clip) run hashes apart from its elided twin.
+        if (value.overflow != .ellipsis) {
+            next = resourceHashEnum(resourceHashBytes(next, "text_overflow"), @intFromEnum(value.overflow));
+        }
         return next;
     }
     return resourceHashU8(hash, 0);

@@ -216,3 +216,74 @@ test "screenshots clear with live widget tokens without an intervening present" 
     try std.testing.expectEqual(channel.byte(dark_tokens.colors.background.g), shot.rgba8[corner + 1]);
     try std.testing.expectEqual(channel.byte(dark_tokens.colors.background.b), shot.rgba8[corner + 2]);
 }
+
+// Env-gated proof shots for single-line text elision (skipped by
+// default, never in CI): a narrow list pane with long row titles, a
+// squeezed button label, and a clip-opted fixed column, rendered
+// offscreen through the deterministic reference renderer at 1x and 2x.
+// PNGs land in /tmp/ellipsis-shots/. To use:
+//
+//   ELLIPSIS_SHOTS=1 zig build test
+test "render text elision proof shots (env-gated)" {
+    if (comptime !@import("builtin").link_libc) return error.SkipZigTest;
+    if (std.c.getenv("ELLIPSIS_SHOTS") == null) return error.SkipZigTest;
+    const io = std.testing.io;
+
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "ellipsis-proof-shots", .source = platform.WebViewSource.html("<h1>shots</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 360, 240),
+    });
+
+    // The notes-list shape at a squeezing width: row titles and a
+    // snippet that must elide, a button whose label cannot fit, and the
+    // deliberate clip opt-out on a fixed time column.
+    const rows = [_]canvas.Widget{
+        .{ .id = 2, .kind = .list_item, .text = "Quarterly revenue report, draft three (final-final)" },
+        .{ .id = 3, .kind = .list_item, .text = "Grocery list for the long weekend cabin trip" },
+        .{ .id = 4, .kind = .text, .text = "A one-line snippet preview that runs much wider than the pane it sits in" },
+        .{ .id = 5, .kind = .button, .text = "Continue with the guided setup", .frame = geometry.RectF.init(0, 0, 150, 36) },
+        .{ .id = 6, .kind = .text, .text = "12:45:07", .text_overflow = .clip, .frame = geometry.RectF.init(0, 0, 34, 20) },
+        .{ .id = 7, .kind = .text, .text = "Short line that fits" },
+    };
+    const root = canvas.Widget{
+        .kind = .column,
+        .layout = .{ .gap = 8, .cross_alignment = .start, .padding = .{ .top = 12, .right = 12, .bottom = 12, .left = 12 } },
+        .children = &rows,
+    };
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(root, geometry.RectF.init(0, 0, 240, 240), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+
+    try std.Io.Dir.cwd().createDirPath(io, "/tmp/ellipsis-shots");
+    for ([_]f32{ 1, 2 }) |scale| {
+        const pixel_size = try harness.runtime.canvasScreenshotPixelSize(1, "canvas", scale);
+        const pixels = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+        defer std.testing.allocator.free(pixels);
+        const scratch = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+        defer std.testing.allocator.free(scratch);
+        const shot = try harness.runtime.renderCanvasScreenshot(1, "canvas", scale, pixels, scratch);
+        const encoded = try std.testing.allocator.alloc(u8, try canvas.png.encodedRgba8ByteLen(shot.width, shot.height));
+        defer std.testing.allocator.free(encoded);
+        var writer = std.Io.Writer.fixed(encoded);
+        try canvas.png.writeRgba8(&writer, shot.width, shot.height, shot.rgba8);
+        var path_buffer: [64]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "/tmp/ellipsis-shots/elision-{d}x.png", .{@as(u32, @intFromFloat(scale))});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = writer.buffered() });
+    }
+}

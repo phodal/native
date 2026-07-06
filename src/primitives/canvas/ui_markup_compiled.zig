@@ -245,14 +245,28 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
                         }
                     }
                 }
-                // Interpreter parity: only plain text leaves word-wrap;
-                // anywhere else the option is silently inert dead layout
-                // data — a compile error here.
+                // Interpreter parity: only plain text leaves word-wrap
+                // or elide; anywhere else the options are silently inert
+                // dead layout data — a compile error here.
                 if (kind != .text) {
                     for (node.attrs) |attribute| {
                         if (std.mem.eql(u8, attribute.name, "wrap")) {
                             fail(node, markup.wrap_element_message);
                         }
+                        if (std.mem.eql(u8, attribute.name, "overflow")) {
+                            fail(node, markup.overflow_element_message);
+                        }
+                    }
+                }
+                // Interpreter parity: the overflow policy's closed
+                // literal vocabulary. A compile error here; bindings
+                // resolve at runtime like any enum option.
+                for (node.attrs) |attribute| {
+                    if (!std.mem.eql(u8, attribute.name, "overflow")) continue;
+                    const expression = markup.parseAttrExpression(attribute.value) orelse continue;
+                    if (expression != .literal) continue;
+                    if (!markup.nameInList(expression.literal, &markup.overflow_value_names)) {
+                        fail(node, markup.overflow_value_message);
                     }
                 }
                 // Interpreter parity: the size register's closed literal

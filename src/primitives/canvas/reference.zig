@@ -33,6 +33,7 @@ const CanvasRenderPass = frame_model.CanvasRenderPass;
 
 const layoutTextRun = text_model.layoutTextRun;
 const textLineBounds = text_model.textLineBounds;
+const text_ellipsis_codepoint = text_model.text_ellipsis_codepoint;
 const estimatedGlyphAdvance = text_model.estimatedGlyphAdvance;
 const measureTextAdvance = text_model.measureTextAdvance;
 const nextTextOffset = text_model.nextTextOffset;
@@ -433,9 +434,10 @@ pub const ReferenceRenderSurface = struct {
 
     fn drawTextLine(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF, line: TextLine) Error!void {
         if (line.glyph_len > 0 and line.glyph_start < value.glyphs.len) {
-            const glyph_end = @min(value.glyphs.len, line.glyph_start + line.glyph_len);
-            const raw_bounds = textLineBounds(value, line.text_start, line.text_len, line.glyph_start, line.glyph_len, line.baseline, line.bounds.height);
-            const first_x = value.glyphs[line.glyph_start].x;
+            // An elided line inks only its kept prefix, then the marker.
+            const glyph_end = @min(value.glyphs.len, line.glyph_start + line.paintedGlyphLen());
+            const raw_bounds = textLineBounds(value, line.text_start, line.paintedTextLen(), line.glyph_start, line.paintedGlyphLen(), line.baseline, line.bounds.height);
+            const first_x = if (line.glyph_start < value.glyphs.len) value.glyphs[line.glyph_start].x else 0;
             const dx = line.bounds.x - raw_bounds.x;
             for (value.glyphs[line.glyph_start..glyph_end]) |glyph| {
                 const width = estimatedGlyphAdvance(glyph, value.size);
@@ -445,6 +447,7 @@ pub const ReferenceRenderSurface = struct {
                 const codepoint = referenceGlyphCodepoint(value.text, glyph.text_start, glyph.text_len);
                 self.drawGlyphBox(command, value, draw_bounds, codepoint, pen_x, baseline, glyph_rect);
             }
+            self.drawTextLineEllipsis(command, value, draw_bounds, line);
             return;
         }
 
@@ -457,7 +460,7 @@ pub const ReferenceRenderSurface = struct {
         // multibyte estimate overshot the provider's real advances and
         // pushed the tail past the measured clip bounds.
         const measure = if (value.text_layout) |options| options.measure else null;
-        const end = @min(value.text.len, line.text_start + line.text_len);
+        const end = @min(value.text.len, line.text_start + line.paintedTextLen());
         var text_offset: usize = line.text_start;
         var x = line.bounds.x;
         while (text_offset < end) {
@@ -472,6 +475,18 @@ pub const ReferenceRenderSurface = struct {
             const codepoint = referenceGlyphCodepoint(value.text, text_offset, next_offset - text_offset);
             self.drawGlyphBox(command, value, draw_bounds, codepoint, x, line.baseline, glyph_rect);
         }
+        self.drawTextLineEllipsis(command, value, draw_bounds, line);
+    }
+
+    /// The trailing ellipsis of an elided line, drawn at the painted
+    /// right edge with the advance layout reserved for it — the same
+    /// codepoint-to-outline path every glyph takes, so a face lacking
+    /// U+2026 falls back to the documented block treatment.
+    fn drawTextLineEllipsis(self: ReferenceRenderSurface, command: RenderCommand, value: DrawText, draw_bounds: geometry.RectF, line: TextLine) void {
+        if (!line.hasEllipsis()) return;
+        const pen_x = line.bounds.maxX() - line.ellipsis_advance;
+        const glyph_rect = geometry.RectF.init(pen_x, line.baseline - value.size, line.ellipsis_advance, value.size);
+        self.drawGlyphBox(command, value, draw_bounds, text_ellipsis_codepoint, pen_x, line.baseline, glyph_rect);
     }
 
     /// Paint one glyph: the real Geist outline through the vector core

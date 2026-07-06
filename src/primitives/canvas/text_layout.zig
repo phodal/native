@@ -15,6 +15,7 @@ const max_text_bounds_layout_lines: usize = 64;
 
 pub const DrawText = text_layout_types.DrawText;
 pub const TextWrap = text_layout_types.TextWrap;
+pub const TextOverflow = text_layout_types.TextOverflow;
 pub const TextAlign = text_layout_types.TextAlign;
 pub const TextLayoutOptions = text_layout_types.TextLayoutOptions;
 pub const TextLine = text_layout_types.TextLine;
@@ -46,6 +47,168 @@ fn drawTextMeasure(text: DrawText) ?*const text_metrics.TextMeasureProvider {
 
 const textLayoutOptionsForDrawText = text_layout_hash.textLayoutOptionsForDrawText;
 const textLayoutKey = text_layout_hash.textLayoutKey;
+pub const textLayoutKeysEqual = text_layout_hash.textLayoutKeysEqual;
+
+/// The elision marker: U+2026 HORIZONTAL ELLIPSIS, taken from the run's
+/// own face. Both bundled faces cover it; a registered face that lacks
+/// it takes the same documented fallback every uncovered codepoint does
+/// (the face's `.notdef` advance in layout, the block glyph in paint),
+/// so the painted extent and the measured extent still agree.
+pub const text_ellipsis = "\u{2026}";
+pub const text_ellipsis_codepoint: u21 = 0x2026;
+
+/// Advance of the ellipsis marker on the run's measurement seam — the
+/// injected provider when the run carries one, the deterministic
+/// estimator otherwise. Elision decisions and ellipsis painting must
+/// both use this so the marker never overruns the box it promised. The
+/// estimator answers from a comptime constant: this runs once per
+/// overflowing line every frame, and the marker's codepoint never
+/// changes.
+pub fn textEllipsisAdvance(measure: ?*const text_metrics.TextMeasureProvider, font_id: FontId, size: f32) f32 {
+    if (measure) |provider| return provider.measureWidth(font_id, size, text_ellipsis);
+    return text_metrics.estimatedTextEllipsisAdvance(font_id, size);
+}
+
+/// True when a run's options ask for single-line trailing elision:
+/// `wrap = .none` bounded by a real width with the (default) ellipsis
+/// overflow policy. Wrapping runs and unbounded runs never elide.
+fn lineElisionEnabled(options: TextLayoutOptions) bool {
+    return options.wrap == .none and
+        options.overflow == .ellipsis and
+        options.max_width > 0 and
+        options.max_width != std.math.inf(f32);
+}
+
+/// Exact-fit slack for the elision decision. A label box computed from
+/// positioned frame edges and the same label measured as one run drift
+/// apart by f32 arithmetic dust (~1e-3 px at window coordinates), and
+/// falling off the elision cliff over dust swaps a whole glyph for the
+/// marker. An eighth of a point sits far above that noise and far below
+/// the smallest real overflow (a glyph), and any overhang it admits is
+/// sub-pixel — within the layout audit's own epsilon. Mirrors the
+/// audit's wrap slack.
+pub const text_elision_slack: f32 = 0.125;
+
+/// A line's elision result: how much of it painting inks, plus the
+/// advance reserved for the trailing ellipsis. `ellipsis_advance == 0`
+/// on an elided line means not even the marker fits (`max_width`
+/// narrower than the ellipsis itself) — paint nothing rather than lie.
+const LineElision = struct {
+    text_len: ?usize = null,
+    glyph_len: ?usize = null,
+    ellipsis_advance: f32 = 0,
+    /// Width of the painted bytes, measured by the elision check on the
+    /// run's own seam. Line-bounds construction reuses it so a fitting
+    /// line costs exactly one measure, the same as before elision
+    /// existed — the fits-check IS the bounds measure.
+    painted_width: ?f32 = null,
+};
+
+/// Trailing-elision point for the plain line `text[start..end)`. Returns
+/// no-op elision when the line fits `max_width`. Otherwise walks cluster
+/// prefixes with the same seam the line breaker measures with, keeping
+/// the widest prefix whose width plus the ellipsis advance still fits,
+/// and trims trailing break bytes so the marker hugs the kept glyphs
+/// ("Quarterly …" never paints as "Quarterly  …"). Prefix and ellipsis
+/// are measured as two runs; any kern between the last kept glyph and
+/// the marker is forfeited, which can only make the painted line
+/// narrower than the budget, never wider.
+fn plainLineElision(text: []const u8, start: usize, end: usize, font_id: FontId, size: f32, options: TextLayoutOptions) LineElision {
+    if (!lineElisionEnabled(options) or end <= start) return .{};
+    if (options.measure == null) return estimatedPlainLineElision(text, start, end, font_id, size, options);
+    const full_width = measureTextWidthForFont(options.measure, font_id, text[start..end], size);
+    if (full_width <= options.max_width + text_elision_slack) return .{ .painted_width = full_width };
+    const ellipsis_advance = textEllipsisAdvance(options.measure, font_id, size);
+    if (ellipsis_advance > options.max_width) return .{ .text_len = 0, .ellipsis_advance = 0, .painted_width = 0 };
+    const budget = options.max_width - ellipsis_advance;
+    var fit = start;
+    var fit_width: f32 = 0;
+    var index = start;
+    while (index < end) {
+        const next_index = nextTextOffset(text, index);
+        const next_width = measureTextWidthForFont(options.measure, font_id, text[start..next_index], size);
+        if (next_width > budget) break;
+        index = next_index;
+        fit = index;
+        fit_width = next_width;
+    }
+    var trimmed = fit;
+    while (trimmed > start and isTextBreakByte(text[trimmed - 1])) trimmed -= 1;
+    const painted_width = if (trimmed == fit)
+        fit_width
+    else
+        measureTextWidthForFont(options.measure, font_id, text[start..trimmed], size);
+    return .{ .text_len = trimmed - start, .ellipsis_advance = ellipsis_advance, .painted_width = painted_width };
+}
+
+/// The estimator half of `plainLineElision`, fused into ONE cluster
+/// walk. Estimator cluster advances are additive (a run's width is
+/// exactly the sum of its per-cluster advances, in the same
+/// accumulation order), so a single pass accumulates the full width AND
+/// tracks the widest prefix that leaves room for the marker — an
+/// eligible line therefore costs exactly the one measure its bounds
+/// always cost, elided or not. The provider path above cannot fuse:
+/// prefix re-measures are what honor kerning. Trimming a trailing break
+/// byte subtracts its own advance instead of measuring the prefix
+/// again.
+fn estimatedPlainLineElision(text: []const u8, start: usize, end: usize, font_id: FontId, size: f32, options: TextLayoutOptions) LineElision {
+    const ellipsis_advance = text_metrics.estimatedTextEllipsisAdvance(font_id, size);
+    const budget = options.max_width - ellipsis_advance;
+    var width: f32 = 0;
+    var fit = start;
+    var fit_width: f32 = 0;
+    var index = start;
+    while (index < end) {
+        const next_index = nextTextOffset(text, index);
+        const advance = estimateTextAdvanceForBytes(font_id, text[index..next_index], size);
+        width += advance;
+        if (width <= budget) {
+            fit = next_index;
+            fit_width = width;
+        }
+        index = next_index;
+    }
+    if (width <= options.max_width + text_elision_slack) return .{ .painted_width = width };
+    if (ellipsis_advance > options.max_width) return .{ .text_len = 0, .ellipsis_advance = 0, .painted_width = 0 };
+    var trimmed = fit;
+    var painted_width = fit_width;
+    while (trimmed > start and isTextBreakByte(text[trimmed - 1])) {
+        painted_width -= estimateTextAdvanceForBytes(font_id, text[trimmed - 1 .. trimmed], size);
+        trimmed -= 1;
+    }
+    return .{ .text_len = trimmed - start, .ellipsis_advance = ellipsis_advance, .painted_width = @max(0, painted_width) };
+}
+
+/// Trailing-elision point for the shaped glyph line
+/// `glyphs[glyph_start..glyph_end)`: the glyph-advance mirror of
+/// `plainLineElision`, also mapping the kept glyphs back to their text
+/// range so serialized lines carry the matching painted bytes.
+fn glyphLineElision(text: DrawText, glyph_start: usize, glyph_end: usize, line_text_start: usize, options: TextLayoutOptions) LineElision {
+    if (!lineElisionEnabled(options) or glyph_end <= glyph_start) return .{};
+    var full_width: f32 = 0;
+    for (text.glyphs[glyph_start..glyph_end]) |glyph| full_width += estimatedGlyphAdvance(glyph, text.size);
+    if (full_width <= options.max_width + text_elision_slack) return .{};
+    const ellipsis_advance = textEllipsisAdvance(options.measure, text.font_id, text.size);
+    if (ellipsis_advance > options.max_width) return .{ .text_len = 0, .glyph_len = 0, .ellipsis_advance = 0 };
+    const budget = options.max_width - ellipsis_advance;
+    var fit = glyph_start;
+    var index = glyph_start;
+    var width: f32 = 0;
+    while (index < glyph_end) {
+        const next_width = width + estimatedGlyphAdvance(text.glyphs[index], text.size);
+        if (next_width > budget) break;
+        width = next_width;
+        index += 1;
+        fit = index;
+    }
+    while (fit > glyph_start and isGlyphTextBreak(text, fit - 1)) fit -= 1;
+    const painted_range = textRangeForGlyphRangeWithGlyphs(text.text, text.glyphs, glyph_start, fit - glyph_start);
+    return .{
+        .text_len = painted_range.end -| line_text_start,
+        .glyph_len = fit - glyph_start,
+        .ellipsis_advance = ellipsis_advance,
+    };
+}
 
 pub const TextLayoutPlanner = struct {
     plans: []TextLayoutPlan,
@@ -156,7 +319,7 @@ pub const TextLineIterator = struct {
         const bytes = self.text.text;
         if (bytes.len == 0) {
             self.finished = true;
-            return self.emit(0, 0, 0, 0);
+            return self.emit(0, 0, 0, 0, .{});
         }
         const start = self.cursor;
         const end = nextTextLineEnd(bytes, start, self.text.font_id, self.text.size, self.options);
@@ -168,7 +331,8 @@ pub const TextLineIterator = struct {
             while (self.options.wrap == .word and next_start < bytes.len and isTextBreakByte(bytes[next_start])) next_start += 1;
             self.cursor = next_start;
         }
-        return self.emit(start, end - start, start, end - start);
+        const elision = plainLineElision(bytes, start, end, self.text.font_id, self.text.size, self.options);
+        return self.emit(start, end - start, start, end - start, elision);
     }
 
     fn nextGlyphLine(self: *TextLineIterator) ?TextLine {
@@ -178,17 +342,18 @@ pub const TextLineIterator = struct {
             self.finished = true;
             // A run whose glyphs are all breaks still lays out as one
             // empty line (the buffered path's fallback emission).
-            if (self.index == 0) return self.emit(0, 0, 0, 0);
+            if (self.index == 0) return self.emit(0, 0, 0, 0, .{});
             return null;
         }
         const glyph_end = nextGlyphLineEnd(self.text, glyph_start, self.options);
         const range = textRangeForGlyphRangeWithGlyphs(self.text.text, self.text.glyphs, glyph_start, glyph_end - glyph_start);
         self.cursor = glyph_end;
-        return self.emit(range.start, range.byteLen(self.text.text.len), glyph_start, glyph_end - glyph_start);
+        const elision = glyphLineElision(self.text, glyph_start, glyph_end, range.start, self.options);
+        return self.emit(range.start, range.byteLen(self.text.text.len), glyph_start, glyph_end - glyph_start, elision);
     }
 
-    fn emit(self: *TextLineIterator, text_start: usize, text_len: usize, glyph_start: usize, glyph_len: usize) TextLine {
-        const line = textLineAt(self.text, text_start, text_len, glyph_start, glyph_len, self.index, self.line_height_value, self.options);
+    fn emit(self: *TextLineIterator, text_start: usize, text_len: usize, glyph_start: usize, glyph_len: usize, elision: LineElision) TextLine {
+        const line = textLineAt(self.text, text_start, text_len, glyph_start, glyph_len, self.index, self.line_height_value, self.options, elision);
         self.index += 1;
         return line;
     }
@@ -452,12 +617,23 @@ fn textLineAt(
     line_index: usize,
     line_height_value: f32,
     options: TextLayoutOptions,
+    elision: LineElision,
 ) TextLine {
     const baseline = text.origin.y + @as(f32, @floatFromInt(line_index)) * line_height_value;
-    const line_bounds = alignTextLineBounds(
-        textLineBounds(text, text_start, text_len, glyph_start, glyph_len, baseline, line_height_value),
-        options,
-    );
+    // Bounds cover the painted extent: the kept prefix plus the trailing
+    // ellipsis on an elided line, so alignment centers what is actually
+    // inked and audits see the true painted width. A plain line whose
+    // elision check already measured it reuses that width instead of
+    // measuring again.
+    const painted_text_len = elision.text_len orelse text_len;
+    const painted_glyph_len = elision.glyph_len orelse glyph_len;
+    const plain_line = painted_glyph_len == 0 or glyph_start >= text.glyphs.len;
+    var raw_bounds = if (plain_line and elision.painted_width != null)
+        geometry.RectF.init(text.origin.x, baseline - text.size, elision.painted_width.?, line_height_value)
+    else
+        textLineBounds(text, text_start, painted_text_len, glyph_start, painted_glyph_len, baseline, line_height_value);
+    raw_bounds.width += elision.ellipsis_advance;
+    const line_bounds = alignTextLineBounds(raw_bounds, options);
     return .{
         .text_start = text_start,
         .text_len = text_len,
@@ -465,6 +641,9 @@ fn textLineAt(
         .glyph_len = glyph_len,
         .bounds = line_bounds,
         .baseline = baseline,
+        .elided_text_len = elision.text_len,
+        .elided_glyph_len = elision.glyph_len,
+        .ellipsis_advance = elision.ellipsis_advance,
     };
 }
 
@@ -515,10 +694,15 @@ fn textLineRangeForLength(text_len: usize, line: TextLine) TextRange {
 pub fn textLineCaretX(text: DrawText, line: TextLine, offset: usize) f32 {
     const range = textLineRange(text, line);
     const snapped = clampTextOffsetToRange(text.text, range, offset);
-    if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len) {
-        return textLineGlyphCaretX(text, line, range, snapped);
-    }
-    return line.bounds.x + measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[range.start..snapped], text.size);
+    const x = if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len)
+        textLineGlyphCaretX(text, line, range, snapped)
+    else
+        line.bounds.x + measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[range.start..snapped], text.size);
+    // Offsets in an elided line's hidden tail pin to the painted right
+    // edge (after the ellipsis): selection highlights stay inside the
+    // box while the range itself still covers every hidden byte.
+    if (line.isElided()) return @min(x, line.bounds.maxX());
+    return x;
 }
 
 fn textLineGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset: usize) f32 {
@@ -546,6 +730,16 @@ fn textLineGlyphCaretX(text: DrawText, line: TextLine, range: TextRange, offset:
 fn textLineOffsetForX(text: DrawText, line: TextLine, x: f32) usize {
     const range = textLineRange(text, line);
     if (x <= line.bounds.x) return range.start;
+    // Elided lines: the hidden tail has no painted geometry, so a point
+    // past the painted right edge means "everything" (a rightward sweep
+    // selects the whole line, hidden bytes included) and a point on the
+    // ellipsis itself means the kept prefix.
+    if (line.isElided()) {
+        if (x >= line.bounds.maxX()) return range.end;
+        if (x >= line.bounds.maxX() - line.ellipsis_advance) {
+            return snapTextOffset(text.text, @min(range.end, line.text_start + line.paintedTextLen()));
+        }
+    }
     if (line.glyph_len > 0 and line.glyph_start < text.glyphs.len) {
         return textLineGlyphOffsetForX(text, line, range, x);
     }

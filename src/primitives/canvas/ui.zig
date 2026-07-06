@@ -455,15 +455,22 @@ pub fn Ui(comptime Msg: type) type {
             /// Line policy for `text` leaves. `true`: word-wrap through
             /// the span paragraph machinery (a single-span paragraph),
             /// wrapping at the width the widget receives and reserving
-            /// its real wrapped height in columns. `false`: honest
-            /// single-line — the content paints as ONE line clipped to
-            /// the frame it receives, so a width-constrained title never
-            /// paints a second line over the row below (measurement is
-            /// single-line either way; this makes paint agree with it).
-            /// Unset (null) keeps the classic paint path byte-identical:
-            /// single-line measurement, but paint re-wraps overflow —
-            /// prefer an explicit `false` for width-constrained titles.
+            /// its real wrapped height in columns. `false` and unset:
+            /// honest single-line — the content paints as ONE line
+            /// (measurement is single-line either way; paint agrees),
+            /// and content that does not fit the frame follows
+            /// `overflow` (trailing ellipsis by default), so a
+            /// width-constrained title never paints a second line over
+            /// the row below.
             wrap: ?bool = null,
+            /// Single-line overflow policy for `text` leaves whose
+            /// content does not fit the frame: `.ellipsis` (default)
+            /// elides the tail behind a trailing U+2026 measured with
+            /// the same seam paint uses; `.clip` is the deliberate
+            /// hard-cut for fixed-format content (a duration column)
+            /// where a partial glyph beats losing the format. Wrapped
+            /// paragraphs (`wrap = true`) ignore it.
+            overflow: canvas.TextOverflow = .ellipsis,
             /// Horizontal alignment of the widget's text content within
             /// its box: `.text` leaves (plain and wrapped/paragraph),
             /// status bars, and surface titles consume it. Controls that
@@ -2066,10 +2073,12 @@ pub fn Ui(comptime Msg: type) type {
                 spans[0] = .{ .text = widget.text };
                 widget.spans = spans;
             }
-            // An explicit `wrap = false` is the honest single-line
-            // contract: paint one line (TextWrap.none) clipped to the
-            // frame, matching the single-line measurement both layout
-            // paths already perform. Span paragraphs keep wrapping.
+            // An explicit `wrap = false` records the author's single-line
+            // choice. Plain leaves paint one line (TextWrap.none) either
+            // way, matching the single-line measurement both layout paths
+            // already perform; overflow policy (`overflow`, trailing
+            // ellipsis by default) decides what happens past the frame.
+            // Span paragraphs keep wrapping.
             if (node.wrap == false and widget.kind == .text and widget.spans.len == 0) {
                 widget.text_no_wrap = true;
             }
@@ -2338,6 +2347,7 @@ pub fn Ui(comptime Msg: type) type {
                 .icon = options.icon,
                 .icon_placement = options.icon_placement,
                 .text_alignment = options.text_alignment,
+                .text_overflow = options.overflow,
                 .autofocus = options.autofocus,
                 .image_id = options.image,
                 .value = options.value,

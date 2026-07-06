@@ -14,6 +14,7 @@ const Affine = canvas.Affine;
 const ImageFit = canvas.ImageFit;
 const ImageSampling = canvas.ImageSampling;
 const TextAlign = text_model.TextAlign;
+const TextOverflow = text_model.TextOverflow;
 const TextSpan = text_spans_model.TextSpan;
 const TextRange = text_model.TextRange;
 const TextSelection = text_model.TextSelection;
@@ -702,15 +703,22 @@ pub const Widget = struct {
     /// Icon-only buttons center the glyph regardless.
     icon_placement: WidgetIconPlacement = .leading,
     text_alignment: TextAlign = .start,
-    /// Honest single-line mode for plain `.text` leaves
-    /// (`ElementOptions.wrap = false` / markup `wrap="false"`): the
-    /// content paints as ONE line (`TextWrap.none`) clipped to the
-    /// widget's frame instead of word-wrapping at paint into siblings
-    /// below. Measurement already treats plain text as one line in both
-    /// the intrinsic and constrained paths, so this makes paint agree
-    /// with layout. Off keeps the classic paint path byte-identical.
-    /// Ignored on span paragraphs (`spans`), which wrap by design.
+    /// Explicit single-line mode for plain `.text` leaves
+    /// (`ElementOptions.wrap = false` / markup `wrap="false"`). Plain
+    /// leaves paint one line either way (measurement treats them as one
+    /// line in both the intrinsic and constrained paths, and paint
+    /// agrees); the flag records the author's explicit choice so
+    /// tooling and write-back can round-trip it. Span paragraphs
+    /// (`spans`) wrap by design and ignore it.
     text_no_wrap: bool = false,
+    /// What a single-line text run does with content that does not fit
+    /// its frame (`ElementOptions.overflow` / markup `overflow=` on
+    /// text leaves): `.ellipsis` (default) elides the tail behind a
+    /// trailing U+2026 measured with the same seam paint uses; `.clip`
+    /// is the deliberate hard-cut for fixed-format content (a duration
+    /// column) where a partial glyph beats losing the format. Wrapped
+    /// paragraphs ignore it.
+    text_overflow: TextOverflow = .ellipsis,
     /// Source-driven focus request: when this turns ON for a widget —
     /// newly mounted with it set, or the source flips it false→true —
     /// the runtime moves keyboard focus to the widget on the rebuild

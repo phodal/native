@@ -641,7 +641,12 @@ test "gpu components display list renders stable reference snapshot" {
     // boxes for engine-drawn hairline row separators with row-level
     // hover washes and right-alignable cells. Reviewed via regenerated
     // docs badge/table previews and the live system-monitor capture.
-    try std.testing.expectEqual(@as(u64, 7647413355359718732), referenceSurfaceSignature(pixels));
+    // Re-pinned on the merged tree carrying the single-line overflow
+    // default: bounded text lays out with trailing-ellipsis elision, so
+    // any label near its box edge re-rasterizes at the elision boundary
+    // even when no glyph is dropped. Reviewed via regenerated docs
+    // previews (only the separator hero pair changed) before blessing.
+    try std.testing.expectEqual(@as(u64, 15848940963031201602), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

@@ -182,6 +182,8 @@ fn writeTextLayoutOptionsJson(options: TextLayoutOptions, writer: anytype) !void
     try json.writeString(writer, @tagName(options.wrap));
     try writer.writeAll(",\"align\":");
     try json.writeString(writer, @tagName(options.alignment));
+    try writer.writeAll(",\"overflow\":");
+    try json.writeString(writer, @tagName(options.overflow));
     try writer.writeByte('}');
 }
 
@@ -514,13 +516,23 @@ fn writeCanvasGpuTextLinesJson(value: CanvasGpuText, options: TextLayoutOptions,
     try writer.writeByte('[');
     for (layout.lines, 0..) |line, index| {
         if (index > 0) try writer.writeByte(',');
+        // Elided lines ship their painted bytes — kept prefix plus the
+        // ellipsis — so hosts that draw packet lines verbatim ink
+        // exactly the extent the engine measured, with no host-side
+        // elision logic to drift.
         const start = @min(line.text_start, value.text.len);
-        const end = @min(value.text.len, start + line.text_len);
+        const end = @min(value.text.len, start + line.paintedTextLen());
         try writer.print("{{\"x\":{d},\"baseline\":{d},\"text\":", .{ line.bounds.x, line.baseline });
-        try json.writeString(writer, value.text[start..end]);
+        try json.writeStringParts(writer, &.{ value.text[start..end], packetLineEllipsis(line) });
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
+}
+
+/// The trailing marker appended to an elided packet line's text (empty
+/// when the line fits or the box cannot even hold the marker).
+fn packetLineEllipsis(line: TextLine) []const u8 {
+    return if (line.hasEllipsis()) text_model.text_ellipsis else "";
 }
 
 fn writeCanvasGpuEffectJson(effect: CanvasGpuEffect, writer: anytype) !void {
@@ -834,6 +846,8 @@ fn writeTextLayoutKeyJson(key: TextLayoutKey, writer: anytype) !void {
     try json.writeString(writer, @tagName(key.wrap));
     try writer.writeAll(",\"align\":");
     try json.writeString(writer, @tagName(key.alignment));
+    try writer.writeAll(",\"overflow\":");
+    try json.writeString(writer, @tagName(key.overflow));
     try writer.print(",\"textLen\":{d},\"glyphCount\":{d},\"fingerprint\":{d}}}", .{
         key.text_len,
         key.glyph_count,
@@ -1107,6 +1121,12 @@ pub fn canvasGpuCommandFingerprint(command: CanvasGpuCommand) u64 {
             h = hash.resourceHashF32(h, nonNegative(options.line_height));
             h = hash.resourceHashEnum(h, @intFromEnum(options.wrap));
             h = hash.resourceHashEnum(h, @intFromEnum(options.alignment));
+            // Default overflow stays out of the hash: fingerprints of
+            // runs the elision default never touches keep their pinned
+            // values; clip-opted runs hash apart from elided twins.
+            if (options.overflow != .ellipsis) {
+                h = hash.resourceHashEnum(hash.resourceHashBytes(h, "text_overflow"), @intFromEnum(options.overflow));
+            }
         } else {
             h = hash.resourceHashU8(h, 0);
         }
@@ -1420,11 +1440,17 @@ fn writeBinaryText(text: CanvasGpuText, writer: anytype) !void {
     try writer.writeByte(1);
     try writer.writeInt(u32, @intCast(layout.lines.len), .little);
     for (layout.lines) |line| {
+        // Elided lines ship painted bytes (kept prefix + ellipsis),
+        // mirroring the JSON encoding, so both packet hosts draw the
+        // measured extent verbatim.
         const start = @min(line.text_start, text.text.len);
-        const end = @min(text.text.len, start + line.text_len);
+        const end = @min(text.text.len, start + line.paintedTextLen());
         try writeBinaryF32(line.bounds.x, writer);
         try writeBinaryF32(line.baseline, writer);
-        try writeBinarySlice(text.text[start..end], writer);
+        const ellipsis = packetLineEllipsis(line);
+        try writer.writeInt(u32, @intCast(end - start + ellipsis.len), .little);
+        try writer.writeAll(text.text[start..end]);
+        try writer.writeAll(ellipsis);
     }
 }
 

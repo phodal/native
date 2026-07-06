@@ -561,17 +561,18 @@ test "explicit wrap=false stamps the honest single-line text mode" {
 }
 
 test "no-wrap text paints one clipped line in a width-constrained row" {
-    // The list-row overlap repro: a narrow column would let the classic
-    // paint path re-wrap the title onto a second line over the sibling
-    // below. wrap=false must keep single-line measurement AND emit a
-    // single `.none` text run clipped to the received frame.
+    // The list-row overlap repro: a narrow column must never let the
+    // title paint a second line over the sibling below. wrap=false must
+    // keep single-line measurement AND emit a single `.none` text run;
+    // overflow="clip" (the explicit opt-out of the ellipsis default)
+    // clips it to the received frame.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
     var ui = InboxUi.init(arena_state.allocator());
     const content = "A long issue title that is much wider than the narrow row it sits in";
     const tree = try ui.finalize(ui.column(.{ .width = 160 }, .{
-        ui.text(.{ .wrap = false }, content),
+        ui.text(.{ .wrap = false, .overflow = .clip }, content),
         ui.text(.{}, "Below"),
     }));
 

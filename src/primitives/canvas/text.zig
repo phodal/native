@@ -16,7 +16,12 @@ pub const fallbackGlyphId = text_atlas.fallbackGlyphId;
 
 pub const DrawText = text_layout.DrawText;
 pub const TextWrap = text_layout.TextWrap;
+pub const TextOverflow = text_layout.TextOverflow;
 pub const TextAlign = text_layout.TextAlign;
+pub const text_ellipsis = text_layout.text_ellipsis;
+pub const text_ellipsis_codepoint = text_layout.text_ellipsis_codepoint;
+pub const textEllipsisAdvance = text_layout.textEllipsisAdvance;
+pub const textLayoutKeysEqual = text_layout.textLayoutKeysEqual;
 pub const TextLayoutOptions = text_layout.TextLayoutOptions;
 pub const TextLine = text_layout.TextLine;
 pub const TextLayout = text_layout.TextLayout;

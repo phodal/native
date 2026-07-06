@@ -21,6 +21,7 @@ const Radius = drawing_model.Radius;
 const Stroke = drawing_model.Stroke;
 const DrawText = text_model.DrawText;
 const TextWrap = text_model.TextWrap;
+const TextOverflow = text_model.TextOverflow;
 const TextAlign = text_model.TextAlign;
 const TextLayoutOptions = text_model.TextLayoutOptions;
 const TextRange = text_model.TextRange;
@@ -202,7 +203,7 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, 0)),
             .color = content_color,
             .text = widget.text,
-            .text_layout = boundedTextLayout(text_frame, text_size, 0, .start, .none, tokens),
+            .text_layout = boundedTextLayout(text_frame, text_size, 0, .start, .none, widget.text_overflow, tokens),
         });
         return;
     }
@@ -213,7 +214,7 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = content_color,
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, tokens),
+        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, widget.text_overflow, tokens),
     });
 }
 
@@ -367,7 +368,7 @@ pub fn emitSelectWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, 0)),
             .color = text_color,
             .text = visible_text,
-            .text_layout = boundedTextLayout(text_frame, text_size, 0, .start, .none, tokens),
+            .text_layout = boundedTextLayout(text_frame, text_size, 0, .start, .none, widget.text_overflow, tokens),
         });
     }
     try emitSelectChevron(builder, widget, tokens, visual, inset, chevron_size);
@@ -613,7 +614,7 @@ pub fn emitTooltipWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, tokens),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .start, .none, widget.text_overflow, tokens),
         });
     }
 }
@@ -668,7 +669,7 @@ pub fn emitListItemWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, text_inset)),
         .color = content_color,
         .text = widget.text,
-        .text_layout = boundedTextLayout(text_frame, text_size, text_inset, .start, .none, tokens),
+        .text_layout = boundedTextLayout(text_frame, text_size, text_inset, .start, .none, widget.text_overflow, tokens),
     });
 }
 
@@ -687,7 +688,7 @@ pub fn emitDataCellWidget(builder: *Builder, widget: Widget, tokens: DesignToken
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
             .color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
             .text = widget.text,
-            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, widget.text_alignment, .none, tokens),
+            .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, widget.text_alignment, .none, widget.text_overflow, tokens),
         });
     }
 }
@@ -782,7 +783,7 @@ pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: Des
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = if (selected) widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text) else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted),
         .text = widget.text,
-        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, tokens),
+        .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, widget.text_overflow, tokens),
     });
 }
 
@@ -1096,7 +1097,7 @@ fn emitControlLabelWithColor(builder: *Builder, widget: Widget, tokens: DesignTo
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(labelFrameForControl(widget.frame, x), text_size, 0)),
         .color = widgetForegroundColor(widget, tokens, color),
         .text = widget.text,
-        .text_layout = boundedTextLayout(labelFrameForControl(widget.frame, x), text_size, 0, .start, .none, tokens),
+        .text_layout = boundedTextLayout(labelFrameForControl(widget.frame, x), text_size, 0, .start, .none, widget.text_overflow, tokens),
     });
 }
 
@@ -1119,12 +1120,16 @@ fn boundedTextOrigin(frame: geometry.RectF, size: f32, inset: f32) geometry.Poin
     return geometry.PointF.init(frame.x + inset, textOrigin(frame, size, 0).y);
 }
 
-fn boundedTextLayout(frame: geometry.RectF, size: f32, inset: f32, alignment: TextAlign, wrap: TextWrap, tokens: DesignTokens) TextLayoutOptions {
+fn boundedTextLayout(frame: geometry.RectF, size: f32, inset: f32, alignment: TextAlign, wrap: TextWrap, overflow: TextOverflow, tokens: DesignTokens) TextLayoutOptions {
     return .{
         .max_width = @max(1, frame.width - inset * 2),
         .line_height = size * 1.25,
         .wrap = wrap,
         .alignment = alignment,
+        // Single-line labels follow the widget's overflow policy:
+        // trailing ellipsis by default, so a control narrower than its
+        // label elides instead of bleeding into its neighbors.
+        .overflow = overflow,
         .measure = tokens.text_measure,
     };
 }

@@ -1055,6 +1055,12 @@ test "compiled wrap attribute matches the interpreter and the hand-written view"
     try testing.expectEqual(@as(usize, 0), compiled_no_wrap.spans.len);
     try testing.expect(compiled_no_wrap.text_no_wrap);
     try testing.expect(interpreted.root.children[2].text_no_wrap);
+    // Both engines land overflow="clip" on the widget; unmarked leaves
+    // keep the ellipsis default.
+    try testing.expectEqual(canvas.TextOverflow.clip, compiled.root.children[3].text_overflow);
+    try testing.expectEqual(canvas.TextOverflow.clip, interpreted.root.children[3].text_overflow);
+    try testing.expectEqual(canvas.TextOverflow.ellipsis, compiled.root.children[1].text_overflow);
+    try testing.expectEqual(canvas.TextOverflow.ellipsis, interpreted.root.children[1].text_overflow);
     // The definite width lands in both bounds.
     try testing.expectEqual(@as(f32, 360), compiled.root.layout.min_size.width);
     try testing.expectEqual(@as(f32, 360), compiled.root.layout.max_size.width);

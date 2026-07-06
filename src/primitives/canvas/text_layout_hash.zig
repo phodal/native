@@ -33,6 +33,7 @@ pub fn textLayoutKey(text: DrawText, options: TextLayoutOptions) TextLayoutKey {
         .line_height = nonNegative(options.line_height),
         .wrap = options.wrap,
         .alignment = options.alignment,
+        .overflow = options.overflow,
         .text_len = text.text.len,
         .glyph_count = text.glyphs.len,
         .fingerprint = textLayoutFingerprint(text, options),
@@ -46,7 +47,17 @@ fn textLayoutFingerprint(text: DrawText, options: TextLayoutOptions) u64 {
     hash = resourceHashF32(hash, nonNegative(options.line_height));
     hash = resourceHashEnum(hash, @intFromEnum(options.wrap));
     hash = resourceHashEnum(hash, @intFromEnum(options.alignment));
+    hash = hashTextOverflow(hash, options.overflow);
     return hash;
+}
+
+/// Overflow folds into hashes only when it departs the default: the
+/// default's absence keeps every fingerprint of an unaffected run
+/// byte-identical to what was pinned before the option existed, while a
+/// clip-opted run still hashes apart from its elided twin.
+fn hashTextOverflow(hash: u64, overflow: text_layout_types.TextOverflow) u64 {
+    if (overflow == .ellipsis) return hash;
+    return resourceHashEnum(resourceHashBytes(hash, "text_overflow"), @intFromEnum(overflow));
 }
 
 fn drawTextFingerprint(text: DrawText) u64 {
@@ -78,6 +89,7 @@ pub fn textLayoutKeysEqual(a: TextLayoutKey, b: TextLayoutKey) bool {
         a.line_height == b.line_height and
         a.wrap == b.wrap and
         a.alignment == b.alignment and
+        a.overflow == b.overflow and
         a.text_len == b.text_len and
         a.glyph_count == b.glyph_count and
         a.fingerprint == b.fingerprint;
@@ -90,6 +102,7 @@ fn resourceHashOptionalTextLayoutOptions(hash: u64, options: ?TextLayoutOptions)
         next = resourceHashF32(next, nonNegative(value.line_height));
         next = resourceHashEnum(next, @intFromEnum(value.wrap));
         next = resourceHashEnum(next, @intFromEnum(value.alignment));
+        next = hashTextOverflow(next, value.overflow);
         return next;
     }
     return resourceHashU8(hash, 0);

@@ -782,6 +782,54 @@ test "overscroll validates as scroll-scoped with a closed value vocabulary" {
     }
 }
 
+test "overflow validates as text-scoped with a closed value vocabulary" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Valid: every vocabulary value on text, and a binding (resolved by
+    // the engines at build).
+    const valid_sources = [_][]const u8{
+        "<column>\n  <text overflow=\"ellipsis\">a long row title</text>\n</column>",
+        "<column>\n  <text overflow=\"clip\">1:22</text>\n</column>",
+        "<column>\n  <text wrap=\"false\" overflow=\"clip\">1:22</text>\n</column>",
+        "<column>\n  <text overflow=\"{policy}\">a</text>\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // Overflow policy exists only where a single line can overflow:
+        // a plain text leaf (same policy as wrap).
+        .{
+            .source = "<column>\n  <row overflow=\"clip\">\n    <text>a</text>\n  </row>\n</column>",
+            .message = markup.overflow_element_message,
+        },
+        .{
+            .source = "<column>\n  <button overflow=\"ellipsis\">Save</button>\n</column>",
+            .message = markup.overflow_element_message,
+        },
+        // Literal values outside the closed vocabulary teach the set —
+        // including the deliberate absence of overflow-visible.
+        .{
+            .source = "<column>\n  <text overflow=\"visible\">a</text>\n</column>",
+            .message = markup.overflow_value_message,
+        },
+        .{
+            .source = "<column>\n  <text overflow=\"middle\">a</text>\n</column>",
+            .message = markup.overflow_value_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}
+
 test "size validates as the two-axis closed vocabulary with teaching errors" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

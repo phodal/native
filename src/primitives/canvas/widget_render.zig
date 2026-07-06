@@ -727,14 +727,16 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
     // Empty text leaves are hit/semantics-only: paragraph link hotspots
     // and composite press overlays (timeline items) draw nothing.
     if (widget.text.len == 0) return;
-    // Honest single-line (`wrap = false`): one line, clean-clipped to
-    // the frame the widget received — a width-constrained title never
-    // paints a second line over the row below. Clip rather than
-    // ellipsize: the text machinery has no elide mode, and synthesizing
-    // an ellipsis would diverge painted bytes from `widget.text` (the
-    // selection/copy source of truth). The default path stays
-    // byte-identical.
-    if (widget.text_no_wrap) {
+    // Plain leaves paint the single line layout measured (wrapping is
+    // the span-paragraph path, `wrap="true"`), so a width-constrained
+    // title never paints a second line over the row below. Content past
+    // the frame follows the widget's overflow policy: trailing ellipsis
+    // by default — layout elides the drawn line while `widget.text`
+    // stays the selection/copy source of truth — or the explicit clip
+    // opt-in (`overflow="clip"`), which keeps the historical hard-cut
+    // behind a frame clip for fixed-format content.
+    const clip_overflow = widget.text_overflow == .clip;
+    if (clip_overflow) {
         try builder.pushClip(.{ .id = widgetPartId(widget.id, 9), .rect = widget.frame });
     }
     try emitStaticTextSelection(builder, widget, tokens);
@@ -749,26 +751,19 @@ fn emitTextWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error
         .text_layout = .{
             .max_width = textWrapMaxWidth(tokens, widget.frame.width),
             .line_height = text_size * 1.25,
-            .wrap = if (widget.text_no_wrap) .none else .word,
+            .wrap = .none,
             .alignment = widget.text_alignment,
+            .overflow = widget.text_overflow,
             .measure = tokens.text_measure,
         },
     });
-    if (widget.text_no_wrap) try builder.popClip();
+    if (clip_overflow) try builder.popClip();
 }
 
-/// Wrap budget for text painted inside a pixel-snapped frame. Geometry
-/// snapping (`emitWidgetDepthContent`'s `pixelSnapGeometryRect`) can shave
-/// up to half a device pixel off the layout frame that intrinsic sizing
-/// measured with the exact same metrics — enough to word-wrap an
-/// exact-fit line ("Sort" painting as "Sor"/"t"). Hand the shaved
-/// quantum back to the wrap so snapping never changes line breaks;
-/// glyph origins still snap independently via `pixelSnapTextPoint`.
-fn textWrapMaxWidth(tokens: DesignTokens, width: f32) f32 {
-    if (!tokens.pixel_snap.geometry) return width;
-    const scale = pixelSnapScale(tokens) orelse return width;
-    return width + 0.5 / scale;
-}
+/// Wrap budget for text painted inside a pixel-snapped frame — the
+/// shared quantum hand-back (`widget_metrics.textWrapMaxWidth`), aliased
+/// for the emit sites here.
+const textWrapMaxWidth = widget_metrics.textWrapMaxWidth;
 
 /// Static text selection highlight: fill rects behind the selected lines
 /// of a `.text` widget (plain or span paragraph). Command ids are hashed
@@ -1198,6 +1193,7 @@ fn emitStatusBarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .line_height = line_height,
             .wrap = .none,
             .alignment = widget.text_alignment,
+            .overflow = widget.text_overflow,
             .measure = tokens.text_measure,
         },
     });

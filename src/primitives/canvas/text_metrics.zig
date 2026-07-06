@@ -132,6 +132,25 @@ pub fn estimateTextAdvanceForBytes(font_id: FontId, bytes: []const u8, size: f32
     return size * clusterAdvanceEm(bytes) * weight;
 }
 
+/// The bundled face's U+2026 HORIZONTAL ELLIPSIS advance in em units,
+/// read at comptime like the ASCII table. Elision consults the marker's
+/// advance once per overflowing line every frame, so the estimator path
+/// answers from this constant instead of re-walking the `cmap`.
+const ellipsis_advance_em: f32 = blk: {
+    @setEvalBranchQuota(400_000);
+    const glyph = font_ttf.geist_regular.glyphIndex(0x2026);
+    if (glyph == 0) @compileError("bundled Geist face is missing U+2026 (the elision marker)");
+    break :blk faceAdvanceEm(&font_ttf.geist_regular, glyph);
+};
+
+/// Estimator advance of the elision marker ("…"): bit-identical to
+/// `estimateTextWidthForFont(font_id, "…", size)`, without the runtime
+/// codepoint lookup.
+pub fn estimatedTextEllipsisAdvance(font_id: FontId, size: f32) f32 {
+    if (font_id == default_mono_font_id) return size * mono_advance_em;
+    return size * ellipsis_advance_em * sansVariantWidthFactor(font_id);
+}
+
 /// Deterministic width of `text` measured against an arbitrary parsed
 /// face — the registered-font counterpart of `estimateTextWidthForFont`.
 /// Same contract as the bundled-face estimator: covered codepoints charge

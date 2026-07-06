@@ -3,15 +3,15 @@
 //! widget-path precision — the classes of layout damage design review
 //! keeps catching by eye:
 //!
-//! - `text_overflow`: text that paints past the box layout gave it. Plain
-//!   `.text` leaves measure single-line but re-wrap at paint, so a
-//!   width-constrained leaf paints extra lines over the content below;
-//!   controls paint their label single-line with no elide, so a control
-//!   narrower than its label bleeds into its neighbors. The explicit
-//!   opt-in is `Widget.text_no_wrap` (`wrap="false"` in markup): "clip
-//!   this to one honest line by design" — opted-in leaves are never
-//!   reported. Span paragraphs wrap by design; they are reported only
-//!   when their wrapped extent exceeds the frame that was reserved.
+//! - `text_overflow`: text that loses glyphs the design never sanctioned.
+//!   Single-line text — plain `.text` leaves and control labels — elides
+//!   behind a trailing ellipsis by default (`Widget.text_overflow`), and
+//!   an elided line is correct rendering, never a finding. What reports:
+//!   a leaf or label whose elision was suppressed (`overflow="clip"`)
+//!   and whose content actually overruns the frame (silent glyph loss —
+//!   size the box for its fixed-format content or drop the clip), and
+//!   span paragraphs, which wrap by design, when their wrapped extent
+//!   exceeds the frame that was reserved (wrap-into-siblings overpaint).
 //! - `sibling_overlap`: two flow siblings of a flow container whose
 //!   frames intersect. Flow layout never overlaps siblings on its own,
 //!   so an intersection means explicit frame offsets/sizes or a virtual
@@ -265,40 +265,41 @@ fn auditSpanParagraphOverflow(widget: Widget, frame: geometry.RectF, node_index:
 
 fn auditPlainTextOverflow(widget: Widget, frame: geometry.RectF, node_index: usize, tokens: DesignTokens, sink: *FindingSink) void {
     if (widget.text.len == 0) return;
-    // The explicit opt-in: `wrap="false"` paints one line clipped to the
-    // frame — truncation by design, never a finding.
-    if (widget.text_no_wrap) return;
-
+    // The default policy elides: an ellipsized line is correct rendering
+    // — the painted extent never exceeds the frame by construction, so
+    // there is nothing to report on the horizontal axis. Only explicit
+    // newlines can still overrun (vertically), checked below.
     const text_size = widget_metrics.widgetBodyTextSize(widget, tokens);
     const line_height = widget_metrics.widgetLineHeight(text_size);
-    const options = text_model.TextLayoutOptions{
-        .max_width = frame.width + layout_audit_wrap_slack,
-        .line_height = line_height,
-        .wrap = .word,
-        .alignment = widget.text_alignment,
-        .measure = tokens.text_measure,
-    };
 
-    // Replay the paint-time line breaker (the exact `nextTextLineEnd`
-    // walk `layoutTextRun` performs) without a line buffer: the audit
-    // needs counts and the widest line, not run geometry.
+    // Replay the paint-time single-line breaker (`wrap = .none`: lines
+    // split only at explicit newlines) without a line buffer: the audit
+    // needs counts and the widest unelided line, not run geometry.
     var line_count: usize = 0;
     var max_line_width: f32 = 0;
     var start: usize = 0;
     while (start <= widget.text.len and widget.text.len > 0) {
-        const end = text_model.nextTextLineEnd(widget.text, start, tokens.typography.font_id, text_size, options);
+        const end = text_model.nextTextLineEnd(widget.text, start, tokens.typography.font_id, text_size, .{
+            .max_width = frame.width + layout_audit_wrap_slack,
+            .line_height = line_height,
+            .wrap = .none,
+            .alignment = widget.text_alignment,
+            .measure = tokens.text_measure,
+        });
         line_count += 1;
         const line_width = text_metrics.measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, widget.text[start..end], text_size);
         max_line_width = @max(max_line_width, line_width);
         if (end >= widget.text.len) break;
         start = end;
         if (start < widget.text.len and widget.text[start] == '\n') start += 1;
-        while (start < widget.text.len and text_model.isTextBreakByte(widget.text[start])) start += 1;
     }
     if (line_count == 0) return;
 
+    // Horizontal glyph loss reports only when elision was suppressed:
+    // `overflow="clip"` promises the content is sized by design, so a
+    // clipped line wider than its frame is silent truncation worth eyes.
+    const overrun_x = if (widget.text_overflow == .clip) overrunPast(max_line_width, frame.width) else 0;
     const painted_height = @as(f32, @floatFromInt(line_count)) * line_height;
-    const overrun_x = overrunPast(max_line_width, frame.width);
     const overrun_y = if (line_count > 1) overrunPast(painted_height, frame.height) else 0;
     if (overrun_x <= 0 and overrun_y <= 0) return;
     sink.append(.{
@@ -312,6 +313,11 @@ fn auditPlainTextOverflow(widget: Widget, frame: geometry.RectF, node_index: usi
 
 fn auditControlLabelOverflow(widget: Widget, frame: geometry.RectF, node_index: usize, tokens: DesignTokens, sink: *FindingSink) void {
     if (widget.text.len == 0) return;
+    // Labels elide by default — an ellipsized label is correct
+    // rendering. Only a clip-opted label that actually overruns reports:
+    // control emitters paint clip-opted labels without a frame clip, so
+    // the overrun is real bleed into neighbors, not just glyph loss.
+    if (widget.text_overflow != .clip) return;
     const intrinsic = widget_layout.intrinsicWidgetSize(widget, tokens);
     const overrun_x = overrunPast(intrinsic.width, frame.width);
     if (overrun_x <= 0) return;
@@ -508,17 +514,17 @@ pub fn formatLayoutAuditFinding(layout: WidgetLayoutTree, finding: LayoutAuditFi
                 try writeOverrun(finding, writer);
                 try writer.print(" - the paragraph needs the width layout measured it at: let it grow, widen the container, or shorten the content", .{});
             } else if (node.widget.kind == .text) {
-                if (finding.lines > 1) {
-                    try writer.print(" re-wraps at paint into {d} lines, overrunning its single-line frame by", .{finding.lines});
+                if (finding.lines > 1 and finding.overrun_y > 0) {
+                    try writer.print(" paints {d} explicit lines past its frame by", .{finding.lines});
                 } else {
-                    try writer.print(" paints an unbreakable run past its frame by", .{});
+                    try writer.print(" hard-cuts its content at the frame, hiding", .{});
                 }
                 try writeOverrun(finding, writer);
-                try writer.print(" - plain text measures single-line: make it a paragraph (wrap=\"true\") so layout reserves the wrapped height, clip to one honest line with wrap=\"false\", or give the leaf room", .{});
+                try writer.print(" - overflow=\"clip\" suppresses the trailing ellipsis, so lost glyphs are silent: size the box for its fixed-format content, drop the clip to elide, or make it a paragraph (wrap=\"true\") so layout reserves the wrapped height", .{});
             } else {
                 try writer.print(" needs", .{});
                 try writeOverrun(finding, writer);
-                try writer.print(" more than its frame for the label, which paints single-line and never elides - widen the control, shorten the label, or let a flexible sibling shrink instead", .{});
+                try writer.print(" more than its frame for the label, whose clip-opted overflow paints past the control unclipped - widen the control, shorten the label, or drop the clip so the label elides", .{});
             }
         },
         .sibling_overlap => {

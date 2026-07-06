@@ -685,6 +685,16 @@ test "overscroll value vocabulary mirrors the live WidgetOverscroll enum" {
     }
 }
 
+test "overflow value vocabulary mirrors the live TextOverflow enum" {
+    // The validator's std-only mirror of the enum's member names; a new
+    // member cannot ship without its markup spelling.
+    const fields = @typeInfo(canvas.TextOverflow).@"enum".fields;
+    try testing.expectEqual(fields.len, canvas.ui_markup.overflow_value_names.len);
+    inline for (fields, 0..) |field, index| {
+        try testing.expectEqualStrings(field.name, canvas.ui_markup.overflow_value_names[index]);
+    }
+}
+
 test "gap on stacking containers fails the build with the teaching message" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -2108,6 +2118,7 @@ pub const wrap_markup_source =
     \\  <text wrap="true">{message}</text>
     \\  <text>{message}</text>
     \\  <text wrap="false">{message}</text>
+    \\  <text overflow="clip">{message}</text>
     \\</column>
 ;
 
@@ -2118,6 +2129,7 @@ pub fn handWrapView(ui: *WrapUi, model: *const WrapModel) WrapUi.Node {
         ui.text(.{ .wrap = true }, model.message),
         ui.text(.{}, model.message),
         ui.text(.{ .wrap = false }, model.message),
+        ui.text(.{ .overflow = .clip }, model.message),
     });
 }
 
@@ -2184,11 +2196,18 @@ test "the wrap attribute builds the hand-written wrapped text leaf" {
     try testing.expect(!plain.text_no_wrap);
 
     // wrap="false" stays on the plain text path and stamps the honest
-    // single-line mode (one line, clean-clipped at paint).
+    // single-line mode; its overflow keeps the ellipsis default.
     const no_wrap = markup_tree.root.children[2];
     try testing.expectEqual(@as(usize, 0), no_wrap.spans.len);
     try testing.expect(no_wrap.text_no_wrap);
     try testing.expectEqualStrings(model.message, no_wrap.text);
+    try testing.expectEqual(canvas.TextOverflow.ellipsis, no_wrap.text_overflow);
+    try testing.expectEqual(canvas.TextOverflow.ellipsis, plain.text_overflow);
+
+    // overflow="clip" is the explicit hard-cut opt-out of the default.
+    const clipped = markup_tree.root.children[3];
+    try testing.expectEqual(@as(usize, 0), clipped.spans.len);
+    try testing.expectEqual(canvas.TextOverflow.clip, clipped.text_overflow);
 
     // The definite column width is both floor and cap.
     try testing.expectEqual(@as(f32, 360), markup_tree.root.layout.min_size.width);

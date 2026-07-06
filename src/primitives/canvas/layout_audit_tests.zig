@@ -24,7 +24,7 @@ fn auditTree(
     return canvas.auditWidgetLayout(layout, bounds, tokens, storage);
 }
 
-test "plain text re-wrapping into siblings is a text-overflow finding" {
+test "plain text that does not fit elides by default: never a finding" {
     var nodes: [16]canvas.WidgetLayoutNode = undefined;
     var storage: [8]canvas.LayoutAuditFinding = undefined;
     const long_text = "A deliberately long heading that cannot fit on one line";
@@ -33,14 +33,12 @@ test "plain text re-wrapping into siblings is a text-overflow finding" {
         .{ .kind = .text, .id = 8, .text = "Below" },
     } };
     const issues = try auditTree(root, geometry.RectF.init(0, 0, 120, 200), .{}, &nodes, &storage);
-    try std.testing.expect(issues.total >= 1);
-    try std.testing.expectEqual(canvas.LayoutAuditRuleKind.text_overflow, issues.findings[0].rule);
-    // The finding names the wrapped-lines geometry, not just "too big".
-    try std.testing.expect(issues.findings[0].lines > 1);
-    try std.testing.expect(issues.findings[0].overrun_y > 0);
+    // Paint elides the leaf behind a trailing ellipsis inside its frame:
+    // correct rendering, not damage.
+    try std.testing.expectEqual(@as(usize, 0), issues.total);
 }
 
-test "wrap=false is the clip opt-in: no finding for the same text" {
+test "wrap=false text keeps the ellipsis default: no finding" {
     var nodes: [16]canvas.WidgetLayoutNode = undefined;
     var storage: [8]canvas.LayoutAuditFinding = undefined;
     const long_text = "A deliberately long heading that cannot fit on one line";
@@ -52,35 +50,79 @@ test "wrap=false is the clip opt-in: no finding for the same text" {
     try std.testing.expectEqual(@as(usize, 0), issues.total);
 }
 
-test "an unbreakable run character-wraps past its single-line frame" {
+test "clip-opted text that truncates is a text-overflow finding" {
     var nodes: [16]canvas.WidgetLayoutNode = undefined;
     var storage: [8]canvas.LayoutAuditFinding = undefined;
-    // No word-break bytes: the paint-time breaker falls back to
-    // character wrapping, so the damage presents as extra painted lines
-    // below the single-line frame, not as a horizontal bleed.
+    // overflow="clip" suppresses the ellipsis: silent glyph loss is the
+    // one single-line state worth a reviewer's eyes.
+    const long_text = "A deliberately long heading that cannot fit on one line";
+    const root = Widget{ .kind = .column, .children = &.{
+        .{ .kind = .text, .id = 7, .text = long_text, .text_overflow = .clip },
+        .{ .kind = .text, .id = 8, .text = "Below" },
+    } };
+    const issues = try auditTree(root, geometry.RectF.init(0, 0, 120, 200), .{}, &nodes, &storage);
+    try std.testing.expect(issues.total >= 1);
+    try std.testing.expectEqual(canvas.LayoutAuditRuleKind.text_overflow, issues.findings[0].rule);
+    try std.testing.expectEqual(@as(usize, 1), issues.findings[0].lines);
+    try std.testing.expect(issues.findings[0].overrun_x > 0);
+    // The same clip opt-in over content that fits is exactly what the
+    // opt-in is for: clean.
+    const fitted = Widget{ .kind = .column, .children = &.{
+        .{ .kind = .text, .id = 7, .text = "1:22", .text_overflow = .clip },
+    } };
+    const clean = try auditTree(fitted, geometry.RectF.init(0, 0, 120, 200), .{}, &nodes, &storage);
+    try std.testing.expectEqual(@as(usize, 0), clean.total);
+}
+
+test "an unbreakable run elides like any single line: no finding" {
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
+    var storage: [8]canvas.LayoutAuditFinding = undefined;
+    // No word-break bytes: elision does not care — the tail elides at
+    // the cluster boundary that fits, so nothing paints past the frame.
     const root = Widget{ .kind = .column, .children = &.{
         .{ .kind = .text, .id = 7, .text = "https://example.com/an/unbreakably/long/path/segment" },
     } };
     const issues = try auditTree(root, geometry.RectF.init(0, 0, 100, 200), .{}, &nodes, &storage);
+    try std.testing.expectEqual(@as(usize, 0), issues.total);
+}
+
+test "explicit newlines past the frame still report vertical overrun" {
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
+    var storage: [8]canvas.LayoutAuditFinding = undefined;
+    // Elision is horizontal: authored newlines paint real extra lines,
+    // and a frame reserved for one line still overpaints the sibling.
+    const root = Widget{ .kind = .column, .children = &.{
+        .{ .kind = .text, .id = 7, .text = "one\ntwo\nthree", .frame = geometry.RectF.init(0, 0, 0, 18) },
+        .{ .kind = .text, .id = 8, .text = "Below" },
+    } };
+    const issues = try auditTree(root, geometry.RectF.init(0, 0, 200, 200), .{}, &nodes, &storage);
     try std.testing.expect(issues.total >= 1);
     try std.testing.expectEqual(canvas.LayoutAuditRuleKind.text_overflow, issues.findings[0].rule);
     try std.testing.expect(issues.findings[0].lines > 1);
     try std.testing.expect(issues.findings[0].overrun_y > 0);
 }
 
-test "a control narrower than its label is a text-overflow finding" {
+test "a control narrower than its label elides by default; clip opt-out reports" {
     var nodes: [16]canvas.WidgetLayoutNode = undefined;
     var storage: [8]canvas.LayoutAuditFinding = undefined;
+    // Default: the label elides inside the control — clean.
     const root = Widget{ .kind = .row, .children = &.{
         .{ .kind = .button, .id = 3, .text = "Continue with the setup", .frame = geometry.RectF.init(0, 0, 60, 36) },
     } };
     const issues = try auditTree(root, geometry.RectF.init(0, 0, 400, 100), .{}, &nodes, &storage);
-    try std.testing.expect(issues.total >= 1);
-    try std.testing.expectEqual(canvas.LayoutAuditRuleKind.text_overflow, issues.findings[0].rule);
-    try std.testing.expect(issues.findings[0].overrun_x > 0);
-    // The same button at its intrinsic size is clean.
+    try std.testing.expectEqual(@as(usize, 0), issues.total);
+    // Clip-opted (builder-only on controls): the label paints past the
+    // control unclipped — a finding.
+    const clipped = Widget{ .kind = .row, .children = &.{
+        .{ .kind = .button, .id = 3, .text = "Continue with the setup", .text_overflow = .clip, .frame = geometry.RectF.init(0, 0, 60, 36) },
+    } };
+    const found = try auditTree(clipped, geometry.RectF.init(0, 0, 400, 100), .{}, &nodes, &storage);
+    try std.testing.expect(found.total >= 1);
+    try std.testing.expectEqual(canvas.LayoutAuditRuleKind.text_overflow, found.findings[0].rule);
+    try std.testing.expect(found.findings[0].overrun_x > 0);
+    // The same button at its intrinsic size is clean either way.
     const fitted = Widget{ .kind = .row, .children = &.{
-        .{ .kind = .button, .id = 3, .text = "Continue with the setup" },
+        .{ .kind = .button, .id = 3, .text = "Continue with the setup", .text_overflow = .clip },
     } };
     const clean = try auditTree(fitted, geometry.RectF.init(0, 0, 400, 100), .{}, &nodes, &storage);
     try std.testing.expectEqual(@as(usize, 0), clean.total);
@@ -286,12 +328,14 @@ test "the injected measurement seam drives the audit (pseudo-locale expansion)" 
     const label = "Continue with the setup";
     const width = text_metrics.estimateTextWidth(label, 14);
     _ = width;
-    // A button given exactly its intrinsic width is clean with authored
-    // strings and overflows once every measured run widens 1.35x — the
-    // long-content sweep point catches designs with zero slack.
+    // A clip-opted button given exactly its intrinsic width is clean
+    // with authored strings and overflows once every measured run widens
+    // 1.35x — the long-content sweep point catches designs with zero
+    // slack. (Clip-opted because the ellipsis default makes label
+    // overflow correct rendering; only suppressed elision reports.)
     const intrinsic = canvas.intrinsicWidgetSize(.{ .kind = .button, .text = label }, .{});
     const root = Widget{ .kind = .row, .children = &.{
-        .{ .kind = .button, .id = 3, .text = label, .frame = geometry.RectF.init(0, 0, intrinsic.width, intrinsic.height) },
+        .{ .kind = .button, .id = 3, .text = label, .text_overflow = .clip, .frame = geometry.RectF.init(0, 0, intrinsic.width, intrinsic.height) },
     } };
     const clean = try auditTree(root, geometry.RectF.init(0, 0, 600, 100), .{}, &nodes, &storage);
     try std.testing.expectEqual(@as(usize, 0), clean.total);
@@ -315,7 +359,7 @@ test "findings format with the widget path and the sweep geometry" {
     var storage: [8]canvas.LayoutAuditFinding = undefined;
     const root = Widget{ .kind = .column, .children = &.{
         .{ .kind = .row, .children = &.{
-            .{ .kind = .button, .id = 3, .text = "Continue with the setup", .frame = geometry.RectF.init(0, 0, 60, 36) },
+            .{ .kind = .button, .id = 3, .text = "Continue with the setup", .text_overflow = .clip, .frame = geometry.RectF.init(0, 0, 60, 36) },
         } },
         .{ .kind = .text, .id = 8, .text = "Below" },
     } };

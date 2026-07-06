@@ -156,7 +156,8 @@ pub fn textLayoutOptionsEqual(a: TextLayoutOptions, b: TextLayoutOptions) bool {
     return nonNegative(a.max_width) == nonNegative(b.max_width) and
         nonNegative(a.line_height) == nonNegative(b.line_height) and
         a.wrap == b.wrap and
-        a.alignment == b.alignment;
+        a.alignment == b.alignment and
+        a.overflow == b.overflow;
 }
 
 pub fn shadowsEqual(a: Shadow, b: Shadow) bool {

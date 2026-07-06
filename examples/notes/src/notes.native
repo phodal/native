@@ -45,7 +45,7 @@
           <for each="folderRows" key="id" as="f">
             <list-item on-press="select_folder:{f.id}" selected="{f.selected}" padding="8" gap="8" cross="center" role="treeitem" label="{f.label}">
               <icon name="folder" width="14" height="14" foreground="text_muted" />
-              <!-- One-line folder row: clip a long name at the rail's
+              <!-- One-line folder row: elide a long name at the rail's
                    width, never wrap onto the row below. -->
               <text grow="1" wrap="false">{f.name}</text>
               <badge variant="secondary">{f.count}</badge>
@@ -88,13 +88,13 @@
                 <list-item on-press="open_note:{n.id}" selected="{n.active}" padding="10" label="{n.title}">
                   <column gap="4" grow="1">
                     <!-- Title leads, the age trails the same line; the
-                         snippet gets the full second line. Titles clip
+                         snippet gets the full second line. Titles elide
                          at the pane width, never wrap over the snippet. -->
                     <row gap="8" cross="center">
                       <text grow="1" wrap="false">{n.title}</text>
                       <text size="sm" foreground="text_muted">{n.time}</text>
                     </row>
-                    <!-- One-line snippet by design: clip, never wrap
+                    <!-- One-line snippet by design: elide, never wrap
                          into the row below. -->
                     <text size="sm" foreground="text_muted" wrap="false">{n.snippet}</text>
                   </column>

@@ -806,6 +806,173 @@ test "text layout wraps words into deterministic line boxes" {
     try expectRectApprox(geometry.RectF.init(4, 10, 26.61, 56), layout.bounds);
 }
 
+// ------------------------------------------------- single-line elision
+
+fn elisionText(content: []const u8) DrawText {
+    return .{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = content,
+    };
+}
+
+test "single-line overflow elides behind a trailing ellipsis on the measurement seam" {
+    const content = "Quarterly revenue report";
+    const size: f32 = 10;
+    const full_width = estimateTextWidth(content, size);
+    const ellipsis_advance = support.textEllipsisAdvance(null, 1, size);
+    try std.testing.expect(ellipsis_advance > 0);
+
+    // Fits exactly: not one glyph is touched and no marker is reserved.
+    var lines: [2]TextLine = undefined;
+    const exact = try layoutTextRun(elisionText(content), .{ .max_width = full_width, .line_height = 14, .wrap = .none }, &lines);
+    try std.testing.expectEqual(@as(usize, 1), exact.lineCount());
+    try std.testing.expect(!exact.lines[0].isElided());
+    try std.testing.expectEqual(content.len, exact.lines[0].paintedTextLen());
+    try std.testing.expectApproxEqAbs(full_width, exact.lines[0].bounds.width, 0.001);
+
+    // One measurement quantum over: the tail elides and the painted
+    // extent (kept prefix + ellipsis) never exceeds the box.
+    const squeezed = try layoutTextRun(elisionText(content), .{ .max_width = full_width - 0.5, .line_height = 14, .wrap = .none }, &lines);
+    const line = squeezed.lines[0];
+    try std.testing.expect(line.isElided());
+    try std.testing.expect(line.hasEllipsis());
+    try std.testing.expect(line.paintedTextLen() < content.len);
+    // The logical range still covers every byte (selection/copy).
+    try std.testing.expectEqual(content.len, line.text_len);
+    try std.testing.expect(line.bounds.width <= full_width - 0.5);
+
+    // Half the width keeps roughly half the content.
+    const half = try layoutTextRun(elisionText(content), .{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .none }, &lines);
+    try std.testing.expect(half.lines[0].isElided());
+    try std.testing.expect(half.lines[0].paintedTextLen() < content.len / 2 + 4);
+    try std.testing.expect(half.lines[0].bounds.width <= full_width * 0.5);
+    // A kept prefix never ends in a break byte ("Quarterly  …").
+    const painted = content[0..half.lines[0].paintedTextLen()];
+    try std.testing.expect(painted.len > 0 and painted[painted.len - 1] != ' ');
+
+    // Exactly the marker's width: an ellipsis-only line.
+    const marker_only = try layoutTextRun(elisionText(content), .{ .max_width = ellipsis_advance, .line_height = 14, .wrap = .none }, &lines);
+    try std.testing.expectEqual(@as(usize, 0), marker_only.lines[0].paintedTextLen());
+    try std.testing.expect(marker_only.lines[0].hasEllipsis());
+    try std.testing.expectApproxEqAbs(ellipsis_advance, marker_only.lines[0].bounds.width, 0.001);
+
+    // Narrower than the marker itself: paint nothing rather than lie.
+    const starved = try layoutTextRun(elisionText(content), .{ .max_width = 1, .line_height = 14, .wrap = .none }, &lines);
+    try std.testing.expect(starved.lines[0].isElided());
+    try std.testing.expect(!starved.lines[0].hasEllipsis());
+    try std.testing.expectEqual(@as(usize, 0), starved.lines[0].paintedTextLen());
+}
+
+test "elision cuts on UTF-8 cluster boundaries (CJK and emoji)" {
+    const content = "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{1F30D} end";
+    const size: f32 = 10;
+    const full_width = estimateTextWidth(content, size);
+    var lines: [2]TextLine = undefined;
+    // Sweep every budget from starved to full: the kept prefix must
+    // always land on a scalar boundary, never mid-sequence.
+    var budget: f32 = 2;
+    while (budget < full_width) : (budget += 3) {
+        const layout = try layoutTextRun(elisionText(content), .{ .max_width = budget, .line_height = 14, .wrap = .none }, &lines);
+        const painted_len = layout.lines[0].paintedTextLen();
+        try std.testing.expectEqual(painted_len, canvas.snapTextOffset(content, painted_len));
+        // Painted extent stays inside the budget plus the exact-fit
+        // slack (sub-pixel by design).
+        try std.testing.expect(layout.lines[0].bounds.width <= budget + 0.13);
+    }
+}
+
+test "clip opt-out and wrapping modes never elide" {
+    const content = "Quarterly revenue report";
+    const full_width = estimateTextWidth(content, 10);
+    var lines: [8]TextLine = undefined;
+    // Clip: the line keeps every byte; the caller's frame clip truncates.
+    const clipped = try layoutTextRun(elisionText(content), .{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .none, .overflow = .clip }, &lines);
+    try std.testing.expect(!clipped.lines[0].isElided());
+    try std.testing.expectEqual(content.len, clipped.lines[0].paintedTextLen());
+    // Word wrap: overflow policy is single-line only.
+    const wrapped = try layoutTextRun(elisionText(content), .{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .word }, &lines);
+    try std.testing.expect(wrapped.lineCount() > 1);
+    for (wrapped.lines) |line| try std.testing.expect(!line.isElided());
+    // Unbounded single line: nothing to elide against.
+    const unbounded = try layoutTextRun(elisionText(content), .{ .max_width = 0, .line_height = 14, .wrap = .none }, &lines);
+    try std.testing.expect(!unbounded.lines[0].isElided());
+}
+
+test "shaped glyph runs elide by glyph advance with the same marker" {
+    const glyphs = [_]Glyph{
+        .{ .id = 1, .x = 0, .y = 0, .advance = 8, .text_start = 0, .text_len = 1 },
+        .{ .id = 2, .x = 8, .y = 0, .advance = 8, .text_start = 1, .text_len = 1 },
+        .{ .id = 3, .x = 16, .y = 0, .advance = 8, .text_start = 2, .text_len = 1 },
+    };
+    var lines: [2]TextLine = undefined;
+    const layout = try layoutTextRun(.{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(0, 10),
+        .color = Color.rgb8(0, 0, 0),
+        .text = "AVX",
+        .glyphs = &glyphs,
+    }, .{ .max_width = 20, .line_height = 14, .wrap = .none }, &lines);
+    const line = layout.lines[0];
+    try std.testing.expect(line.isElided());
+    try std.testing.expect(line.hasEllipsis());
+    try std.testing.expect(line.paintedGlyphLen() < glyphs.len);
+    try std.testing.expectEqual(@as(usize, 3), line.glyph_len);
+    try std.testing.expect(line.bounds.width <= 20);
+}
+
+test "elided lines pin caret and hit mapping at the painted edge" {
+    const content = "Quarterly revenue report";
+    const full_width = estimateTextWidth(content, 10);
+    const options = canvas.TextLayoutOptions{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .none };
+    const text = elisionText(content);
+    var lines: [2]TextLine = undefined;
+    const layout = try layoutTextRun(text, options, &lines);
+    const line = layout.lines[0];
+    try std.testing.expect(line.isElided());
+    // A caret in the hidden tail pins to the painted right edge.
+    const caret = canvas.layoutTextCaretRect(text, options, content.len).?;
+    try std.testing.expect(caret.x <= line.bounds.maxX() + 0.001);
+    // A point past the painted edge selects to the line's true end
+    // (rightward sweeps keep selecting the hidden bytes)...
+    try std.testing.expectEqual(content.len, canvas.layoutTextOffsetForPoint(text, options, geometry.PointF.init(line.bounds.maxX() + 5, 10)).?);
+    // ...while a point on the marker itself maps to the kept prefix.
+    const on_marker = canvas.layoutTextOffsetForPoint(text, options, geometry.PointF.init(line.bounds.maxX() - line.ellipsis_advance * 0.5, 10)).?;
+    try std.testing.expectEqual(line.paintedTextLen(), on_marker);
+}
+
+test "ellipsis advance matches the estimator seam for every font id" {
+    // The comptime fast path must be bit-identical to measuring the
+    // marker as a run — including registered ids (measured as the sans
+    // estimator measures them; a registered face lacking U+2026 takes
+    // the documented notdef fallback on both sides of the seam) and the
+    // mono pitch.
+    for ([_]FontId{ 1, 2, 3, 4, 5, 6, 64, 900 }) |font_id| {
+        try std.testing.expectEqual(
+            estimateTextWidthForFont(font_id, "\u{2026}", 13),
+            support.textEllipsisAdvance(null, font_id, 13),
+        );
+    }
+    try std.testing.expectEqual(@as(f32, 13 * canvas.mono_advance_em), support.textEllipsisAdvance(null, 2, 13));
+}
+
+test "overflow policy salts layout keys and fingerprints only when non-default" {
+    const content = "Quarterly revenue report";
+    const full_width = estimateTextWidth(content, 10);
+    var lines: [2]TextLine = undefined;
+    const elided = try layoutTextRunPlan(elisionText(content), .{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .none }, &lines);
+    var clip_lines: [2]TextLine = undefined;
+    const clipped = try layoutTextRunPlan(elisionText(content), .{ .max_width = full_width * 0.5, .line_height = 14, .wrap = .none, .overflow = .clip }, &clip_lines);
+    try std.testing.expectEqual(canvas.TextOverflow.ellipsis, elided.key.overflow);
+    try std.testing.expectEqual(canvas.TextOverflow.clip, clipped.key.overflow);
+    // The two runs must never share a cache entry or a fingerprint.
+    try std.testing.expect(!canvas.textLayoutKeysEqual(elided.key, clipped.key));
+    try std.testing.expect(elided.key.fingerprint != clipped.key.fingerprint);
+}
+
 test "text layout aligns fallback and shaped line boxes" {
     const text = DrawText{
         .font_id = 1,
@@ -1554,7 +1721,7 @@ test "display list serializes per-run text layout options" {
     var writer = std.Io.Writer.fixed(&buffer);
     try (DisplayList{ .commands = &commands }).writeJson(&writer);
     try std.testing.expectEqualStrings(
-        "{\"commands\":[{\"op\":\"draw_text\",\"id\":3,\"font\":1,\"size\":10,\"origin\":[4,20],\"color\":[0,0,0,1],\"text\":\"Wrapped\",\"glyphs\":[],\"layout\":{\"maxWidth\":42,\"lineHeight\":14,\"wrap\":\"character\",\"align\":\"center\"}}]}",
+        "{\"commands\":[{\"op\":\"draw_text\",\"id\":3,\"font\":1,\"size\":10,\"origin\":[4,20],\"color\":[0,0,0,1],\"text\":\"Wrapped\",\"glyphs\":[],\"layout\":{\"maxWidth\":42,\"lineHeight\":14,\"wrap\":\"character\",\"align\":\"center\",\"overflow\":\"ellipsis\"}}]}",
         writer.buffered(),
     );
 }

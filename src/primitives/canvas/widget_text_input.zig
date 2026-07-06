@@ -65,6 +65,11 @@ pub fn widgetTextInputLayoutOptions(widget: Widget, tokens: DesignTokens, text_s
         .max_width = @max(1, widget.frame.width - inset - trailing_inset),
         .line_height = line_height,
         .wrap = widgetTextInputWrap(widget, line_height),
+        // Never elide input text: a single-line field keeps its overflow
+        // reachable (caret, selection, and scroll address every byte),
+        // so the honest treatment is the frame clip, not an ellipsis
+        // hiding the caret's own neighborhood.
+        .overflow = .clip,
         .measure = tokens.text_measure,
     };
 }

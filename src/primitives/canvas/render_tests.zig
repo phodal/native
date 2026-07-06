@@ -2413,6 +2413,45 @@ test "canvas gpu packet text serializes engine measured line breaks" {
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, packet_json, "\"lines\":"));
 }
 
+test "canvas gpu packet lines carry elided text with the trailing ellipsis" {
+    const content = "Quarterly revenue report";
+    const full_width = estimateTextWidth(content, 12);
+    const commands = [_]CanvasGpuCommand{.{
+        .command_index = 0,
+        .kind = .draw_text,
+        .pipeline = .glyph_run,
+        .text = .{
+            .font_id = 1,
+            .size = 12,
+            .origin = geometry.PointF.init(4, 40),
+            .color = Color.rgb8(0, 0, 0),
+            .text = content,
+            .text_layout = .{ .max_width = full_width * 0.5, .line_height = 16, .wrap = .none },
+        },
+        .uses_glyph_atlas = true,
+        .uses_text_layout = true,
+    }};
+    const packet = CanvasGpuPacket{ .load_action = .clear, .commands = &commands };
+
+    var json_buffer: [8192]u8 = undefined;
+    var json_writer = std.Io.Writer.fixed(&json_buffer);
+    try packet.writeJson(&json_writer);
+    const packet_json = json_writer.buffered();
+    // The line text is the kept prefix plus the marker — the host draws
+    // the measured extent verbatim, never the full overflowing string.
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\xe2\x80\xa6\"}]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"text\":\"Quarterly revenue report\"}]") == null);
+    // The full source text still rides the command (selection source).
+    try std.testing.expect(std.mem.indexOf(u8, packet_json, "\"text\":\"Quarterly revenue report\",\"glyphs\"") != null);
+
+    // The binary encoding mirrors the JSON lines byte-for-byte.
+    var binary_buffer: [8192]u8 = undefined;
+    var binary_writer = std.Io.Writer.fixed(&binary_buffer);
+    try packet.writeBinary(&binary_writer);
+    const packet_binary = binary_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, packet_binary, "\xe2\x80\xa6") != null);
+}
+
 test "canvas gpu packet serializes image upload payloads" {
     const image_pixels = [_]u8{ 11, 22, 33, 255 };
     const image_resources = [_]ReferenceImage{.{

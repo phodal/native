@@ -115,10 +115,13 @@ fn staticTextLayoutOptions(widget: Widget, tokens: DesignTokens, text_size: f32)
     return .{
         .max_width = widget.frame.width,
         .line_height = text_size * 1.25,
-        // Mirrors `emitTextWidget`: honest single-line text lays out
-        // (and therefore selects/hit-maps) as the one line it paints.
-        .wrap = if (widget.text_no_wrap) .none else .word,
+        // Mirrors `emitTextWidget`: plain single-line text lays out
+        // (and therefore selects/hit-maps) as the one line it paints,
+        // under the same overflow policy — an elided line still maps
+        // every hidden byte, pinned at the painted right edge.
+        .wrap = .none,
         .alignment = widget.text_alignment,
+        .overflow = widget.text_overflow,
         .measure = tokens.text_measure,
     };
 }

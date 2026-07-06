@@ -25,11 +25,13 @@
       </else>
       <button size="sm" variant="ghost" icon="skip-forward" disabled="{idle}" on-press="next_track" label="Next track"></button>
     </row>
-    <!-- Fixed time columns: one honest line each, clipped rather than
-         wrapped over the transport row. -->
-    <text size="sm" foreground="text_muted" width="34" wrap="false">{elapsedLabel}</text>
+    <!-- Fixed time columns: a stamp like "1:22" must never ellipsize
+         into "1…", so the explicit clip keeps the format; the width
+         covers the widest stamp with the layout audit's long-content
+         slack, since clip means any hidden glyph is silent. -->
+    <text size="sm" foreground="text_muted" width="46" wrap="false" overflow="clip">{elapsedLabel}</text>
     <slider grow="1" value="{progressFraction}" disabled="{idle}" on-change="seeked" label="Seek" />
-    <text size="sm" foreground="text_muted" width="34" wrap="false">{durationLabel}</text>
+    <text size="sm" foreground="text_muted" width="46" wrap="false" overflow="clip">{durationLabel}</text>
     <if test="{queue_len > 0}">
       <badge variant="secondary">{queue_len} queued</badge>
     </if>

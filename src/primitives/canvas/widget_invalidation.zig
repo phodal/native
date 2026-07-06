@@ -265,6 +265,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         previous.widget.scrim != next.widget.scrim or
         previous.widget.text_alignment != next.widget.text_alignment or
         previous.widget.text_no_wrap != next.widget.text_no_wrap or
+        previous.widget.text_overflow != next.widget.text_overflow or
         previous.widget.variant != next.widget.variant or
         previous.widget.size != next.widget.size or
         !widgetStylesEqual(previous.widget.style, next.widget.style);

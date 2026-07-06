@@ -1132,7 +1132,17 @@ pub const known_stack_container_element_names = schema.stack_container_element_n
 
 pub const stack_container_gap_message = "gap does nothing here: this container layers its children on top of each other - wrap them in a column (or row) inside it for flow, or drop the gap";
 
-pub const wrap_element_message = "wrap is only supported on text - only plain text leaves take a line policy (wrap=\"true\" word-wraps, wrap=\"false\" clips to one honest line); put wrap on the text leaf itself, or size the container so content fits (rows and columns never flow-wrap their children)";
+pub const wrap_element_message = "wrap is only supported on text - only plain text leaves take a line policy (wrap=\"true\" word-wraps and reserves height; wrap=\"false\" and unset paint one honest line whose overflow follows the overflow attribute, trailing ellipsis by default); put wrap on the text leaf itself, or size the container so content fits (rows and columns never flow-wrap their children)";
+
+pub const overflow_element_message = "overflow is only supported on text - it names a single-line text leaf's policy for content that does not fit (ellipsis elides behind a trailing \u{2026}, clip hard-cuts at the frame); put overflow on the text leaf itself, or size the container so content fits";
+
+/// The `overflow` attribute's closed value vocabulary: the member names
+/// of `canvas.TextOverflow`, mirrored as data here (this layer stays
+/// std-only) with a lockstep test in ui_markup_view_tests.zig holding the
+/// mirror equal to the live enum.
+pub const overflow_value_names = [_][]const u8{ "ellipsis", "clip" };
+
+pub const overflow_value_message = "unknown overflow value - text takes ellipsis (the default: elide overflow behind a trailing \u{2026}) or clip (hard-cut at the frame, for fixed-format content like a duration column); overflow-visible is not offered because painting past the frame is the bug class the layout audit exists to catch";
 
 /// The `size` attribute's control-scale values (every sized element) and
 /// its typography rungs (text only). Registry-derived; lockstep tests in
@@ -2663,6 +2673,23 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     // comments asserting wrapping that never happened
                     // (same policy as gap on stacking containers).
                     return attrError(node, attribute, wrap_element_message);
+                }
+                if (std.mem.eql(u8, attribute.name, "overflow")) {
+                    // Overflow policy exists only where a single line can
+                    // overflow: a plain text leaf. Anywhere else the
+                    // option is silently inert (same policy as wrap).
+                    if (!std.mem.eql(u8, node.name, "text")) {
+                        return attrError(node, attribute, overflow_element_message);
+                    }
+                    // The closed value vocabulary, checked on literals
+                    // here so the teaching error lands at validation
+                    // (bindings resolve at build, where the engines
+                    // enforce the same set).
+                    if (parseAttrExpression(attribute.value)) |expression| {
+                        if (expression == .literal and !nameInList(expression.literal, &overflow_value_names)) {
+                            return attrError(node, attribute, overflow_value_message);
+                        }
+                    }
                 }
                 if (std.mem.eql(u8, attribute.name, "overscroll")) {
                     // Edge behavior exists only where the runtime scrolls:

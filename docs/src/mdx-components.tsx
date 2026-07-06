@@ -1,15 +1,21 @@
 import type { MDXComponents } from "mdx/types";
 import { Code } from "@/components/code";
+import { CopyPage } from "@/components/copy-page";
 import { HeadingLink } from "@/components/heading-link";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
+    // The page h1 is the heading row: title on the left, the layout-level
+    // "Copy Page" button (copies the page as markdown) on the right.
     h1: (props) => (
-      <HeadingLink
-        as="h1"
-        className="mb-6 text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100"
-        {...props}
-      />
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <HeadingLink
+          as="h1"
+          className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100"
+          {...props}
+        />
+        <CopyPage />
+      </div>
     ),
     h2: (props) => (
       <HeadingLink

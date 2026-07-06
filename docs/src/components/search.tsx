@@ -210,7 +210,7 @@ export function Search() {
             )}
           </div>
 
-          <div ref={listRef} className="max-h-[min(60vh,400px)] overflow-y-auto p-2">
+          <div ref={listRef} className="max-h-[min(60vh,400px)] overflow-y-auto overscroll-contain p-2">
             {loading && hasQuery ? (
               <div className="flex items-center justify-center py-6">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />

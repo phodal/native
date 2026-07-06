@@ -48,7 +48,8 @@ export function DocsMobileNav() {
           </svg>
         </div>
       </SheetTrigger>
-      <SheetContent side="left" className="overflow-y-auto p-6" showCloseButton={false}>
+      {/* overscroll-contain: sheet edge-scroll must not chain to the page. */}
+      <SheetContent side="left" className="overflow-y-auto overscroll-contain p-6" showCloseButton={false}>
         <SheetTitle className="mb-6">Table of Contents</SheetTitle>
         <nav className="space-y-6">
           {navSections.map((section) => (

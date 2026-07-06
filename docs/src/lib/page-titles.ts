@@ -29,6 +29,7 @@ export const PAGE_TITLES: Record<string, string> = {
   security: "Security",
   cli: "CLI",
   "cli/dev": "Dev Server",
+  skills: "Agent Skills",
   packaging: "Packaging",
   "packaging/signing": "Code Signing",
   updates: "Updates",

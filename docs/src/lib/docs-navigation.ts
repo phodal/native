@@ -18,6 +18,7 @@ export const navSections: NavSection[] = [
       { name: "Quick Start", href: "/quick-start" },
       { name: "CLI", href: "/cli" },
       { name: "Config", href: "/app-zon" },
+      { name: "Agent Skills", href: "/skills" },
     ],
   },
   {

@@ -108,9 +108,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      // overscroll-none on the root scroller: the document never
+      // rubber-bands past its edges.
+      className={`${GeistSans.variable} ${GeistMono.variable} overscroll-none`}
     >
-      <body className="bg-background-100 text-gray-1000 antialiased">
+      <body className="overscroll-none bg-background-100 text-gray-1000 antialiased">
         <ThemeProvider>
           <Header stars={stars} />
           <DocsMobileNav />

@@ -9,7 +9,8 @@ function Sidebar() {
 
   return (
     <aside className="hidden w-56 shrink-0 lg:block">
-      <nav className="fixed top-16 w-56 h-[calc(100vh-4rem)] overflow-y-auto py-8 pr-4 space-y-6">
+      {/* overscroll-contain: sidebar edge-scroll must not chain to the page. */}
+      <nav className="fixed top-16 w-56 h-[calc(100vh-4rem)] overflow-y-auto overscroll-contain py-8 pr-4 space-y-6">
         {navSections.map((section) => (
           <div key={section.title}>
             <div className="mb-2 px-3 label-12 font-medium uppercase tracking-wider text-gray-900">

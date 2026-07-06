@@ -2,15 +2,13 @@ import Link from "next/link";
 import Image from "next/image";
 import { Code } from "@/components/code";
 import { Showcase } from "@/components/home/showcase";
-import { CopyCommand } from "@/components/home/copy-command";
+import { InstallToggle } from "@/components/home/install-toggle";
 import { HeroWindow } from "@/components/home/hero-window";
 import { HeroPointer } from "@/components/home/hero-pointer";
-import { githubUrl, npmCli, siteName } from "@/lib/site";
+import { githubUrl, siteName } from "@/lib/site";
 
 // ---------------------------------------------------------------- samples
 // Both excerpts are real source from examples/ui-inbox in this repository.
-
-const installCommands = [`npm install -g ${npmCli}`];
 
 const markupSample = `<column background="background">
   <row height="{header_height}" padding="12" gap="10" cross="center"
@@ -172,10 +170,6 @@ const stats = [
     value: "0",
     label: "Embedded browsers, script engines, or interpreters inside those binaries.",
   },
-  {
-    value: "7",
-    label: "Real apps in examples/, screenshotted on this page from actual builds.",
-  },
 ];
 
 const principles = [
@@ -271,30 +265,11 @@ export default function HomePage() {
             desktop and mobile apps.
           </h1>
           <p className="mx-auto mt-4 max-w-2xl copy-16 text-gray-900 sm:copy-18">
-            Developers shouldn’t have to choose between expressive UI and native performance.{" "}
-            {siteName} is the complete toolkit for both: expressive interfaces, rendered by its
-            own engine into real OS windows. No browser. No WebView. No compromise.
+            The complete toolkit for building native desktop and mobile applications. Expressive
+            interfaces, rendered by its own engine into real OS windows. No browser. No WebView.
           </p>
-          <div className="mx-auto mt-8 flex max-w-2xl flex-col items-center justify-center gap-3 sm:flex-row">
-            <div className="w-full max-w-xs sm:w-auto sm:min-w-[21rem]">
-              <CopyCommand lines={installCommands} />
-            </div>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/quick-start"
-                className="inline-flex h-10 items-center justify-center rounded-md bg-gray-1000 px-4 button-14 text-background-100 transition-colors hover:bg-gray-1000/85"
-              >
-                Get Started
-              </Link>
-              <a
-                href={githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-10 items-center justify-center rounded-md border border-gray-alpha-400 bg-background-100/60 px-4 button-14 text-gray-1000 backdrop-blur-sm transition-colors hover:bg-gray-100"
-              >
-                GitHub
-              </a>
-            </div>
+          <div className="mx-auto mt-8 w-full max-w-xs sm:max-w-sm">
+            <InstallToggle />
           </div>
         </div>
         <div className="relative mt-8 pb-16 sm:mt-10 sm:pb-24">
@@ -305,9 +280,9 @@ export default function HomePage() {
       {/* Numbers */}
       <section className="border-t border-gray-alpha-400 bg-background-200 dark:bg-gray-alpha-100">
         <div className="mx-auto max-w-[1200px] px-6 py-16">
-          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-10 sm:grid-cols-3">
             {stats.map((stat) => (
-              <div key={stat.value} className="text-center lg:text-left">
+              <div key={stat.value} className="text-center sm:text-left">
                 <div className="font-mono text-5xl font-semibold tabular-nums text-gray-1000 sm:text-[56px] sm:leading-[56px]">
                   {stat.value}
                 </div>

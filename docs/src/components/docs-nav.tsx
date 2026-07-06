@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { navSections } from "@/lib/docs-navigation";
+import { DocsToc } from "@/components/docs-toc";
 
 function Sidebar() {
   const pathname = usePathname();
@@ -50,12 +51,19 @@ export function DocsNav({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8 lg:py-12">
+    <div className="mx-auto max-w-5xl px-6 py-8 lg:py-12 xl:max-w-7xl">
       <div className="flex gap-12">
         <Sidebar />
         <main className="min-w-0 flex-1">
           <article className="max-w-none">{children}</article>
         </main>
+        {/* The rail keeps its slot on every page so content width is stable
+            across navigation, even when a page has no headings to list. */}
+        <aside className="hidden w-52 shrink-0 xl:block">
+          <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto overscroll-contain">
+            <DocsToc />
+          </div>
+        </aside>
       </div>
     </div>
   );

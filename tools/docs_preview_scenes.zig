@@ -314,10 +314,17 @@ fn buildToggleGroup(ui: *Ui) Node {
 }
 
 fn buildInput(ui: *Ui) Node {
+    // The middle specimen shows the live editing affordances: focus
+    // ring plus the inverted selection (solid accent fill under
+    // accent-foreground glyphs). One focused field per tile — only one
+    // field can hold focus honestly.
+    var selected = ui.el(.text_field, .{ .text = "native-sdk" }, .{});
+    selected.widget.state.focused = true;
+    selected.widget.text_selection = .{ .anchor = 0, .focus = 6 };
     return tile(ui, .{
         ui.column(.{ .gap = 12, .width = 280 }, .{
             ui.el(.input, .{ .placeholder = "Email address" }, .{}),
-            ui.el(.text_field, .{ .text = "native-sdk" }, .{}),
+            selected,
             ui.el(.input, .{ .placeholder = "Disabled", .disabled = true }, .{}),
         }),
     });
@@ -342,12 +349,17 @@ fn buildTextarea(ui: *Ui) Node {
 /// entry carries focus, so the GROUP wears the ring — the focus-within
 /// treatment the component exists for.
 fn inputGroupComposer(ui: *Ui, width: f32, height: f32, focused: bool) Node {
+    const entry_text = "Ship the composer today.";
     var entry = ui.el(.textarea, .{
-        .text = "Ship the composer today.",
+        .text = entry_text,
         .placeholder = "Type a message…",
         .semantics = .{ .label = "Message" },
     }, .{});
     entry.widget.state.focused = focused;
+    // The focused composer carries a collapsed selection at the end of
+    // its text, so the preview shows the text-ink caret where typing
+    // would continue.
+    if (focused) entry.widget.text_selection = canvas.TextSelection.collapsed(entry_text.len);
     return ui.inputGroup(.{
         .width = width,
         .height = height,

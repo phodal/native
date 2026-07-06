@@ -1479,8 +1479,8 @@ test "runtime automation protocol refreshes widget-owned canvas display lists" {
                 }
                 if (std.mem.eql(u8, text.text, "Draft")) saw_stale_text = true;
             },
-            .draw_line => |line| {
-                if (line.id == testCanvasWidgetPartId(2, 6)) saw_text_caret = true;
+            .fill_rect => |bar| {
+                if (bar.id == testCanvasWidgetPartId(2, 6)) saw_text_caret = true;
             },
             else => {},
         }

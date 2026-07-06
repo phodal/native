@@ -69,6 +69,9 @@ const Widget = widget_model.Widget;
 const estimateTextWidth = text_model.estimateTextWidth;
 const affinesEqual = equality_model.affinesEqual;
 pub const textSelectionFillColor = widget_render_style.textSelectionFillColor;
+pub const textSelectionTextColor = widget_render_style.textSelectionTextColor;
+pub const textEditingInkColor = widget_render_style.textEditingInkColor;
+pub const staticTextSelectionFillColor = widget_render_style.staticTextSelectionFillColor;
 pub const colorWithAlpha = widget_render_style.colorWithAlpha;
 const colorFill = widget_render_style.colorFill;
 const widgetBackgroundFill = widget_render_style.widgetBackgroundFill;
@@ -778,7 +781,7 @@ fn emitStaticTextSelection(builder: *Builder, widget: Widget, tokens: DesignToke
             .id = textSelectionCommandId(widget.id, ordinal),
             .rect = pixelSnapGeometryRect(tokens, selection.rect),
             .radius = Radius.all(tokens.radius.sm),
-            .fill = .{ .color = textSelectionFillColor(widget, tokens) },
+            .fill = .{ .color = staticTextSelectionFillColor(widget, tokens) },
         });
     }
 }

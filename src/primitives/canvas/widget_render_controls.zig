@@ -56,8 +56,9 @@ const estimateTextWidth = text_model.estimateTextWidth;
 const measureTextWidthForFont = text_model.measureTextWidthForFont;
 const layoutTextCaretRect = text_model.layoutTextCaretRect;
 const layoutTextSelectionRects = text_model.layoutTextSelectionRects;
-const textInputAffordanceColor = widget_render_style.textInputAffordanceColor;
+const textEditingInkColor = widget_render_style.textEditingInkColor;
 const textSelectionFillColor = widget_render_style.textSelectionFillColor;
+const textSelectionTextColor = widget_render_style.textSelectionTextColor;
 const colorFill = widget_render_style.colorFill;
 const widgetBackgroundFill = widget_render_style.widgetBackgroundFill;
 const widgetAccentFill = widget_render_style.widgetAccentFill;
@@ -437,6 +438,11 @@ pub fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignToke
         }
         try builder.drawText(command);
     }
+    if (selection_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            try emitWidgetTextSelectedGlyphs(builder, widget, draw_text, layout_options, range, max_widget_text_range_rects, tokens);
+        }
+    }
     if (composition_range) |range| {
         if (!range.isCollapsed(widget.text.len)) {
             try emitWidgetTextCompositionLines(builder, widget, draw_text, layout_options, range, 5, 10, max_widget_text_range_rects, tokens);
@@ -522,6 +528,11 @@ pub fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTo
         command.text = visible_text;
         command.color = if (widget.text.len > 0) text_color else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted);
         try builder.drawText(command);
+    }
+    if (selection_range) |range| {
+        if (!range.isCollapsed(widget.text.len)) {
+            try emitWidgetTextSelectedGlyphs(builder, widget, draw_text, layout_options, range, 1, tokens);
+        }
     }
     if (composition_range) |range| {
         if (!range.isCollapsed(widget.text.len)) {
@@ -1190,13 +1201,61 @@ fn emitWidgetTextSelectionRects(
     var rect_buffer: [max_widget_text_range_rects]TextSelectionRect = undefined;
     const rects = layoutTextSelectionRects(text, options, range, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
     for (rects, 0..) |selection, index| {
-        try builder.fillRoundedRect(.{
+        // Square corners: the highlight is a solid accent block that the
+        // selected-glyph repaint is clipped to, so fill and clip must
+        // share one edge — and abutting per-line rects of a multi-line
+        // selection meet without corner notches.
+        try builder.fillRect(.{
             .id = widgetPartId(widget.id, widgetTextRangePart(first_part, overflow_first_part, index)),
             .rect = pixelSnapGeometryRect(tokens, selection.rect),
-            .radius = Radius.all(tokens.radius.sm),
             .fill = .{ .color = textSelectionFillColor(widget, tokens) },
         });
     }
+}
+
+/// The inverted-selection glyph pass: the SAME text command the base
+/// pass drew, re-emitted once per highlight rect under that rect's clip
+/// with the selection foreground. Re-emitting the identical command is
+/// what makes the recolor drift-free — every glyph lands exactly where
+/// the base pass put it and only swaps ink where the highlight covers it
+/// (re-shaping the selected substring instead would re-kern at the
+/// segment boundary and shift the halves apart). Runs after the base
+/// text so the recolored glyphs paint over their normal-ink twins.
+fn emitWidgetTextSelectedGlyphs(
+    builder: *Builder,
+    widget: Widget,
+    text: DrawText,
+    options: TextLayoutOptions,
+    range: TextRange,
+    max_parts: usize,
+    tokens: DesignTokens,
+) Error!void {
+    var rect_buffer: [max_widget_text_range_rects]TextSelectionRect = undefined;
+    const rects = layoutTextSelectionRects(text, options, range, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
+    for (rects, 0..) |selection, ordinal| {
+        try builder.pushClip(.{
+            .id = textSelectionOverlayCommandId(0x5eed_59a2_0000_0005, widget.id, ordinal),
+            .rect = pixelSnapGeometryRect(tokens, selection.rect),
+        });
+        var command = text;
+        command.id = textSelectionOverlayCommandId(0x5eed_59a2_0000_0006, widget.id, ordinal);
+        command.color = textSelectionTextColor(widget, tokens);
+        try builder.drawText(command);
+        try builder.popClip();
+    }
+}
+
+/// Stable command ids for the selected-glyph repaint (one clip + one
+/// text per highlight rect). Hashed from the widget id and rect ordinal
+/// — the same scheme static-text selection rects use — because the
+/// arithmetic part-id space (16 slots per widget id) has no room left
+/// on text fields for four more rect-indexed parts.
+fn textSelectionOverlayCommandId(seed: u64, widget_id: ObjectId, ordinal: usize) ObjectId {
+    var hasher = std.hash.Wyhash.init(seed);
+    hasher.update(std.mem.asBytes(&widget_id));
+    hasher.update(std.mem.asBytes(&@as(u64, ordinal)));
+    const value = hasher.final();
+    return if (value == 0) 1 else value;
 }
 
 fn emitWidgetTextCompositionLines(
@@ -1213,12 +1272,20 @@ fn emitWidgetTextCompositionLines(
     var rect_buffer: [max_widget_text_range_rects]TextSelectionRect = undefined;
     const rects = layoutTextSelectionRects(text, options, range, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
     for (rects, 0..) |selection, index| {
-        const y = pixelSnapGeometryRect(tokens, selection.rect).maxY() - tokens.stroke.regular;
-        try builder.drawLine(.{
+        // A filled bar, not a stroked line: a centered 1pt stroke on a
+        // snapped coordinate covers half of each neighboring pixel row
+        // at 1x and antialiases to a 50% ghost, while a snapped rect
+        // covers whole device pixels and stays crisp at every scale.
+        const snapped = pixelSnapGeometryRect(tokens, selection.rect);
+        try builder.fillRect(.{
             .id = widgetPartId(widget.id, widgetTextRangePart(first_part, overflow_first_part, index)),
-            .from = pixelSnapGeometryPoint(tokens, geometry.PointF.init(selection.rect.x, y)),
-            .to = pixelSnapGeometryPoint(tokens, geometry.PointF.init(selection.rect.x + selection.rect.width, y)),
-            .stroke = .{ .fill = .{ .color = textInputAffordanceColor(widget, tokens) }, .width = 1 },
+            .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(
+                snapped.x,
+                snapped.maxY() - tokens.stroke.regular,
+                snapped.width,
+                tokens.stroke.regular,
+            )),
+            .fill = .{ .color = textEditingInkColor(widget, tokens) },
         });
     }
 }
@@ -1238,11 +1305,14 @@ fn emitWidgetTextCaret(
     tokens: DesignTokens,
 ) Error!void {
     const rect = layoutTextCaretRect(text, options, offset) orelse return;
-    const snapped = pixelSnapGeometryRect(tokens, rect);
-    try builder.drawLine(.{
+    // A filled one-point bar in the field's text ink. A fill, not a
+    // stroked line: a centered 1pt stroke on a snapped x covers half of
+    // each neighboring pixel column at 1x and antialiases to a 50%
+    // ghost, while the snapped rect covers whole device pixels — the
+    // caret stays crisp and full-contrast at every scale.
+    try builder.fillRect(.{
         .id = widgetPartId(widget.id, part),
-        .from = geometry.PointF.init(snapped.x, snapped.y),
-        .to = geometry.PointF.init(snapped.x, snapped.y + snapped.height),
-        .stroke = .{ .fill = .{ .color = textInputAffordanceColor(widget, tokens) }, .width = tokens.stroke.regular },
+        .rect = pixelSnapGeometryRect(tokens, rect),
+        .fill = .{ .color = textEditingInkColor(widget, tokens) },
     });
 }

@@ -245,6 +245,18 @@ pub fn textSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
     return widget_render.textSelectionFillColor(widget, tokens);
 }
 
+pub fn textSelectionTextColor(widget: Widget, tokens: DesignTokens) Color {
+    return widget_render.textSelectionTextColor(widget, tokens);
+}
+
+pub fn textEditingInkColor(widget: Widget, tokens: DesignTokens) Color {
+    return widget_render.textEditingInkColor(widget, tokens);
+}
+
+pub fn staticTextSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
+    return widget_render.staticTextSelectionFillColor(widget, tokens);
+}
+
 /// Stable command id of the `ordinal`-th static text selection highlight
 /// rect on a `.text` widget (tests and retained diffing).
 pub fn textSelectionCommandId(widget_id: ObjectId, ordinal: usize) ObjectId {

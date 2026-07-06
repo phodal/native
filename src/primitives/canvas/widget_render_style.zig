@@ -34,13 +34,40 @@ pub fn focusRingRadius(radius: Radius) Radius {
     };
 }
 
-pub fn textInputAffordanceColor(widget: Widget, tokens: DesignTokens) Color {
+/// The caret and composition-underline ink of an editable field: the
+/// field's own text color. The caret is the primary "you are typing
+/// HERE" signal, so it must read at the same contrast as the glyphs
+/// beside it — the soft focus-ring gray that used to fill this role
+/// hints at focus but disappears as an insertion point.
+pub fn textEditingInkColor(widget: Widget, tokens: DesignTokens) Color {
     const visual = textInputControlVisualTokens(widget, tokens);
-    return widget.style.focus_ring orelse widget.style.accent orelse visual.active_background orelse tokens.colors.focus_ring;
+    return widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
 }
 
+/// The selection highlight of an editable field: the solid accent. The
+/// emitters repaint the selected glyphs in `textSelectionTextColor`
+/// (the inverted-selection treatment), so the fill takes the full
+/// accent block instead of a see-through wash — unmissable in both
+/// schemes, including the monochrome register where the accent is
+/// near-black on light surfaces.
 pub fn textSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
-    return colorWithAlpha(textInputAffordanceColor(widget, tokens), 0.18);
+    return widget.style.accent orelse tokens.colors.accent;
+}
+
+/// The glyph ink inside an editable field's selection: the accent's own
+/// foreground, so the selected run inverts against the solid fill the
+/// way filled-primary controls pair accent with accent_text.
+pub fn textSelectionTextColor(widget: Widget, tokens: DesignTokens) Color {
+    return widget.style.accent_foreground orelse tokens.colors.accent_text;
+}
+
+/// The selection wash of static (read-only) text: the accent at a
+/// strength that reads as selection at a glance while the glyphs above
+/// it stay in their own ink. Static paragraphs keep per-span colors
+/// (links, emphasis, code), so the highlight sits under them as a
+/// translucent band instead of inverting them like editable fields do.
+pub fn staticTextSelectionFillColor(widget: Widget, tokens: DesignTokens) Color {
+    return colorWithAlpha(widget.style.accent orelse tokens.colors.accent, 0.3);
 }
 
 pub fn colorWithAlpha(color: Color, alpha: f32) Color {

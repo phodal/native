@@ -362,6 +362,9 @@ pub const widgetPartId = widget_runtime.widgetPartId;
 pub const colorWithAlpha = widget_runtime.colorWithAlpha;
 pub const widgetControlHeight = widget_runtime.widgetControlHeight;
 pub const textSelectionFillColor = widget_runtime.textSelectionFillColor;
+pub const textSelectionTextColor = widget_runtime.textSelectionTextColor;
+pub const textEditingInkColor = widget_runtime.textEditingInkColor;
+pub const staticTextSelectionFillColor = widget_runtime.staticTextSelectionFillColor;
 pub const transparentColor = widget_runtime.transparentColor;
 
 pub fn expectRect(expected: geometry.RectF, actual: ?geometry.RectF) !void {

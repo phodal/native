@@ -628,7 +628,7 @@ test "runtime applies ime composition edits to canvas text fields" {
     var saw_selection_fill = false;
     for (display_list.commands) |command| {
         switch (command) {
-            .fill_rounded_rect => |fill| {
+            .fill_rect => |fill| {
                 if (fill.id == testCanvasWidgetPartId(2, 3)) saw_selection_fill = true;
             },
             .draw_text => |text| {
@@ -661,8 +661,8 @@ test "runtime applies ime composition edits to canvas text fields" {
                     saw_composed_text = true;
                 }
             },
-            .draw_line => |line| {
-                if (line.id == testCanvasWidgetPartId(2, 5)) saw_composition_underline = true;
+            .fill_rect => |bar| {
+                if (bar.id == testCanvasWidgetPartId(2, 5)) saw_composition_underline = true;
             },
             else => {},
         }
@@ -1163,7 +1163,7 @@ test "runtime applies pointer selection to canvas text fields" {
     var saw_selection_fill = false;
     for (selected_display_list.commands) |command| {
         switch (command) {
-            .fill_rounded_rect => |fill| {
+            .fill_rect => |fill| {
                 if (fill.id == testCanvasWidgetPartId(2, 3)) saw_selection_fill = true;
             },
             else => {},
@@ -1536,8 +1536,8 @@ test "runtime click focus shows caret, ring, and blink; blur drops them" {
     var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
     for (display_list.commands) |command| {
         switch (command) {
-            .draw_line => |line| {
-                if (line.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
+            .fill_rect => |bar| {
+                if (bar.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
             },
             .stroke_rect => |stroke| {
                 if (stroke.id == testCanvasWidgetPartId(2, 7)) saw_ring = true;
@@ -1576,8 +1576,8 @@ test "runtime click focus shows caret, ring, and blink; blur drops them" {
     display_list = try harness.runtime.canvasDisplayList(1, "canvas");
     for (display_list.commands) |command| {
         switch (command) {
-            .draw_line => |line| {
-                if (line.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
+            .fill_rect => |bar| {
+                if (bar.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
             },
             .stroke_rect => |stroke| {
                 if (stroke.id == testCanvasWidgetPartId(2, 7)) saw_ring = true;
@@ -1659,8 +1659,8 @@ test "typing into a textarea seeded with a long document survives dispatch" {
     var saw_caret = false;
     for (display_list.commands) |command| {
         switch (command) {
-            .draw_line => |line| {
-                if (line.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
+            .fill_rect => |bar| {
+                if (bar.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
             },
             else => {},
         }

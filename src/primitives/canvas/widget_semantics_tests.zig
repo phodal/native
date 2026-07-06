@@ -355,6 +355,9 @@ const widgetPartId = support.widgetPartId;
 const colorWithAlpha = support.colorWithAlpha;
 const widgetControlHeight = support.widgetControlHeight;
 const textSelectionFillColor = support.textSelectionFillColor;
+const textSelectionTextColor = support.textSelectionTextColor;
+const textEditingInkColor = support.textEditingInkColor;
+const staticTextSelectionFillColor = support.staticTextSelectionFillColor;
 const transparentColor = support.transparentColor;
 const expectRect = support.expectRect;
 const expectRectApprox = support.expectRectApprox;
@@ -1347,18 +1350,26 @@ test "widget textareas expose multiline textbox semantics and render wrapped tex
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[5]) {
-        .draw_line => |line| try expectFillColor(ColorTokens.light().focus_ring, line.stroke.fill),
+        // The caret is a filled one-point bar in the field's text ink —
+        // full reading contrast, not the soft focus-ring gray.
+        .fill_rect => |caret| {
+            try expectFillColor(ColorTokens.light().text, caret.fill);
+            try std.testing.expectEqual(@as(f32, 1), caret.rect.width);
+        },
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[6]);
 }
 
 test "widget text fields render selection caret and composition ranges" {
-    const affordance_color = Color.rgb8(40, 80, 120);
+    // The caret and composition underline take the field's own text ink
+    // (the control foreground here), and the selection inverts: solid
+    // accent fill under accent-foreground glyphs.
+    const ink_color = Color.rgb8(40, 80, 120);
     const tokens = DesignTokens{
         .colors = .{ .focus_ring = Color.rgb8(10, 20, 30) },
         .controls = .{
-            .text_field = .{ .active_background = affordance_color },
+            .text_field = .{ .foreground = ink_color },
         },
     };
     const composing = Widget{
@@ -1386,26 +1397,45 @@ test "widget text fields render selection caret and composition ranges" {
     try std.testing.expectEqual(@as(usize, 1), text_geometry.composition_rect_count);
     try expectRectApprox(geometry.RectF.init(36.352, 19.25, 16.1, 17.5), text_geometry.composition_bounds.?);
 
-    var commands: [7]CanvasCommand = undefined;
+    var commands: [10]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, tokens);
     const display_list = builder.displayList();
-    // Fill, border, offset focus ring, selection, text, composition.
-    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
-    switch (display_list.commands[3]) {
-        .fill_rounded_rect => |selection| try expectFillColor(textSelectionFillColor(composing, tokens), selection.fill),
+    // Fill, border, offset focus ring, selection fill, text, the
+    // clipped selected-glyph repaint (clip + text + pop), composition.
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
+    const selection_fill_rect = switch (display_list.commands[3]) {
+        .fill_rect => |selection| blk: {
+            try expectFillColor(textSelectionFillColor(composing, tokens), selection.fill);
+            break :blk selection.rect;
+        },
         else => return error.TestUnexpectedResult,
-    }
+    };
     switch (display_list.commands[4]) {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("abcdef", text.text);
+            try std.testing.expectEqualDeep(ink_color, text.color);
             try std.testing.expect(text.text_layout != null);
             try std.testing.expectEqual(TextWrap.none, text.text_layout.?.wrap);
         },
         else => return error.TestUnexpectedResult,
     }
+    // The repaint clip shares the highlight's exact rect, so the glyph
+    // ink swaps precisely at the fill edge.
     switch (display_list.commands[5]) {
-        .draw_line => |line| try expectFillColor(affordance_color, line.stroke.fill),
+        .push_clip => |clip| try expectRectApprox(selection_fill_rect, clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[6]) {
+        .draw_text => |text| {
+            try std.testing.expectEqualStrings("abcdef", text.text);
+            try std.testing.expectEqualDeep(textSelectionTextColor(composing, tokens), text.color);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[7]);
+    switch (display_list.commands[8]) {
+        .fill_rect => |underline| try expectFillColor(ink_color, underline.fill),
         else => return error.TestUnexpectedResult,
     }
 
@@ -1423,12 +1453,47 @@ test "widget text fields render selection caret and composition ranges" {
     const caret_display_list = caret_builder.displayList();
     try std.testing.expectEqual(@as(usize, 5), caret_display_list.commandCount());
     switch (caret_display_list.commands[4]) {
-        .draw_line => |line| {
-            try expectFillColor(affordance_color, line.stroke.fill);
-            try std.testing.expectEqual(line.from.x, line.to.x);
+        .fill_rect => |caret_bar| {
+            try expectFillColor(ink_color, caret_bar.fill);
+            try std.testing.expectEqual(@as(f32, 1), caret_bar.rect.width);
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "text editing affordance colors resolve tokens and per-widget overrides" {
+    const tokens = DesignTokens{};
+    const field = Widget{ .id = 3, .kind = .text_field, .frame = geometry.RectF.init(0, 0, 100, 32), .text = "abc" };
+
+    // Defaults: caret/underline take the text ink; the selection takes
+    // the solid accent with the accent foreground for selected glyphs;
+    // static text keeps a translucent accent wash under untouched inks.
+    try std.testing.expectEqualDeep(tokens.colors.text, textEditingInkColor(field, tokens));
+    try std.testing.expectEqualDeep(tokens.colors.accent, textSelectionFillColor(field, tokens));
+    try std.testing.expectEqualDeep(tokens.colors.accent_text, textSelectionTextColor(field, tokens));
+    const wash = staticTextSelectionFillColor(field, tokens);
+    try std.testing.expectEqual(tokens.colors.accent.r, wash.r);
+    try std.testing.expectEqual(tokens.colors.accent.g, wash.g);
+    try std.testing.expectEqual(tokens.colors.accent.b, wash.b);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), wash.a, 0.001);
+
+    // Per-widget style overrides win: foreground drives the ink, accent
+    // and accent_foreground drive the selection pair.
+    var styled = field;
+    styled.style.foreground = Color.rgb8(1, 2, 3);
+    styled.style.accent = Color.rgb8(4, 5, 6);
+    styled.style.accent_foreground = Color.rgb8(7, 8, 9);
+    try std.testing.expectEqualDeep(Color.rgb8(1, 2, 3), textEditingInkColor(styled, tokens));
+    try std.testing.expectEqualDeep(Color.rgb8(4, 5, 6), textSelectionFillColor(styled, tokens));
+    try std.testing.expectEqualDeep(Color.rgb8(7, 8, 9), textSelectionTextColor(styled, tokens));
+    const styled_wash = staticTextSelectionFillColor(styled, tokens);
+    try std.testing.expectEqual(Color.rgb8(4, 5, 6).r, styled_wash.r);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), styled_wash.a, 0.001);
+
+    // A disabled field's ink mutes with its text.
+    var disabled = field;
+    disabled.state.disabled = true;
+    try std.testing.expectEqualDeep(tokens.colors.text_muted, textEditingInkColor(disabled, tokens));
 }
 
 test "widget text fields render wrapped selection geometry" {
@@ -1446,7 +1511,7 @@ test "widget text fields render wrapped selection geometry" {
         .state = .{ .focused = true },
     };
 
-    var commands: [6]CanvasCommand = undefined;
+    var commands: [12]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, field, tokens);
 
@@ -1457,17 +1522,18 @@ test "widget text fields render wrapped selection geometry" {
     try expectRectApprox(geometry.RectF.init(8, 10, 14.13, 25), text_geometry.selection_bounds.?);
 
     const display_list = builder.displayList();
-    // Fill, border, offset focus ring, two selection rects, text.
-    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
+    // Fill, border, offset focus ring, two selection rects, text, then
+    // the selected-glyph repaint per rect (clip + text + pop, twice).
+    try std.testing.expectEqual(@as(usize, 12), display_list.commandCount());
     switch (display_list.commands[3]) {
-        .fill_rounded_rect => |selection| {
+        .fill_rect => |selection| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(11, 3)), selection.id);
             try expectRectApprox(geometry.RectF.init(14.7, 10, 6.8, 12.5), selection.rect);
         },
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[4]) {
-        .fill_rounded_rect => |selection| {
+        .fill_rect => |selection| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(11, 13)), selection.id);
             try expectRectApprox(geometry.RectF.init(8, 22.5, 14.13, 12.5), selection.rect);
         },
@@ -1482,6 +1548,26 @@ test "widget text fields render wrapped selection geometry" {
         },
         else => return error.TestUnexpectedResult,
     }
+    // Each repaint clip pairs with one full-run redraw in the selection
+    // foreground; the clip rects mirror the two highlight rects above.
+    switch (display_list.commands[6]) {
+        .push_clip => |clip| try expectRectApprox(geometry.RectF.init(14.7, 10, 6.8, 12.5), clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[7]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(textSelectionTextColor(field, tokens), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[8]);
+    switch (display_list.commands[9]) {
+        .push_clip => |clip| try expectRectApprox(geometry.RectF.init(8, 22.5, 14.13, 12.5), clip.rect),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[10]) {
+        .draw_text => |text| try std.testing.expectEqualStrings("AB CD", text.text),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[11]);
 }
 
 test "widget text fields map pointer positions to caret selections" {

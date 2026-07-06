@@ -611,7 +611,14 @@ test "gpu components display list renders stable reference snapshot" {
     // catalog cards pin their compact 16px inset explicitly (the card
     // component default is now the component default of 24). Spot-reviewed via a full
     // reference render dump before blessing.
-    try std.testing.expectEqual(@as(u64, 15979582546869592762), referenceSurfaceSignature(pixels));
+    // Regenerated 2026-07-06 (chrome honesty round): segmented triggers
+    // take the concentric radius (TabsList container radius minus the
+    // 3px hug) instead of the md control radius, and the catalog's
+    // density tabs spell out the house hug so the selected trigger no
+    // longer sits flush against the container corners. Spot-reviewed
+    // against before/after reference captures at 1x and a live 2x
+    // window before blessing.
+    try std.testing.expectEqual(@as(u64, 2640511625398350866), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

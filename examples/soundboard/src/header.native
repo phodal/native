@@ -17,7 +17,7 @@
     <!-- Band contents: only working controls — the library tabs lead
          after the window controls, search holds the trailing corner,
          and the stretch between them stays bare drag surface. -->
-    <tabs gap="4">
+    <tabs>
       <button size="sm" selected="{albumsShowing}" on-press="show_albums">Albums</button>
       <button size="sm" selected="{songsShowing}" on-press="show_songs">Songs</button>
     </tabs>

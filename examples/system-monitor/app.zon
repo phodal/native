@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.system_monitor",
     .name = "system-monitor",
     .display_name = "System Monitor",
+    .description = "Live CPU, memory, and process sampling on a native canvas.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

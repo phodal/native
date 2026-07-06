@@ -57,8 +57,11 @@ pub const max_path_bytes = 512;
 const max_status_bytes = 128;
 /// The header band's natural height, and the floor `header_height`
 /// falls back to when no titlebar band overlays the content
-/// (fullscreen, standard chrome, tests).
-pub const header_natural_height: f32 = 56;
+/// (fullscreen, standard chrome, tests). Matches the tall hidden-inset
+/// band the system reports through `on_chrome` — the band must not be
+/// taller than the OS band, or the header's controls center below the
+/// traffic lights the system centers within its own band.
+pub const header_natural_height: f32 = 52;
 
 /// Serialized-store budget: every record header plus every body at cap.
 /// Comfortably under the 1 MiB `max_effect_file_bytes` channel bound.

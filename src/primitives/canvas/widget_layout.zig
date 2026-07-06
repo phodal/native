@@ -1150,7 +1150,7 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .alert => intrinsicAlertWidgetSize(widget, tokens, depth),
         .card => intrinsicCardWidgetSize(widget, tokens, depth),
         .accordion => intrinsicAccordionWidgetSize(widget, tokens, depth),
-        .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens),
+        .dialog, .drawer, .sheet => intrinsicModalSurfaceWidgetSize(widget, tokens, depth),
         // Containers measure their children (matching the stacking axis the
         // layout pass uses), bounded by the widget depth cap. Scroll
         // viewports and virtualized containers stay zero: their content is
@@ -1377,7 +1377,7 @@ fn intrinsicCardWidgetSize(widget: Widget, tokens: DesignTokens, depth: usize) g
     return size;
 }
 
-fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
+fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens, depth: usize) geometry.SizeF {
     const title_size = widgetTypographySize(widget, tokens.typography.title_size);
     const inset = widgetControlInset(widget, tokens, tokens.spacing.xl);
     const text = intrinsicTextWidgetSize(widget, tokens, title_size);
@@ -1386,10 +1386,24 @@ fn intrinsicModalSurfaceWidgetSize(widget: Widget, tokens: DesignTokens) geometr
         .sheet => geometry.SizeF.init(320, 420),
         else => geometry.SizeF.init(420, 220),
     };
-    return geometry.SizeF.init(
+    var size = geometry.SizeF.init(
         @max(widgetSizedDensityValue(widget, tokens, default_size.width), text.width + inset * 2),
         @max(widgetSizedDensityValue(widget, tokens, default_size.height), if (widget.text.len > 0) widgetLineHeight(title_size) + inset * 2 else 0),
     );
+    // Content-bearing modal surfaces hug their children plus their own
+    // padding, like cards. The fixed default height is a placeholder for
+    // childless surfaces, NOT a floor: content shorter than the default
+    // would otherwise leave the surplus stacked below the last child, so
+    // a dialog's inset under its button row breaks symmetry with the
+    // insets its padding declares on the other three sides.
+    const children = intrinsicStackedChildrenSize(widget, tokens, depth);
+    if (children.height > 0) {
+        const padding = widget.layout.padding;
+        size.height = children.height + padding.top + padding.bottom;
+        if (widget.text.len > 0) size.height = @max(size.height, widgetLineHeight(title_size) + inset * 2);
+        size.width = @max(size.width, children.width + padding.left + padding.right);
+    }
+    return size;
 }
 
 fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {

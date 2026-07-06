@@ -901,11 +901,27 @@ test "built-in component factory applies house composite defaults" {
     try std.testing.expectEqual(@as(f32, 0), builtinComponentWidget(.accordion, .{}).layout.padding.top);
     try std.testing.expectEqual(@as(f32, 16), builtinComponentWidget(.bubble, .{}).layout.padding.top);
 
+    // Defaults merge PER FIELD: an explicit gap wins for the gap alone
+    // and the untouched padding keeps the house content inset — a custom
+    // gap must not silently strip the card hug (nor a custom trigger gap
+    // the TabsList hug, which leaves triggers flush against the
+    // container's rounded corners).
     const custom_card = builtinComponentWidget(.card, .{
         .layout = .{ .gap = 24 },
     });
-    try std.testing.expectEqual(@as(f32, 0), custom_card.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 24), custom_card.layout.padding.top);
     try std.testing.expectEqual(@as(f32, 24), custom_card.layout.gap);
+    const custom_tabs = builtinComponentWidget(.tabs, .{
+        .layout = .{ .gap = 4 },
+    });
+    try std.testing.expectEqual(@as(f32, 3), custom_tabs.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 4), custom_tabs.layout.gap);
+    const padded_card = builtinComponentWidget(.card, .{
+        .layout = .{ .padding = geometry.InsetsF.all(8) },
+    });
+    try std.testing.expectEqual(@as(f32, 8), padded_card.layout.padding.top);
+    try std.testing.expectEqual(@as(f32, 12), padded_card.layout.gap);
+    try std.testing.expect(padded_card.layout.clip_content);
 }
 
 test "built-in accordion renders house disclosure chrome and toggle semantics" {

@@ -69,6 +69,7 @@ const widgetForegroundColor = widget_render_style.widgetForegroundColor;
 const widgetAccentForegroundColor = widget_render_style.widgetAccentForegroundColor;
 const widgetRadius = widget_render_style.widgetRadius;
 const controlRadius = widget_render_style.controlRadius;
+const widgetSizedRadiusValue = widget_render_style.widgetSizedRadiusValue;
 const controlStrokeWidth = widget_render_style.controlStrokeWidth;
 const buttonFill = widget_render_style.buttonFill;
 const buttonTextColorForWidget = widget_render_style.buttonTextColorForWidget;
@@ -672,10 +673,23 @@ pub fn emitDataCellWidgetChrome(builder: *Builder, widget: Widget, tokens: Desig
     return visual;
 }
 
+/// The radius for a segmented trigger. Triggers sit `tabs_list_inset`
+/// inside the TabsList container, so a corner that hugs the container's
+/// curve needs radius = container radius − inset; reusing a full-size
+/// control radius makes the selected segment's corners bulge past the
+/// container's rounding. An explicit style or themed trigger radius
+/// still wins over the concentric default.
+fn segmentedTriggerRadius(widget: Widget, visual: ControlVisualTokens, tokens: DesignTokens) Radius {
+    if (widget.style.radius) |radius| return Radius.all(@max(0, radius));
+    if (visual.radius) |radius| return Radius.all(@max(0, widgetSizedRadiusValue(widget, radius)));
+    const container = tokens.controls.tabs.radius orelse tokens.radius.lg;
+    return Radius.all(@max(0, widgetSizedRadiusValue(widget, container) - widget_model.tabs_list_inset));
+}
+
 pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = widget.state.selected or widget.value >= 0.5;
     const visual = selectionControlVisualTokens(widget, tokens);
-    const radius = controlRadius(widget, visual, tokens.radius.md);
+    const radius = segmentedTriggerRadius(widget, visual, tokens);
     const text_size = widgetLabelTextSize(widget, tokens);
     const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
     // The tab-trigger treatment: the active segment lifts to the page

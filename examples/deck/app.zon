@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.deck",
     .name = "deck",
     .display_name = "Deck",
+    .description = "A compact deck controller driven by keyboard shortcuts.",
     .version = "0.2.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

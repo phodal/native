@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.ui_inbox",
     .name = "ui-inbox",
     .display_name = "Inbox",
+    .description = "A task inbox with filters and a clear-done sweep.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

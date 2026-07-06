@@ -93,6 +93,7 @@ pub fn validateIdentity(identity: AppIdentity) ValidationError!void {
     try validateAppId(identity.id, .reverse_dns);
     try validateName(identity.name);
     if (identity.display_name) |display_name| try validateName(display_name);
+    if (identity.description) |description| try validateDescription(description);
     if (identity.organization) |organization| try validateName(organization);
     if (identity.homepage) |homepage| try validateUrl(homepage);
 }
@@ -362,6 +363,18 @@ pub fn validateName(name: []const u8) ValidationError!void {
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidName;
     for (name) |ch| {
         if (ch == 0 or ch == '/' or ch == '\\') return error.InvalidName;
+    }
+}
+
+/// The identity `description` is one human-facing sentence (the About
+/// panel credits line): non-empty, a single line (no control bytes),
+/// and at most `max_description_bytes` — a paragraph belongs in the
+/// README, not the manifest.
+pub fn validateDescription(description: []const u8) ValidationError!void {
+    if (description.len == 0) return error.InvalidDescription;
+    if (description.len > types.max_description_bytes) return error.InvalidDescription;
+    for (description) |ch| {
+        if (ch < 0x20 or ch == 0x7f) return error.InvalidDescription;
     }
 }
 

@@ -260,7 +260,15 @@ typedef void (*native_sdk_appkit_bridge_callback_t)(void *context, uint64_t wind
 // ordered-out and `makeKeyAndOrderFront` runs after the first
 // gpu-surface present lands, with a short fallback deadline so a wedged
 // first frame cannot leave the window invisible).
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
+//
+// display_name is the human-facing app name (empty = fall back to
+// app_name): it drives the application menu title and its About/Hide/
+// Quit labels, the process name, the Dock/app-switcher entry, and the
+// About panel, which also shows version and about_description when
+// non-empty. has_web_content declares whether the app hosts a webview;
+// web-only default menu items (Reload, Toggle Web Inspector, Undo/Redo)
+// exist only when it is set.
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *display_name, size_t display_name_len, const char *version, size_t version_len, const char *about_description, size_t about_description_len, int has_web_content, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
 void native_sdk_appkit_destroy(native_sdk_appkit_host_t *host);
 void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_event_callback_t callback, void *context);
 void native_sdk_appkit_stop(native_sdk_appkit_host_t *host);

@@ -43,8 +43,11 @@ pub const max_search = 32;
 pub const max_note = 160;
 /// The header bar's natural height, and the floor `header_height` falls
 /// back to when no titlebar band overlays the content (fullscreen,
-/// standard chrome, tests).
-pub const header_natural_height: f32 = 54;
+/// standard chrome, tests). Matches the tall hidden-inset band the
+/// system reports through `on_chrome` — the band must not be taller
+/// than the OS band, or the header's controls center below the traffic
+/// lights the system centers within its own band.
+pub const header_natural_height: f32 = 52;
 
 // Effect keys, model-owned identity. Timer keys are their own namespace.
 pub const sample_timer_key: u64 = 1;

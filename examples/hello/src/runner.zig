@@ -33,6 +33,14 @@ pub const RunOptions = struct {
     fn appInfo(self: RunOptions, buffers: *StateBuffers) native_sdk.AppInfo {
         var info: native_sdk.AppInfo = .{
             .app_name = self.app_name,
+            // The identity the OS shows (application menu, Dock, About
+            // panel) reads straight from app.zon at comptime, so dev
+            // runs carry the same display name and version a packaged
+            // bundle gets from its Info.plist.
+            .display_name = manifestStringField("display_name"),
+            .version = manifestStringField("version"),
+            .description = manifestStringField("description"),
+            .has_web_content = manifestHasWebContent(),
             .window_title = self.window_title,
             .bundle_id = self.bundle_id,
             .icon_path = self.icon_path,
@@ -70,6 +78,29 @@ const ShortcutStorage = struct {
         return self.shortcuts[0..manifest_shortcuts.len];
     }
 };
+
+/// A top-level app.zon string field (`display_name`, `version`,
+/// `description`), or "" when the manifest omits it — optional identity
+/// stays optional all the way into `AppInfo`.
+fn manifestStringField(comptime field: []const u8) []const u8 {
+    if (comptime !@hasField(@TypeOf(app_manifest), field)) return "";
+    const value = @field(app_manifest, field);
+    if (comptime @TypeOf(value) == @TypeOf(null)) return "";
+    return value;
+}
+
+/// Whether app.zon declares web content: the `webview` capability or a
+/// `frontend` block. Hosts build honest default menus from this — web
+/// items like Reload only exist when a webview can answer them, so
+/// canvas-only apps never ship dead menu items.
+fn manifestHasWebContent() bool {
+    if (comptime @hasField(@TypeOf(app_manifest), "frontend")) return true;
+    if (comptime !@hasField(@TypeOf(app_manifest), "capabilities")) return false;
+    inline for (app_manifest.capabilities) |capability| {
+        if (comptime std.mem.eql(u8, capability, "webview")) return true;
+    }
+    return false;
+}
 
 fn manifestWindowOptions(buffers: *StateBuffers) []const native_sdk.WindowOptions {
     comptime {

@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.soundboard",
     .name = "soundboard",
     .display_name = "Soundboard",
+    .description = "A native music library: albums, songs, search, and a playback bar.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

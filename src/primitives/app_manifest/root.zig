@@ -71,6 +71,7 @@ pub const UpdateConfig = types.UpdateConfig;
 pub const Manifest = types.Manifest;
 pub const validateManifest = validation.validateManifest;
 pub const validateIdentity = validation.validateIdentity;
+pub const validateDescription = validation.validateDescription;
 pub const validateVersion = validation.validateVersion;
 pub const validateWindows = validation.validateWindows;
 pub const validateShell = validation.validateShell;

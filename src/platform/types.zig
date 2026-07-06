@@ -946,6 +946,22 @@ pub const ViewInfo = struct {
 
 pub const AppInfo = struct {
     app_name: []const u8 = "native-sdk",
+    /// The human-facing application name (app.zon `display_name`) the
+    /// host shows wherever the OS names the app: the application menu
+    /// and its About/Hide/Quit items, the Dock tile, the app switcher,
+    /// and the About panel. Falls back through the window title to
+    /// `app_name` (the binary name) via `resolvedDisplayName`.
+    display_name: []const u8 = "",
+    /// The app version (app.zon `version`), shown in the About panel.
+    version: []const u8 = "",
+    /// The one-line app description (app.zon `description`), shown as
+    /// the About panel's credits line when present.
+    description: []const u8 = "",
+    /// Whether the manifest declares web content (the `webview`
+    /// capability or a `frontend` block). Hosts use it to build honest
+    /// default menus: web items like Reload only exist when a webview
+    /// can answer them.
+    has_web_content: bool = false,
     window_title: []const u8 = "",
     bundle_id: []const u8 = "dev.native_sdk.app",
     icon_path: []const u8 = "",
@@ -955,6 +971,15 @@ pub const AppInfo = struct {
     pub fn resolvedWindowTitle(self: AppInfo) []const u8 {
         if (self.window_title.len > 0) return self.window_title;
         return self.main_window.resolvedTitle(self.app_name);
+    }
+
+    /// The name the OS should call the app: the manifest display name
+    /// when declared, else the window title, else the binary name —
+    /// never empty, so hosts can use it unconditionally.
+    pub fn resolvedDisplayName(self: AppInfo) []const u8 {
+        if (self.display_name.len > 0) return self.display_name;
+        if (self.window_title.len > 0) return self.window_title;
+        return self.app_name;
     }
 
     pub fn resolvedMainWindow(self: AppInfo) WindowOptions {

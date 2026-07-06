@@ -24,7 +24,7 @@
       <text-field text="{draft}" placeholder="New task…" on-input="draft_edit" on-submit="add" grow="1" />
       <button variant="primary" on-press="add">Add task</button>
     </row>
-    <tabs gap="8">
+    <tabs>
       <for each="filters" as="f">
         <button size="sm" selected="{f == filter}" on-press="set_filter:{f}">{f}</button>
       </for>

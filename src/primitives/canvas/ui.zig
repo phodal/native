@@ -2065,13 +2065,15 @@ pub fn Ui(comptime Msg: type) type {
         /// (`canvas.widgetKindDefaultLayout`): a bare `.card` carries
         /// the house content padding, a bare `.tabs` hugs its triggers
         /// like a TabsList. Only padding/gap (and a non-stretch cross
-        /// default) apply, and only when the author left them at zero —
-        /// explicit spacing always wins.
+        /// default) apply, each ONLY when the author left that field at
+        /// zero — per field, so an explicit trigger gap keeps the
+        /// TabsList hug (dropping it leaves triggers flush against the
+        /// container's rounded corners) and explicit padding keeps the
+        /// default gap. Explicit spacing always wins for its own field.
         fn applyKindDefaultLayout(kind: WidgetKind, options: ElementOptions, layout: *canvas.WidgetLayoutStyle) void {
-            if (options.padding != 0 or options.gap != 0) return;
             const defaults = canvas.widgetKindDefaultLayout(kind, options.size) orelse return;
-            layout.padding = defaults.padding;
-            layout.gap = defaults.gap;
+            if (options.padding == 0) layout.padding = defaults.padding;
+            if (options.gap == 0) layout.gap = defaults.gap;
             if (layout.cross_alignment == .stretch and defaults.cross_alignment != .stretch) {
                 layout.cross_alignment = defaults.cross_alignment;
             }

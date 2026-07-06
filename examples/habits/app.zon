@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.habits",
     .name = "habits",
     .display_name = "Habits",
+    .description = "A daily habit tracker with streaks and filters.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

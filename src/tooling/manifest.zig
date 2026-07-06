@@ -13,6 +13,9 @@ pub const Metadata = struct {
     id: []const u8,
     name: []const u8,
     display_name: ?[]const u8 = null,
+    /// One human-facing sentence about the app: the About panel credits
+    /// line on macOS. Optional — absent means no credits line.
+    description: ?[]const u8 = null,
     version: []const u8,
     icons: []const []const u8 = &.{},
     platforms: []const []const u8 = &.{},
@@ -39,6 +42,7 @@ pub const Metadata = struct {
         allocator.free(self.id);
         allocator.free(self.name);
         if (self.display_name) |value| allocator.free(value);
+        if (self.description) |value| allocator.free(value);
         allocator.free(self.version);
         allocator.free(self.web_engine);
         allocator.free(self.cef.dir);
@@ -317,6 +321,12 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     };
     defer metadata.deinit(allocator);
 
+    if (metadata.description) |description| {
+        app_manifest.validateDescription(description) catch return .{
+            .ok = false,
+            .message = "app.zon description is invalid - it must be one non-empty line of at most 256 bytes with no control characters (it becomes the About panel credits line)",
+        };
+    }
     validateIconPaths(metadata.icons) catch return .{ .ok = false, .message = "app.zon icons are invalid" };
     const permissions = parsePermissions(allocator, metadata.permissions) catch return .{ .ok = false, .message = "app.zon permissions are invalid" };
     defer allocator.free(permissions);
@@ -348,7 +358,7 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
     defer allocator.free(platform_settings);
 
     const manifest: app_manifest.Manifest = .{
-        .identity = .{ .id = metadata.id, .name = metadata.name, .display_name = metadata.display_name },
+        .identity = .{ .id = metadata.id, .name = metadata.name, .display_name = metadata.display_name, .description = metadata.description },
         .version = parseVersion(metadata.version) catch return .{ .ok = false, .message = "app.zon version is invalid" },
         .permissions = permissions,
         .capabilities = capabilities,
@@ -410,6 +420,7 @@ pub fn parseText(allocator: std.mem.Allocator, source: []const u8) !Metadata {
         .id = try allocator.dupe(u8, raw.id),
         .name = try allocator.dupe(u8, raw.name),
         .display_name = if (raw.display_name) |value| try allocator.dupe(u8, value) else null,
+        .description = if (raw.description) |value| try allocator.dupe(u8, value) else null,
         .version = try allocator.dupe(u8, raw.version),
         .icons = try duplicateStringList(allocator, raw.icons),
         .platforms = try duplicateStringList(allocator, raw.platforms),
@@ -1185,6 +1196,7 @@ test "manifest metadata parser reads identity version and lists" {
         \\  .id = "com.example.app",
         \\  .name = "example",
         \\  .display_name = "Example App",
+        \\  .description = "An example app for the manifest parser.",
         \\  .version = "1.2.3",
         \\  .icons = .{ "assets/icon.png" },
         \\  .platforms = .{ "macos", "linux" },
@@ -1226,6 +1238,7 @@ test "manifest metadata parser reads identity version and lists" {
     try std.testing.expectEqualStrings("com.example.app", metadata.id);
     try std.testing.expectEqualStrings("example", metadata.name);
     try std.testing.expectEqualStrings("Example App", metadata.displayName());
+    try std.testing.expectEqualStrings("An example app for the manifest parser.", metadata.description.?);
     try std.testing.expectEqualStrings("1.2.3", metadata.version);
     try std.testing.expectEqualStrings("assets/icon.png", metadata.icons[0]);
     try std.testing.expectEqualStrings("linux", metadata.platforms[1]);

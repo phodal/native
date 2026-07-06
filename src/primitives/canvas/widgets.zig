@@ -1038,6 +1038,12 @@ fn builtinComponentSemantics(descriptor: BuiltinComponentDescriptor, semantics: 
     return next;
 }
 
+/// How far the TabsList container insets its segmented triggers on
+/// every side. Shared with the trigger renderer, which subtracts this
+/// from the container radius so the selected segment's corners stay
+/// concentric with the container's at every position.
+pub const tabs_list_inset: f32 = 3;
+
 /// Ergonomic per-kind layout defaults for the composite surfaces whose
 /// house reference carries built-in content spacing, shared by EVERY
 /// authoring path — `builtinComponentWidget` and (via the ui builder,
@@ -1059,11 +1065,11 @@ pub fn widgetKindDefaultLayout(kind: WidgetKind, size: WidgetSize) ?WidgetLayout
             .clip_content = true,
         },
         // The house TabsList: one muted rounded container hugging its
-        // triggers with 3px of padding; the active trigger lifts to the
-        // surface, so the container itself provides the wash and the
-        // triggers need no gap between them.
+        // triggers with `tabs_list_inset` of padding; the active trigger
+        // lifts to the surface, so the container itself provides the
+        // wash and the triggers need no gap between them.
         .tabs => .{
-            .padding = geometry.InsetsF.all(3),
+            .padding = geometry.InsetsF.all(tabs_list_inset),
             .cross_alignment = .center,
         },
         // house accordion items are borderless rows — trigger band and
@@ -1076,10 +1082,11 @@ pub fn widgetKindDefaultLayout(kind: WidgetKind, size: WidgetSize) ?WidgetLayout
 }
 
 fn builtinComponentLayout(kind: BuiltinComponentKind, size: WidgetSize, layout: WidgetLayoutStyle) WidgetLayoutStyle {
-    if (!widgetLayoutStyleIsDefault(layout)) return layout;
-    if (widgetKindDefaultLayout(builtinComponentDescriptor(kind).root_widget_kind, size)) |defaults| return defaults;
+    if (widgetKindDefaultLayout(builtinComponentDescriptor(kind).root_widget_kind, size)) |defaults| {
+        return mergeLayoutDefaults(layout, defaults);
+    }
 
-    return switch (kind) {
+    const defaults: WidgetLayoutStyle = switch (kind) {
         .resizable => .{
             .padding = geometry.InsetsF.all(12),
             .gap = 8,
@@ -1122,32 +1129,27 @@ fn builtinComponentLayout(kind: BuiltinComponentKind, size: WidgetSize, layout: 
         .skeleton => .{
             .min_size = geometry.SizeF.init(120, 20),
         },
-        else => layout,
+        else => return layout,
     };
+    return mergeLayoutDefaults(layout, defaults);
 }
 
-fn widgetLayoutStyleIsDefault(layout: WidgetLayoutStyle) bool {
-    return layout.padding.top == 0 and
-        layout.padding.right == 0 and
-        layout.padding.bottom == 0 and
-        layout.padding.left == 0 and
-        layout.gap == 0 and
-        layout.grow == 0 and
-        layout.main_alignment == .start and
-        layout.cross_alignment == .stretch and
-        !layout.clip_content and
-        layout.columns == 0 and
-        layout.anchor == null and
-        !layout.virtualized and
-        layout.virtual_item_extent == 0 and
-        layout.virtual_overscan == 0 and
-        layout.virtual_item_count == 0 and
-        layout.virtual_first_index == 0 and
-        layout.virtual_anchor_index == 0 and
-        layout.virtual_anchor_extent == 0 and
-        layout.virtual_total_extent == 0 and
-        layout.min_size.width == 0 and
-        layout.min_size.height == 0 and
-        layout.max_size.width == 0 and
-        layout.max_size.height == 0;
+/// Fill only the spacing fields the author left untouched from the
+/// kind's built-in defaults — PER FIELD, so an explicit gap does not
+/// silently strip a container's built-in content padding (a TabsList
+/// with a custom trigger gap must keep its hug, or the triggers sit
+/// flush against the container's rounded corners) and explicit padding
+/// does not strip the default gap or clipping.
+fn mergeLayoutDefaults(explicit: WidgetLayoutStyle, defaults: WidgetLayoutStyle) WidgetLayoutStyle {
+    var merged = explicit;
+    if (explicit.padding.top == 0 and explicit.padding.right == 0 and
+        explicit.padding.bottom == 0 and explicit.padding.left == 0)
+    {
+        merged.padding = defaults.padding;
+    }
+    if (explicit.gap == 0) merged.gap = defaults.gap;
+    if (explicit.cross_alignment == .stretch) merged.cross_alignment = defaults.cross_alignment;
+    if (!explicit.clip_content) merged.clip_content = defaults.clip_content;
+    if (explicit.min_size.width == 0 and explicit.min_size.height == 0) merged.min_size = defaults.min_size;
+    return merged;
 }

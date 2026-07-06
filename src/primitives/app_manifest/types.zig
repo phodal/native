@@ -3,6 +3,7 @@ const std = @import("std");
 pub const ValidationError = error{
     InvalidId,
     InvalidName,
+    InvalidDescription,
     InvalidVersion,
     InvalidDimension,
     DuplicateIcon,
@@ -48,6 +49,8 @@ pub const max_file_associations: usize = 32;
 pub const max_file_association_extensions: usize = 32;
 pub const max_file_association_mime_types: usize = 32;
 pub const max_url_schemes: usize = 32;
+/// Cap for the identity `description` — one sentence, not a README.
+pub const max_description_bytes: usize = 256;
 
 pub const Platform = enum {
     macos,
@@ -177,6 +180,9 @@ pub const AppIdentity = struct {
     id: []const u8,
     name: []const u8,
     display_name: ?[]const u8 = null,
+    /// One human-facing sentence about the app (the About-panel credits
+    /// line on macOS). Single line, at most `max_description_bytes`.
+    description: ?[]const u8 = null,
     organization: ?[]const u8 = null,
     homepage: ?[]const u8 = null,
 };

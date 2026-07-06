@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.kanban",
     .name = "kanban",
     .display_name = "Kanban",
+    .description = "A kanban board with todo, doing, and done columns.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

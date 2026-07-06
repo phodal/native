@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.notes",
     .name = "notes",
     .display_name = "Notes",
+    .description = "A three-pane notes app with folders, search, and local storage.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

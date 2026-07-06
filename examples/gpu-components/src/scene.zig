@@ -716,7 +716,11 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         .{ .id = 115, .kind = .slider, .frame = rect(0, 108, 176, 28), .value = 0.62, .semantics = .{ .label = "Density slider" } },
         .{ .id = 116, .kind = .progress, .frame = rect(202, 118, 134, 8), .value = 1, .semantics = .{ .label = "Build progress" } },
         .{ .id = 167, .kind = .radio_group, .frame = rect(0, 148, 160, 28), .layout = .{ .gap = 10, .cross_alignment = .center }, .semantics = .{ .label = "Layout radio group" }, .children = &radio_controls },
-        .{ .id = 168, .kind = .tabs, .frame = rect(0, 200, 148, 34), .layout = .{ .gap = 4 }, .semantics = .{ .label = "Density tabs" }, .children = &segment_controls },
+        // The house TabsList hug: triggers sit 3px inside the container
+        // (raw widget trees bypass the builder defaults, so the inset is
+        // spelled out) and carry no gap — the selected trigger's corners
+        // stay concentric with the container's rounding.
+        .{ .id = 168, .kind = .tabs, .frame = rect(0, 200, 148, 34), .layout = .{ .padding = .{ .top = 3, .right = 3, .bottom = 3, .left = 3 } }, .semantics = .{ .label = "Density tabs" }, .children = &segment_controls },
         .{ .id = 171, .kind = .textarea, .frame = rect(0, 246, 336, 72), .text = "Compose a native-rendered message", .semantics = .{ .label = "Message textarea" } },
         .{ .id = environment_select_id, .kind = .select, .frame = rect(0, 330, 180, 34), .text = environmentLabel(ui_state.environment_index), .command = environment_toggle_command, .state = .{ .expanded = ui_state.environment_select_open }, .semantics = .{ .label = "Environment select" } },
     };

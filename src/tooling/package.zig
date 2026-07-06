@@ -344,6 +344,12 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
     defer allocator.free(document_types);
     const url_types = try macosUrlTypes(allocator, metadata);
     defer allocator.free(url_types);
+    // The About panel's bottom line in packaged bundles: the manifest
+    // description rides NSHumanReadableCopyright, the plist key the
+    // standard About panel renders as its footer text — the same line
+    // dev runs pass to the panel directly.
+    const about_line = try macosAboutLine(allocator, metadata);
+    defer allocator.free(about_line);
     return std.fmt.allocPrint(allocator,
         \\<?xml version="1.0" encoding="UTF-8"?>
         \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -367,11 +373,20 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
         \\  <string>{s}</string>
         \\  <key>CFBundleVersion</key>
         \\  <string>{s}</string>
-        \\{s}{s}
+        \\{s}{s}{s}
         \\</dict>
         \\</plist>
         \\
-    , .{ bundle_id, name, display_name, executable, icon, version, version, document_types, url_types });
+    , .{ bundle_id, name, display_name, executable, icon, version, version, about_line, document_types, url_types });
+}
+
+/// The optional NSHumanReadableCopyright entry (with trailing newline)
+/// for the manifest description, or "" when the manifest has none.
+fn macosAboutLine(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    const description = metadata.description orelse return try allocator.dupe(u8, "");
+    const escaped = try xmlEscapeAlloc(allocator, description);
+    defer allocator.free(escaped);
+    return std.fmt.allocPrint(allocator, "  <key>NSHumanReadableCopyright</key>\n  <string>{s}</string>\n", .{escaped});
 }
 
 fn embedHeader() []const u8 {
@@ -3420,7 +3435,7 @@ test "artifact names include metadata target and optimize mode" {
 }
 
 test "plist template includes identity executable and version" {
-    const metadata: manifest_tool.Metadata = .{ .id = "dev.example.app", .name = "demo", .display_name = "Demo App", .version = "1.2.3", .icons = &.{"assets/icon.icns"} };
+    const metadata: manifest_tool.Metadata = .{ .id = "dev.example.app", .name = "demo", .display_name = "Demo App", .description = "A demo of the packaging pipeline.", .version = "1.2.3", .icons = &.{"assets/icon.icns"} };
     const plist = try macosInfoPlist(std.testing.allocator, metadata, "demo");
     defer std.testing.allocator.free(plist);
     try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleIdentifier") != null);
@@ -3430,6 +3445,15 @@ test "plist template includes identity executable and version" {
     try std.testing.expect(std.mem.indexOf(u8, plist, "icon.icns") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "LSMinimumSystemVersion") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "11.0") != null);
+    // The manifest description reaches the About panel's footer key.
+    try std.testing.expect(std.mem.indexOf(u8, plist, "NSHumanReadableCopyright") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "A demo of the packaging pipeline.") != null);
+
+    // Without a description the key is absent, not emitted empty.
+    const bare: manifest_tool.Metadata = .{ .id = "dev.example.app", .name = "demo", .version = "1.2.3" };
+    const bare_plist = try macosInfoPlist(std.testing.allocator, bare, "demo");
+    defer std.testing.allocator.free(bare_plist);
+    try std.testing.expect(std.mem.indexOf(u8, bare_plist, "NSHumanReadableCopyright") == null);
 }
 
 test "plist template includes document and URL registrations" {

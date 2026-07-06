@@ -83,6 +83,7 @@ const validateCefConfig = validation.validateCefConfig;
 const AppIdMode = validation.AppIdMode;
 const validateAppId = validation.validateAppId;
 const validateName = validation.validateName;
+const validateDescription = validation.validateDescription;
 const validateUrl = validation.validateUrl;
 const validateIcons = validation.validateIcons;
 const validatePermissions = validation.validatePermissions;
@@ -516,6 +517,7 @@ test "valid rich manifest" {
             .id = "com.example.app",
             .name = "example",
             .display_name = "Example App",
+            .description = "An example app exercising every manifest field.",
             .organization = "Example",
             .homepage = "https://example.com/app",
         },
@@ -569,6 +571,15 @@ test "name validation" {
     try std.testing.expectError(error.InvalidName, validateName("bad/name"));
     try std.testing.expectError(error.InvalidName, validateName("bad\\name"));
     try std.testing.expectError(error.InvalidName, validateName("bad\x00name"));
+}
+
+test "description validation" {
+    try validateDescription("A one-line app description.");
+
+    try std.testing.expectError(error.InvalidDescription, validateDescription(""));
+    try std.testing.expectError(error.InvalidDescription, validateDescription("two\nlines"));
+    try std.testing.expectError(error.InvalidDescription, validateDescription("tab\tcharacter"));
+    try std.testing.expectError(error.InvalidDescription, validateDescription("x" ** 257));
 }
 
 test "version validation and formatting" {

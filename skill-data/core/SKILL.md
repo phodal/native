@@ -106,6 +106,7 @@ Keep `app.zon` as the source of truth for app-level behavior:
     .id = "com.example.my-app",
     .name = "my-app",
     .display_name = "My App",
+    .description = "One line about the app, shown in the About panel.",
     .version = "0.1.0",
     .icons = .{ "assets/icon.icns" },
     .platforms = .{ "macos", "linux" },

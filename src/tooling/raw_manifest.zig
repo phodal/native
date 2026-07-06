@@ -4,6 +4,7 @@ pub const RawManifest = struct {
     id: []const u8,
     name: []const u8,
     display_name: ?[]const u8 = null,
+    description: ?[]const u8 = null,
     version: []const u8,
     icons: []const []const u8 = &.{},
     platforms: []const []const u8 = &.{},

@@ -2,6 +2,7 @@
     .id = "dev.native_sdk.calculator",
     .name = "calculator",
     .display_name = "Calculator",
+    .description = "A keyboard-first calculator in a compact fixed window.",
     .version = "0.1.0",
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},

@@ -556,6 +556,7 @@ fn nativeAppZon(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 
     try appendZigString(&out, allocator, names.display_name);
     try out.appendSlice(allocator,
         \\,
+        \\    .description = "A counter that lives in one native window.",
         \\    .version = "0.1.0",
         \\    .icons = .{"assets/icon.icns"},
         \\    .platforms = .{"macos"},

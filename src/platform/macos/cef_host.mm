@@ -522,6 +522,14 @@ static const char *NativeSdkCefBridgeScript() {
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSTimer *> *appTimers;
 @property(nonatomic, strong) NSString *appName;
+/* The human-facing app name (app.zon display_name, empty = appName):
+ * drives the application menu title and its About/Hide/Quit labels, the
+ * process name, and the About panel. */
+@property(nonatomic, strong) NSString *displayName;
+/* app.zon version and description for the About panel; empty when
+ * undeclared. */
+@property(nonatomic, strong) NSString *appVersion;
+@property(nonatomic, strong) NSString *aboutDescription;
 @property(nonatomic, assign) native_sdk_appkit_event_callback_t callback;
 @property(nonatomic, assign) native_sdk_appkit_bridge_callback_t bridgeCallback;
 @property(nonatomic, assign) void *context;
@@ -542,7 +550,7 @@ static const char *NativeSdkCefBridgeScript() {
 @property(nonatomic, strong) NSArray<NSString *> *allowedNavigationOrigins;
 @property(nonatomic, strong) NSArray<NSString *> *allowedExternalURLs;
 @property(nonatomic, assign) NSInteger externalLinkAction;
-- (instancetype)initWithAppName:(NSString *)appName title:(NSString *)title width:(double)width height:(double)height;
+- (instancetype)initWithAppName:(NSString *)appName displayName:(NSString *)displayName version:(NSString *)version aboutDescription:(NSString *)aboutDescription title:(NSString *)title width:(double)width height:(double)height;
 - (void)configureApplication;
 - (void)buildMenuBar;
 - (NSMenuItem *)menuItem:(NSString *)title action:(SEL)action key:(NSString *)key modifiers:(NSEventModifierFlags)modifiers;
@@ -699,7 +707,7 @@ static const char *NativeSdkCefBridgeScript() {
 
 @implementation NativeSdkChromiumHost
 
-- (instancetype)initWithAppName:(NSString *)appName title:(NSString *)title width:(double)width height:(double)height {
+- (instancetype)initWithAppName:(NSString *)appName displayName:(NSString *)displayName version:(NSString *)version aboutDescription:(NSString *)aboutDescription title:(NSString *)title width:(double)width height:(double)height {
     self = [super init];
     if (!self) return nil;
 
@@ -707,6 +715,9 @@ static const char *NativeSdkCefBridgeScript() {
     ensureCefInitialized();
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     self.appName = appName.length > 0 ? appName : @"native-sdk";
+    self.displayName = displayName.length > 0 ? displayName : self.appName;
+    self.appVersion = version ?: @"";
+    self.aboutDescription = aboutDescription ?: @"";
     [self configureApplication];
     self.windows = [[NSMutableDictionary alloc] init];
     self.browserContainers = [[NSMutableDictionary alloc] init];
@@ -741,7 +752,7 @@ static const char *NativeSdkCefBridgeScript() {
 }
 
 - (void)configureApplication {
-    [[NSProcessInfo processInfo] setProcessName:self.appName];
+    [[NSProcessInfo processInfo] setProcessName:self.displayName];
     [self buildMenuBar];
 }
 
@@ -749,19 +760,21 @@ static const char *NativeSdkCefBridgeScript() {
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
     [NSApp setMainMenu:mainMenu];
 
-    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:self.appName action:nil keyEquivalent:@""];
+    // Every string the application menu derives \u2014 the bold menu-bar
+    // title and the About/Hide/Quit labels \u2014 reads from the one display
+    // name, never the binary name. No Settings item: the host has no
+    // settings surface to open, and a dead item is worse than none.
+    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:self.displayName action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:self.appName];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:self.displayName];
     [appMenuItem setSubmenu:appMenu];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"About %@", self.appName] action:@selector(orderFrontStandardAboutPanel:) key:@"" modifiers:0]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"About %@", self.displayName] action:@selector(showAboutPanel:) key:@"" modifiers:0]];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:@"Preferences\u2026" action:@selector(showPreferences:) key:@"," modifiers:NSEventModifierFlagCommand]];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Hide %@", self.appName] action:@selector(hide:) key:@"h" modifiers:NSEventModifierFlagCommand]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Hide %@", self.displayName] action:@selector(hide:) key:@"h" modifiers:NSEventModifierFlagCommand]];
     [appMenu addItem:[self menuItem:@"Hide Others" action:@selector(hideOtherApplications:) key:@"h" modifiers:(NSEventModifierFlagCommand | NSEventModifierFlagOption)]];
     [appMenu addItem:[self menuItem:@"Show All" action:@selector(unhideAllApplications:) key:@"" modifiers:0]];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Quit %@", self.appName] action:@selector(terminate:) key:@"q" modifiers:NSEventModifierFlagCommand]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Quit %@", self.displayName] action:@selector(terminate:) key:@"q" modifiers:NSEventModifierFlagCommand]];
 
     NSMenuItem *fileMenuItem = [[NSMenuItem alloc] initWithTitle:@"File" action:nil keyEquivalent:@""];
     [mainMenu addItem:fileMenuItem];
@@ -797,8 +810,24 @@ static const char *NativeSdkCefBridgeScript() {
     return item;
 }
 
-- (void)showPreferences:(id)sender {
+/* The standard About panel, populated explicitly so unbundled dev runs
+ * show the manifest identity a packaged bundle reads from Info.plist. */
+- (void)showAboutPanel:(id)sender {
     (void)sender;
+    NSMutableDictionary<NSAboutPanelOptionKey, id> *options = [[NSMutableDictionary alloc] init];
+    options[NSAboutPanelOptionApplicationName] = self.displayName;
+    if (self.appVersion.length > 0) {
+        options[NSAboutPanelOptionApplicationVersion] = self.appVersion;
+        options[NSAboutPanelOptionVersion] = @"";
+    }
+    if (self.aboutDescription.length > 0) {
+        NSDictionary<NSAttributedStringKey, id> *creditAttributes = @{
+            NSFontAttributeName : [NSFont systemFontOfSize:11],
+            NSForegroundColorAttributeName : NSColor.secondaryLabelColor,
+        };
+        options[NSAboutPanelOptionCredits] = [[NSAttributedString alloc] initWithString:self.aboutDescription attributes:creditAttributes];
+    }
+    [NSApp orderFrontStandardAboutPanelWithOptions:options];
 }
 
 - (void)reload:(id)sender {
@@ -1844,13 +1873,16 @@ static void NativeSdkApplyHiddenInsetTitlebar(NSWindow *window, int titlebar_sty
     }
 }
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *display_name, size_t display_name_len, const char *version, size_t version_len, const char *about_description, size_t about_description_len, int has_web_content, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
     @autoreleasepool {
         // Present-before-show is a canvas contract; the Chromium host
         // hosts webviews only (gpu-surface presents are unsupported on
         // this engine), so the policy is accepted for ABI parity and
         // windows show immediately — the web engine owns first paint.
+        // has_web_content is likewise ABI parity: this host always
+        // hosts web content, and its menus already assume it.
         (void)show_policy;
+        (void)has_web_content;
         (void)bundle_id;
         (void)bundle_id_len;
         (void)icon_path;
@@ -1858,8 +1890,11 @@ native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t 
         (void)window_label;
         (void)window_label_len;
         NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"native-sdk";
+        NSString *displayNameString = [[NSString alloc] initWithBytes:display_name length:display_name_len encoding:NSUTF8StringEncoding] ?: @"";
+        NSString *versionString = [[NSString alloc] initWithBytes:version length:version_len encoding:NSUTF8StringEncoding] ?: @"";
+        NSString *aboutDescriptionString = [[NSString alloc] initWithBytes:about_description length:about_description_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *titleString = [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] ?: appNameString;
-        NativeSdkChromiumHost *host = [[NativeSdkChromiumHost alloc] initWithAppName:appNameString title:titleString width:width height:height];
+        NativeSdkChromiumHost *host = [[NativeSdkChromiumHost alloc] initWithAppName:appNameString displayName:displayNameString version:versionString aboutDescription:aboutDescriptionString title:titleString width:width height:height];
         if (restore_frame) {
             [host.window setFrame:NativeSdkConstrainFrame(NSMakeRect(x, y, width, height)) display:NO];
         }

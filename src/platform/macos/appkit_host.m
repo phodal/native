@@ -9,6 +9,7 @@
 #import <ImageIO/ImageIO.h>
 #import <dispatch/dispatch.h>
 #import <Security/Security.h>
+#include <dlfcn.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 #include <stdint.h>
@@ -585,6 +586,26 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSTimer *automationFrameTimer;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSTimer *> *appTimers;
 @property(nonatomic, strong) NSString *appName;
+/* The human-facing app name (app.zon display_name, falling back through
+ * the window title to the binary name). Everything the OS labels the
+ * app with derives from it: the application menu and its About/Hide/
+ * Quit items, the process name, the Dock tile / app switcher entry, and
+ * the About panel. */
+@property(nonatomic, strong) NSString *displayName;
+/* app.zon version, shown in the About panel; empty when undeclared. */
+@property(nonatomic, strong) NSString *appVersion;
+/* app.zon description, the About panel credits line; empty when
+ * undeclared. */
+@property(nonatomic, strong) NSString *aboutDescription;
+/* Whether the manifest declares web content. Gates the web-only default
+ * menu items (Reload, Toggle Web Inspector, Undo/Redo) so canvas-only
+ * apps never ship menu items nothing answers. */
+@property(nonatomic, assign) BOOL hasWebContent;
+/* The decoded manifest icon (nil until the async decode lands, or when
+ * the file is missing). The About panel needs it passed explicitly:
+ * unbundled dev binaries have no bundle icon for the standard panel to
+ * find, and it does not read NSApp.applicationIconImage. */
+@property(nonatomic, strong) NSImage *appIcon;
 @property(nonatomic, strong) NSString *bundleIdentifier;
 @property(nonatomic, strong) NSString *iconPath;
 @property(nonatomic, strong) NSString *windowLabel;
@@ -606,7 +627,7 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSArray<NSString *> *allowedNavigationOrigins;
 @property(nonatomic, strong) NSArray<NSString *> *allowedExternalURLs;
 @property(nonatomic, assign) NSInteger externalLinkAction;
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy;
+- (instancetype)initWithAppName:(NSString *)appName displayName:(NSString *)displayName version:(NSString *)version aboutDescription:(NSString *)aboutDescription hasWebContent:(BOOL)hasWebContent windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy;
 - (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy makeMain:(BOOL)makeMain;
 - (void)showDeferredWindowIfPending:(uint64_t)windowId reason:(const char *)reason;
 - (void)applyWindowClearColor:(uint64_t)windowId red:(uint8_t)red green:(uint8_t)green blue:(uint8_t)blue alpha:(uint8_t)alpha;
@@ -5594,6 +5615,37 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     [self emitSelectAllTextInputCommand];
 }
 
+// Edit-menu clipboard actions on the canvas: the runtime already
+// resolves cmd+C/X/V key events against the focused editable widget or
+// the view's text selection, so the menu items ride the same path as
+// the shortcuts — one clipboard implementation, two entry points.
+// Copy stays permissive (a selection can exist without a focused text
+// field); cut/paste require a focused editable so the items gray out
+// where they could not act.
+- (void)copy:(id)sender {
+    (void)sender;
+    [self emitSyntheticKeyDownWithKey:@"c" modifiers:(NativeSdkShortcutModifierPrimary | NativeSdkShortcutModifierCommand)];
+}
+
+- (void)cut:(id)sender {
+    (void)sender;
+    if (![self focusedTextAccessibilityElement]) return;
+    [self emitSyntheticKeyDownWithKey:@"x" modifiers:(NativeSdkShortcutModifierPrimary | NativeSdkShortcutModifierCommand)];
+}
+
+- (void)paste:(id)sender {
+    (void)sender;
+    if (![self focusedTextAccessibilityElement]) return;
+    [self emitSyntheticKeyDownWithKey:@"v" modifiers:(NativeSdkShortcutModifierPrimary | NativeSdkShortcutModifierCommand)];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    if (menuItem.action == @selector(cut:) || menuItem.action == @selector(paste:) || menuItem.action == @selector(selectAll:)) {
+        return [self focusedTextAccessibilityElement] != nil;
+    }
+    return YES;
+}
+
 - (void)doCommandBySelector:(SEL)selector {
     if (![self focusedTextAccessibilityElement]) return;
     if (selector == @selector(deleteBackward:)) {
@@ -5732,7 +5784,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 
 @implementation NativeSdkAppKitHost
 
-- (instancetype)initWithAppName:(NSString *)appName windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy {
+- (instancetype)initWithAppName:(NSString *)appName displayName:(NSString *)displayName version:(NSString *)version aboutDescription:(NSString *)aboutDescription hasWebContent:(BOOL)hasWebContent windowTitle:(NSString *)windowTitle bundleIdentifier:(NSString *)bundleIdentifier iconPath:(NSString *)iconPath windowLabel:(NSString *)windowLabel x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable titlebarStyle:(int)titlebarStyle showPolicy:(int)showPolicy {
     self = [super init];
     if (!self) {
         return nil;
@@ -5745,6 +5797,10 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     NativeSdkRegisterBundledFonts();
     NativeSdkLaunchLap("fonts_registered");
     self.appName = appName.length > 0 ? appName : @"native-sdk";
+    self.displayName = displayName.length > 0 ? displayName : self.appName;
+    self.appVersion = version ?: @"";
+    self.aboutDescription = aboutDescription ?: @"";
+    self.hasWebContent = hasWebContent;
     self.bundleIdentifier = bundleIdentifier.length > 0 ? bundleIdentifier : @"dev.native_sdk.app";
     self.iconPath = iconPath ?: @"";
     self.windowLabel = windowLabel.length > 0 ? windowLabel : @"main";
@@ -7285,8 +7341,30 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     return [NSURL URLWithString:[NSString stringWithFormat:@"%@/%@", base, entry]];
 }
 
+/* Ask the process services layer to show the display name for this
+ * process in the Dock tile and the app switcher. Unbundled dev binaries
+ * otherwise show their executable name there — packaged bundles get the
+ * name from Info.plist instead, so this is dev-run-only polish. The
+ * call is a private services entry resolved at runtime; when the
+ * symbols are absent the name simply stays the executable's. */
+static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
+    if (displayName.length == 0) return;
+    if ([NSBundle.mainBundle.bundlePath.pathExtension.lowercaseString isEqualToString:@"app"]) return;
+    typedef CFTypeRef (*NativeSdkCurrentASNFn)(void);
+    typedef OSStatus (*NativeSdkSetInfoItemFn)(int, CFTypeRef, CFStringRef, CFStringRef, CFDictionaryRef *);
+    NativeSdkCurrentASNFn currentASN = (NativeSdkCurrentASNFn)dlsym(RTLD_DEFAULT, "_LSGetCurrentApplicationASN");
+    NativeSdkSetInfoItemFn setInfoItem = (NativeSdkSetInfoItemFn)dlsym(RTLD_DEFAULT, "_LSSetApplicationInformationItem");
+    CFStringRef *displayNameKey = (CFStringRef *)dlsym(RTLD_DEFAULT, "_kLSDisplayNameKey");
+    if (!currentASN || !setInfoItem) return;
+    CFTypeRef asn = currentASN();
+    if (!asn) return;
+    CFStringRef key = (displayNameKey && *displayNameKey) ? *displayNameKey : CFSTR("LSDisplayName");
+    (void)setInfoItem(-2 /* current session */, asn, key, (__bridge CFStringRef)displayName, NULL);
+}
+
 - (void)configureApplication {
-    [[NSProcessInfo processInfo] setProcessName:self.appName];
+    [[NSProcessInfo processInfo] setProcessName:self.displayName];
+    NativeSdkApplyProcessDisplayName(self.displayName);
     [self buildMenuBar];
     NativeSdkLaunchLap("menu_built");
     if (self.iconPath.length > 0) {
@@ -7295,10 +7373,12 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
         // tile updates a few frames after launch instead — imperceptible,
         // and identical when the file is missing (no icon either way).
         NSString *iconPath = self.iconPath;
+        __weak NativeSdkAppKitHost *weakSelf = self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
             if (!icon) return;
             dispatch_async(dispatch_get_main_queue(), ^{
+                weakSelf.appIcon = icon;
                 [NSApp setApplicationIconImage:icon];
             });
         });
@@ -7320,36 +7400,65 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     [mainMenu addItem:editMenuItem];
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
     [editMenuItem setSubmenu:editMenu];
-    [editMenu addItem:[self menuItem:@"Undo" action:@selector(undo:) key:@"z" modifiers:NSEventModifierFlagCommand]];
-    [editMenu addItem:[self menuItem:@"Redo" action:@selector(redo:) key:@"Z" modifiers:NSEventModifierFlagCommand]];
-    [editMenu addItem:[NSMenuItem separatorItem]];
+    if (self.hasWebContent) {
+        // Undo/Redo answer only inside web content (the webview's own
+        // editing stack); the canvas text editor has no undo stack, so
+        // canvas-only apps do not show items nothing can perform.
+        [editMenu addItem:[self menuItem:@"Undo" action:@selector(undo:) key:@"z" modifiers:NSEventModifierFlagCommand]];
+        [editMenu addItem:[self menuItem:@"Redo" action:@selector(redo:) key:@"Z" modifiers:NSEventModifierFlagCommand]];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+    }
     [editMenu addItem:[self menuItem:@"Cut" action:@selector(cut:) key:@"x" modifiers:NSEventModifierFlagCommand]];
     [editMenu addItem:[self menuItem:@"Copy" action:@selector(copy:) key:@"c" modifiers:NSEventModifierFlagCommand]];
     [editMenu addItem:[self menuItem:@"Paste" action:@selector(paste:) key:@"v" modifiers:NSEventModifierFlagCommand]];
     [editMenu addItem:[self menuItem:@"Select All" action:@selector(selectAll:) key:@"a" modifiers:NSEventModifierFlagCommand]];
 
+    // The View menu carries web items only when the manifest declares
+    // web content — in a canvas-only app Reload and the inspector have
+    // no webview to act on, so the items do not exist. Enter Full
+    // Screen is real for every window shape.
     NSMenuItem *viewMenuItem = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
     [mainMenu addItem:viewMenuItem];
     NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
     [viewMenuItem setSubmenu:viewMenu];
-    [viewMenu addItem:[self menuItem:@"Reload" action:@selector(reload:) key:@"r" modifiers:NSEventModifierFlagCommand]];
-    [viewMenu addItem:[self menuItem:@"Toggle Web Inspector" action:@selector(toggleWebInspector:) key:@"i" modifiers:(NSEventModifierFlagCommand | NSEventModifierFlagOption)]];
+    if (self.hasWebContent) {
+        [viewMenu addItem:[self menuItem:@"Reload" action:@selector(reload:) key:@"r" modifiers:NSEventModifierFlagCommand]];
+        [viewMenu addItem:[self menuItem:@"Toggle Web Inspector" action:@selector(toggleWebInspector:) key:@"i" modifiers:(NSEventModifierFlagCommand | NSEventModifierFlagOption)]];
+        [viewMenu addItem:[NSMenuItem separatorItem]];
+    }
+    [viewMenu addItem:[self menuItem:@"Enter Full Screen" action:@selector(toggleFullScreen:) key:@"f" modifiers:(NSEventModifierFlagCommand | NSEventModifierFlagControl)]];
+
+    // A real Window menu: Minimize/Zoom act through the responder
+    // chain, and registering it as NSApp.windowsMenu lets the system
+    // append the open-window list (and its own tiling section) to it.
+    NSMenuItem *windowMenuItem = [[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""];
+    [mainMenu addItem:windowMenuItem];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    [windowMenuItem setSubmenu:windowMenu];
+    [windowMenu addItem:[self menuItem:@"Minimize" action:@selector(performMiniaturize:) key:@"m" modifiers:NSEventModifierFlagCommand]];
+    [windowMenu addItem:[self menuItem:@"Zoom" action:@selector(performZoom:) key:@"" modifiers:0]];
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    [windowMenu addItem:[self menuItem:@"Bring All to Front" action:@selector(arrangeInFront:) key:@"" modifiers:0]];
+    [NSApp setWindowsMenu:windowMenu];
 }
 
 - (void)addApplicationMenuToMenu:(NSMenu *)mainMenu {
-    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:self.appName action:nil keyEquivalent:@""];
+    // Every string the application menu derives — the bold menu-bar
+    // title and the About/Hide/Quit labels — reads from the one display
+    // name, never the binary name. No Settings item: the host has no
+    // settings surface to open, and a dead item is worse than none
+    // (apps add their own through custom menus when they grow one).
+    NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:self.displayName action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:self.appName];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:self.displayName];
     [appMenuItem setSubmenu:appMenu];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"About %@", self.appName] action:@selector(orderFrontStandardAboutPanel:) key:@"" modifiers:0]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"About %@", self.displayName] action:@selector(showAboutPanel:) key:@"" modifiers:0]];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Preferences..."] action:@selector(showPreferences:) key:@"," modifiers:NSEventModifierFlagCommand]];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Hide %@", self.appName] action:@selector(hide:) key:@"h" modifiers:NSEventModifierFlagCommand]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Hide %@", self.displayName] action:@selector(hide:) key:@"h" modifiers:NSEventModifierFlagCommand]];
     [appMenu addItem:[self menuItem:@"Hide Others" action:@selector(hideOtherApplications:) key:@"h" modifiers:(NSEventModifierFlagCommand | NSEventModifierFlagOption)]];
     [appMenu addItem:[self menuItem:@"Show All" action:@selector(unhideAllApplications:) key:@"" modifiers:0]];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Quit %@", self.appName] action:@selector(terminate:) key:@"q" modifiers:NSEventModifierFlagCommand]];
+    [appMenu addItem:[self menuItem:[NSString stringWithFormat:@"Quit %@", self.displayName] action:@selector(terminate:) key:@"q" modifiers:NSEventModifierFlagCommand]];
 }
 
 - (NSMenuItem *)menuItem:(NSString *)title action:(SEL)action key:(NSString *)key modifiers:(NSEventModifierFlags)modifiers {
@@ -8044,8 +8153,32 @@ static NSURL *NativeSdkAssetEntryURL(NSString *origin, NSString *entryPath) {
     self.shortcuts = items;
 }
 
-- (void)showPreferences:(id)sender {
+/* The standard About panel, populated explicitly so unbundled dev runs
+ * show the same identity a packaged bundle reads from Info.plist: the
+ * display name, the app.zon version, and the description as the
+ * credits line. The icon is NSApp.applicationIconImage, which
+ * configureApplication loads from the manifest icon. */
+- (void)showAboutPanel:(id)sender {
     (void)sender;
+    NSMutableDictionary<NSAboutPanelOptionKey, id> *options = [[NSMutableDictionary alloc] init];
+    options[NSAboutPanelOptionApplicationName] = self.displayName;
+    if (self.appIcon) {
+        options[NSAboutPanelOptionApplicationIcon] = self.appIcon;
+    }
+    if (self.appVersion.length > 0) {
+        options[NSAboutPanelOptionApplicationVersion] = self.appVersion;
+        // Suppress the parenthesized build-number line unbundled
+        // binaries have no honest value for.
+        options[NSAboutPanelOptionVersion] = @"";
+    }
+    if (self.aboutDescription.length > 0) {
+        NSDictionary<NSAttributedStringKey, id> *creditAttributes = @{
+            NSFontAttributeName : [NSFont systemFontOfSize:11],
+            NSForegroundColorAttributeName : NSColor.secondaryLabelColor,
+        };
+        options[NSAboutPanelOptionCredits] = [[NSAttributedString alloc] initWithString:self.aboutDescription attributes:creditAttributes];
+    }
+    [NSApp orderFrontStandardAboutPanelWithOptions:options];
 }
 
 - (void)reload:(id)sender {
@@ -8193,14 +8326,17 @@ static BOOL NativeSdkPolicyListMatches(NSArray<NSString *> *values, NSURL *url) 
     return NO;
 }
 
-native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
+native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *display_name, size_t display_name_len, const char *version, size_t version_len, const char *about_description, size_t about_description_len, int has_web_content, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy) {
     @autoreleasepool {
         NSString *appNameString = [[NSString alloc] initWithBytes:app_name length:app_name_len encoding:NSUTF8StringEncoding] ?: @"native-sdk";
+        NSString *displayNameString = [[NSString alloc] initWithBytes:display_name length:display_name_len encoding:NSUTF8StringEncoding] ?: @"";
+        NSString *versionString = [[NSString alloc] initWithBytes:version length:version_len encoding:NSUTF8StringEncoding] ?: @"";
+        NSString *aboutDescriptionString = [[NSString alloc] initWithBytes:about_description length:about_description_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *windowTitleString = [[NSString alloc] initWithBytes:window_title length:window_title_len encoding:NSUTF8StringEncoding] ?: appNameString;
         NSString *bundleIdString = [[NSString alloc] initWithBytes:bundle_id length:bundle_id_len encoding:NSUTF8StringEncoding] ?: @"dev.native_sdk.app";
         NSString *iconPathString = [[NSString alloc] initWithBytes:icon_path length:icon_path_len encoding:NSUTF8StringEncoding] ?: @"";
         NSString *windowLabelString = [[NSString alloc] initWithBytes:window_label length:window_label_len encoding:NSUTF8StringEncoding] ?: @"main";
-        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style showPolicy:show_policy];
+        NativeSdkAppKitHost *host = [[NativeSdkAppKitHost alloc] initWithAppName:appNameString displayName:displayNameString version:versionString aboutDescription:aboutDescriptionString hasWebContent:(has_web_content != 0) windowTitle:windowTitleString bundleIdentifier:bundleIdString iconPath:iconPathString windowLabel:windowLabelString x:x y:y width:width height:height restoreFrame:(restore_frame != 0) resizable:(resizable != 0) titlebarStyle:titlebar_style showPolicy:show_policy];
         return (__bridge_retained native_sdk_appkit_host_t *)host;
     }
 }

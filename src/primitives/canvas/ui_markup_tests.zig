@@ -1081,37 +1081,26 @@ test "import path escapes, absolute paths, and bad extensions are teaching error
     try testing.expectEqualStrings(markup.import_src_escape_message, escaped.message);
 }
 
-test "the former .zml extension keeps loading and mixes with .native imports" {
-    // The rename window: `.zml` (the format's former extension) resolves
-    // everywhere `.native` does, and imports go by the path as written, so
-    // a closure may mix both extensions while an app renames file by file.
+test "the former .zml extension is retired: not a markup extension, imports reject it" {
+    // The rename window is closed. `.zml` gets the same treatment as any
+    // other non-markup extension; the teaching error names the required
+    // extension so the fix is evident.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     try testing.expect(markup.hasMarkupExtension("view.native"));
-    try testing.expect(markup.hasMarkupExtension("view.zml"));
+    try testing.expect(!markup.hasMarkupExtension("view.zml"));
     try testing.expect(!markup.hasMarkupExtension("view.html"));
     try testing.expect(!markup.hasMarkupExtension("view.xml"));
 
-    // A .native view importing a .zml component.
-    const native_root_set = [_]markup.SourceFile{
+    const root_set = [_]markup.SourceFile{
         .{ .path = "view.native", .source = "<import src=\"parts.zml\"/>\n<row><use template=\"pill\" /></row>" },
         .{ .path = "parts.zml", .source = "<template name=\"pill\"><badge>x</badge></template>" },
     };
     var diagnostic: markup.MarkupErrorInfo = .{};
-    const native_root = try resolveSet(arena, &native_root_set, "view.native", &diagnostic);
-    try testing.expectEqual(@as(usize, 1), native_root.templates.len);
-    try testing.expectEqualStrings("parts.zml", native_root.templates[0].src_path);
-
-    // A .zml view importing a .native component.
-    const zml_root_set = [_]markup.SourceFile{
-        .{ .path = "view.zml", .source = "<import src=\"parts.native\"/>\n<row><use template=\"pill\" /></row>" },
-        .{ .path = "parts.native", .source = "<template name=\"pill\"><badge>x</badge></template>" },
-    };
-    const zml_root = try resolveSet(arena, &zml_root_set, "view.zml", &diagnostic);
-    try testing.expectEqual(@as(usize, 1), zml_root.templates.len);
-    try testing.expectEqualStrings("parts.native", zml_root.templates[0].src_path);
+    try testing.expectError(error.MarkupImport, resolveSet(arena, &root_set, "view.native", &diagnostic));
+    try testing.expectEqualStrings(markup.import_src_extension_message, diagnostic.message);
 }
 
 test "an imported file with a view root is rejected with the teaching error" {

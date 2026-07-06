@@ -2,8 +2,7 @@ const std = @import("std");
 const ui_markup = @import("ui_markup");
 const markup_lsp = @import("markup_lsp");
 
-/// Re-exported for the `native check` verb's src/ walk: true for `.native`
-/// and, during the rename window, `.zml`.
+/// Re-exported for the `native check` verb's src/ walk: true for `.native`.
 pub const hasMarkupExtension = ui_markup.hasMarkupExtension;
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
@@ -101,24 +100,25 @@ pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []con
     // for the scan).
     var embedded_basenames: ?[]const []const u8 = null;
     for (files) |file_path| {
-        // The rename window: `.zml` (the format's former extension) still
-        // checks and loads, with a nudge toward the current name. Not a
-        // warning — --strict must not fail an app that simply has not
-        // renamed yet.
-        const legacy_extension = std.mem.endsWith(u8, file_path, ui_markup.legacy_markup_extension);
+        // The format's former extension no longer loads anywhere, so
+        // checking such a file would validate something the engines will
+        // never see; the honest result is an error that names the one fix.
+        if (std.mem.endsWith(u8, file_path, ".zml")) {
+            outcome.failures += 1;
+            printRenameError(file_path);
+            continue;
+        }
         const checked = checkFile(allocator, io, file_path, .{
             .contract = if (contract_value) |*parsed| parsed else null,
             .usage = if (usage_state) |*live_usage| live_usage else null,
             .arena = arena,
         }) catch {
             outcome.failures += 1;
-            if (legacy_extension) printRenameNote(file_path);
             printOrphanHint(arena, io, file_path, &embedded_basenames);
             continue;
         };
         if (checked.had_view) views_checked += 1;
         outcome.warnings += checked.warnings;
-        if (legacy_extension) printRenameNote(file_path);
     }
     if (contract_value != null) outcome.contract_checked = true;
 
@@ -137,9 +137,9 @@ pub fn checkFiles(allocator: std.mem.Allocator, io: std.Io, files: []const []con
     return outcome;
 }
 
-/// The gentle nudge for files still on the format's former extension.
-fn printRenameNote(file_path: []const u8) void {
-    std.debug.print("{s}: note: rename to .native — .zml keeps working for now\n", .{file_path});
+/// The teaching error for files still on the format's former extension.
+fn printRenameError(file_path: []const u8) void {
+    std.debug.print("{s}: error: .zml (the format's former extension) no longer loads — rename the file to .native and update the @embedFile path\n", .{file_path});
 }
 
 /// After a markup file fails inside an app directory, say out loud when

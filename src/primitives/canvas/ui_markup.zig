@@ -1665,7 +1665,7 @@ pub const import_top_level_message = "import is only allowed at the top of the f
 pub const import_src_message = "import requires a src attribute naming a .native file, relative to this file (subdirectories allowed)";
 pub const import_attrs_message = "import takes only a src attribute";
 pub const import_children_message = "import is a leaf - it takes no children";
-pub const import_src_extension_message = "import src must name a .native file (.zml, the format's former extension, still works for now)";
+pub const import_src_extension_message = "import src must name a .native file";
 pub const import_src_absolute_message = "import src must be a relative path (resolved against the importing file) - absolute paths are rejected so markup stays portable";
 pub const import_src_separator_message = "import src uses forward slashes only";
 pub const import_src_escape_message = "import src escapes the markup root (the root view file's directory) - keep component files under it";
@@ -1738,18 +1738,11 @@ pub fn importSrcShapeError(src: []const u8) ?[]const u8 {
 /// The Native markup file extension.
 pub const markup_extension = ".native";
 
-/// The format's former extension. Files named `.zml` keep loading and
-/// importing everywhere `.native` does, so existing apps build unchanged
-/// while they rename; the checker suggests the rename. Imports resolve by
-/// the path as written, so a `.zml` file may import a `.native` file and
-/// vice versa.
-pub const legacy_markup_extension = ".zml";
-
-/// True for both accepted markup extensions (`.native` and, for now,
-/// `.zml`).
+/// True for the one markup extension. The format's former extension
+/// (`.zml`) is retired: the tools name the rename in their teaching
+/// errors, but nothing loads it.
 pub fn hasMarkupExtension(path: []const u8) bool {
-    return std.mem.endsWith(u8, path, markup_extension) or
-        std.mem.endsWith(u8, path, legacy_markup_extension);
+    return std.mem.endsWith(u8, path, markup_extension);
 }
 
 fn validateTemplate(document: MarkupDocument, node: MarkupNode, index: usize) ?MarkupErrorInfo {

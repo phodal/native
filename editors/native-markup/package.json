@@ -23,8 +23,7 @@
           "Native markup"
         ],
         "extensions": [
-          ".native",
-          ".zml"
+          ".native"
         ],
         "configuration": "./language-configuration.json"
       }

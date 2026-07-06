@@ -14,7 +14,7 @@ native build   # produce a ReleaseFast binary in zig-out/bin/
 
 | Example | Shows |
 | --- | --- |
-| `habits` | The smallest markup app: one `.zml` view, a plain-form Model/Msg/update. |
+| `habits` | The smallest markup app: one `.native` view, a plain-form Model/Msg/update. |
 | `calculator` | A complete small app: markup keypad, text-field keyboard path, chrome shortcuts, theming. |
 | `notes` | Persistence through the effects channel: debounced writes, restore on boot, dialogs, search. |
 | `kanban` | Builder-view boards with drag interactions. |

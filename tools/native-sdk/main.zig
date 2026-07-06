@@ -465,16 +465,18 @@ fn runCheck(allocator: std.mem.Allocator, io: std.Io, strict: bool) !void {
     }
 }
 
-/// Every `.native` file under the root — plus `.zml`, the format's former
-/// extension, which keeps checking during the rename window (the checker
-/// notes the rename per file).
+/// Every `.native` file under the root — plus any `.zml` stragglers, the
+/// format's former extension: they no longer load, so the walk hands them
+/// to the checker to FAIL with the rename error rather than skipping them
+/// silently (a markup file the check never mentions reads as passing).
 fn collectMarkupFiles(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8, out: *std.ArrayList([]const u8)) !void {
     var root = std.Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true }) catch return;
     defer root.close(io);
     var walker = try root.walk(allocator);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
-        if (entry.kind == .file and markup_cli.hasMarkupExtension(entry.path)) {
+        if (entry.kind != .file) continue;
+        if (markup_cli.hasMarkupExtension(entry.path) or std.mem.endsWith(u8, entry.path, ".zml")) {
             try out.append(allocator, try std.fs.path.join(allocator, &.{ root_path, entry.path }));
         }
     }

@@ -123,6 +123,24 @@ export interface AgentRunResult {
   errorDetail?: string;
 }
 
+/**
+ * View-authoring telemetry computed from the finished workspace: how much of
+ * the UI is `.native` markup vs Zig builder calls. Never a pass/fail signal.
+ * Heuristic documented in markup-share.ts.
+ */
+export interface MarkupShare {
+  /** Count of src/*.native markup files (also one subdirectory level deep). */
+  nativeFiles: number;
+  /** Total bytes across those markup files; a markup file is view code in full. */
+  nativeBytes: number;
+  /** Unioned lines covered by builder node-constructing call expressions in non-test src/*.zig. */
+  builderViewLines: number;
+  /** Actual source bytes of those lines, newlines included. */
+  builderViewBytes: number;
+  /** nativeBytes / (nativeBytes + builderViewBytes); null when no view code was found. */
+  share: number | null;
+}
+
 export interface CaseResult {
   case: string;
   /** 1-based trial number; only present when the run had --trials > 1. */
@@ -133,6 +151,8 @@ export interface CaseResult {
   startedAt: string;
   dryRun: boolean;
   agent: AgentRunResult;
+  /** Absent only when the run crashed before a workspace existed. */
+  markupShare?: MarkupShare;
   checks: CheckResult[];
   passed: boolean;
 }
@@ -161,6 +181,8 @@ export interface CaseAggregate {
   checks: CheckAggregate[];
   /** Mean of all recorded llm_judge overall scores across trials. */
   meanJudgeScore?: number;
+  /** Mean markup share across trials that measured one (see MarkupShare). */
+  meanMarkupShare?: number;
   meanTurns?: number;
   totalCostUsd?: number;
   /** Sum of per-trial durations (agent + checks); trials may overlap in wall-clock. */

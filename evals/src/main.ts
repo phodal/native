@@ -8,6 +8,7 @@ import {
   findGatewayKey,
   runAgent,
 } from "./agent.ts";
+import { computeMarkupShare, formatMarkupShare } from "./markup-share.ts";
 import { buildCli, prewarmWorkspace, scaffoldWorkspace } from "./scaffold.ts";
 import { DEFAULT_JUDGE_MODEL } from "./judge.ts";
 import { ensureSandboxAuth, packRepo, runCaseInSandbox } from "./sandbox.ts";
@@ -277,6 +278,11 @@ async function runCaseLocal(
     if (agent.errorDetail) log(`[agent] ${agent.errorDetail}`);
   }
 
+  // Telemetry, never a gate: how much of the delivered view is markup vs
+  // builder calls. In --dry-run this measures the untouched scaffold.
+  const markupShare = computeMarkupShare(workspace.path);
+  log(`[markup] ${formatMarkupShare(markupShare)}`);
+
   const checks = await runChecks(evalCase.checks, {
     workspace,
     log,
@@ -300,6 +306,7 @@ async function runCaseLocal(
     startedAt,
     dryRun: options.dryRun,
     agent,
+    markupShare,
     checks,
     passed,
   };
@@ -488,6 +495,7 @@ function aggregateCase(name: string, results: CaseResult[]): CaseAggregate {
   const checkOrder: string[] = [];
   const checkStats = new Map<string, CheckAggregate>();
   const judgeScores: number[] = [];
+  const markupShares: number[] = [];
   const turns: number[] = [];
   let totalCostUsd: number | undefined;
   let totalDurationMs = 0;
@@ -506,6 +514,7 @@ function aggregateCase(name: string, results: CaseResult[]): CaseAggregate {
       if (check.type === "llm_judge" && check.score !== undefined) judgeScores.push(check.score);
       totalDurationMs += check.durationMs;
     }
+    if (result.markupShare?.share != null) markupShares.push(result.markupShare.share);
     if (result.agent.numTurns !== undefined) turns.push(result.agent.numTurns);
     if (result.agent.totalCostUsd !== undefined) {
       totalCostUsd = (totalCostUsd ?? 0) + result.agent.totalCostUsd;
@@ -537,6 +546,7 @@ function aggregateCase(name: string, results: CaseResult[]): CaseAggregate {
     results,
   };
   if (judgeScores.length > 0) aggregate.meanJudgeScore = mean(judgeScores);
+  if (markupShares.length > 0) aggregate.meanMarkupShare = mean(markupShares);
   if (turns.length > 0) aggregate.meanTurns = mean(turns);
   if (totalCostUsd !== undefined) aggregate.totalCostUsd = totalCostUsd;
   return aggregate;
@@ -562,11 +572,13 @@ function printTrialSummary(aggregates: CaseAggregate[], options: RunnerOptions):
       .join(" "),
     judge:
       aggregate.meanJudgeScore !== undefined ? `${aggregate.meanJudgeScore.toFixed(1)}/10` : "-",
+    markup:
+      aggregate.meanMarkupShare !== undefined ? aggregate.meanMarkupShare.toFixed(2) : "-",
     turns: aggregate.meanTurns !== undefined ? aggregate.meanTurns.toFixed(1) : "-",
     cost: aggregate.totalCostUsd !== undefined ? `$${aggregate.totalCostUsd.toFixed(4)}` : "-",
     time: formatDuration(aggregate.totalDurationMs),
   }));
-  const columns = ["case", "lane", "pass rate", "checks", "judge", "turns", "cost", "time"] as const;
+  const columns = ["case", "lane", "pass rate", "checks", "judge", "markup", "turns", "cost", "time"] as const;
   const widths = columns.map((column) =>
     Math.max(column.length, ...rows.map((row) => row[column].length)),
   );
@@ -606,12 +618,13 @@ function printSummary(results: CaseResult[], options: RunnerOptions): void {
       result: result.passed ? "PASS" : "FAIL",
       checks: checkSummary,
       judge: judgeScores.join(" ") || "-",
+      markup: result.markupShare?.share != null ? result.markupShare.share.toFixed(2) : "-",
       turns: result.agent.numTurns?.toString() ?? "-",
       cost: result.agent.totalCostUsd !== undefined ? `$${result.agent.totalCostUsd.toFixed(4)}` : "-",
       time: formatDuration(result.agent.durationMs + result.checks.reduce((sum, check) => sum + check.durationMs, 0)),
     };
   });
-  const columns = ["case", "lane", "result", "checks", "judge", "turns", "cost", "time"] as const;
+  const columns = ["case", "lane", "result", "checks", "judge", "markup", "turns", "cost", "time"] as const;
   const widths = columns.map((column) =>
     Math.max(column.length, ...rows.map((row) => row[column].length)),
   );

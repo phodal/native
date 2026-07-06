@@ -1,10 +1,36 @@
 # Native SDK
 
-Cross-platform native development inspired by the web. Views are declarative Native markup, styling is a token system, logic is Zig — rendered by Native SDK's own engine, not a browser. Tiny binaries. Minimal memory. Instant rebuilds, with hot-reloading views.
+**Native SDK is the complete toolkit for building native desktop and mobile applications.**
 
-Native SDK apps are native-rendered by default: a retained widget tree with flex layout, typed message dispatch, accessibility, and a built-in component catalog, drawn through the platform's GPU surface. WebViews remain a first-class coexisting surface — use one when a feature should stay web-shaped (browser surfaces, rich previews, embedded web apps, third-party content), or build the whole app as a WebView shell with the frontend framework you already use. Native, web, or both.
+Native SDK exists because expressive UI and native performance should not be competing goals. Developers often choose web-based runtimes because they offer freedom, speed and control over the product experience. But that freedom often comes with a heavy runtime. Native SDK keeps the expressive authoring model and replaces the runtime with native rendering.
 
-## Quick Start
+Views are declarative markup in `.native` files, logic is plain Zig, and Native SDK's own engine draws every pixel into real OS windows — no browser, no WebView, no interpreter in the binary.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/soundboard-dark.webp">
+  <img src=".github/assets/soundboard-light.webp" alt="The Soundboard example app rendered by the Native SDK engine: a music library with album cover art, search, and a playback bar" width="100%">
+</picture>
+
+<table>
+  <tr>
+    <td width="70%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset=".github/assets/notes-dark.webp">
+        <img src=".github/assets/notes-light.webp" alt="The Notes example app rendered by the Native SDK engine: a three-pane notes manager with folders, a note list, and an open note" width="640">
+      </picture>
+    </td>
+    <td width="30%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset=".github/assets/calculator-dark.webp">
+        <img src=".github/assets/calculator-light.webp" alt="The Calculator example app rendered by the Native SDK engine: a finished calculation above a full keypad" width="270">
+      </picture>
+    </td>
+  </tr>
+</table>
+
+<sub>Soundboard, Notes, and Calculator from <a href="./examples">examples/</a> — every pixel drawn by the Native SDK engine, captured through its deterministic reference renderer. The images follow your color scheme.</sub>
+
+## Quick start
 
 Install the CLI:
 
@@ -15,133 +41,92 @@ npm install -g @native-sdk/cli
 Create and run an app:
 
 ```bash
-native init my_app            # native-rendered app (default)
-native init my_app --frontend next   # or a WebView app with a web frontend
+native init my_app
 cd my_app
 native dev
 ```
 
-The default app is native-rendered: a declarative `.native` view plus Zig logic, with hot reload of the view while the app runs. With a web frontend selected, the first run installs frontend dependencies and opens a desktop window rendering your WebView content.
+A native window opens with a working counter. The whole view is `src/app.native` — a markup file that binds values and dispatches messages:
 
-Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
+```html
+<column gap="12" padding="16">
+  <row gap="8" main="center" cross="center" grow="1">
+    <button variant="secondary" on-press="decrement">-</button>
+    <text>{count}</text>
+    <button variant="primary" on-press="increment">+</button>
+  </row>
+  <status-bar>count: {count}</status-bar>
+</column>
+```
 
-## Why Native SDK
-
-### Model like HTML, logic in a real language
-
-A view is a `.native` file: elements, flex layout, `{bindings}`, and typed message dispatch — the composability of the web with a deliberately closed grammar. Logic is plain Zig: a `Model` struct, a `Msg` union, and an `update` function. The markup compiles at comptime, so release builds carry no parser and a typo in a view is a compile error with a line and column.
-
-### Edit the view while the app runs
-
-In dev builds the `.native` file is watched: save it and the window updates in place, keeping your model state, selection, and widget identity. No JS engine, no bundler.
-
-### Built to be verified
-
-Deterministic rendering, a headless automation harness (drive widgets, read accessibility snapshots, take reference-renderer screenshots), and structural widget ids that stay stable across rebuilds make Native SDK apps checkable by tests and AI agents without a human watching the screen.
-
-### Tiny and fast
-
-No browser runtime in a native-rendered app and no GC in the loop: layout, paint, and dispatch are Zig. Binaries stay small, rebuilds are quick, and WebView-shell apps keep using the system engine (WKWebView on macOS, WebKitGTK on Linux) or pinned Chromium via CEF.
-
-### Web where it fits
-
-WebViews are a composition tool, not the app model. Mix native-rendered surfaces, real OS chrome, and WebViews in one window with one command routing and security policy — the WebView is untrusted by default, and every native capability is opt-in and policy controlled.
-
-### OS power without heavy glue
-
-Zig calls C directly, which keeps platform SDKs, native libraries, codecs, and local system integrations within reach.
-
-## Status
-
-The Native SDK is pre-release. Native-rendered apps run on macOS 11+ (Metal) and Linux (software presentation); Windows currently covers WebView-shell apps and native window chrome, with canvas support planned. WebView engines: system WebView everywhere, Chromium/CEF on macOS and Linux.
-
-## Core Concepts
-
-`App` is the small Zig object that describes your application: name, WebView source, lifecycle hooks, an optional native scene, and native services.
-
-`Runtime` owns the event loop, windows, native views, WebViews, command routing, bridge dispatch, automation hooks, tracing, and platform services.
-
-`ShellConfig` declares native-first windows and view trees: toolbars, sidebars, status bars, split panes, stacks, controls, WebViews, GPU surfaces, and future surface kinds.
-
-`canvas.builtin_component_kinds` declares Native SDK's built-in component catalog. The defaults follow the house component design language, use Geist and Geist Mono typography, and render through Native SDK's retained canvas/GPU surface.
-
-`WebViewSource` tells the runtime what a WebView should load: inline HTML, a URL, or packaged frontend assets served from a local app origin.
-
-`app.zon` is the app manifest. It declares app metadata, icons, windows, native shell views, frontend assets, web engine selection, security policy, bridge permissions, and packaging inputs.
-
-`window.zero.*` is the guarded JavaScript-to-native bridge for commands, windows, views, WebViews, dialogs, clipboard, credentials, and OS services. Calls are size-limited, origin checked, permission checked, and routed only to allowed handlers.
-
-## Configuration
-
-Most project-level behavior lives in `app.zon`:
+All logic lives in `src/main.zig`: a `Model` struct, a `Msg` union, and one `update` function — the only place state changes:
 
 ```zig
-.{
-    .id = "com.example.my-app",
-    .name = "my-app",
-    .display_name = "My App",
-    .version = "0.1.0",
-    .web_engine = "system",
-    .permissions = .{},
-    .capabilities = .{ "webview" },
-    .security = .{
-        .navigation = .{
-            .allowed_origins = .{ "zero://app", "http://127.0.0.1:5173" },
-        },
-    },
-    .windows = .{
-        .{ .label = "main", .title = "My App", .width = 960, .height = 640 },
-    },
+pub fn update(model: *Model, msg: Msg) void {
+    switch (msg) {
+        .increment => model.count += 1,
+        .decrement => model.count -= 1,
+        .reset => model.count = 0,
+    }
 }
 ```
 
-Use `.web_engine = "system"` for the platform WebView. On supported macOS builds, use `.web_engine = "chromium"` with a `.cef` config when you want to bundle Chromium.
+Edit `src/app.native` while `native dev` runs and the window updates in place, keeping your state. `native check` validates every view in milliseconds without building, `native test` runs full-loop UI tests headlessly, and `native build` produces an optimized release binary.
+
+Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
+
+## What you get
+
+**Beautiful by default** — Great software should not start from a blank slate. The built-in component catalog — buttons, tabs, text fields, dialogs, charts, virtual lists, and more — ships with considered typography, spacing, and color, so the app `native init` scaffolds already looks intentional the first time its window opens.
+
+**Customizable by design** — Your app should have its own identity, not ours. Styling is design tokens end to end: color, radius, and typography resolve by name, re-resolve live when the theme changes, and can be replaced wholesale — `examples/soundboard` and `examples/deck` are the same music player separated only by tokens and a chrome pass.
+
+**Native from the start** — Every interface is rendered without a browser or WebView. The engine draws into real OS windows while scroll physics, menus, dialogs, the tray, and text input stay with the operating system, and markup compiles into the executable at build time, so a release build carries no parser or interpreter — the scaffolded counter app builds to a single binary a few megabytes small.
+
+**Predictable state** — State changes should be explicit, inspectable and easy to reason about. Events produce messages, messages update state, and state renders the interface; markup can bind and dispatch but never mutate. The loop is so deterministic that `native automate record` journals a session and `replay` reproduces it headlessly, verified frame by frame against state fingerprints.
+
+**Simple authoring** — Interfaces should be easy to read, easy to write and easy to generate. Views are elements, flex layout, `{bindings}`, and expressions like `selected="{f == filter}"`, and `native check` validates every view against your app's actual `Model` and `Msg` — bindings, iterables, message tags — in milliseconds, with `file:line:column` errors that teach.
+
+**AI is part of the workflow** — Native SDK is designed for a world where humans and AI agents build software together. Every app embeds an automation server, so any agent can read accessibility snapshots, drive widgets, assert on live state, and take deterministic screenshots of the running window; accessibility findings are machine-checked in `native check`; and the CLI ships the agent skills that teach all of it (`native skills list`).
+
+## Examples
+
+The apps pictured above live in [examples/](./examples), most as zero-config projects — `app.zon` plus `src/`, no build files — run straight from their directory with `native dev`.
+
+| Example | What it shows |
+| --- | --- |
+| [`calculator`](./examples/calculator) | A complete small app: markup keypad, keyboard input, chrome shortcuts, theming. |
+| [`notes`](./examples/notes) | Persistence through the effects channel: debounced writes, restore on boot, dialogs, search. |
+| [`soundboard`](./examples/soundboard) | Album grid with decoded cover art, context menus, timers, and a custom theme. |
+| [`deck`](./examples/deck) | The soundboard player rebuilt as a dense hardware chassis: two windows, same widgets, different tokens. |
+| [`feed`](./examples/feed) | A 100,000-row list, virtualized with runtime-owned scrolling. |
+
+The full catalog in [examples/README.md](./examples/README.md) also covers guarded OS capabilities, GPU surfaces, WebView composition, web-frontend shells, and the iOS/Android embed hosts.
+
+## Platforms
+
+macOS is the primary development platform and carries the deepest support: Metal presentation, OS scroll physics, native context menus, app menus, tray, and dialogs. Linux runs the full showcase through the deterministic software renderer in real windows, with pointer, keyboard, scroll, IME composition, and HiDPI; Windows runs on a Win32 host with IME composition and is exercised in CI, including real input injection. iOS is simulator-proven through the embed library, Android cross-compiles with the full embed ABI, and WebView surfaces coexist on every desktop platform. The [platform support matrix](https://zero-native.dev/platform-support) documents exactly what each host supports today.
 
 ## Documentation
 
 The full documentation is at [zero-native.dev](https://zero-native.dev).
 
-- [Quick Start](https://zero-native.dev/quick-start)
-- [Web Engines](https://zero-native.dev/web-engines)
-- [App Model](https://zero-native.dev/app-model)
-- [Native Surfaces](https://zero-native.dev/native-surfaces)
-- [Native Controls](https://zero-native.dev/native-controls)
-- [Built-in Components](https://zero-native.dev/built-in-components)
-- [Commands](https://zero-native.dev/commands)
-- [Capabilities](https://zero-native.dev/capabilities)
-- [Platform Support](https://zero-native.dev/platform-support)
-- [Bridge](https://zero-native.dev/bridge)
-- [Security](https://zero-native.dev/security)
-- [Packaging](https://zero-native.dev/packaging)
+- [Quick Start](https://zero-native.dev/quick-start) — install to a running, tested app
+- [Philosophy](https://zero-native.dev/philosophy) — the six principles behind the toolkit
+- [App Model](https://zero-native.dev/app-model) — the model/message/update loop, wiring, and hot reload
+- [Native UI](https://zero-native.dev/native-ui) — every element, attribute, and pattern in the markup
+- [Components](https://zero-native.dev/components) — the component catalog
+- [State & Data Flow](https://zero-native.dev/state) — derive-don't-store, bindings, and text editing
+- [Testing](https://zero-native.dev/testing) — full-loop UI tests, headless on any machine
+- [Automation](https://zero-native.dev/automation) — snapshots, widget driving, record/replay, screenshots
+- [Capabilities](https://zero-native.dev/capabilities) — guarded OS services: notifications, clipboard, dialogs, credentials
+- [Packaging](https://zero-native.dev/packaging) — from binary to distributable app
+- [Platform Support](https://zero-native.dev/platform-support) — what each host supports today
 
-## Examples
+## Contributing
 
-Framework-specific starter examples live in `examples/`:
+Native SDK is pre-1.0: APIs still move, and the toolkit is evolving quickly. Bug reports and focused pull requests are welcome — for larger changes, open an issue first so the design can be discussed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development setup and local checks.
 
-- `examples/next`
-- `examples/react`
-- `examples/svelte`
-- `examples/vue`
+## License
 
-Each example is a complete Native SDK app with `app.zon`, a Zig shell, and a minimal frontend project. Run one with `zig build run` from its directory.
-
-Native-first examples are available too:
-
-- `examples/command-app` - shared command routing across native controls, menus, shortcuts, tray, and bridge calls
-- `examples/native-shell` - native toolbar/sidebar/statusbar chrome around WebView content
-- `examples/native-panels` - split/stack native panel composition with WebView content
-- `examples/gpu-surface` - Metal-backed GPU surface composed beside native controls and WebView content
-- `examples/gpu-components` - built-in component lab rendered through the retained GPU canvas
-- `examples/capabilities` - guarded OS services such as notifications, clipboard, dialogs, credentials, file drops, and recent documents
-- `examples/mobile-shell` - shared metadata for the iOS and Android native shell hosts
-
-Most native-rendered showcase apps (`examples/calculator`, `examples/notes`, `examples/kanban`, and more — see [examples/README.md](./examples/README.md)) are zero-config: `app.zon` + `src/` and no build files, driven entirely by `native dev|test|build`.
-
-Mobile embedding examples are available too:
-
-- `examples/ios`
-- `examples/android`
-
-These show how an iOS or Android host app links the Native SDK C ABI from `libnative-sdk.a`.
-
-For local framework development, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+[Apache-2.0](./LICENSE)

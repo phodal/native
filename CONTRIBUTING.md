@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve the Native SDK. This guide is for maintainers and contributors working on the framework repository itself.
+Thanks for helping improve the Native SDK. This guide is for maintainers and contributors working on the toolkit repository itself.
 
 For app author documentation, start at [zero-native.dev](https://zero-native.dev).
 
@@ -14,7 +14,7 @@ For app author documentation, start at [zero-native.dev](https://zero-native.dev
 
 ## Local Checks
 
-Run the framework tests:
+Run the toolkit tests:
 
 ```bash
 zig build test

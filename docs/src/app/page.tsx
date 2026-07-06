@@ -14,6 +14,11 @@ const installCommands = [`npm install -g ${npmCli}`];
 
 const markupSample = `<column gap="12" padding="16">
   <row gap="8" cross="center">
+    <text grow="1">Inbox</text>
+    <button variant="ghost" disabled="{doneCount == 0}"
+            on-press="clear_done">Clear done</button>
+  </row>
+  <row gap="8" cross="center">
     <text-field text="{draft}" placeholder="New task…"
                 on-input="draft_edit" on-submit="add" grow="1" />
     <button variant="primary" on-press="add">Add task</button>
@@ -28,7 +33,8 @@ const markupSample = `<column gap="12" padding="16">
     <column gap="2">
       <for each="visible" key="id" as="t">
         <row gap="8" padding="6" cross="center">
-          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}" />
+          <checkbox checked="{t.done}" on-toggle="toggle:{t.id}"
+                    label="Done" />
           <text grow="1">{t.title}</text>
         </row>
       </for>
@@ -48,8 +54,12 @@ const zigSample = `pub const Msg = union(enum) {
 pub fn update(model: *Model, msg: Msg) void {
     switch (msg) {
         .add => {
-            model.addTask(std.mem.trim(u8, model.draft(), " "));
-            model.draft_buffer.clear();
+            if (model.draftEmpty()) {
+                model.addGeneratedTask();
+            } else {
+                model.addTask(std.mem.trim(u8, model.draft(), " "));
+                model.draft_buffer.clear();
+            }
         },
         .toggle => |id| if (model.taskById(id)) |task| {
             task.done = !task.done;
@@ -158,23 +168,24 @@ function InlineCode({ children }: { children: React.ReactNode }) {
 // ----------------------------------------------------------------- data
 
 // Verified in this repository: sizes are `ls -lh` of
-// `zig build -Doptimize=ReleaseFast` outputs on macOS arm64; line count is
-// the app's src/ markup + Zig, tests excluded.
+// `zig build -Doptimize=ReleaseFast` outputs on macOS arm64; launch is
+// process spawn to first presented frame, warm, via the engine's
+// launch-timing channel (NATIVE_SDK_WINDOW_TIMING).
 const stats = [
   {
-    value: "2.7 MB",
-    label: "The whole calculator — engine, widgets, renderer — as one static release binary.",
+    value: "<6 MB",
+    label: "Every app on this page — engine, widgets, renderer — as one static release binary.",
+  },
+  {
+    value: "~100 ms",
+    label: "From launch to the first frame on the glass, measured warm on macOS arm64.",
   },
   {
     value: "0",
-    label: "Embedded browsers, script engines, or interpreters inside that binary.",
+    label: "Embedded browsers, script engines, or interpreters inside those binaries.",
   },
   {
-    value: "959",
-    label: "Lines of markup and logic for that entire calculator app.",
-  },
-  {
-    value: "6",
+    value: "7",
     label: "Real apps in examples/, screenshotted on this page from actual builds.",
   },
 ];
@@ -318,7 +329,7 @@ export default function HomePage() {
           </div>
           <p className="mt-10 text-center copy-13 text-gray-900">
             Measured in this repository: <code>zig build -Doptimize=ReleaseFast</code> on macOS
-            arm64; line counts are app source with tests excluded.
+            arm64; launch is process spawn to first presented frame.
           </p>
         </div>
       </section>
@@ -337,11 +348,13 @@ export default function HomePage() {
           </SectionLede>
           {/* The proof: soundboard and deck are the same player — same
               library, transport, queue, and search — separated only by
-              design tokens and a chrome pass. Soundboard is a full app
-              window; deck is a fixed 460x180 chassis shown at natural
-              scale, so the size contrast is part of the point. Soundboard
-              follows the site theme; deck is dark by design, so it never
-              swaps. */}
+              design tokens and a chrome pass. Soundboard runs in a real
+              titled window, so the window frame is honest; deck is a
+              chromeless fixed 460x180 chassis, so it gets no invented
+              chrome — its own silhouette sits on the page background at
+              natural scale, and the size contrast is part of the point.
+              Soundboard follows the site theme; deck is dark by design,
+              so it never swaps. */}
           <figure className="mt-12">
             <div className="grid gap-6 lg:grid-cols-2">
               <AppWindow title="examples/soundboard">
@@ -359,18 +372,16 @@ export default function HomePage() {
                   />
                 ))}
               </AppWindow>
-              <AppWindow title="examples/deck" className="flex flex-col">
-                <div className="flex flex-1 items-center justify-center px-6 py-10 sm:px-10">
-                  <Image
-                    src="/home/deck-dark.webp"
-                    alt="The Deck example app rendered by the Native SDK engine: the same music player rebuilt as a fixed 460 by 180 hardware chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design"
-                    width={920}
-                    height={360}
-                    quality={90}
-                    className="block h-auto w-full max-w-[460px]"
-                  />
-                </div>
-              </AppWindow>
+              <div className="flex items-center justify-center px-6 py-10 sm:px-10">
+                <Image
+                  src="/home/deck-dark.webp"
+                  alt="The Deck example app rendered by the Native SDK engine: the same music player rebuilt as a fixed 460 by 180 chromeless hardware chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design"
+                  width={920}
+                  height={360}
+                  quality={90}
+                  className="block h-auto w-full max-w-[460px]"
+                />
+              </div>
             </div>
             <figcaption className="mx-auto mt-6 max-w-3xl text-center">
               <p className="copy-16 text-gray-1000">
@@ -436,7 +447,7 @@ export default function HomePage() {
       <section className="border-t border-gray-alpha-400" id="showcase">
         <div className="mx-auto max-w-[1200px] px-6 py-16 sm:py-24">
           <SectionLabel>Built for modern apps</SectionLabel>
-          <SectionTitle>Six real apps, in the repo</SectionTitle>
+          <SectionTitle>Seven real apps, in the repo</SectionTitle>
           <SectionLede>
             Dashboards, editors, tools, internal apps, creative software — every screenshot is
             rendered by {siteName}’s deterministic engine from the example apps in{" "}
@@ -554,12 +565,13 @@ export default function HomePage() {
             <Terminal title="examples — release builds">
               <Prompt>zig build -Doptimize=ReleaseFast</Prompt>
               <Prompt>ls -lh */zig-out/bin</Prompt>
-              <Muted>2.7M calculator</Muted>
-              <Muted>3.2M deck</Muted>
-              <Muted>2.6M markdown-viewer</Muted>
-              <Muted>2.5M notes</Muted>
-              <Muted>4.6M soundboard</Muted>
-              <Muted>2.7M system-monitor</Muted>
+              <Muted>3.6M calculator</Muted>
+              <Muted>4.2M deck</Muted>
+              <Muted>3.6M feed</Muted>
+              <Muted>3.5M markdown-viewer</Muted>
+              <Muted>3.5M notes</Muted>
+              <Muted>5.7M soundboard</Muted>
+              <Muted>3.7M system-monitor</Muted>
             </Terminal>
           </div>
         </div>

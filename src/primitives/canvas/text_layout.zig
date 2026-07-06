@@ -113,31 +113,86 @@ pub fn layoutTextRun(text: DrawText, options: TextLayoutOptions, output: []TextL
 pub fn layoutTextRunPlan(text: DrawText, options: TextLayoutOptions, output: []TextLine) Error!TextLayoutPlan {
     var len: usize = 0;
     var bounds: ?geometry.RectF = null;
-    if (text.glyphs.len > 0) {
-        try appendGlyphTextLines(output, &len, text, options, &bounds);
-        return .{
-            .key = textLayoutKey(text, options),
-            .layout = .{ .lines = output[0..len], .bounds = bounds },
-        };
-    }
-
-    var start: usize = 0;
-    while (start <= text.text.len and text.text.len > 0) {
-        const end = nextTextLineEnd(text.text, start, text.font_id, text.size, options);
-        try appendTextLine(output, &len, text, start, end - start, start, end - start, lineHeight(text, options), options, &bounds);
-        if (end >= text.text.len) break;
-        start = end;
-        if (start < text.text.len and text.text[start] == '\n') start += 1;
-        while (options.wrap == .word and start < text.text.len and isTextBreakByte(text.text[start])) start += 1;
-    }
-    if (text.text.len == 0) {
-        try appendTextLine(output, &len, text, 0, 0, 0, 0, lineHeight(text, options), options, &bounds);
+    var lines = TextLineIterator.init(text, options);
+    while (lines.next()) |line| {
+        if (len >= output.len) return error.TextLayoutLineListFull;
+        output[len] = line;
+        len += 1;
+        bounds = unionOptionalBounds(bounds, line.bounds);
     }
     return .{
         .key = textLayoutKey(text, options),
         .layout = .{ .lines = output[0..len], .bounds = bounds },
     };
 }
+
+/// Streams a run's lines one at a time — the same lines `layoutTextRun`
+/// materializes, without a line buffer or a line-count cap. Point/offset
+/// queries (caret rect, selection rects, hit testing) walk this instead
+/// of materializing the layout: an editable widget's text is bounded by
+/// its own byte budget, not by any fixed per-query line list, so a query
+/// against a long document must not be able to fail on line count.
+pub const TextLineIterator = struct {
+    text: DrawText,
+    options: TextLayoutOptions,
+    line_height_value: f32,
+    /// Line index so far; each line's baseline derives from it.
+    index: usize = 0,
+    /// Byte cursor (plain runs) or glyph cursor (glyph runs).
+    cursor: usize = 0,
+    finished: bool = false,
+
+    pub fn init(text: DrawText, options: TextLayoutOptions) TextLineIterator {
+        return .{ .text = text, .options = options, .line_height_value = lineHeight(text, options) };
+    }
+
+    pub fn next(self: *TextLineIterator) ?TextLine {
+        if (self.finished) return null;
+        if (self.text.glyphs.len > 0) return self.nextGlyphLine();
+        return self.nextPlainLine();
+    }
+
+    fn nextPlainLine(self: *TextLineIterator) ?TextLine {
+        const bytes = self.text.text;
+        if (bytes.len == 0) {
+            self.finished = true;
+            return self.emit(0, 0, 0, 0);
+        }
+        const start = self.cursor;
+        const end = nextTextLineEnd(bytes, start, self.text.font_id, self.text.size, self.options);
+        if (end >= bytes.len) {
+            self.finished = true;
+        } else {
+            var next_start = end;
+            if (next_start < bytes.len and bytes[next_start] == '\n') next_start += 1;
+            while (self.options.wrap == .word and next_start < bytes.len and isTextBreakByte(bytes[next_start])) next_start += 1;
+            self.cursor = next_start;
+        }
+        return self.emit(start, end - start, start, end - start);
+    }
+
+    fn nextGlyphLine(self: *TextLineIterator) ?TextLine {
+        var glyph_start = self.cursor;
+        while (self.options.wrap == .word and glyph_start < self.text.glyphs.len and isGlyphTextBreak(self.text, glyph_start)) glyph_start += 1;
+        if (glyph_start >= self.text.glyphs.len) {
+            self.finished = true;
+            // A run whose glyphs are all breaks still lays out as one
+            // empty line (the buffered path's fallback emission).
+            if (self.index == 0) return self.emit(0, 0, 0, 0);
+            return null;
+        }
+        const glyph_end = nextGlyphLineEnd(self.text, glyph_start, self.options);
+        const range = textRangeForGlyphRangeWithGlyphs(self.text.text, self.text.glyphs, glyph_start, glyph_end - glyph_start);
+        self.cursor = glyph_end;
+        return self.emit(range.start, range.byteLen(self.text.text.len), glyph_start, glyph_end - glyph_start);
+    }
+
+    fn emit(self: *TextLineIterator, text_start: usize, text_len: usize, glyph_start: usize, glyph_len: usize) TextLine {
+        const line = textLineAt(self.text, text_start, text_len, glyph_start, glyph_len, self.index, self.line_height_value, self.options);
+        self.index += 1;
+        return line;
+    }
+};
 
 /// Conservative ink allowance around a text run's metric box. Command
 /// bounds must cover everything a command may ink (stroke bounds inflate
@@ -196,61 +251,128 @@ fn metricTextBounds(value: DrawText) ?geometry.RectF {
     );
 }
 
-pub fn layoutTextCaretRect(text: DrawText, options: TextLayoutOptions, offset: usize, lines: []TextLine) Error!?geometry.RectF {
-    const layout = try layoutTextRun(text, options, lines);
-    return textCaretRectForLayout(text, layout, offset);
+/// Caret rectangle for `offset`, streaming the run's lines — no line
+/// buffer and no line-count failure mode: the caret of an arbitrarily
+/// long document always resolves.
+pub fn layoutTextCaretRect(text: DrawText, options: TextLayoutOptions, offset: usize) ?geometry.RectF {
+    const line = streamTextLineForOffset(text, options, snapTextOffset(text.text, offset)) orelse return null;
+    return textCaretRectForLine(text, line, offset);
 }
 
 pub fn textCaretRectForLayout(text: DrawText, layout: TextLayout, offset: usize) ?geometry.RectF {
     const line = textLineForOffset(layout, text.text.len, snapTextOffset(text.text, offset)) orelse return null;
+    return textCaretRectForLine(text, line, offset);
+}
+
+fn textCaretRectForLine(text: DrawText, line: TextLine, offset: usize) geometry.RectF {
     const x = textLineCaretX(text, line, offset);
     return geometry.RectF.init(x, line.bounds.y, 1, @max(1, line.bounds.height));
 }
 
+/// Selection rectangles for `range`, streaming the run's lines. A range
+/// spanning more lines than `output` holds folds the overflow into the
+/// last rectangle (a bounding highlight) instead of failing: selection
+/// drawing degrades, it never errors — select-all over a long document
+/// is an ordinary render, not a capacity fault.
 pub fn layoutTextSelectionRects(
     text: DrawText,
     options: TextLayoutOptions,
     range: TextRange,
-    lines: []TextLine,
     output: []TextSelectionRect,
-) Error![]const TextSelectionRect {
-    const layout = try layoutTextRun(text, options, lines);
-    return textSelectionRectsForLayout(text, layout, range, output);
-}
-
-pub fn textSelectionRectsForLayout(text: DrawText, layout: TextLayout, range: TextRange, output: []TextSelectionRect) Error![]const TextSelectionRect {
+) []const TextSelectionRect {
     const normalized = snapTextRange(text.text, range);
     if (normalized.isCollapsed(text.text.len)) return output[0..0];
 
-    var len: usize = 0;
-    for (layout.lines) |line| {
-        const line_range = textLineRange(text, line);
-        const start = @max(normalized.start, line_range.start);
-        const end = @min(normalized.end, line_range.end);
-        if (start >= end) continue;
-        if (len >= output.len) return error.TextSelectionRectListFull;
-
-        const x0 = textLineCaretX(text, line, start);
-        const x1 = textLineCaretX(text, line, end);
-        const left = @min(x0, x1);
-        const right = @max(x0, x1);
-        output[len] = .{
-            .range = TextRange.init(start, end),
-            .rect = geometry.RectF.init(left, line.bounds.y, @max(1, right - left), @max(1, line.bounds.height)),
-        };
-        len += 1;
+    var accumulator = TextSelectionRectAccumulator{ .output = output };
+    var lines = TextLineIterator.init(text, options);
+    while (lines.next()) |line| {
+        accumulateTextSelectionRect(&accumulator, text, line, normalized);
     }
-    return output[0..len];
+    return accumulator.slice();
 }
 
-pub fn layoutTextOffsetForPoint(text: DrawText, options: TextLayoutOptions, point: geometry.PointF, lines: []TextLine) Error!?usize {
-    const layout = try layoutTextRun(text, options, lines);
-    return textOffsetForLayoutPoint(text, layout, point);
+pub fn textSelectionRectsForLayout(text: DrawText, layout: TextLayout, range: TextRange, output: []TextSelectionRect) []const TextSelectionRect {
+    const normalized = snapTextRange(text.text, range);
+    if (normalized.isCollapsed(text.text.len)) return output[0..0];
+
+    var accumulator = TextSelectionRectAccumulator{ .output = output };
+    for (layout.lines) |line| {
+        accumulateTextSelectionRect(&accumulator, text, line, normalized);
+    }
+    return accumulator.slice();
+}
+
+const TextSelectionRectAccumulator = struct {
+    output: []TextSelectionRect,
+    len: usize = 0,
+
+    fn add(self: *TextSelectionRectAccumulator, range: TextRange, rect: geometry.RectF) void {
+        if (self.output.len == 0) return;
+        if (self.len == self.output.len) {
+            // The caller's rect budget is full: widen the last rect to
+            // cover this line too, so the highlight stays a truthful
+            // bound over the whole range instead of erroring out.
+            const last = &self.output[self.len - 1];
+            last.range = TextRange.init(last.range.start, range.end);
+            last.rect = last.rect.unionWith(rect);
+            return;
+        }
+        self.output[self.len] = .{ .range = range, .rect = rect };
+        self.len += 1;
+    }
+
+    fn slice(self: *const TextSelectionRectAccumulator) []const TextSelectionRect {
+        return self.output[0..self.len];
+    }
+};
+
+fn accumulateTextSelectionRect(accumulator: *TextSelectionRectAccumulator, text: DrawText, line: TextLine, normalized: TextRange) void {
+    const line_range = textLineRange(text, line);
+    const start = @max(normalized.start, line_range.start);
+    const end = @min(normalized.end, line_range.end);
+    if (start >= end) return;
+
+    const x0 = textLineCaretX(text, line, start);
+    const x1 = textLineCaretX(text, line, end);
+    const left = @min(x0, x1);
+    const right = @max(x0, x1);
+    accumulator.add(
+        TextRange.init(start, end),
+        geometry.RectF.init(left, line.bounds.y, @max(1, right - left), @max(1, line.bounds.height)),
+    );
+}
+
+/// Byte offset for a point, streaming the run's lines — hit testing a
+/// click in a long document has no line-count failure mode.
+pub fn layoutTextOffsetForPoint(text: DrawText, options: TextLayoutOptions, point: geometry.PointF) ?usize {
+    var lines = TextLineIterator.init(text, options);
+    var candidate: ?TextLine = null;
+    while (lines.next()) |line| {
+        candidate = line;
+        if (point.y < line.bounds.y + line.bounds.height) break;
+    }
+    const line = candidate orelse return null;
+    return textLineOffsetForX(text, line, point.x);
 }
 
 pub fn textOffsetForLayoutPoint(text: DrawText, layout: TextLayout, point: geometry.PointF) ?usize {
     const line = textLineForPoint(layout, point) orelse return null;
     return textLineOffsetForX(text, line, point.x);
+}
+
+/// Streaming twin of `textLineForOffset`: the line containing
+/// `offset` (already snapped), with the same neighbor semantics.
+fn streamTextLineForOffset(text: DrawText, options: TextLayoutOptions, offset: usize) ?TextLine {
+    const normalized = @min(offset, text.text.len);
+    var lines = TextLineIterator.init(text, options);
+    var previous: ?TextLine = null;
+    while (lines.next()) |line| {
+        const range = textLineRangeForLength(text.text.len, line);
+        if (normalized < range.start) return previous orelse line;
+        if (normalized <= range.end) return line;
+        previous = line;
+    }
+    return previous;
 }
 
 pub fn nextTextLineEnd(text: []const u8, start: usize, font_id: FontId, size: f32, options: TextLayoutOptions) usize {
@@ -278,22 +400,6 @@ pub fn nextTextLineEnd(text: []const u8, start: usize, font_id: FontId, size: f3
         index = next_index;
     }
     return text.len;
-}
-
-fn appendGlyphTextLines(output: []TextLine, len: *usize, text: DrawText, options: TextLayoutOptions, bounds: *?geometry.RectF) Error!void {
-    const height = lineHeight(text, options);
-    const initial_len = len.*;
-    var glyph_start: usize = 0;
-    while (glyph_start < text.glyphs.len) {
-        while (options.wrap == .word and glyph_start < text.glyphs.len and isGlyphTextBreak(text, glyph_start)) glyph_start += 1;
-        if (glyph_start >= text.glyphs.len) break;
-
-        const glyph_end = nextGlyphLineEnd(text, glyph_start, options);
-        const range = textRangeForGlyphRangeWithGlyphs(text.text, text.glyphs, glyph_start, glyph_end - glyph_start);
-        try appendTextLine(output, len, text, range.start, range.byteLen(text.text.len), glyph_start, glyph_end - glyph_start, height, options, bounds);
-        glyph_start = glyph_end;
-    }
-    if (len.* == initial_len) try appendTextLine(output, len, text, 0, 0, 0, 0, height, options, bounds);
 }
 
 fn nextGlyphLineEnd(text: DrawText, start: usize, options: TextLayoutOptions) usize {
@@ -337,25 +443,22 @@ fn trimTrailingTextBreak(text: []const u8, start: usize, end: usize) usize {
     return if (trimmed == start) end else trimmed;
 }
 
-fn appendTextLine(
-    output: []TextLine,
-    len: *usize,
+fn textLineAt(
     text: DrawText,
     text_start: usize,
     text_len: usize,
     glyph_start: usize,
     glyph_len: usize,
+    line_index: usize,
     line_height_value: f32,
     options: TextLayoutOptions,
-    bounds: *?geometry.RectF,
-) Error!void {
-    if (len.* >= output.len) return error.TextLayoutLineListFull;
-    const baseline = text.origin.y + @as(f32, @floatFromInt(len.*)) * line_height_value;
+) TextLine {
+    const baseline = text.origin.y + @as(f32, @floatFromInt(line_index)) * line_height_value;
     const line_bounds = alignTextLineBounds(
         textLineBounds(text, text_start, text_len, glyph_start, glyph_len, baseline, line_height_value),
         options,
     );
-    output[len.*] = .{
+    return .{
         .text_start = text_start,
         .text_len = text_len,
         .glyph_start = glyph_start,
@@ -363,8 +466,6 @@ fn appendTextLine(
         .bounds = line_bounds,
         .baseline = baseline,
     };
-    len.* += 1;
-    bounds.* = unionOptionalBounds(bounds.*, line_bounds);
 }
 
 fn alignTextLineBounds(bounds: geometry.RectF, options: TextLayoutOptions) geometry.RectF {

@@ -67,7 +67,6 @@ const WidgetRenderState = widget_model.WidgetRenderState;
 const WidgetSize = widget_model.WidgetSize;
 const Widget = widget_model.Widget;
 const estimateTextWidth = text_model.estimateTextWidth;
-const layoutTextCaretRect = text_model.layoutTextCaretRect;
 const affinesEqual = equality_model.affinesEqual;
 pub const textSelectionFillColor = widget_render_style.textSelectionFillColor;
 pub const colorWithAlpha = widget_render_style.colorWithAlpha;
@@ -601,7 +600,7 @@ fn textWrapMaxWidth(tokens: DesignTokens, width: f32) f32 {
 fn emitStaticTextSelection(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const range = widget_access.widgetTextSelectionRange(widget) orelse return;
     if (range.isCollapsed(widget.text.len)) return;
-    var rect_buffer: [widget_text_select.max_static_text_layout_lines]text_model.TextSelectionRect = undefined;
+    var rect_buffer: [widget_text_select.max_static_text_selection_rects]text_model.TextSelectionRect = undefined;
     const rects = widget_text_select.staticTextSelectionRects(widget, tokens, range, &rect_buffer);
     for (rects, 0..) |selection, ordinal| {
         try builder.fillRoundedRect(.{

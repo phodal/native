@@ -31,6 +31,7 @@ pub const TextLayoutCachePlan = text_layout.TextLayoutCachePlan;
 pub const TextLayoutCachePlanner = text_layout.TextLayoutCachePlanner;
 pub const layoutTextRun = text_layout.layoutTextRun;
 pub const layoutTextRunPlan = text_layout.layoutTextRunPlan;
+pub const TextLineIterator = text_layout.TextLineIterator;
 pub const textBounds = text_layout.textBounds;
 pub const layoutTextCaretRect = text_layout.layoutTextCaretRect;
 pub const textCaretRectForLayout = text_layout.textCaretRectForLayout;

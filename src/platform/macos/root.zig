@@ -484,7 +484,13 @@ const RunState = struct {
     fn emit(self: *RunState, event: platform_mod.Event) void {
         const handler = self.handler orelse return;
         const context = self.handler_context orelse return;
-        handler(context, event) catch {
+        handler(context, event) catch |err| {
+            // The app is about to terminate through `CallbackFailed`;
+            // name the error that latched the failure (and, in builds
+            // that carry one, its return trace) so the exit is
+            // attributable instead of a bare CallbackFailed.
+            std.debug.print("platform callback failed: {s} (event {s})\n", .{ @errorName(err), @tagName(event) });
+            if (@errorReturnTrace()) |error_trace| std.debug.dumpErrorReturnTrace(error_trace);
             self.failed = true;
             if (self.self) |mac| native_sdk_appkit_stop(mac.host);
         };

@@ -843,6 +843,41 @@ test "text layout aligns fallback and shaped line boxes" {
     try expectRect(geometry.RectF.init(8, 10, 12, 14), shaped.bounds);
 }
 
+test "text layout caret selection and point queries have no line-count cap" {
+    // A document with far more lines than any fixed query-side line
+    // buffer ever held (the caret path once failed a >16-line textarea
+    // with TextLayoutLineListFull and killed the app from a keystroke).
+    // The streaming queries must resolve caret, selection, and hit
+    // offsets for a document of any length.
+    const doc = "word\n" ** 100;
+    const text = DrawText{
+        .font_id = 1,
+        .size = 10,
+        .origin = geometry.PointF.init(4, 20),
+        .color = Color.rgb8(0, 0, 0),
+        .text = doc,
+    };
+    const options = TextLayoutOptions{ .max_width = 200, .line_height = 14, .wrap = .word };
+
+    // Caret at the end of the document: the trailing newline puts it on
+    // line index 100 (the 101st, empty line).
+    const caret = layoutTextCaretRect(text, options, doc.len).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 10 + 100 * 14), caret.y, 0.001);
+
+    // A whole-document selection folds the lines beyond the rect budget
+    // into the last rect instead of erroring.
+    var rects_buffer: [4]TextSelectionRect = undefined;
+    const rects = layoutTextSelectionRects(text, options, TextRange.init(0, doc.len), &rects_buffer);
+    try std.testing.expectEqual(@as(usize, 4), rects.len);
+    try std.testing.expectEqualDeep(TextRange.init(0, 4), rects[0].range);
+    try std.testing.expectEqual(@as(usize, doc.len - 1), rects[3].range.end);
+    try std.testing.expect(rects[3].rect.maxY() > 10 + 99 * 14);
+
+    // Hit testing a point deep in the document resolves to that line.
+    const offset = layoutTextOffsetForPoint(text, options, geometry.PointF.init(5, 10 + 50 * 14 + 7)).?;
+    try std.testing.expectEqual(@as(usize, 50 * 5), offset);
+}
+
 test "text layout maps caret selection and points across wrapped fallback lines" {
     const text = DrawText{
         .font_id = 1,
@@ -853,12 +888,10 @@ test "text layout maps caret selection and points across wrapped fallback lines"
     };
     const options = TextLayoutOptions{ .max_width = 30, .line_height = 14, .wrap = .word };
 
-    var caret_lines: [2]TextLine = undefined;
-    try expectRectApprox(geometry.RectF.init(28.25, 10, 1, 14), try layoutTextCaretRect(text, options, 5, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(28.25, 10, 1, 14), layoutTextCaretRect(text, options, 5));
 
-    var selection_lines: [2]TextLine = undefined;
     var selection_rects: [2]TextSelectionRect = undefined;
-    const rects = try layoutTextSelectionRects(text, options, TextRange.init(3, 8), &selection_lines, &selection_rects);
+    const rects = layoutTextSelectionRects(text, options, TextRange.init(3, 8), &selection_rects);
     try std.testing.expectEqual(@as(usize, 2), rects.len);
     try std.testing.expectEqualDeep(TextRange.init(3, 5), rects[0].range);
     try expectRectApprox(geometry.RectF.init(19.63, 10, 8.62, 14), rects[0].rect);
@@ -872,19 +905,21 @@ test "text layout maps caret selection and points across wrapped fallback lines"
         .color = Color.rgb8(0, 0, 0),
         .text = "$13.4M",
     };
-    var dashboard_value_lines: [1]TextLine = undefined;
     try expectRectApprox(
         geometry.RectF.init(57.001, 0, 1, 21.25),
-        try layoutTextCaretRect(dashboard_value, .{ .line_height = 21.25 }, dashboard_value.text.len, &dashboard_value_lines),
+        layoutTextCaretRect(dashboard_value, .{ .line_height = 21.25 }, dashboard_value.text.len),
     );
 
-    var point_lines: [2]TextLine = undefined;
-    const offset = (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(16, 25), &point_lines)).?;
+    const offset = (layoutTextOffsetForPoint(text, options, geometry.PointF.init(16, 25))).?;
     try std.testing.expectEqual(@as(usize, 8), offset);
 
-    var overflow_lines: [2]TextLine = undefined;
+    // A range spanning more lines than the caller's rect budget folds
+    // the overflow into the last rect: a bounding highlight, no error.
     var one_rect: [1]TextSelectionRect = undefined;
-    try std.testing.expectError(error.TextSelectionRectListFull, layoutTextSelectionRects(text, options, TextRange.init(3, 8), &overflow_lines, &one_rect));
+    const folded = layoutTextSelectionRects(text, options, TextRange.init(3, 8), &one_rect);
+    try std.testing.expectEqual(@as(usize, 1), folded.len);
+    try std.testing.expectEqualDeep(TextRange.init(3, 8), folded[0].range);
+    try expectRectApprox(geometry.RectF.init(4, 10, 24.25, 28), folded[0].rect);
 }
 
 test "text layout maps caret selection and points across shaped glyph lines" {
@@ -902,17 +937,14 @@ test "text layout maps caret selection and points across shaped glyph lines" {
     };
     const options = TextLayoutOptions{ .line_height = 12 };
 
-    var caret_lines: [1]TextLine = undefined;
-    try expectRect(geometry.RectF.init(14, 7, 1, 19.5), try layoutTextCaretRect(text, options, 1, &caret_lines));
+    try expectRect(geometry.RectF.init(14, 7, 1, 19.5), layoutTextCaretRect(text, options, 1));
 
-    var selection_lines: [1]TextLine = undefined;
     var selection_rects: [1]TextSelectionRect = undefined;
-    const rects = try layoutTextSelectionRects(text, options, TextRange.init(1, 2), &selection_lines, &selection_rects);
+    const rects = layoutTextSelectionRects(text, options, TextRange.init(1, 2), &selection_rects);
     try std.testing.expectEqual(@as(usize, 1), rects.len);
     try expectRect(geometry.RectF.init(14, 7, 4, 19.5), rects[0].rect);
 
-    var point_lines: [1]TextLine = undefined;
-    const offset = (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(13, 12), &point_lines)).?;
+    const offset = (layoutTextOffsetForPoint(text, options, geometry.PointF.init(13, 12))).?;
     try std.testing.expectEqual(@as(usize, 1), offset);
 
     const commands = [_]CanvasCommand{.{ .draw_text = .{
@@ -957,23 +989,20 @@ test "text layout maps caret selection and points through glyph text clusters" {
     const layout = try layoutTextRun(text, options, &layout_lines);
     try std.testing.expectEqualDeep(TextRange.init(0, 6), textLineRange(text, layout.lines[0]));
 
-    var caret_lines: [1]TextLine = undefined;
-    try expectRectApprox(geometry.RectF.init(16, 10, 1, 12.5), try layoutTextCaretRect(text, options, 1, &caret_lines));
-    try expectRectApprox(geometry.RectF.init(22, 10, 1, 12.5), try layoutTextCaretRect(text, options, 2, &caret_lines));
-    try expectRectApprox(geometry.RectF.init(28, 10, 1, 12.5), try layoutTextCaretRect(text, options, 3, &caret_lines));
-    try expectRectApprox(geometry.RectF.init(34, 10, 1, 12.5), try layoutTextCaretRect(text, options, 4, &caret_lines));
+    try expectRectApprox(geometry.RectF.init(16, 10, 1, 12.5), layoutTextCaretRect(text, options, 1));
+    try expectRectApprox(geometry.RectF.init(22, 10, 1, 12.5), layoutTextCaretRect(text, options, 2));
+    try expectRectApprox(geometry.RectF.init(28, 10, 1, 12.5), layoutTextCaretRect(text, options, 3));
+    try expectRectApprox(geometry.RectF.init(34, 10, 1, 12.5), layoutTextCaretRect(text, options, 4));
 
-    var selection_lines: [1]TextLine = undefined;
     var selection_rects: [1]TextSelectionRect = undefined;
-    const rects = try layoutTextSelectionRects(text, options, TextRange.init(1, 4), &selection_lines, &selection_rects);
+    const rects = layoutTextSelectionRects(text, options, TextRange.init(1, 4), &selection_rects);
     try std.testing.expectEqual(@as(usize, 1), rects.len);
     try std.testing.expectEqualDeep(TextRange.init(1, 4), rects[0].range);
     try expectRectApprox(geometry.RectF.init(16, 10, 18, 12.5), rects[0].rect);
 
-    var point_lines: [1]TextLine = undefined;
-    try std.testing.expectEqual(@as(usize, 2), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(21, 15), &point_lines)).?);
-    try std.testing.expectEqual(@as(usize, 3), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(27, 15), &point_lines)).?);
-    try std.testing.expectEqual(@as(usize, 4), (try layoutTextOffsetForPoint(text, options, geometry.PointF.init(33.5, 15), &point_lines)).?);
+    try std.testing.expectEqual(@as(usize, 2), (layoutTextOffsetForPoint(text, options, geometry.PointF.init(21, 15))).?);
+    try std.testing.expectEqual(@as(usize, 3), (layoutTextOffsetForPoint(text, options, geometry.PointF.init(27, 15))).?);
+    try std.testing.expectEqual(@as(usize, 4), (layoutTextOffsetForPoint(text, options, geometry.PointF.init(33.5, 15))).?);
 }
 
 test "text layout measures utf8 scalars for fallback wrapping" {

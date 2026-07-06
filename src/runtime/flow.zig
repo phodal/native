@@ -279,9 +279,26 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         .view_label = command.view_label,
                     });
                 },
-                .gpu_surface_frame => |frame_event| try GpuSurfaceEventMethods().dispatchGpuSurfaceFrame(self, app, frame_event),
+                // The interactive-surface family below degrades on error
+                // instead of propagating: an error that escapes
+                // `dispatchPlatformEvent` reaches the platform callback,
+                // latches its failure flag, and exits the whole app — so a
+                // runtime-side capacity or render fault on a keystroke,
+                // click, scroll, resize, or frame tick must land in the
+                // dispatch-error ring (loud, queryable, traced at `.err`)
+                // while the app keeps running. The failing interaction is
+                // refused; the next one starts clean. The TestHarness's
+                // `.propagate` policy still returns the error so tests
+                // fail loud instead of leaving silent stale frames.
+                .gpu_surface_frame => |frame_event| GpuSurfaceEventMethods().dispatchGpuSurfaceFrame(self, app, frame_event) catch |err| {
+                    recordDispatchError(self, "gpu_surface_frame", err);
+                    if (self.dispatch_error_policy == .propagate) return err;
+                },
                 .gpu_surface_resized => |resize_event| {
-                    try GpuSurfaceEventMethods().dispatchGpuSurfaceResized(self, app, resize_event);
+                    GpuSurfaceEventMethods().dispatchGpuSurfaceResized(self, app, resize_event) catch |err| {
+                        recordDispatchError(self, "gpu_surface_resized", err);
+                        if (self.dispatch_error_policy == .propagate) return err;
+                    };
                     log(self, "gpu_surface.resize", "gpu surface resized", &.{
                         trace.string("label", resize_event.label),
                         trace.float("width", resize_event.frame.width),
@@ -289,16 +306,28 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                         trace.float("scale", resize_event.scale_factor),
                     });
                 },
-                .gpu_surface_input => |input_event| try GpuSurfaceEventMethods().dispatchGpuSurfaceInput(self, app, input_event),
-                .gpu_surface_scroll_driver => |driver_event| try ScrollDriverMethods().dispatchGpuSurfaceScrollDriver(self, app, driver_event),
-                .context_menu_action => |action_event| try ContextMenuMethods().dispatchContextMenuAction(self, app, action_event),
+                .gpu_surface_input => |input_event| GpuSurfaceEventMethods().dispatchGpuSurfaceInput(self, app, input_event) catch |err| {
+                    recordDispatchError(self, "gpu_surface_input", err);
+                    if (self.dispatch_error_policy == .propagate) return err;
+                },
+                .gpu_surface_scroll_driver => |driver_event| ScrollDriverMethods().dispatchGpuSurfaceScrollDriver(self, app, driver_event) catch |err| {
+                    recordDispatchError(self, "gpu_surface_scroll_driver", err);
+                    if (self.dispatch_error_policy == .propagate) return err;
+                },
+                .context_menu_action => |action_event| ContextMenuMethods().dispatchContextMenuAction(self, app, action_event) catch |err| {
+                    recordDispatchError(self, "context_menu_action", err);
+                    if (self.dispatch_error_policy == .propagate) return err;
+                },
                 .widget_accessibility_action => |action_event| {
-                    _ = try self.dispatchCanvasWidgetAccessibilityAction(app, action_event.window_id, action_event.label, .{
+                    _ = self.dispatchCanvasWidgetAccessibilityAction(app, action_event.window_id, action_event.label, .{
                         .id = action_event.id,
                         .action = canvasWidgetAccessibilityActionKindFromPlatform(action_event.action),
                         .text = action_event.text,
                         .selection = if (action_event.selection) |selection| .{ .anchor = selection.start, .focus = selection.end } else null,
-                    });
+                    }) catch |err| {
+                        recordDispatchError(self, "widget_accessibility_action", err);
+                        if (self.dispatch_error_policy == .propagate) return err;
+                    };
                 },
                 .menu_command => |command| {
                     try dispatchCommand(self, app, .{

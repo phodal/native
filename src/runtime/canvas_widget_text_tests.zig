@@ -1516,3 +1516,161 @@ test "runtime click focus shows caret, ring, and blink; blur drops them" {
     try std.testing.expect(!saw_caret);
     try std.testing.expect(!saw_ring);
 }
+
+test "typing into a textarea seeded with a long document survives dispatch" {
+    // Live-crash regression: a textarea holding more wrapped lines than
+    // the render-side caret query once buffered (16) killed the whole
+    // app on the first keystroke — the caret emission failed with
+    // TextLayoutLineListFull, the error escaped `dispatchGpuSurfaceInput`,
+    // and the platform callback latched CallbackFailed. The harness's
+    // `.propagate` policy makes any such escape fail this test.
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-textarea-long-doc", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 160),
+    });
+
+    // ~40 source lines that wrap into even more layout lines at 180px.
+    const doc = "The quick brown fox jumps over the lazy dog.\n" ** 40;
+    const textarea = canvas.Widget{
+        .id = 2,
+        .kind = .textarea,
+        .frame = geometry.RectF.init(12, 16, 180, 84),
+        .text = doc,
+        .semantics = .{ .label = "Markdown source" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{textarea} }, geometry.RectF.init(0, 0, 260, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Click into the document (focus + caret placement), then type.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 100,
+        .y = 30,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "x",
+        .text = "x",
+    } });
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(doc.len + 1, retained.nodes[1].widget.text.len);
+    try std.testing.expect(retained.nodes[1].widget.text_selection != null);
+
+    // The emitted display list carries the caret for the focused,
+    // collapsed-selection textarea (part 6 of the widget) — this exact
+    // emission is what failed pre-fix.
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    const display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_caret = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .draw_line => |line| {
+                if (line.id == testCanvasWidgetPartId(2, 6)) saw_caret = true;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_caret);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dispatchErrors().len);
+}
+
+test "a widget text budget overflow on input degrades instead of exiting" {
+    // Degrade-semantics regression: a runtime-side capacity error on a
+    // keystroke (here the per-view widget text budget) must land in the
+    // dispatch-error ring and refuse the edit — never escape
+    // `dispatchPlatformEvent`, which would latch the platform callback's
+    // failure flag and exit the app.
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-textarea-budget", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    // Production policy: errors degrade (the harness default propagates
+    // so ordinary tests fail loud).
+    harness.runtime.dispatch_error_policy = .degrade;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 160),
+    });
+
+    // Fill the view's widget text storage to within 512 bytes of the
+    // budget, so a 510-byte insert overflows the storage rewrite while
+    // still fitting the edit-apply scratch.
+    const filler = [_]u8{'a'} ** (runtime_module.max_canvas_widget_text_bytes_per_view - 512);
+    const textarea = canvas.Widget{
+        .id = 2,
+        .kind = .textarea,
+        .frame = geometry.RectF.init(12, 16, 180, 84),
+        .text = &filler,
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{textarea} }, geometry.RectF.init(0, 0, 260, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 100,
+        .y = 30,
+    } });
+
+    const burst = [_]u8{'b'} ** 510;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "b",
+        .text = &burst,
+    } });
+
+    // The edit was refused, the error recorded, the app still running.
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(filler.len, retained.nodes[1].widget.text.len);
+    const errors = harness.runtime.dispatchErrors();
+    try std.testing.expect(errors.len >= 1);
+    try std.testing.expectEqualStrings("gpu_surface_input", errors[errors.len - 1].event);
+    try std.testing.expectEqualStrings("WidgetTextTooLarge", errors[errors.len - 1].error_name);
+
+    // The next interaction dispatches clean.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowleft",
+    } });
+}

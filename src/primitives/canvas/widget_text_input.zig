@@ -12,8 +12,6 @@ const Color = drawing_model.Color;
 const DrawText = text_model.DrawText;
 const TextWrap = text_model.TextWrap;
 const TextLayoutOptions = text_model.TextLayoutOptions;
-const TextLayout = text_model.TextLayout;
-const TextLine = text_model.TextLine;
 const TextRange = text_model.TextRange;
 const TextSelection = text_model.TextSelection;
 const DesignTokens = token_model.DesignTokens;
@@ -24,11 +22,9 @@ const nextTextLineEnd = text_model.nextTextLineEnd;
 const isTextBreakByte = text_model.isTextBreakByte;
 const textLineRange = text_model.textLineRange;
 const textLineCaretX = text_model.textLineCaretX;
-const layoutTextRun = text_model.layoutTextRun;
-const textCaretRectForLayout = text_model.textCaretRectForLayout;
+const layoutTextCaretRect = text_model.layoutTextCaretRect;
 const layoutTextOffsetForPoint = text_model.layoutTextOffsetForPoint;
-
-const max_widget_text_layout_lines: usize = 16;
+const TextLineIterator = text_model.TextLineIterator;
 
 pub fn widgetPlaceholder(widget: Widget) []const u8 {
     if (widget.placeholder.len > 0) return widget.placeholder;
@@ -55,8 +51,7 @@ pub fn textOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, tokens: 
     const layout_options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, tokens.colors.text, layout_options);
-    var lines: [max_widget_text_layout_lines]TextLine = undefined;
-    return layoutTextOffsetForPoint(draw_text, layout_options, point, &lines) catch null;
+    return layoutTextOffsetForPoint(draw_text, layout_options, point);
 }
 
 pub fn widgetTextInputSize(widget: Widget, tokens: DesignTokens) f32 {
@@ -265,21 +260,18 @@ pub fn textGeometryForWidget(widget: Widget, tokens: DesignTokens) WidgetTextGeo
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, tokens.colors.text, layout_options);
 
-    var lines: [max_widget_text_layout_lines]TextLine = undefined;
-    const layout = layoutTextRun(draw_text, layout_options, &lines) catch return value;
-
     if (widget_access.widgetTextSelectionRange(widget)) |range| {
         if (range.isCollapsed(widget.text.len)) {
-            value.caret_bounds = textCaretRectForLayout(draw_text, layout, range.start);
+            value.caret_bounds = layoutTextCaretRect(draw_text, layout_options, range.start);
         } else {
-            const bounds = textRangeBoundsForLayout(draw_text, layout, range);
+            const bounds = textRangeBounds(draw_text, layout_options, range);
             value.selection_bounds = bounds.bounds;
             value.selection_rect_count = bounds.rect_count;
         }
     }
     if (widget_access.widgetTextCompositionRange(widget)) |range| {
         if (!range.isCollapsed(widget.text.len)) {
-            const bounds = textRangeBoundsForLayout(draw_text, layout, range);
+            const bounds = textRangeBounds(draw_text, layout_options, range);
             value.composition_bounds = bounds.bounds;
             value.composition_rect_count = bounds.rect_count;
         }
@@ -292,12 +284,13 @@ const TextRangeBounds = struct {
     rect_count: usize = 0,
 };
 
-fn textRangeBoundsForLayout(text: DrawText, layout: TextLayout, range: TextRange) TextRangeBounds {
+fn textRangeBounds(text: DrawText, options: TextLayoutOptions, range: TextRange) TextRangeBounds {
     const normalized = snapTextRange(text.text, range);
     if (normalized.isCollapsed(text.text.len)) return .{};
 
     var value: TextRangeBounds = .{};
-    for (layout.lines) |line| {
+    var lines = TextLineIterator.init(text, options);
+    while (lines.next()) |line| {
         const line_range = textLineRange(text, line);
         const start = @max(normalized.start, line_range.start);
         const end = @min(normalized.end, line_range.end);

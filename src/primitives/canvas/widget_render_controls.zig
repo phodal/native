@@ -23,7 +23,6 @@ const DrawText = text_model.DrawText;
 const TextWrap = text_model.TextWrap;
 const TextAlign = text_model.TextAlign;
 const TextLayoutOptions = text_model.TextLayoutOptions;
-const TextLine = text_model.TextLine;
 const TextRange = text_model.TextRange;
 const TextSelectionRect = text_model.TextSelectionRect;
 const DesignTokens = token_model.DesignTokens;
@@ -87,7 +86,6 @@ const buttonStrokeWidth = widget_render_style.buttonStrokeWidth;
 const listItemFillColor = widget_render_style.listItemFillColor;
 
 const max_widget_text_range_rects: usize = 4;
-const max_widget_text_layout_lines: usize = 16;
 
 fn pixelSnapScale(tokens: DesignTokens) ?f32 {
     const scale = tokens.pixel_snap.scale;
@@ -1110,9 +1108,8 @@ fn emitWidgetTextSelectionRects(
     max_parts: usize,
     tokens: DesignTokens,
 ) Error!void {
-    var lines: [max_widget_text_layout_lines]TextLine = undefined;
     var rect_buffer: [max_widget_text_range_rects]TextSelectionRect = undefined;
-    const rects = try layoutTextSelectionRects(text, options, range, &lines, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
+    const rects = layoutTextSelectionRects(text, options, range, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
     for (rects, 0..) |selection, index| {
         try builder.fillRoundedRect(.{
             .id = widgetPartId(widget.id, widgetTextRangePart(first_part, overflow_first_part, index)),
@@ -1134,9 +1131,8 @@ fn emitWidgetTextCompositionLines(
     max_parts: usize,
     tokens: DesignTokens,
 ) Error!void {
-    var lines: [max_widget_text_layout_lines]TextLine = undefined;
     var rect_buffer: [max_widget_text_range_rects]TextSelectionRect = undefined;
-    const rects = try layoutTextSelectionRects(text, options, range, &lines, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
+    const rects = layoutTextSelectionRects(text, options, range, rect_buffer[0..@min(max_parts, rect_buffer.len)]);
     for (rects, 0..) |selection, index| {
         const y = pixelSnapGeometryRect(tokens, selection.rect).maxY() - tokens.stroke.regular;
         try builder.drawLine(.{
@@ -1162,8 +1158,7 @@ fn emitWidgetTextCaret(
     part: ObjectId,
     tokens: DesignTokens,
 ) Error!void {
-    var lines: [max_widget_text_layout_lines]TextLine = undefined;
-    const rect = (try layoutTextCaretRect(text, options, offset, &lines)) orelse return;
+    const rect = layoutTextCaretRect(text, options, offset) orelse return;
     const snapped = pixelSnapGeometryRect(tokens, rect);
     try builder.drawLine(.{
         .id = widgetPartId(widget.id, part),

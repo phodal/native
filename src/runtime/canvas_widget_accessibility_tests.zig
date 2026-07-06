@@ -900,13 +900,21 @@ test "runtime publishes canvas widget accessibility snapshots to platform" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 3), runtime.views[0].canvas_widget_focused_id);
     try std.testing.expect(!platform_state.nodes[2].selected);
 
-    try std.testing.expectError(error.InvalidCommand, runtime.dispatchPlatformEvent(app_state.app(), .{ .widget_accessibility_action = .{
+    // An invalid assistive action degrades under the production policy:
+    // the edit is refused and the error lands in the dispatch-error ring
+    // instead of escaping to the platform callback (which would exit the
+    // whole app on external assistive input).
+    const errors_before_invalid = runtime.dispatchErrors().len;
+    try runtime.dispatchPlatformEvent(app_state.app(), .{ .widget_accessibility_action = .{
         .window_id = 1,
         .label = "canvas",
         .id = 4,
         .action = .set_text,
         .text = "Customer search",
-    } }));
+    } });
+    try std.testing.expect(runtime.dispatchErrors().len > errors_before_invalid);
+    try std.testing.expectEqualStrings("InvalidCommand", runtime.dispatchErrors()[runtime.dispatchErrors().len - 1].error_name);
+    try std.testing.expectEqualStrings("widget_accessibility_action", runtime.dispatchErrors()[runtime.dispatchErrors().len - 1].event);
     try std.testing.expectEqualStrings("Search", platform_state.nodes[3].text_value);
 
     try runtime.dispatchPlatformEvent(app_state.app(), .{ .widget_accessibility_action = .{

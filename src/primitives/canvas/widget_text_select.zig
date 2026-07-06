@@ -18,16 +18,15 @@ const widget_metrics = @import("widget_metrics.zig");
 const DesignTokens = token_model.DesignTokens;
 const DrawText = text_model.DrawText;
 const TextLayoutOptions = text_model.TextLayoutOptions;
-const TextLine = text_model.TextLine;
 const TextRange = text_model.TextRange;
 const TextSelection = text_model.TextSelection;
 const TextSelectionRect = text_model.TextSelectionRect;
 const Widget = widget_model.Widget;
 
-/// Static paragraphs run longer than text inputs; plain-text selection
-/// supports up to this many wrapped lines (beyond it, selection quietly
-/// reports unsupported for the widget — layout itself still draws).
-pub const max_static_text_layout_lines: usize = 64;
+/// Highlight-rect budget for one static text selection: one rect per
+/// selected line up to this many; a longer selection folds its overflow
+/// into the last rect (see `staticTextSelectionRects`).
+pub const max_static_text_selection_rects: usize = 64;
 
 /// True for widgets whose text supports pointer selection without being
 /// editable: `.text` leaves (plain or span paragraphs) with content.
@@ -68,13 +67,13 @@ pub fn staticTextOffsetForWidgetPoint(widget: Widget, point: geometry.PointF, to
         );
     }
     const draw_text = staticTextDrawText(widget, tokens);
-    var lines: [max_static_text_layout_lines]TextLine = undefined;
-    return text_model.layoutTextOffsetForPoint(draw_text, draw_text.text_layout.?, point, &lines) catch null;
+    return text_model.layoutTextOffsetForPoint(draw_text, draw_text.text_layout.?, point);
 }
 
 /// Widget-space highlight rects for a selection range over a static text
-/// widget: one rect per selected line. Returns the rects that fit in
-/// `output` (overflow truncates deterministically).
+/// widget: one rect per selected line. A range spanning more lines than
+/// `output` holds folds the overflow into the last rect (a bounding
+/// highlight), so long selections degrade instead of failing.
 pub fn staticTextSelectionRects(
     widget: Widget,
     tokens: DesignTokens,
@@ -93,9 +92,7 @@ pub fn staticTextSelectionRects(
         return output[0..rects.len];
     }
     const draw_text = staticTextDrawText(widget, tokens);
-    var lines: [max_static_text_layout_lines]TextLine = undefined;
-    const rects = text_model.layoutTextSelectionRects(draw_text, draw_text.text_layout.?, range, &lines, output) catch return output[0..0];
-    return rects;
+    return text_model.layoutTextSelectionRects(draw_text, draw_text.text_layout.?, range, output);
 }
 
 /// The exact draw command `emitTextWidget` builds for a plain `.text`

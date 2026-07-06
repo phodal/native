@@ -4,7 +4,12 @@
      and the window updates without losing notes. -->
 <stack>
   <column background="background">
-    <row height="56" padding="12" gap="10" cross="center" background="surface" label="Notes header">
+    <!-- The header IS the titlebar (tall hidden-inset chrome): it is the
+         window's drag surface, leads with a spacer sized to the traffic
+         lights via on_chrome, and matches its height to the titlebar
+         band so its controls and the lights share a centerline. -->
+    <row height="{header_height}" padding="12" gap="10" cross="center" background="surface" window-drag="true" label="Notes header">
+      <spacer width="{chrome_leading}" />
       <badge variant="primary">Notes</badge>
       <!-- Width-constrained caption: one honest line, clipped if the
            text ever outgrows the band, never a second line over the
@@ -46,7 +51,12 @@
         <spacer grow="1" />
         <column gap="4">
           <button size="sm" variant="outline" on-press="open_create_folder" disabled="{foldersFull}" label="New folder">New Folder</button>
-          <button size="sm" variant="ghost" on-press="open_rename_folder" disabled="{renameDisabled}" label="Rename folder">Rename</button>
+          <!-- Rename appears only when a real folder is selected — state
+               is shown by presence, never by a permanently dead button
+               (All Notes cannot be renamed). -->
+          <if test="{renameAvailable}">
+            <button size="sm" variant="ghost" on-press="open_rename_folder" label="Rename folder">Rename</button>
+          </if>
         </column>
       </column>
       <split value="{list_split}" on-resize="list_resized">

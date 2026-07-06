@@ -27,6 +27,10 @@ pub const window_min_width: f32 = 520;
 pub const window_min_height: f32 = 400;
 const max_tasks = 64;
 const max_task_title = 32;
+/// The header row's natural height, and the floor `header_height` falls
+/// back to when no titlebar band overlays the content (fullscreen,
+/// standard chrome, tests).
+pub const header_natural_height: f32 = 52;
 
 
 const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
@@ -41,9 +45,15 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the header row IS the
+    // titlebar — it pads its leading edge past the traffic lights via
+    // `on_chrome` and is the window's drag surface (`window-drag` in
+    // inbox.native).
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
-const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
+pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
 // ------------------------------------------------------------------ model
 
@@ -70,6 +80,14 @@ pub const Msg = union(enum) {
     set_filter: Filter,
     clear_done,
     draft_edit: canvas.TextInputEvent,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the header
+    /// pads its leading edge past the traffic lights and matches its
+    /// height to the titlebar band. Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
+
+    /// Zig-only dispatch (`on_chrome`): never bound in markup, so the
+    /// dead-state lint must not ask for an on-* event.
+    pub const view_unbound = .{"chrome_changed"};
 };
 
 pub const Model = struct {
@@ -77,6 +95,13 @@ pub const Model = struct {
     task_count: usize = 0,
     next_id: u32 = 1,
     filter: Filter = .all,
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the header leads with a spacer this wide so its
+    /// controls clear the traffic lights, and matches its height to the
+    /// titlebar band. Both fall back to the natural header when no band
+    /// overlays the content (fullscreen, standard chrome, tests).
+    chrome_leading: f32 = 0,
+    header_height: f32 = header_natural_height,
     // The draft field's editor state, elm-style: the model applies every
     // text edit event and is the source of truth. The runtime's reconcile
     // rule keeps them in lockstep (matching source text preserves runtime
@@ -173,7 +198,22 @@ pub fn update(model: *Model, msg: Msg) void {
         .set_filter => |filter| model.filter = filter,
         .clear_done => model.clearDone(),
         .draft_edit => |edit| model.draft_buffer.apply(edit),
+        .chrome_changed => |chrome| {
+            model.chrome_leading = chrome.insets.left;
+            // Match the header to the titlebar band so its centered
+            // controls share the traffic lights' centerline; the natural
+            // height is the floor when no band overlays the content.
+            model.header_height = @max(header_natural_height, chrome.insets.top);
+        },
     }
+}
+
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return .{ .chrome_changed = chrome };
 }
 
 // ------------------------------------------------------------------- view
@@ -230,6 +270,7 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
+        .on_chrome = onChrome,
         .view = CompiledInboxView.build,
         .markup = if (dev_markup_reload)
             .{ .source = inbox_markup, .watch_path = "src/inbox.native", .io = init.io }

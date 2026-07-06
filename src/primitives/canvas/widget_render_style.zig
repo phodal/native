@@ -146,6 +146,16 @@ fn hoverWash(base: Color, active: bool, hovered: bool, alpha: f32) Color {
     return base;
 }
 
+/// The disabled state of a selection control's chrome (checkbox box,
+/// radio dot, switch track): the same color at half alpha — the house
+/// disabled register keeps the control's shape and checked hue muted
+/// to half strength instead of swapping to a different color, so a
+/// checked-but-disabled control still reads as checked.
+pub fn disabledWash(color: Color, disabled: bool) Color {
+    if (!disabled) return color;
+    return colorWithAlpha(color, 0.5 * color.a);
+}
+
 pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
     if (widget.state.disabled) return tokens.colors.text_muted;
     const active = widget.state.pressed or widget.state.selected;

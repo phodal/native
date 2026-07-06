@@ -301,7 +301,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             name: []const u8,
             scene: app_manifest.ShellConfig,
             canvas_label: []const u8,
-            tokens: canvas.DesignTokens = .{},
+            /// Fixed design tokens for an app that owns its look. Leave
+            /// null (the default) and the stock tokens FOLLOW THE SYSTEM
+            /// appearance: light/dark scheme, high contrast, and reduced
+            /// motion derive from the OS setting live — flipping the
+            /// system appearance re-themes the running app without a
+            /// restart. Set explicit tokens (or `tokens_fn`) to opt out.
+            tokens: ?canvas.DesignTokens = null,
             /// Model-derived design tokens. When set, this is consulted on
             /// every install and rebuild instead of the static `tokens`,
             /// and `pixel_snap.scale` is stamped with the live surface
@@ -537,6 +543,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// (fullscreen transitions flip it; ordinary resizes do not).
         window_chrome: platform.WindowChrome = .{},
         window_chrome_known: bool = false,
+        /// The system appearance the platform last reported (delivered
+        /// before the first view build, then on every OS-side change).
+        /// The stock token derivation reads it when the app sets neither
+        /// `tokens` nor `tokens_fn`, so unthemed apps follow the OS
+        /// light/dark setting live. Test/null platforms never emit it,
+        /// so deterministic runs stay on the default light theme.
+        system_appearance: platform.Appearance = .{},
         pixel_snap_scale: f32 = 1,
         frame_timestamp_ns: u64 = 0,
         markup_arenas: [2]std.heap.ArenaAllocator,
@@ -855,14 +868,43 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             }
         }
 
-        /// The design tokens for the next rebuild: static `tokens`, or the
-        /// model-derived `tokens_fn` with the surface scale stamped into
-        /// `pixel_snap.scale`.
+        /// The design tokens for the next rebuild: the model-derived
+        /// `tokens_fn`, explicit static `tokens`, or — the default — the
+        /// stock theme derived from the SYSTEM appearance the runtime
+        /// tracks (scheme, contrast, reduced motion), so an unthemed app
+        /// honors the OS light/dark setting live. Derived tokens carry
+        /// the surface scale in `pixel_snap.scale`.
         pub fn effectiveTokens(self: *const Self) canvas.DesignTokens {
-            const tokens_fn = self.options.tokens_fn orelse return self.options.tokens;
-            var tokens = tokens_fn(&self.model);
+            if (self.options.tokens_fn) |tokens_fn| {
+                var tokens = tokens_fn(&self.model);
+                tokens.pixel_snap.scale = self.pixel_snap_scale;
+                return tokens;
+            }
+            if (self.options.tokens) |static_tokens| return static_tokens;
+            var tokens = canvas.DesignTokens.theme(.{
+                .color_scheme = switch (self.system_appearance.color_scheme) {
+                    .light => .light,
+                    .dark => .dark,
+                },
+                .contrast = if (self.system_appearance.high_contrast) .high else .standard,
+                .reduce_motion = self.system_appearance.reduce_motion,
+            });
             tokens.pixel_snap.scale = self.pixel_snap_scale;
             return tokens;
+        }
+
+        /// Whether the stock tokens derive from the system appearance:
+        /// true only when the app claims neither token override, so an
+        /// appearance flip (or a surface-scale change) must re-derive
+        /// and re-render.
+        fn followsSystemAppearance(self: *const Self) bool {
+            return self.options.tokens_fn == null and self.options.tokens == null;
+        }
+
+        /// Whether tokens are derived per rebuild (model-owned or
+        /// system-followed) rather than a fixed set.
+        fn derivesTokens(self: *const Self) bool {
+            return self.options.tokens_fn != null or self.followsSystemAppearance();
         }
 
         /// Read runtime-owned widget state back into the model through the
@@ -975,7 +1017,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 try self.installChromeDisplayList(runtime, window_id, chrome, layout, tokens);
             } else {
                 _ = try runtime.setCanvasWidgetLayout(window_id, self.options.canvas_label, layout);
-                if (self.installed and self.options.tokens_fn != null) {
+                if (self.installed and self.derivesTokens()) {
                     _ = try runtime.emitCanvasWidgetDisplayList(window_id, self.options.canvas_label, tokens);
                 }
             }
@@ -1460,7 +1502,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 return err;
             };
             _ = try runtime.setCanvasWidgetLayout(slot.window_id, slot.canvasLabel(), layout);
-            if (slot.installed and self.options.tokens_fn != null) {
+            if (slot.installed and self.derivesTokens()) {
                 _ = try runtime.emitCanvasWidgetDisplayList(slot.window_id, slot.canvasLabel(), tokens);
             }
             slot.tree = tree;
@@ -2015,9 +2057,25 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     }
                 },
                 .appearance_changed => |appearance| {
-                    const map = self.options.on_appearance orelse return;
-                    if (map(appearance)) |msg| {
-                        try self.dispatch(runtime, self.canvas_window_id, msg);
+                    const changed = !std.meta.eql(self.system_appearance, appearance);
+                    self.system_appearance = appearance;
+                    if (self.options.on_appearance) |map| {
+                        if (map(appearance)) |msg| {
+                            try self.dispatch(runtime, self.canvas_window_id, msg);
+                            return;
+                        }
+                    }
+                    // No app mapping consumed the change: when the stock
+                    // tokens follow the system, re-derive and re-render
+                    // live — flipping the OS appearance re-themes the
+                    // running app without a restart. Before install the
+                    // stored appearance alone is enough: the first build
+                    // reads it.
+                    if (changed and self.installed and self.followsSystemAppearance()) {
+                        try self.rebuild(runtime, self.canvas_window_id);
+                        if (self.options.chrome == null) {
+                            _ = try runtime.emitCanvasWidgetDisplayList(self.canvas_window_id, self.options.canvas_label, runtime.tokensWithTextMeasure(self.effectiveTokens()));
+                        }
                     }
                 },
                 .timer => |timer_event| try self.handleTimer(runtime, timer_event),
@@ -2181,7 +2239,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 self.installed = true;
                 self.startMarkupWatch(runtime);
                 self.installStatusItem(runtime);
-            } else if (self.options.tokens_fn != null and @abs(self.pixel_snap_scale - scale) > 0.001) {
+            } else if (self.derivesTokens() and @abs(self.pixel_snap_scale - scale) > 0.001) {
                 self.pixel_snap_scale = scale;
                 try self.rebuild(runtime, frame_event.window_id);
             } else if (self.options.web_panes != null) {

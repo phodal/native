@@ -251,10 +251,20 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
 
+            // Hover and cursor resolve through the hover-target walk (the
+            // press fall-through): a composite row is ONE interactive
+            // surface, so a pointer over the row's own text/icon/badge
+            // children keeps the row's wash and cursor instead of holing
+            // them per child. The pressed id stays the RAW hit — static
+            // text drag-selection extends against it, so resolving it
+            // would break click-drag copy inside pressable rows.
+            const layout_tree = self.views[index].widgetLayoutTree();
             const target_id: canvas.ObjectId = if (pointer_event.target) |target| target.id else 0;
-            const hit_target = self.views[index].widgetLayoutTree().hitTestWithTokens(pointer_event.pointer.point, self.views[index].widget_tokens);
-            const hit_target_id: canvas.ObjectId = if (hit_target) |target| target.id else 0;
-            const hit_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(hit_target));
+            const hover_target = layout_tree.hoverTargetForHit(pointer_event.target);
+            const hover_target_id: canvas.ObjectId = if (hover_target) |value| value.id else 0;
+            const hit_target = layout_tree.hoverTargetForHit(layout_tree.hitTestWithTokens(pointer_event.pointer.point, self.views[index].widget_tokens));
+            const hit_target_id: canvas.ObjectId = if (hit_target) |value| value.id else 0;
+            const hit_cursor = platformCursorFromCanvas(layout_tree.cursorForHit(hit_target));
             var next_hovered_id = self.views[index].canvas_widget_hovered_id;
             var next_pressed_id = self.views[index].canvas_widget_pressed_id;
             var next_cursor = self.views[index].canvas_widget_cursor;
@@ -265,9 +275,9 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                     next_cursor = hit_cursor;
                 },
                 .down => {
-                    next_hovered_id = target_id;
+                    next_hovered_id = hover_target_id;
                     next_pressed_id = target_id;
-                    next_cursor = platformCursorFromCanvas(self.views[index].widgetLayoutTree().cursorForHit(pointer_event.target));
+                    next_cursor = platformCursorFromCanvas(layout_tree.cursorForHit(hover_target));
                 },
                 .up => {
                     next_hovered_id = hit_target_id;

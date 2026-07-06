@@ -41,6 +41,10 @@ pub const window_height: f32 = 760;
 /// audit sweep in tests.zig, which sweeps from exactly this floor.
 pub const window_min_width: f32 = window_width;
 pub const window_min_height: f32 = 480;
+/// The header bar's natural height, and the floor `header_height` falls
+/// back to when no titlebar band overlays the content (fullscreen,
+/// standard chrome, tests).
+pub const header_natural_height: f32 = 52;
 
 const shell_views = [_]native_sdk.ShellView{
     .{ .label = canvas_label, .kind = .gpu_surface, .fill = true, .role = "Feed timeline canvas", .accessibility_label = "Feed", .gpu_backend = .metal, .gpu_pixel_format = .bgra8_unorm, .gpu_present_mode = .timer, .gpu_alpha_mode = .@"opaque", .gpu_color_space = .srgb, .gpu_vsync = true },
@@ -53,6 +57,11 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the header bar IS the
+    // titlebar — it pads its leading edge past the traffic lights via
+    // `on_chrome` and is the window's drag surface.
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -243,7 +252,13 @@ pub const Model = struct {
     liked: LikedSet = LikedSet.initEmpty(),
     boosted: LikedSet = LikedSet.initEmpty(),
     selected: ?usize = null,
-    system_scheme: canvas.ColorScheme = .light,
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the header leads with a spacer this wide so its
+    /// controls clear the traffic lights, and matches its height to the
+    /// titlebar band. Both fall back to the natural header when no band
+    /// overlays the content (fullscreen, standard chrome, tests).
+    chrome_leading: f32 = 0,
+    header_height: f32 = header_natural_height,
 
     pub fn likeCount(model: *const Model, index: usize) u32 {
         return postAt(index).likes + @as(u32, @intFromBool(model.liked.isSet(index)));
@@ -264,7 +279,10 @@ pub const Msg = union(enum) {
     toggle_like: usize,
     toggle_boost: usize,
     select_post: usize,
-    system_scheme: canvas.ColorScheme,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the header
+    /// pads its leading edge past the traffic lights and matches its
+    /// height to the titlebar band. Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
 };
 
 pub fn update(model: *Model, msg: Msg) void {
@@ -278,23 +296,28 @@ pub fn update(model: *Model, msg: Msg) void {
         .toggle_like => |index| if (index < max_posts) model.liked.toggle(index),
         .toggle_boost => |index| if (index < max_posts) model.boosted.toggle(index),
         .select_post => |index| model.selected = if (model.selected != null and model.selected.? == index) null else index,
-        .system_scheme => |scheme| model.system_scheme = scheme,
+        .chrome_changed => |chrome| {
+            model.chrome_leading = chrome.insets.left;
+            // Match the header to the titlebar band so its centered
+            // controls share the traffic lights' centerline; the natural
+            // height is the floor when no band overlays the content.
+            model.header_height = @max(header_natural_height, chrome.insets.top);
+        },
     }
 }
 
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return .{ .chrome_changed = chrome };
+}
+
 // ------------------------------------------------------------------ theme
-
-/// House bar: stock tokens, system scheme, flat rows — no custom palette.
-pub fn feedTokens(model: *const Model) canvas.DesignTokens {
-    return canvas.DesignTokens.theme(.{ .color_scheme = model.system_scheme });
-}
-
-pub fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
-    return .{ .system_scheme = switch (appearance.color_scheme) {
-        .light => .light,
-        .dark => .dark,
-    } };
-}
+//
+// House bar: no tokens/tokens_fn — the stock theme follows the system
+// appearance by default (light/dark flips re-theme the running app).
 
 // ------------------------------------------------------------------- view
 
@@ -332,7 +355,13 @@ pub fn view(ui: *FeedUi, model: *const Model) FeedUi.Node {
     for (rows, 0..) |*row, offset| row.* = postRow(ui, model, window.start_index + offset);
 
     return ui.column(.{ .style_tokens = .{ .background = .background } }, .{
-        ui.row(.{ .height = 52, .padding = 12, .gap = 10, .cross = .center, .style_tokens = .{ .background = .surface }, .semantics = .{ .label = "Feed header" } }, .{
+        // The header IS the titlebar (tall hidden-inset chrome): it is
+        // the window's drag surface, leads with a spacer sized to the
+        // traffic lights via on_chrome, and matches its height to the
+        // titlebar band so its controls and the lights share a
+        // centerline.
+        ui.row(.{ .height = model.header_height, .padding = 12, .gap = 10, .cross = .center, .window_drag = true, .style_tokens = .{ .background = .surface }, .semantics = .{ .label = "Feed header" } }, .{
+            ui.el(.stack, .{ .width = model.chrome_leading }, .{}),
             ui.el(.badge, .{ .variant = .primary, .text = "Feed" }, .{}),
             ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Native SDK"),
             ui.spacer(1),
@@ -428,8 +457,7 @@ pub fn main(init: std.process.Init) !void {
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
-        .tokens_fn = feedTokens,
-        .on_appearance = onAppearance,
+        .on_chrome = onChrome,
         .view = view,
     });
     defer app_state.deinit();

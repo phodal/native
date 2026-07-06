@@ -834,8 +834,13 @@ pub fn Ui(comptime Msg: type) type {
                     if (self.msgFor(target_id, .submit)) |msg| return msg;
                 }
                 if (isTextEntryWidget(widget) and !widget.state.disabled) {
-                    if (keyboard.textEditEvent()) |edit| {
-                        if (self.msgForTextEdit(target_id, edit)) |msg| return msg;
+                    // The textarea newline mapping resolves BEFORE the
+                    // generic key mapping (which has no Enter case), so
+                    // the model's `on_input` hears the same newline the
+                    // runtime applied to the retained text.
+                    const edit = canvas.widgetKeyboardNewlineTextEditEvent(widget.kind, keyboard) orelse keyboard.textEditEvent();
+                    if (edit) |text_edit| {
+                        if (self.msgForTextEdit(target_id, text_edit)) |msg| return msg;
                     }
                 }
                 return null;
@@ -2208,13 +2213,17 @@ fn isTextEntryWidget(widget: Widget) bool {
 }
 
 fn isSubmitKeyboard(widget: Widget, keyboard: canvas.WidgetKeyboardEvent) bool {
-    const submits_on_enter = switch (widget.kind) {
-        .text_field, .search_field, .input, .combobox => true,
+    if (widget.state.disabled or keyboard.phase != .key_down) return false;
+    if (!std.ascii.eqlIgnoreCase(keyboard.key, "enter")) return false;
+    return switch (widget.kind) {
+        // Single-line entry: plain Enter submits.
+        .text_field, .search_field, .input, .combobox => !keyboard.modifiers.hasNavigationModifier(),
+        // Multi-line entry: Enter edits (newline), so submit rides the
+        // primary chord — cmd+Enter on macOS, ctrl+Enter elsewhere.
+        // Shift/alt variants stay free for apps.
+        .textarea => keyboard.modifiers.hasCommandModifier() and !keyboard.modifiers.alt and !keyboard.modifiers.shift,
         else => false,
     };
-    if (!submits_on_enter or widget.state.disabled) return false;
-    if (keyboard.phase != .key_down or keyboard.modifiers.hasNavigationModifier()) return false;
-    return std.ascii.eqlIgnoreCase(keyboard.key, "enter");
 }
 
 fn structuralId(parent_id: ObjectId, kind: WidgetKind, key: UiKey) ObjectId {

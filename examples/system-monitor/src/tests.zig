@@ -997,3 +997,40 @@ fn envGateSet(name: [*:0]const u8) bool {
     if (comptime !@import("builtin").link_libc) return false;
     return std.c.getenv(name) != null;
 }
+
+test "chrome geometry pads the header and matches its height to the tall band" {
+    var fx = model_mod.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    var model = model_mod.Model{};
+    try testing.expectEqual(model_mod.header_natural_height, model.header_height);
+
+    // The tall hidden-inset band arrives through on_chrome: the header
+    // pads past the traffic lights and matches the band's height so its
+    // centered controls share the lights' centerline.
+    const chrome: native_sdk.WindowChrome = .{
+        .insets = .{ .top = 52, .left = 78 },
+        .buttons = native_sdk.geometry.RectF.init(20, 19, 52, 14),
+    };
+    const msg = main.onChrome(chrome) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, msg, &fx);
+    try testing.expectEqual(@as(f32, 78), model.chrome_leading);
+    try testing.expectEqual(@max(model_mod.header_natural_height, 52), model.header_height);
+
+    // A band taller than the natural header grows the header with it.
+    const tall = main.onChrome(.{ .insets = .{ .top = 72, .left = 78 } }) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, tall, &fx);
+    try testing.expectEqual(@as(f32, 72), model.header_height);
+
+    // Fullscreen zeroes the chrome: the pad collapses and the height
+    // falls back to the header's natural floor.
+    const cleared = main.onChrome(.{}) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, cleared, &fx);
+    try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(model_mod.header_natural_height, model.header_height);
+
+    // The scene declares the matching titlebar so the platform actually
+    // hides the OS bar this header replaces.
+    try testing.expectEqual(.hidden_inset_tall, main.shell_scene.windows[0].titlebar);
+}

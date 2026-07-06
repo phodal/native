@@ -117,6 +117,20 @@ pub fn widgetPressTargetForHit(layout: anytype, hit: WidgetHit) ?WidgetHit {
     return widgetHitFromNode(layout.nodes[index], index);
 }
 
+/// The widget a HOVER that hit `hit` visually belongs to: the same
+/// target-then-ancestors walk as the press fall-through, so the hover
+/// wash and the pointer cursor track exactly where a click would land.
+/// A composite row is ONE interactive surface — a hit on plain text, an
+/// icon, or a badge inside a list row attributes hover to the row, so
+/// the wash never drops out over the row's own content. Links keep their
+/// own hover (the pointer cursor is the link's affordance even inside a
+/// pressable ancestor), and a hit with no claiming ancestor keeps itself
+/// (static text keeps its selection affordance).
+pub fn widgetHoverTargetForHit(layout: anytype, hit: WidgetHit) WidgetHit {
+    if (hit.role == .link and !hit.state.disabled) return hit;
+    return widgetPressTargetForHit(layout, hit) orelse hit;
+}
+
 /// The window-drag region a press that hit `node_index` lands on, if
 /// any: the same target-then-ancestors walk as the press fall-through,
 /// but a press-CLAIMING widget encountered first wins the gesture for

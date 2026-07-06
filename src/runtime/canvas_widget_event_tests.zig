@@ -143,6 +143,97 @@ test "runtime tracks retained canvas widget cursor intent" {
     try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
 }
 
+test "composite list row hovers as one surface: wash, cursor, and pressed wash cover the row" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-row-hover", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 160),
+    });
+
+    // The two-line list row shape (title + snippet) the showcase list
+    // panes render: text children are hit targets (selection), but hover
+    // must attribute to the row.
+    const snippet = canvas.Widget{ .id = 6, .kind = .text, .frame = geometry.RectF.init(0, 0, 160, 20), .text = "Snippet line" };
+    const inner_row = canvas.Widget{ .id = 5, .kind = .row, .frame = geometry.RectF.init(0, 0, 0, 20), .children = &.{snippet} };
+    const title = canvas.Widget{ .id = 4, .kind = .text, .frame = geometry.RectF.init(0, 0, 120, 20), .text = "Title" };
+    const column = canvas.Widget{ .id = 3, .kind = .column, .layout = .{ .gap = 8 }, .children = &.{ title, inner_row } };
+    const row = canvas.Widget{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 72), .layout = .{ .padding = geometry.InsetsF.all(10) }, .children = &.{column} };
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{row} }, geometry.RectF.init(0, 0, 320, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    const title_frame = retained.findById(4).?.frame.normalized();
+    const snippet_frame = retained.findById(6).?.frame.normalized();
+    const row_frame = retained.findById(2).?.frame.normalized();
+
+    // Probe the title interior, the gap between the lines, the snippet
+    // interior, and the row's padding corner: every point hovers the ROW
+    // and shows the pointer cursor — no dead zones inside one surface.
+    const probes = [_]geometry.PointF{
+        title_frame.center(),
+        .{ .x = title_frame.center().x, .y = (title_frame.maxY() + snippet_frame.y) / 2 },
+        snippet_frame.center(),
+        .{ .x = row_frame.x + 3, .y = row_frame.y + 3 },
+        .{ .x = row_frame.maxX() - 3, .y = snippet_frame.center().y },
+    };
+    for (probes) |probe| {
+        try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = "canvas",
+            .kind = .pointer_move,
+            .x = probe.x,
+            .y = probe.y,
+        } });
+        try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+        try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.null_platform.view_cursor);
+    }
+
+    // A press over the snippet lights the row's pressed wash (the render
+    // state resolves it through the same fall-through the click takes).
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = snippet_frame.center().x,
+        .y = snippet_frame.center().y,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvasWidgetRenderState().pressed_id.?);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = snippet_frame.center().x,
+        .y = snippet_frame.center().y,
+    } });
+
+    // Off the row: hover clears and the cursor returns to the default.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_move,
+        .x = row_frame.center().x,
+        .y = row_frame.maxY() + 20,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
+}
+
 test "runtime dispatches routed canvas widget pointer events" {
     const TestApp = struct {
         raw_input_count: u32 = 0,

@@ -505,6 +505,7 @@ pub const WidgetInvalidationKind = event_model.WidgetInvalidationKind;
 pub const WidgetInvalidation = event_model.WidgetInvalidation;
 pub const WidgetClipboardAction = event_model.WidgetClipboardAction;
 pub const widgetKeyboardClipboardAction = event_model.widgetKeyboardClipboardAction;
+pub const widgetKeyboardNewlineTextEditEvent = event_model.widgetKeyboardNewlineTextEditEvent;
 pub const widgetKeyboardControlIntent = event_model.widgetKeyboardControlIntent;
 pub const semanticActions = event_model.semanticActions;
 pub const widgetSemanticControlIntent = event_model.widgetSemanticControlIntent;
@@ -591,6 +592,7 @@ pub const widgetKindCode = @import("widgets.zig").widgetKindCode;
 /// a hit path that claims presses.
 pub const widgetPressTargetForHit = @import("widget_routing.zig").widgetPressTargetForHit;
 pub const widgetPressTargetIndexFromNode = @import("widget_routing.zig").widgetPressTargetIndexFromNode;
+pub const widgetHoverTargetForHit = @import("widget_routing.zig").widgetHoverTargetForHit;
 /// Window-drag regions (`window-drag="true"` / `.window_drag`): the
 /// widget-level predicate and the press walk that resolves whether a
 /// pointer-down moves the window instead of pressing a widget.

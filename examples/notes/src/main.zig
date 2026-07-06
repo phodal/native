@@ -52,6 +52,12 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the header row IS the
+    // titlebar — it pads its leading edge past the traffic lights via
+    // `on_chrome` and is the window's drag surface (`window-drag` in
+    // notes.native).
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -182,6 +188,14 @@ pub fn notesTokens(model: *const Model) canvas.DesignTokens {
 
 /// System appearance flows into the model and the tokens re-derive from
 /// it — the app follows the OS scheme live, with no in-window theme UI.
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return .{ .chrome_changed = chrome };
+}
+
 pub fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return .{ .system_scheme = switch (appearance.color_scheme) {
         .light => .light,
@@ -226,6 +240,7 @@ pub fn main(init: std.process.Init) !void {
         .init_fx = boot,
         .tokens_fn = notesTokens,
         .on_appearance = onAppearance,
+        .on_chrome = onChrome,
         .on_command = command,
         .view = CompiledNotesView.build,
         .markup = if (dev_markup_reload)

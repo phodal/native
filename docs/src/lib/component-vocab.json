@@ -82,7 +82,7 @@
     },
     {
       "name": "textarea",
-      "doc": "Multi-line text entry; edits via on-input."
+      "doc": "Multi-line text entry; edits via on-input, enter inserts a newline, submit via primary+enter with on-submit."
     },
     {
       "name": "list-item",
@@ -432,7 +432,7 @@
     },
     {
       "name": "on-submit",
-      "doc": "Dispatch a Msg on enter in a text field: tag or tag:{payload}."
+      "doc": "Dispatch a Msg on enter in a text field (primary+enter in a textarea): tag or tag:{payload}."
     },
     {
       "name": "on-input",

@@ -41,6 +41,10 @@ pub const sample_interval_ms: u32 = 2000;
 pub const max_table_rows = 14;
 pub const max_search = 32;
 pub const max_note = 160;
+/// The header bar's natural height, and the floor `header_height` falls
+/// back to when no titlebar band overlays the content (fullscreen,
+/// standard chrome, tests).
+pub const header_natural_height: f32 = 54;
 
 // Effect keys, model-owned identity. Timer keys are their own namespace.
 pub const sample_timer_key: u64 = 1;
@@ -86,6 +90,10 @@ pub const Msg = union(enum) {
     copy_name: u32,
     copied: native_sdk.EffectClipboardResult,
     set_appearance: native_sdk.Appearance,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the header
+    /// pads its leading edge past the traffic lights and matches its
+    /// height to the titlebar band. Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
     /// Toolbar gear: show/hide the settings WINDOW (model-declared —
     /// the window exists exactly while this flag is set).
     toggle_settings,
@@ -156,6 +164,13 @@ pub const Model = struct {
     note_storage: [max_note]u8 = undefined,
     note_len: usize = 0,
     appearance: native_sdk.Appearance = .{},
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the header leads with a spacer this wide so its
+    /// controls clear the traffic lights, and matches its height to the
+    /// titlebar band. Both fall back to the natural header when no band
+    /// overlays the content (fullscreen, standard chrome, tests).
+    chrome_leading: f32 = 0,
+    header_height: f32 = header_natural_height,
     /// The settings window's open flag: `windows_fn` declares the
     /// window while this is set, so a Msg opens it and a Msg (or the
     /// user's close button, via `settings_closed`) closes it.
@@ -585,6 +600,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             }
         },
         .set_appearance => |appearance| model.appearance = appearance,
+        .chrome_changed => |chrome| {
+            model.chrome_leading = chrome.insets.left;
+            // Match the header to the titlebar band so its centered
+            // controls share the traffic lights' centerline; the natural
+            // height is the floor when no band overlays the content.
+            model.header_height = @max(header_natural_height, chrome.insets.top);
+        },
         .toggle_settings => model.settings_open = !model.settings_open,
         .settings_closed => model.settings_open = false,
     }

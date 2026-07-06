@@ -2681,6 +2681,61 @@ test "selection control focus bounds exclude clickable labels" {
     );
 }
 
+test "hover target resolves composite row children to the row" {
+    // A two-line list row: title text, then a snippet line inside a
+    // nested row with a link — the shape the notes/feed list panes
+    // render. Probe points derive from the LAID-OUT frames so the test
+    // pins behavior, not layout arithmetic.
+    const snippet = Widget{ .id = 6, .kind = .text, .frame = geometry.RectF.init(0, 0, 140, 20), .text = "Snippet line" };
+    const link = Widget{ .id = 7, .kind = .text, .frame = geometry.RectF.init(0, 0, 50, 20), .text = "More", .semantics = .{ .role = .link } };
+    const inner_row = Widget{ .id = 5, .kind = .row, .frame = geometry.RectF.init(0, 0, 0, 20), .layout = .{ .gap = 8 }, .children = &.{ snippet, link } };
+    const title = Widget{ .id = 4, .kind = .text, .frame = geometry.RectF.init(0, 0, 120, 20), .text = "Title" };
+    const column = Widget{ .id = 3, .kind = .column, .layout = .{ .gap = 8 }, .children = &.{ title, inner_row } };
+    const row = Widget{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 72), .layout = .{ .padding = geometry.InsetsF.all(10) }, .children = &.{column} };
+    const caption = Widget{ .id = 8, .kind = .text, .frame = geometry.RectF.init(0, 90, 120, 20), .text = "Bare caption" };
+
+    var nodes: [8]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(.{ .kind = .stack, .children = &.{ row, caption } }, geometry.RectF.init(0, 0, 320, 130), &nodes);
+
+    const row_frame = layout.findById(2).?.frame.normalized();
+    const title_frame = layout.findById(4).?.frame.normalized();
+    const snippet_frame = layout.findById(6).?.frame.normalized();
+    const link_frame = layout.findById(7).?.frame.normalized();
+
+    // The raw hit over the title line is the text child; hover resolves
+    // to the row, so the wash and pointer cursor cover the whole row.
+    const title_hit = layout.hitTest(title_frame.center()).?;
+    try std.testing.expectEqual(@as(ObjectId, 4), title_hit.id);
+    const title_hover = layout.hoverTargetForHit(title_hit).?;
+    try std.testing.expectEqual(@as(ObjectId, 2), title_hover.id);
+    try std.testing.expectEqual(WidgetKind.list_item, title_hover.kind);
+    try std.testing.expectEqual(WidgetCursor.pointing_hand, layout.cursorForHit(title_hover));
+
+    // The snippet line, the gap between the lines, and the row's own
+    // padding corner all belong to the row too.
+    const snippet_hover = layout.hoverTargetForHit(layout.hitTest(snippet_frame.center())).?;
+    try std.testing.expectEqual(@as(ObjectId, 2), snippet_hover.id);
+    const gap_point = geometry.PointF.init(title_frame.center().x, (title_frame.maxY() + snippet_frame.y) / 2);
+    const gap_hover = layout.hoverTargetForHit(layout.hitTest(gap_point)).?;
+    try std.testing.expectEqual(@as(ObjectId, 2), gap_hover.id);
+    const corner_point = geometry.PointF.init(row_frame.x + 3, row_frame.y + 3);
+    const corner_hover = layout.hoverTargetForHit(layout.hitTest(corner_point)).?;
+    try std.testing.expectEqual(@as(ObjectId, 2), corner_hover.id);
+
+    // A link keeps its own hover: the pointer cursor is the link's
+    // affordance even inside a pressable row.
+    const link_hover = layout.hoverTargetForHit(layout.hitTest(link_frame.center())).?;
+    try std.testing.expectEqual(@as(ObjectId, 7), link_hover.id);
+    try std.testing.expectEqual(WidgetCursor.pointing_hand, layout.cursorForHit(link_hover));
+
+    // Bare text with no claiming ancestor keeps itself (selection
+    // affordance), and stays on the default cursor.
+    const caption_frame = layout.findById(8).?.frame.normalized();
+    const caption_hover = layout.hoverTargetForHit(layout.hitTest(caption_frame.center())).?;
+    try std.testing.expectEqual(@as(ObjectId, 8), caption_hover.id);
+    try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(caption_hover));
+}
+
 test "widget emitter renders list item and segmented control states" {
     const tokens = DesignTokens{
         .colors = .{

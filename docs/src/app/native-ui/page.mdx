@@ -102,6 +102,8 @@ The color attributes are `background`, `foreground`, `accent`, `accent-foregroun
 
 References resolve against the app's live tokens on every rebuild, so themed apps re-resolve them when the theme changes — dark mode flips `surface` for free. Anything dynamic beyond that (raw colors, per-state styling) stays in Zig via `ElementOptions.style`, which always wins over a token reference.
 
+By default the stock tokens follow the system appearance: an app that sets neither `tokens` nor `tokens_fn` derives its theme from the OS light/dark setting (plus high-contrast and reduce-motion) and re-themes live when the user flips it — no restart, no wiring. Apps that own their look opt out by passing explicit `tokens` (a fixed theme) or `tokens_fn` (model-owned theming — the pattern for a custom palette that still follows the system scheme through `on_appearance`).
+
 ## Structure tags
 
 `<for each="..." as="...">` repeats its body per item and `<if test="{...}">` renders its children conditionally. A `for` body takes one or more children — elements, `<use>`, `<if>`/`<else>` arms, or nested `<for>`s — so polymorphic rows need no wrapper node. `key` names an item field: every node an item emits shares the item's identity across reorders (same-kind siblings within one item are disambiguated automatically), and a node's own `key`/`global-key` still wins. An `<else>` directly after an `</if>` renders when the test is false; directly after a `</for>` it renders the empty state when the iterable has no items:

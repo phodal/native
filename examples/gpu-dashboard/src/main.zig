@@ -121,6 +121,12 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the toolbar IS the titlebar
+    // — the chrome title and the toolbar's leading reserve shift right by
+    // the live chrome inset, and the toolbar row is the window's drag
+    // surface.
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
 const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -183,6 +189,10 @@ pub const Msg = union(enum) {
     submit_search,
     activity_scrolled: canvas.ScrollState,
     set_appearance: native_sdk.Appearance,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the chrome
+    /// title and toolbar reserve shift right past the traffic lights.
+    /// Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
     frame_status: DashboardFrameStatus,
 };
 
@@ -197,6 +207,12 @@ pub const Model = struct {
     auto_refresh: bool = true,
     confidence: f32 = 0.62,
     activity_scroll: f32 = 18,
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the chrome title and the toolbar's leading reserve
+    /// shift right by this much so they clear the traffic lights. Zero
+    /// when no band overlays the content (fullscreen, standard chrome,
+    /// tests).
+    chrome_leading: f32 = 0,
     color_scheme: native_sdk.ColorScheme = .light,
     reduce_motion: bool = false,
     high_contrast: bool = false,
@@ -269,6 +285,7 @@ pub fn update(model: *Model, msg: Msg) void {
         .activity_scrolled => |scroll_state| model.activity_scroll = scroll_state.offset,
         .submit_forecast => model.setStatus("Forecast amount submitted."),
         .submit_search => model.setStatus("Segment search submitted."),
+        .chrome_changed => |chrome| model.chrome_leading = chrome.insets.left,
         .set_appearance => |appearance| {
             const changed = model.color_scheme != appearance.color_scheme or
                 model.reduce_motion != appearance.reduce_motion or
@@ -310,16 +327,19 @@ fn textLeaf(ui: *DashboardUi, kind: canvas.WidgetKind, options: DashboardUi.Elem
 
 pub fn view(ui: *DashboardUi, model: *const Model) DashboardUi.Node {
     return ui.column(.{}, .{
-        toolbarView(ui),
+        toolbarView(ui, model),
         contentView(ui, model),
         statusView(ui, model),
     });
 }
 
-fn toolbarView(ui: *DashboardUi) DashboardUi.Node {
-    return ui.row(.{ .height = toolbar_height, .padding = 10, .gap = 12, .cross = .center }, .{
+fn toolbarView(ui: *DashboardUi, model: *const Model) DashboardUi.Node {
+    // The toolbar IS the titlebar (tall hidden-inset chrome): it is the
+    // window's drag surface, and its leading reserve grows by the live
+    // chrome inset so the title and controls clear the traffic lights.
+    return ui.row(.{ .height = toolbar_height, .padding = 10, .gap = 12, .cross = .center, .window_drag = true }, .{
         // The chrome display list draws the "GPU Dashboard" title here.
-        ui.el(.stack, .{ .width = 228 }, .{}),
+        ui.el(.stack, .{ .width = 228 + model.chrome_leading }, .{}),
         // A width FLOOR, not a fixed width: the control keeps its
         // designed 214pt at the shipped type scale and may only grow
         // when measured text runs longer (wider type, longer strings),
@@ -516,6 +536,7 @@ fn dashboardOptions() DashboardApp.Options {
         .animations = dashboardAnimations,
         .on_command = dashboardCommand,
         .on_appearance = dashboardAppearance,
+        .on_chrome = dashboardChrome,
         .on_frame = dashboardOnFrame,
         .sync = dashboardSync,
     };
@@ -530,8 +551,7 @@ fn dashboardTokensFromModel(model: *const Model) canvas.DesignTokens {
 /// The non-widget chrome prefix (background, toolbar, title, separators,
 /// hero gradient) rebuilt with the widget display list on every rebuild.
 fn buildDashboardChrome(model: *const Model, builder: *canvas.Builder, size: geometry.SizeF, tokens: canvas.DesignTokens) anyerror!void {
-    _ = model;
-    try buildDashboardChromeForSize(builder, tokens, size);
+    try buildDashboardChromeForSizeWithInset(builder, tokens, size, model.chrome_leading);
 }
 
 /// CommandEvent is stringly by design; the shell command names map onto the
@@ -546,6 +566,14 @@ fn dashboardCommand(name: []const u8) ?Msg {
 /// `tokens_fn` can derive from it.
 fn dashboardAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
+}
+
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+fn dashboardChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return .{ .chrome_changed = chrome };
 }
 
 /// The live-button pulse: command ids derive from the current tree, so the
@@ -678,6 +706,12 @@ fn dashboardHeroRect(surface_size: geometry.SizeF) geometry.RectF {
 /// The chrome display-list prefix: exactly
 /// `dashboard_chrome_prefix_commands` commands.
 fn buildDashboardChromeForSize(builder: *canvas.Builder, tokens: canvas.DesignTokens, surface_size: geometry.SizeF) canvas.Error!void {
+    try buildDashboardChromeForSizeWithInset(builder, tokens, surface_size, 0);
+}
+
+/// `chrome_leading` shifts the toolbar title past the traffic lights on a
+/// hidden-inset titlebar; zero everywhere chrome does not overlay content.
+fn buildDashboardChromeForSizeWithInset(builder: *canvas.Builder, tokens: canvas.DesignTokens, surface_size: geometry.SizeF, chrome_leading: f32) canvas.Error!void {
     const size = dashboardSurfaceSize(surface_size);
     const backdrop_rect = dashboardBackdropRect(size);
     const hero_rect = dashboardHeroRect(size);
@@ -689,7 +723,7 @@ fn buildDashboardChromeForSize(builder: *canvas.Builder, tokens: canvas.DesignTo
         .id = dashboard_toolbar_title_id,
         .font_id = tokens.typography.font_id,
         .size = 16,
-        .origin = geometry.PointF.init(18, 33),
+        .origin = geometry.PointF.init(18 + chrome_leading, 33),
         .color = tokens.colors.text,
         .text = "GPU Dashboard",
         .text_layout = .{
@@ -1813,6 +1847,30 @@ test "gpu dashboard app rebuilds retained scene for resized gpu surfaces" {
     const status_frame = try dashboardLayoutFrame(widget_layout, status_text.id);
     const content_end = dashboardContentYForSize(resized_size) + dashboardContentHeightForSize(resized_size);
     try std.testing.expect(status_frame.y >= content_end);
+}
+
+test "chrome geometry shifts the toolbar title reserve past the traffic lights" {
+    var model = Model{};
+    try std.testing.expectEqual(@as(f32, 0), model.chrome_leading);
+
+    // The tall hidden-inset band arrives through on_chrome: the chrome
+    // title and the toolbar's leading reserve shift right so they clear
+    // the traffic lights.
+    const msg = dashboardChrome(.{
+        .insets = .{ .top = 52, .left = 78 },
+        .buttons = geometry.RectF.init(20, 19, 52, 14),
+    }) orelse return error.TestUnexpectedResult;
+    update(&model, msg);
+    try std.testing.expectEqual(@as(f32, 78), model.chrome_leading);
+
+    // Fullscreen zeroes the chrome and the reserve collapses.
+    const cleared = dashboardChrome(.{}) orelse return error.TestUnexpectedResult;
+    update(&model, cleared);
+    try std.testing.expectEqual(@as(f32, 0), model.chrome_leading);
+
+    // The scene declares the matching titlebar so the platform actually
+    // hides the OS bar the toolbar replaces.
+    try std.testing.expectEqual(.hidden_inset_tall, shell_scene.windows[0].titlebar);
 }
 
 test "gpu dashboard frame status message formats renderer diagnostics" {

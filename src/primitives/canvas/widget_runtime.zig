@@ -93,6 +93,14 @@ pub const WidgetLayoutTree = struct {
         return widget_access.cursorForWidgetHit(hit);
     }
 
+    /// Resolve a raw hit to the widget hover visually belongs to: the
+    /// press fall-through walk, so the hover wash and pointer cursor
+    /// land where a click would (a composite row is one surface).
+    pub fn hoverTargetForHit(self: WidgetLayoutTree, hit: ?WidgetHit) ?WidgetHit {
+        const raw = hit orelse return null;
+        return widget_routing.widgetHoverTargetForHit(self, raw);
+    }
+
     pub fn routePointerEvent(self: WidgetLayoutTree, event: WidgetPointerEvent, output: []WidgetEventRouteEntry) Error!WidgetEventRoute {
         return widget_routing.routeWidgetPointerEvent(self, event, .{}, output);
     }

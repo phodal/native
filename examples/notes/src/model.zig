@@ -55,6 +55,10 @@ pub const max_title_bytes = 28;
 pub const max_snippet_bytes = 30;
 pub const max_path_bytes = 512;
 const max_status_bytes = 128;
+/// The header band's natural height, and the floor `header_height`
+/// falls back to when no titlebar band overlays the content
+/// (fullscreen, standard chrome, tests).
+pub const header_natural_height: f32 = 56;
 
 /// Serialized-store budget: every record header plus every body at cap.
 /// Comfortably under the 1 MiB `max_effect_file_bytes` channel bound.
@@ -140,6 +144,10 @@ pub const Msg = union(enum) {
     /// controlled pattern (rebuilds keep the list's place).
     note_list_scrolled: canvas.ScrollState,
     system_scheme: canvas.ColorScheme,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the header
+    /// pads its leading edge past the traffic lights and matches its
+    /// height to the titlebar band. Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
     refresh_tick: native_sdk.EffectTimer,
     save_tick: native_sdk.EffectTimer,
     store_done: native_sdk.EffectFileResult,
@@ -194,6 +202,14 @@ pub const Model = struct {
     /// Note-list scroll offset (model-owned; the runtime echoes scrolls
     /// back through `note_list_scrolled`).
     note_list_scroll: f32 = 0,
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the header row leads with a spacer this wide so its
+    /// controls clear the traffic lights, and matches its height to the
+    /// titlebar band so the lights share the header's centerline. Both
+    /// fall back to the natural header when no band overlays the
+    /// content (fullscreen, platforms with standard chrome, tests).
+    chrome_leading: f32 = 0,
+    header_height: f32 = header_natural_height,
 
     /// Keyboard reference rendered in the idle editor pane. Spelled-out
     /// key names on purpose: the bundled glyph set has no ⌘/⌥ coverage,
@@ -290,8 +306,8 @@ pub const Model = struct {
         return model.folder_count >= max_folders;
     }
 
-    pub fn renameDisabled(model: *const Model) bool {
-        return model.selected_folder == all_folder_id;
+    pub fn renameAvailable(model: *const Model) bool {
+        return model.selected_folder != all_folder_id;
     }
 
     pub fn folderRows(model: *const Model, arena: std.mem.Allocator) []const FolderRow {
@@ -748,6 +764,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         // Same controlled pattern for the note-list scroll: store the
         // applied offset, echo it back through the scroll's value.
         .note_list_scrolled => |state| model.note_list_scroll = state.offset,
+        .chrome_changed => |chrome| {
+            model.chrome_leading = chrome.insets.left;
+            // Match the header to the titlebar band so its centered
+            // controls share the traffic lights' centerline; the natural
+            // height is the floor when no band overlays the content.
+            model.header_height = @max(header_natural_height, chrome.insets.top);
+        },
         .select_folder_at => |position| {
             if (position == 0) return selectFolder(model, all_folder_id);
             if (position <= model.folder_count) selectFolder(model, model.folders[position - 1].id);

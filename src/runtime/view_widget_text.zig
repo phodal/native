@@ -55,10 +55,12 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
                 return null;
             }
 
-            if (widget.kind == .textarea and keyboard.phase == .key_down and keyboard.text.len == 0 and keyboard.modifiers.shift and !keyboard.modifiers.control and !keyboard.modifiers.alt and !keyboard.modifiers.super) {
-                if (std.ascii.eqlIgnoreCase(keyboard.key, "enter") or std.ascii.eqlIgnoreCase(keyboard.key, "return")) {
-                    return .{ .insert_text = "\n" };
-                }
+            // Multi-line editing contract: Enter (plain or shift) inserts
+            // a newline; submit rides the primary-modifier chord instead.
+            // Shared with the app dispatch path so the model's `on_input`
+            // hears exactly the edit the retained text applied.
+            if (canvas.widgetKeyboardNewlineTextEditEvent(widget.kind, keyboard)) |newline_edit| {
+                return newline_edit;
             }
 
             if (canvasWidgetSingleLineTextKind(widget.kind) and keyboard.phase == .key_down and keyboard.text.len == 0 and !keyboard.modifiers.hasNavigationModifier()) {

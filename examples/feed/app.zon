@@ -19,6 +19,7 @@
                 .min_height = 480,
                 .restore_state = false,
                 .restore_policy = "center_on_primary",
+                .titlebar = "hidden_inset_tall",
                 .views = .{
                     .{ .label = "feed-canvas", .kind = "gpu_surface", .fill = true, .role = "Feed timeline canvas", .accessibility_label = "Feed", .gpu_backend = "metal", .gpu_pixel_format = "bgra8_unorm", .gpu_present_mode = "timer", .gpu_alpha_mode = "opaque", .gpu_color_space = "srgb", .gpu_vsync = true },
                 },

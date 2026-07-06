@@ -170,12 +170,15 @@ test "the board lays out through the canvas engine with cards in their columns" 
 /// copy-pasted column blocks. Template expansion happens at the use site,
 /// so the templated board must produce byte-identical widget ids.
 const legacy_board_markup =
-    \\<column gap="12" padding="16">
-    \\  <row gap="8" cross="center">
-    \\    <text grow="1">Kanban</text>
+    \\<column background="background">
+    \\  <row height="{header_height}" padding="12" gap="10" cross="center" background="surface" window-drag="true" label="Kanban header">
+    \\    <spacer width="{chrome_leading}" />
+    \\    <badge variant="primary">Kanban</badge>
+    \\    <spacer grow="1" />
     \\    <button variant="primary" on-press="add">Add card</button>
     \\  </row>
-    \\  <row grow="1" gap="12">
+    \\  <separator />
+    \\  <row grow="1" gap="12" padding="16">
     \\    <column grow="1" gap="8" padding="10" label="Todo">
     \\      <text>Todo</text>
     \\      <column gap="8">
@@ -334,4 +337,37 @@ test "the board markup satisfies the model contract in both directions" {
         std.debug.print("dead-state warning: {s}\n", .{warning.message});
     }
     try testing.expectEqual(@as(usize, 0), warnings.len);
+}
+
+test "chrome geometry pads the header and matches its height to the tall band" {
+    var model = main.Model{};
+    try testing.expectEqual(main.header_natural_height, model.header_height);
+
+    // The tall hidden-inset band arrives through on_chrome: the header
+    // pads past the traffic lights and matches the band's height so its
+    // centered controls share the lights' centerline.
+    const chrome: native_sdk.WindowChrome = .{
+        .insets = .{ .top = 52, .left = 78 },
+        .buttons = native_sdk.geometry.RectF.init(20, 19, 52, 14),
+    };
+    const msg = main.onChrome(chrome) orelse return error.TestUnexpectedResult;
+    main.update(&model, msg);
+    try testing.expectEqual(@as(f32, 78), model.chrome_leading);
+    try testing.expectEqual(@max(main.header_natural_height, 52), model.header_height);
+
+    // A band taller than the natural header grows the header with it.
+    const tall = main.onChrome(.{ .insets = .{ .top = 72, .left = 78 } }) orelse return error.TestUnexpectedResult;
+    main.update(&model, tall);
+    try testing.expectEqual(@as(f32, 72), model.header_height);
+
+    // Fullscreen zeroes the chrome: the pad collapses and the height
+    // falls back to the header's natural floor.
+    const cleared = main.onChrome(.{}) orelse return error.TestUnexpectedResult;
+    main.update(&model, cleared);
+    try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(main.header_natural_height, model.header_height);
+
+    // The scene declares the matching titlebar so the platform actually
+    // hides the OS bar this header replaces.
+    try testing.expectEqual(.hidden_inset_tall, main.shell_scene.windows[0].titlebar);
 }

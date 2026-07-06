@@ -128,6 +128,10 @@ pub fn albumTracks(album_id: u8) []const Track {
 
 pub const max_queue = 16;
 pub const max_search = 48;
+/// The header bar's natural height, and the floor `header_height` falls
+/// back to when no titlebar band overlays the content (fullscreen,
+/// standard chrome, tests).
+pub const header_natural_height: f32 = 60;
 pub const tick_ms: u32 = 500;
 
 /// Effect keys, model-owned identity (effect-key style).
@@ -142,6 +146,10 @@ pub const Msg = union(enum) {
     show_albums,
     show_songs,
     set_appearance: native_sdk.Appearance,
+    /// Chrome overlay geometry (tall hidden-inset titlebar): the header
+    /// pads its leading edge past the traffic lights and matches its
+    /// height to the titlebar band. Delivered through `on_chrome`.
+    chrome_changed: native_sdk.WindowChrome,
     search_edit: canvas.TextInputEvent,
     open_album: u8,
     close_album,
@@ -176,6 +184,13 @@ pub const Model = struct {
     /// the model observes the applied offset and echoes it back.
     grid_scroll: f32 = 0,
     detail_scroll: f32 = 0,
+    /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
+    /// titlebar): the header leads with a spacer this wide so its
+    /// controls clear the traffic lights, and matches its height to the
+    /// titlebar band. Both fall back to the natural header when no band
+    /// overlays the content (fullscreen, standard chrome, tests).
+    chrome_leading: f32 = 0,
+    header_height: f32 = header_natural_height,
     songs_scroll: f32 = 0,
     now: ?u8 = null, // playing track id
     playing: bool = false,
@@ -425,6 +440,13 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .show_albums => model.tab = .albums,
         .show_songs => model.tab = .songs,
         .set_appearance => |appearance| model.appearance = appearance,
+        .chrome_changed => |chrome| {
+            model.chrome_leading = chrome.insets.left;
+            // Match the header to the titlebar band so its centered
+            // controls share the traffic lights' centerline; the natural
+            // height is the floor when no band overlays the content.
+            model.header_height = @max(header_natural_height, chrome.insets.top);
+        },
         .search_edit => |edit| model.search_buffer.apply(edit),
         .grid_scrolled => |state| model.grid_scroll = state.offset,
         .detail_scrolled => |state| model.detail_scroll = state.offset,

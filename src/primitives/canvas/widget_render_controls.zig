@@ -84,6 +84,7 @@ const selectionControlVisualTokens = widget_render_style.selectionControlVisualT
 const surfaceControlVisualTokens = widget_render_style.surfaceControlVisualTokens;
 const buttonStrokeWidth = widget_render_style.buttonStrokeWidth;
 const listItemFillColor = widget_render_style.listItemFillColor;
+const disabledWash = widget_render_style.disabledWash;
 
 const max_widget_text_range_rects: usize = 4;
 
@@ -733,7 +734,7 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .rect = box,
         .radius = radius,
         .fill = if (selected)
-            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
+            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled))
         else
             colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
     });
@@ -742,12 +743,16 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .rect = box,
         .radius = radius,
         .stroke = .{
-            .fill = if (selected) widgetAccentFill(widget, visual.border orelse visual.active_background orelse tokens.colors.accent) else widgetBorderFill(widget, visual.border orelse tokens.colors.border),
+            .fill = colorFill(disabledWash(if (selected) widgetAccentColor(widget, visual.border orelse visual.active_background orelse tokens.colors.accent) else widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled)),
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 3, box, radius);
     if (selected) {
+        // The check keeps the accent-foreground tint even when disabled
+        // (washed to half strength with the box) — swapping it to the
+        // muted text gray would read muddy on the washed accent fill.
+        const check_color = disabledWash(widget.style.accent_foreground orelse visual.foreground orelse tokens.colors.accent_text, widget.state.disabled);
         const left = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.26, box.y + box.height * 0.54));
         const mid = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.43, box.y + box.height * 0.70));
         const right = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.76, box.y + box.height * 0.32));
@@ -755,13 +760,13 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
             .id = widgetPartId(widget.id, 4),
             .from = left,
             .to = mid,
-            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)), .width = 2 },
+            .stroke = .{ .fill = colorFill(check_color), .width = 2 },
         });
         try builder.drawLine(.{
             .id = widgetPartId(widget.id, 5),
             .from = mid,
             .to = right,
-            .stroke = .{ .fill = colorFill(widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)), .width = 2 },
+            .stroke = .{ .fill = colorFill(check_color), .width = 2 },
         });
     }
     try emitControlLabelWithColor(builder, widget, tokens, box.x + box.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 6, visual.foreground orelse tokens.colors.text);
@@ -785,7 +790,7 @@ pub fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         // The border stays on the input hairline even when selected —
         // the primary-colored dot alone carries the checked state.
         .stroke = .{
-            .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
+            .fill = colorFill(disabledWash(widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled)),
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
@@ -802,7 +807,7 @@ pub fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .id = widgetPartId(widget.id, 4),
             .rect = dot,
             .radius = Radius.all(dot.height * 0.5),
-            .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent)),
+            .fill = colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled)),
         });
     }
     try emitControlLabelWithColor(builder, widget, tokens, circle.x + circle.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5, visual.foreground orelse tokens.colors.text);
@@ -826,9 +831,9 @@ pub fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .rect = track,
         .radius = track_radius,
         .fill = if (selected)
-            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
+            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled))
         else
-            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed))),
+            colorFill(disabledWash(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed)), widget.state.disabled)),
     });
     // Borderless by default: the switch is a filled pill (primary when
     // on, the input wash when off) whose near-white thumb provides the
@@ -854,8 +859,12 @@ pub fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .radius = controlRadius(widget, visual, knob.height * 0.5),
         // The thumb is near-white in both states and schemes (the
         // primary-foreground tint), so it stays legible on the primary
-        // track and on the dark input wash alike.
-        .fill = colorFill(if (selected) widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text) else widgetBackgroundColor(widget, visual.foreground orelse tokens.colors.accent_text)),
+        // track and on the dark input wash alike. Disabled washes it to
+        // half strength with the track instead of swapping to gray.
+        .fill = colorFill(disabledWash(
+            if (selected) widget.style.accent_foreground orelse visual.foreground orelse tokens.colors.accent_text else widget.style.background orelse visual.foreground orelse tokens.colors.accent_text,
+            widget.state.disabled,
+        )),
     });
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 4, track, track_radius);
     try emitControlLabelWithColor(builder, widget, tokens, track.x + track.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5, visual.foreground orelse tokens.colors.text);

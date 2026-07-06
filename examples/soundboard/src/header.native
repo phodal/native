@@ -8,7 +8,12 @@
      field carries the built-in trailing clear affordance whenever it
      holds text — no external Clear button. -->
 <column>
-  <row height="60" padding="12" gap="12" cross="center" background="surface" label="Soundboard header">
+  <!-- The header IS the titlebar (tall hidden-inset chrome): it is the
+       window's drag surface, leads with a spacer sized to the traffic
+       lights via on_chrome, and matches its height to the titlebar band
+       so its controls and the lights share a centerline. -->
+  <row height="{header_height}" padding="12" gap="12" cross="center" background="surface" window-drag="true" label="Soundboard header">
+    <spacer width="{chrome_leading}" />
     <badge variant="primary">Soundboard</badge>
     <!-- Width-constrained caption: one honest line, clipped if the text
          ever outgrows the band, never a second line over the header. -->

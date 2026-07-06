@@ -304,8 +304,23 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 .focused_id = focused_id,
                 .focus_visible_id = if (focused_id) |id| if (self.canvas_widget_focus_visible_id == id) id else null else null,
                 .hovered_id = if (self.canvas_widget_hovered_id == 0) null else self.canvas_widget_hovered_id,
-                .pressed_id = if (self.canvas_widget_pressed_id == 0) null else self.canvas_widget_pressed_id,
+                // The STORED pressed id is the raw hit (text drag-selection
+                // extends against it); the pressed WASH resolves through
+                // the press fall-through so a click anywhere in a
+                // composite row lights the row, matching the hover walk.
+                .pressed_id = if (self.canvas_widget_pressed_id == 0) null else canvasWidgetPressWashTargetId(self, self.canvas_widget_pressed_id),
             };
+        }
+
+        /// The widget the pressed WASH belongs to for a raw pressed id:
+        /// the nearest press-claiming widget on the ancestor path (the
+        /// same walk presses dispatch through), or the raw id when
+        /// nothing on the path claims.
+        fn canvasWidgetPressWashTargetId(self: *const RuntimeView, id: canvas.ObjectId) canvas.ObjectId {
+            const index = self.canvasWidgetNodeIndexById(id) orelse return id;
+            const layout = self.widgetLayoutTree();
+            const target_index = canvas.widgetPressTargetIndexFromNode(layout, index) orelse return id;
+            return layout.nodes[target_index].widget.id;
         }
 
         pub fn reconcileCanvasWidgetRenderStateAfterScroll(self: *RuntimeView, point: ?geometry.PointF) void {
@@ -322,7 +337,10 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             var next_cursor = self.canvas_widget_cursor;
 
             if (point) |value| {
-                const hit = layout.hitTestWithTokens(value, self.widget_tokens);
+                // Same hover-target walk as live pointer moves: the wash
+                // and cursor a scroll settles on must match what a real
+                // move to this point would produce.
+                const hit = layout.hoverTargetForHit(layout.hitTestWithTokens(value, self.widget_tokens));
                 next_hovered_id = if (hit) |target| target.id else 0;
                 next_cursor = platformCursorFromCanvas(layout.cursorForHit(hit));
             } else if (!canvasWidgetInteractionTargetExists(layout, next_hovered_id)) {

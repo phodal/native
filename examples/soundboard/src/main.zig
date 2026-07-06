@@ -52,6 +52,12 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the header bar IS the
+    // titlebar — it pads its leading edge past the traffic lights via
+    // `on_chrome` and is the window's drag surface (`window-drag` in
+    // header.native).
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -98,9 +104,18 @@ pub fn soundboardOptions() SoundboardApp.Options {
         .init_fx = boot,
         .tokens_fn = tokensFromModel,
         .on_appearance = onAppearance,
+        .on_chrome = onChrome,
         .animations = animations,
         .sync = sync,
     };
+}
+
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return .{ .chrome_changed = chrome };
 }
 
 /// Design tokens derive from the model's theme preference plus the

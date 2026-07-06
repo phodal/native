@@ -4,12 +4,19 @@
      each <use>, so widget ids are identical to writing the three columns
      out by hand in this file. -->
 <import src="components/board-column.native"/>
-<column gap="12" padding="16">
-  <row gap="8" cross="center">
-    <text grow="1">Kanban</text>
+<column background="background">
+  <!-- The header IS the titlebar (tall hidden-inset chrome): it is the
+       window's drag surface, leads with a spacer sized to the traffic
+       lights via on_chrome, and matches its height to the titlebar band
+       so its controls and the lights share a centerline. -->
+  <row height="{header_height}" padding="12" gap="10" cross="center" background="surface" window-drag="true" label="Kanban header">
+    <spacer width="{chrome_leading}" />
+    <badge variant="primary">Kanban</badge>
+    <spacer grow="1" />
     <button variant="primary" on-press="add">Add card</button>
   </row>
-  <row grow="1" gap="12">
+  <separator />
+  <row grow="1" gap="12" padding="16">
     <use template="board-column" title="Todo" cards="{todoCards}" />
     <use template="board-column" title="Doing" cards="{doingCards}" />
     <use template="board-column" title="Done" cards="{doneCards}" />

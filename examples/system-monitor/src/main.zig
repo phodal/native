@@ -68,6 +68,12 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .min_width = window_min_width,
     .min_height = window_min_height,
     .restore_state = false,
+    // Tall hidden-inset titlebar (declared in app.zon too, which threads
+    // it through the STARTUP window create): the header bar IS the
+    // titlebar — it pads its leading edge past the traffic lights via
+    // `on_chrome` and is the window's drag surface (`window-drag` in
+    // header.native). The settings window keeps standard chrome.
+    .titlebar = .hidden_inset_tall,
     .views = &shell_views,
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
@@ -88,6 +94,7 @@ pub fn monitorOptions() MonitorApp.Options {
         .window_view = monitorWindowView,
         .tokens_fn = tokensFromModel,
         .on_appearance = onAppearance,
+        .on_chrome = onChrome,
     };
 }
 
@@ -127,6 +134,14 @@ pub fn tokensFromModel(model: *const Model) canvas.DesignTokens {
 /// the `auto` theme preference follows them live.
 fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
+}
+
+/// Chrome overlay geometry flows into the model (tall hidden-inset
+/// titlebar): delivered before the first view build and again when it
+/// changes — entering fullscreen hides the traffic lights and this goes
+/// to zero.
+pub fn onChrome(chrome: native_sdk.WindowChrome) ?Msg {
+    return Msg{ .chrome_changed = chrome };
 }
 
 // ------------------------------------------------------------------- main

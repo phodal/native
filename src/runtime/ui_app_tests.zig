@@ -755,6 +755,66 @@ test "ui app hooks drive chrome, dynamic tokens, animations, and frame reports" 
     try std.testing.expectEqual(@as(u32, 1), app_state.model.frame_reports);
 }
 
+test "unthemed apps follow the system appearance live; explicit tokens opt out" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    // The counter sets neither `tokens` nor `tokens_fn`: the stock theme
+    // follows the system appearance.
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, counterOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // An appearance delivered BEFORE the install (the platform emits one
+    // right after start) makes the very first build dark.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .appearance_changed = .{ .color_scheme = .dark } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    const dark = canvas.DesignTokens.theme(.{ .color_scheme = .dark });
+    var stored = try harness.runtime.canvasWidgetDesignTokens(1, canvas_label);
+    try std.testing.expectEqualDeep(dark.colors.background, stored.colors.background);
+    try std.testing.expectEqual(@as(f32, 2), stored.pixel_snap.scale);
+
+    // Flipping the OS setting re-themes the RUNNING app: no restart, no
+    // app wiring.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .appearance_changed = .{ .color_scheme = .light } });
+    const light = canvas.DesignTokens.theme(.{ .color_scheme = .light });
+    stored = try harness.runtime.canvasWidgetDesignTokens(1, canvas_label);
+    try std.testing.expectEqualDeep(light.colors.background, stored.colors.background);
+
+    // Reduce-motion and high-contrast ride the same channel.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .appearance_changed = .{ .color_scheme = .dark, .high_contrast = true, .reduce_motion = true } });
+    stored = try harness.runtime.canvasWidgetDesignTokens(1, canvas_label);
+    const dark_hc = canvas.DesignTokens.theme(.{ .color_scheme = .dark, .contrast = .high, .reduce_motion = true });
+    try std.testing.expectEqualDeep(dark_hc.colors.background, stored.colors.background);
+    try std.testing.expectEqualDeep(dark_hc.colors.focus_ring, stored.colors.focus_ring);
+    try std.testing.expectEqual(@as(u32, 0), stored.motion.normal_ms);
+
+    // Explicit static tokens OPT OUT: the app owns its look and an
+    // appearance flip never restyles it.
+    const fixed_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(fixed_state);
+    var fixed_options = counterOptions();
+    fixed_options.name = "ui-app-counter-fixed";
+    fixed_options.tokens = canvas.DesignTokens.theme(.{ .color_scheme = .light });
+    fixed_state.* = CounterApp.init(std.heap.page_allocator, .{}, fixed_options);
+    defer fixed_state.deinit();
+    try std.testing.expectEqualDeep(light.colors.background, fixed_state.effectiveTokens().colors.background);
+    fixed_state.system_appearance = .{ .color_scheme = .dark };
+    try std.testing.expectEqualDeep(light.colors.background, fixed_state.effectiveTokens().colors.background);
+}
+
 test "markup watch polls from the reserved runtime timer" {
     const io = std.testing.io;
     const watch_path = ".zig-cache/ui-app-markup-watch-test.native";

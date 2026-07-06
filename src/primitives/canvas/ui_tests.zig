@@ -321,6 +321,39 @@ test "keyboard events resolve activation and submit messages" {
     try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(checkbox.id, letter));
 }
 
+test "textarea keyboard: enter edits a newline, submit rides the primary chord" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var ui = InboxUi.init(arena_state.allocator());
+    const tree = try ui.finalize(ui.column(.{ .gap = 8 }, .{
+        ui.el(.textarea, .{ .on_input = InboxUi.inputMsg(.draft), .on_submit = .add }, .{}),
+    }));
+    const textarea = findByKind(tree.root, .textarea).?;
+
+    // Plain Enter is an EDIT: the model's on_input hears the newline the
+    // runtime applied to the retained text — never a submit.
+    const enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter" };
+    try testing.expectEqualStrings("\n", tree.msgForKeyboard(textarea.id, enter).?.draft.insert_text);
+
+    // Shift+Enter stays a newline too: single-line muscle memory must
+    // never destroy multi-line text.
+    const shift_enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter", .modifiers = .{ .shift = true } };
+    try testing.expectEqualStrings("\n", tree.msgForKeyboard(textarea.id, shift_enter).?.draft.insert_text);
+
+    // The primary chord submits (cmd on macOS, ctrl elsewhere).
+    const cmd_enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter", .modifiers = .{ .super = true } };
+    try testing.expectEqual(Msg.add, tree.msgForKeyboard(textarea.id, cmd_enter).?);
+    const ctrl_enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter", .modifiers = .{ .control = true } };
+    try testing.expectEqual(Msg.add, tree.msgForKeyboard(textarea.id, ctrl_enter).?);
+
+    // Shift/alt variants of the chord stay free for app shortcuts.
+    const cmd_shift_enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter", .modifiers = .{ .super = true, .shift = true } };
+    try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(textarea.id, cmd_shift_enter));
+    const alt_enter = canvas.WidgetKeyboardEvent{ .phase = .key_down, .key = "enter", .modifiers = .{ .alt = true } };
+    try testing.expectEqual(@as(?Msg, null), tree.msgForKeyboard(textarea.id, alt_enter));
+}
+
 test "typed handlers imply accessibility actions" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

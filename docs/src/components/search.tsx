@@ -134,8 +134,8 @@ export function Search() {
           <path d="m21 21-4.3-4.3" />
         </svg>
         Search docs…
-        <kbd className="pointer-events-none ml-1 inline-flex items-center gap-0.5 rounded border border-gray-alpha-400 bg-background-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-900">
-          <span>&#8984;</span>K
+        <kbd className="pointer-events-none flex h-5 items-center rounded border border-gray-alpha-400 bg-background-100 px-1 font-sans text-[11px] leading-none text-gray-900">
+          &#8984;K
         </kbd>
       </button>
 

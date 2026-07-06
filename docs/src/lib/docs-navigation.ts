@@ -14,11 +14,10 @@ export const navSections: NavSection[] = [
   {
     title: "Get Started",
     items: [
-      { name: "Home", href: "/" },
-      { name: "Philosophy", href: "/philosophy" },
+      { name: "Introduction", href: "/introduction" },
       { name: "Quick Start", href: "/quick-start" },
-      { name: "CLI Reference", href: "/cli" },
-      { name: "app.zon Reference", href: "/app-zon" },
+      { name: "CLI", href: "/cli" },
+      { name: "Config", href: "/app-zon" },
     ],
   },
   {

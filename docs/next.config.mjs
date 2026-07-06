@@ -8,6 +8,12 @@ const nextConfig = {
   // CI-style builds set NEXT_DIST_DIR so `pnpm check` never shares .next
   // with a running dev server (a shared dist dir corrupts the dev cache).
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  async redirects() {
+    return [
+      // The Philosophy page became the Introduction, the opening page of the docs.
+      { source: "/philosophy", destination: "/introduction", permanent: true },
+    ];
+  },
 };
 
 export default withMDX(nextConfig);

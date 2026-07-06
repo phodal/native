@@ -6,6 +6,7 @@ import { GeistPixelSquare } from "geist/font/pixel";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Search } from "@/components/search";
+import { HeaderNav } from "@/components/header-nav";
 import { DocsMobileNav } from "@/components/docs-mobile-nav";
 import { DocsNav } from "@/components/docs-nav";
 import { getStarCount } from "@/lib/github";
@@ -79,7 +80,8 @@ function Header({ stars }: { stars?: string }) {
             <span className={`${GeistPixelSquare.className} text-lg`}>{siteName}</span>
           </Link>
         </div>
-        <nav className="flex items-center gap-4">
+        <div className="flex items-center gap-4">
+          <HeaderNav />
           <Search />
           <a
             href={githubUrl}
@@ -93,7 +95,7 @@ function Header({ stars }: { stars?: string }) {
             {stars && <span>{stars}</span>}
           </a>
           <ThemeToggle />
-        </nav>
+        </div>
       </div>
     </header>
   );

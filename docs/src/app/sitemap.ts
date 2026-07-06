@@ -6,9 +6,11 @@ import path from "node:path";
 const baseUrl = "https://zero-native.dev";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  return allDocsPages.map((page) => ({
-    url: `${baseUrl}${page.href}`,
-    lastModified: lastModifiedFor(page.href),
+  // The homepage lives in the site header, not the docs nav, so list it explicitly.
+  const hrefs = ["/", ...allDocsPages.map((page) => page.href)];
+  return hrefs.map((href) => ({
+    url: `${baseUrl}${href}`,
+    lastModified: lastModifiedFor(href),
   }));
 }
 

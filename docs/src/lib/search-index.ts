@@ -13,8 +13,10 @@ let cached: IndexEntry[] | null = null;
 export async function getSearchIndex(): Promise<IndexEntry[]> {
   if (cached) return cached;
 
+  // The homepage lives in the site header, not the docs nav, so index it explicitly.
+  const pages = [{ name: "Home", href: "/" }, ...allDocsPages];
   const entries: IndexEntry[] = await Promise.all(
-    allDocsPages.map(async (item) => ({
+    pages.map(async (item) => ({
       title: item.name,
       href: item.href,
       content: await pageContent(item.href, item.name),

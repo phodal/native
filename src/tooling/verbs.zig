@@ -179,7 +179,7 @@ fn runZig(io: std.Io, verb: Verb, argv: []const []const u8) !void {
         .pgid = if (own_tree) process_tree.spawnPgid() else null,
     });
     // Capture the group id at spawn: wait() clears the child's id.
-    const group_pid: i32 = if (own_tree) (if (child.id) |id| @as(i32, @intCast(id)) else 0) else 0;
+    const group_pid: i32 = if (own_tree) process_tree.groupId(&child) else 0;
     if (group_pid > 0) process_tree.own(group_pid);
     defer if (group_pid > 0) process_tree.releaseAndKill(group_pid);
     const term = try child.wait(io);

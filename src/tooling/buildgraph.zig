@@ -27,9 +27,9 @@ pub const Error = error{
 
 /// Where the `native_sdk` framework checkout lives, for wiring the path
 /// dependency of a generated or ejected build graph. Resolution order:
-///   1. NATIVE_SDK_PATH environment variable (explicit override)
-///   2. derived from the CLI executable location (`<root>/zig-out/bin/native`
-///      in a framework checkout, `<package>/bin/native` in the npm package)
+///   1. NATIVE_SDK_PATH environment variable (explicit override; the npm
+///      wrapper sets it to the package that carries src/)
+///   2. derived from the CLI executable location (frameworkRootFromExecutable)
 /// Returns an absolute path, or null when neither resolves.
 pub fn resolveFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, env_map: *std.process.Environ.Map) !?[]const u8 {
     if (env_map.get("NATIVE_SDK_PATH")) |path| {
@@ -39,23 +39,43 @@ pub fn resolveFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, env_map: *
         }
     }
 
+    return frameworkRootFromExecutable(allocator, io);
+}
+
+/// Derive the framework root from the CLI executable's own location, so a
+/// `native` binary is self-sufficient wherever it was installed from.
+/// Layouts covered (binary path -> framework root):
+///   - `<checkout>/zig-out/bin/native` -> `<checkout>` (source checkout)
+///   - `<package>/bin/native` -> `<package>` (any bundle carrying src/
+///     next to bin/)
+///   - `node_modules/@native-sdk/cli-<platform>/bin/native` ->
+///     `node_modules/@native-sdk/cli` (npm split install: per-platform
+///     packages carry only the binary, the main package next to them
+///     carries the SDK source — nested or hoisted/global node_modules)
+/// The walk checks each of the four nearest ancestors, plus a `cli`
+/// sibling at each level for the npm split shape, and accepts the first
+/// directory that has `src/root.zig`.
+pub fn frameworkRootFromExecutable(allocator: std.mem.Allocator, io: std.Io) !?[]const u8 {
     var buffer: [std.fs.max_path_bytes]u8 = undefined;
     const executable_len = std.process.executablePath(io, &buffer) catch return null;
     const executable_path = buffer[0..executable_len];
-    const bin_dir = std.fs.path.dirname(executable_path) orelse return null;
-    const package_root = std.fs.path.dirname(bin_dir) orelse return null;
-    if (hasFrameworkRoot(allocator, io, package_root)) {
-        return try allocator.dupe(u8, package_root);
-    }
-    if (std.fs.path.dirname(package_root)) |repo_root| {
-        if (hasFrameworkRoot(allocator, io, repo_root)) {
-            return try allocator.dupe(u8, repo_root);
+
+    var dir: []const u8 = std.fs.path.dirname(executable_path) orelse return null;
+    var level: usize = 0;
+    while (level < 4) : (level += 1) {
+        const parent = std.fs.path.dirname(dir) orelse return null;
+        if (hasFrameworkRoot(allocator, io, parent)) {
+            return try allocator.dupe(u8, parent);
         }
+        const sibling = try std.fs.path.join(allocator, &.{ parent, "cli" });
+        if (hasFrameworkRoot(allocator, io, sibling)) return sibling;
+        allocator.free(sibling);
+        dir = parent;
     }
     return null;
 }
 
-fn hasFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, root: []const u8) bool {
+pub fn hasFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, root: []const u8) bool {
     const root_zig = std.fs.path.join(allocator, &.{ root, "src", "root.zig" }) catch return false;
     defer allocator.free(root_zig);
     var file = std.Io.Dir.cwd().openFile(io, root_zig, .{}) catch return false;

@@ -1,12 +1,14 @@
 # @native-sdk/cli
 
-CLI tools for the [Native SDK](https://zero-native.dev), a Zig native app framework with secure WebView surfaces, native controls, and OS capabilities.
+The command line for the [Native SDK](https://zero-native.dev): the complete toolkit for building native desktop and mobile applications — declarative markup, native rendering, secure WebView surfaces, native controls, and OS capabilities.
 
 ## Install
 
 ```bash
 npm install -g @native-sdk/cli
 ```
+
+The install runs no scripts: the `native` binary arrives as a per-platform optional dependency (`@native-sdk/cli-<platform>`), and this package carries the SDK source your apps build against, so `native init` and `native dev` work offline after install. The pinned Zig toolchain is fetched into `~/.native/toolchains/` on first build unless a compatible `zig` is already on your PATH.
 
 ## Usage
 

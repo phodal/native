@@ -42,7 +42,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !void {
         });
     }
     // Capture group ids at spawn: wait()/kill() clear the child's id.
-    const dev_group: i32 = if (dev_child) |*child| (if (child.id) |id| @as(i32, @intCast(id)) else 0) else 0;
+    const dev_group: i32 = if (dev_child) |*child| process_tree.groupId(child) else 0;
     if (dev_group > 0) process_tree.own(dev_group);
     defer if (dev_child) |*child| {
         child.kill(io);
@@ -72,7 +72,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, options: Options) !void {
         .environ_map = &env,
         .pgid = process_tree.spawnPgid(),
     });
-    const app_group: i32 = if (app_child.id) |id| @as(i32, @intCast(id)) else 0;
+    const app_group: i32 = process_tree.groupId(&app_child);
     if (app_group > 0) process_tree.own(app_group);
     defer if (app_group > 0) process_tree.releaseAndKill(app_group);
     _ = try app_child.wait(io);

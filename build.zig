@@ -200,6 +200,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(cli_exe);
 
+    // `zig build cli` builds and installs ONLY the CLI executable. The
+    // release pipeline cross-compiles it for every supported platform
+    // (packages/native-sdk/scripts/build-binaries.sh), and skipping the
+    // framework libraries, examples, and docs artifacts keeps that
+    // eight-target loop fast.
+    const cli_step = b.step("cli", "Build only the native CLI executable (cross-compile friendly)");
+    cli_step.dependOn(&b.addInstallArtifact(cli_exe, .{}).step);
+
     const host_assets_mod = module(b, host_target, optimize, "src/primitives/assets/root.zig");
     const host_app_dirs_mod = module(b, host_target, optimize, "src/primitives/app_dirs/root.zig");
     const host_app_manifest_mod = module(b, host_target, optimize, "src/primitives/app_manifest/root.zig");

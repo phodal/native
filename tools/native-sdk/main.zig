@@ -48,9 +48,9 @@ pub fn main(init: std.process.Init) !void {
         const framework_path, const free_framework_path = if (explicit_framework) |value|
             .{ value, false }
         else
-            try initFrameworkPath(allocator, init.io);
+            try initFrameworkPath(allocator, init.io, init.environ_map);
         defer if (free_framework_path) allocator.free(framework_path);
-        if (!try hasFrameworkRoot(allocator, init.io, framework_path)) {
+        if (!hasFrameworkRoot(allocator, init.io, framework_path)) {
             if (explicit_framework) |value| {
                 std.debug.print("error: --framework {s} is not a Native SDK checkout (no src/root.zig there)\n", .{value});
             } else {
@@ -538,35 +538,18 @@ fn discoverAppBinary(allocator: std.mem.Allocator, io: std.Io, app_name: []const
     return candidate;
 }
 
-fn initFrameworkPath(allocator: std.mem.Allocator, io: std.Io) !struct { []const u8, bool } {
-    if (try frameworkRootFromExecutable(allocator, io)) |path| return .{ path, true };
+/// Where `native init` points the new app's SDK dependency when no
+/// --framework flag is given: the same resolution `native dev|build|test`
+/// use (NATIVE_SDK_PATH, then the CLI executable's own location — see
+/// buildgraph.resolveFrameworkRoot), so init and the verbs can never
+/// disagree about which SDK an app builds against.
+fn initFrameworkPath(allocator: std.mem.Allocator, io: std.Io, env_map: *std.process.Environ.Map) !struct { []const u8, bool } {
+    if (try tooling.buildgraph.resolveFrameworkRoot(allocator, io, env_map)) |path| return .{ path, true };
     return .{ ".", false };
 }
 
-fn frameworkRootFromExecutable(allocator: std.mem.Allocator, io: std.Io) !?[]const u8 {
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const executable_len = std.process.executablePath(io, &buffer) catch return null;
-    const executable_path = buffer[0..executable_len];
-    const bin_dir = std.fs.path.dirname(executable_path) orelse return null;
-    const package_root = std.fs.path.dirname(bin_dir) orelse return null;
-
-    if (try hasFrameworkRoot(allocator, io, package_root)) {
-        return try allocator.dupe(u8, package_root);
-    }
-    if (std.fs.path.dirname(package_root)) |repo_root| {
-        if (try hasFrameworkRoot(allocator, io, repo_root)) {
-            return try allocator.dupe(u8, repo_root);
-        }
-    }
-    return null;
-}
-
-fn hasFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !bool {
-    const root_zig = try std.fs.path.join(allocator, &.{ root, "src", "root.zig" });
-    defer allocator.free(root_zig);
-    var file = std.Io.Dir.cwd().openFile(io, root_zig, .{}) catch return false;
-    defer file.close(io);
-    return true;
+fn hasFrameworkRoot(allocator: std.mem.Allocator, io: std.Io, root: []const u8) bool {
+    return tooling.buildgraph.hasFrameworkRoot(allocator, io, root);
 }
 
 fn flagValue(args: []const []const u8, name: []const u8) error{MissingFlagValue}!?[]const u8 {

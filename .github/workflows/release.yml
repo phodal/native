@@ -108,35 +108,11 @@ jobs:
           fi
           echo "Extracted release notes for $VERSION ($LINES lines)"
 
-      - name: Build native release asset
+      - name: Build native release assets (all platforms)
         run: |
-          mkdir -p /tmp/native-sdk-release
-
-          build_asset() {
-            target="$1"
-            name="$2"
-            rm -rf zig-out
-            zig build -Dtarget="$target" -Doptimize=ReleaseSmall
-
-            src="zig-out/bin/native"
-            case "$name" in
-              *.exe) src="${src}.exe" ;;
-            esac
-
-            cp "$src" "/tmp/native-sdk-release/$name"
-            chmod 755 "/tmp/native-sdk-release/$name"
-          }
-
-          build_asset aarch64-macos native-sdk-darwin-arm64
-          build_asset x86_64-macos native-sdk-darwin-x64
-          build_asset aarch64-linux-gnu native-sdk-linux-arm64
-          build_asset x86_64-linux-gnu native-sdk-linux-x64
-          build_asset aarch64-linux-musl native-sdk-linux-musl-arm64
-          build_asset x86_64-linux-musl native-sdk-linux-musl-x64
-          build_asset aarch64-windows native-sdk-win32-arm64.exe
-          build_asset x86_64-windows native-sdk-win32-x64.exe
-
-          (cd /tmp/native-sdk-release && shasum -a 256 native-sdk-* > CHECKSUMS.txt)
+          # Cross-compiles the CLI for all eight platforms and writes the
+          # flat release assets + CHECKSUMS.txt into zig-out/release/.
+          bash packages/native-sdk/scripts/build-binaries.sh
 
       - name: Create GitHub Release
         run: |
@@ -153,8 +129,8 @@ jobs:
           fi
 
           gh release upload "$TAG" \
-            /tmp/native-sdk-release/native-sdk-* \
-            /tmp/native-sdk-release/CHECKSUMS.txt \
+            zig-out/release/native-sdk-* \
+            zig-out/release/CHECKSUMS.txt \
             --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -167,7 +143,7 @@ jobs:
       && needs.check-release.outputs.should_release == 'true'
       && (needs.github-release.result == 'success' || needs.github-release.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: Release
     permissions:
       contents: read
@@ -182,17 +158,84 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # Publishing is gated on the NPM_TOKEN secret (an npm automation
+      # token with publish rights on the @native-sdk scope, configured in
+      # the Release environment). Fail loudly before touching the registry
+      # so a missing token never half-publishes a release.
+      - name: Verify npm token is configured
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "error: NPM_TOKEN secret is not configured (Release environment)."
+            echo "Create an npm automation token with publish access to the @native-sdk scope"
+            echo "and store it as the NPM_TOKEN secret."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Check version sync
         run: npm --prefix packages/native-sdk run version:check
 
       - name: Check package scripts
         run: npm --prefix packages/native-sdk run scripts:check
 
+      - name: Download release binaries
+        run: |
+          VERSION="${{ needs.check-release.outputs.version }}"
+          mkdir -p /tmp/native-sdk-release
+          gh release download "v$VERSION" \
+            --pattern 'native-sdk-*' \
+            --pattern 'CHECKSUMS.txt' \
+            --dir /tmp/native-sdk-release
+          (cd /tmp/native-sdk-release && sha256sum -c CHECKSUMS.txt)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage binaries into the platform packages
+        run: |
+          # Release-asset name -> npm platform package (same table as
+          # packages/native-sdk/scripts/build-binaries.sh).
+          stage() {
+            asset="$1"; key="$2"; ext="$3"
+            mkdir -p "packages/native-sdk/npm/$key/bin"
+            cp "/tmp/native-sdk-release/$asset" "packages/native-sdk/npm/$key/bin/native$ext"
+            chmod 755 "packages/native-sdk/npm/$key/bin/native$ext"
+          }
+          stage native-sdk-darwin-arm64 darwin-arm64 ""
+          stage native-sdk-darwin-x64 darwin-x64 ""
+          stage native-sdk-linux-arm64 linux-arm64-gnu ""
+          stage native-sdk-linux-x64 linux-x64-gnu ""
+          stage native-sdk-linux-musl-arm64 linux-arm64-musl ""
+          stage native-sdk-linux-musl-x64 linux-x64-musl ""
+          stage native-sdk-win32-arm64.exe win32-arm64 ".exe"
+          stage native-sdk-win32-x64.exe win32-x64 ".exe"
+
       - name: Publish to npm
         run: |
           if [ "${{ github.event.repository.visibility }}" = "public" ]; then
-            npm publish --provenance --access public
+            PROVENANCE="--provenance"
           else
-            npm publish --access public
+            PROVENANCE=""
           fi
-        working-directory: packages/native-sdk
+
+          VERSION="${{ needs.check-release.outputs.version }}"
+
+          # Platform packages first, so the main package's
+          # optionalDependencies pins are resolvable the moment it lands.
+          # Re-runs skip anything already on the registry at this version.
+          publish_dir() {
+            dir="$1"
+            name=$(node -p "require('./$dir/package.json').name")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "$name@$VERSION already published, skipping"
+              return 0
+            fi
+            (cd "$dir" && npm publish $PROVENANCE --access public)
+          }
+
+          for dir in packages/native-sdk/npm/*/; do
+            publish_dir "${dir%/}"
+          done
+          publish_dir packages/native-sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

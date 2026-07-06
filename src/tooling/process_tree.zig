@@ -27,6 +27,18 @@ pub fn spawnPgid() ?std.posix.pid_t {
     return if (supported) 0 else null;
 }
 
+/// The process-group id of a freshly spawned child (its pid, thanks to
+/// spawnPgid), or 0 when unavailable. Capture it right after spawn:
+/// wait()/kill() clear the child's id. Comptime-gated on `supported`
+/// because Child.id is a HANDLE on Windows, not a pid — the cast below
+/// must never be analyzed there.
+pub fn groupId(child: *const std.process.Child) i32 {
+    if (supported) {
+        if (child.id) |id| return @intCast(id);
+    }
+    return 0;
+}
+
 /// Track a spawned child as an owned process group and install the
 /// exit-signal hooks (once) that kill every owned group.
 pub fn own(pid: i32) void {

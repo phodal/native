@@ -10,6 +10,11 @@ const repoRoot = join(projectRoot, '..', '..');
 
 const mirrors = [
   { source: 'src', target: 'src' },
+  { source: 'build', target: 'build' },
+  { source: 'build.zig', target: 'build.zig' },
+  { source: 'build.zig.zon', target: 'build.zig.zon' },
+  { source: 'app.zon', target: 'app.zon' },
+  { source: 'LICENSE', target: 'LICENSE' },
   { source: 'skills', target: 'skills' },
   { source: 'skill-data', target: 'skill-data' },
 ];

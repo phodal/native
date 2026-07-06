@@ -1,0 +1,1 @@
+fix: **Windows CLI cross-compile**: `native dev`'s process-group capture now compiles on Windows (Child.id is a handle there, not a pid) via a comptime-gated `process_tree.groupId` helper shared with the frontend dev flow.

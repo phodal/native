@@ -1,12 +1,18 @@
 //! system-monitor views. Markup-first where markup fits: the header bar
-//! (brand, status line, theme chips) and the three sparkline charts (one
-//! `<chart>` per tile: token-tinted bar/area series binding the model's
-//! NaN-padded sample windows) are compiled `.native` views. Everything
-//! else is Zig because it needs what the closed markup grammar excludes —
-//! vector icons paired with press handlers, the tiles' bold-span stat
-//! paragraphs (sized by the heading typography rung),
-//! per-row native context menus, and the modal SIGTERM confirmation
-//! overlaid through a z-stack root.
+//! (status line holding the trailing corner) and the three sparkline
+//! charts (one `<chart>` per tile: token-tinted bar/area series binding
+//! the model's NaN-padded sample windows) are compiled `.native` views.
+//! Everything else is Zig because it needs what the closed markup
+//! grammar excludes — the tiles' bold-span stat paragraphs (sized by the
+//! heading typography rung), per-row native context menus, and the modal
+//! SIGTERM confirmation overlaid through a z-stack root; the toolbar and
+//! table ride along in Zig so the whole working surface composes in one
+//! place.
+//!
+//! Control sizing rule: every control in a row shares ONE size register
+//! (the toolbar is all `.sm` — button, filter field, sort toggles), so
+//! the row renders one height. Ad-hoc pixel heights on pressable panels
+//! never match the control scale; compose rows from real controls.
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
@@ -162,12 +168,16 @@ fn uptimeTile(ui: *Ui, model: *const Model) Ui.Node {
 
 // --------------------------------------------------------------- toolbar
 
+// Settings has no toolbar button: it opens through the app menu and its
+// standard keyboard shortcut (primary+comma), mapped in main.zig's
+// `command`.
 fn toolbarView(ui: *Ui, model: *const Model) Ui.Node {
     return ui.row(.{ .gap = 10, .cross = .center, .semantics = .{ .label = "Table toolbar" } }, .{
-        samplingChip(ui, model),
+        pauseButton(ui, model),
         // The search field carries the built-in trailing clear
         // affordance whenever it holds text — no external Clear chip.
         ui.el(.search_field, .{
+            .size = .sm,
             .width = 260,
             .text = model.search(),
             .placeholder = "Filter by name or pid",
@@ -178,7 +188,6 @@ fn toolbarView(ui: *Ui, model: *const Model) Ui.Node {
         ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Sort"),
         sortChips(ui, model),
         sortDirectionIcon(ui, model),
-        iconChip(ui, "settings", "Settings", .toggle_settings, "Open settings window"),
     });
 }
 
@@ -186,71 +195,50 @@ fn toolbarView(ui: *Ui, model: *const Model) Ui.Node {
 
 /// The settings WINDOW's whole canvas: a model-declared secondary
 /// window (`windows_fn` declares it while `settings_open` is set), so
-/// this view rebuilds from the same model as the main canvas — pausing
-/// sampling here updates both windows on the same dispatch. Appearance
-/// is not a setting: the app follows the system, so both windows
-/// retheme together through `on_appearance`.
+/// this view rebuilds from the same model as the main canvas — flipping
+/// the sampling switch here updates both windows on the same dispatch,
+/// live, with no Apply step. Appearance is not a setting: the app
+/// follows the system, so both windows retheme together through
+/// `on_appearance`.
+///
+/// The register is the standard grouped settings form: one row per
+/// setting — label and description leading, the control trailing. The
+/// window's titlebar carries the "Settings" title, so the content
+/// repeats no title and explains no window mechanics.
 pub fn settingsView(ui: *Ui, model: *const Model) Ui.Node {
     return ui.column(.{
         .grow = 1,
         .padding = 20,
-        .gap = 14,
         .style_tokens = .{ .background = .background },
         .semantics = .{ .label = "Settings window" },
     }, .{
-        ui.paragraph(.{ .semantics = .{ .label = "Settings title" } }, &.{
-            .{ .text = "Settings", .weight = .bold, .scale = 1.3 },
+        ui.row(.{ .gap = 12, .cross = .center }, .{
+            ui.column(.{ .grow = 1, .gap = 2 }, .{
+                ui.text(.{}, "Sampling"),
+                ui.text(.{ .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, ui.fmt("{d} samples kept · one every {d} s while live", .{
+                    model_mod.history_len, model_mod.sample_interval_ms / 1000,
+                })),
+            }),
+            ui.el(.switch_control, .{
+                .selected = model.sampling(),
+                .on_toggle = .toggle_sampling,
+                .semantics = .{ .label = "Pause or resume sampling" },
+            }, .{}),
         }),
-        ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Sampling"),
-        samplingChip(ui, model),
-        ui.text(.{ .wrap = true, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, ui.fmt("{d} samples kept · one every {d} s while live.", .{
-            model_mod.history_len, model_mod.sample_interval_ms / 1000,
-        })),
-        ui.spacer(1),
-        // A real wrapped paragraph: the sentence needs two lines at the
-        // settings width, and wrap=true reserves that height instead of
-        // painting the second line into the window's bottom padding.
-        ui.text(.{ .wrap = true, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Close this window (or press its close button) to keep monitoring."),
     });
 }
 
-/// Pause/resume: a pressable panel pairing the play/pause vector icon
-/// with its verb (markup buttons carry text only, so this chip is a Zig
-/// view by necessity — and the reason the toolbar is Zig). The inner text
-/// leaf carries the same press handler: hit-testing resolves the deepest
-/// hit-target under the pointer, and text is one — icons are not, so
-/// icon clicks fall through to the panel's own handler.
-fn samplingChip(ui: *Ui, model: *const Model) Ui.Node {
-    const label: []const u8 = if (model.paused) "Resume" else "Pause";
-    return ui.panel(.{
-        .height = 30,
-        .padding = 6,
+/// Pause/resume: a real button on the toolbar's `.sm` register, with the
+/// play/pause icon drawn inline before the verb (icon + label are one
+/// widget, so both follow the control's states together).
+fn pauseButton(ui: *Ui, model: *const Model) Ui.Node {
+    return ui.button(.{
+        .size = .sm,
+        .variant = .outline,
+        .icon = if (model.paused) "play" else "pause",
         .on_press = .toggle_sampling,
-        .style_tokens = if (model.paused)
-            .{ .background = .accent, .radius = .md }
-        else
-            .{ .background = .surface_subtle, .radius = .md, .border_color = .border },
-        .semantics = .{ .role = .button, .label = "Pause or resume sampling" },
-    }, ui.row(.{ .gap = 6, .cross = .center }, .{
-        if (model.paused)
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .accent_text } }, "play")
-        else
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .text_muted } }, "pause"),
-        ui.text(.{ .size = .sm, .on_press = .toggle_sampling, .style_tokens = if (model.paused) .{ .foreground = .accent_text } else .{} }, label),
-    }));
-}
-
-fn iconChip(ui: *Ui, comptime icon_name: []const u8, label: []const u8, msg: Msg, semantic_label: []const u8) Ui.Node {
-    return ui.panel(.{
-        .height = 30,
-        .padding = 6,
-        .on_press = msg,
-        .style_tokens = .{ .background = .surface_subtle, .radius = .md, .border_color = .border },
-        .semantics = .{ .role = .button, .label = semantic_label },
-    }, ui.row(.{ .gap = 6, .cross = .center }, .{
-        ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .text_muted } }, icon_name),
-        ui.text(.{ .size = .sm, .on_press = msg }, label),
-    }));
+        .semantics = .{ .label = "Pause or resume sampling" },
+    }, if (model.paused) "Resume" else "Pause");
 }
 
 fn sortChips(ui: *Ui, model: *const Model) Ui.Node {

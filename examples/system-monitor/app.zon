@@ -6,7 +6,13 @@
     .icons = .{"assets/icon.icns"},
     .platforms = .{"macos"},
     .permissions = .{ "view", "command" },
-    .capabilities = .{ "native_views", "gpu_surfaces" },
+    .capabilities = .{ "native_views", "gpu_surfaces", "shortcuts" },
+    .shortcuts = .{
+        // The standard settings shortcut (primary+comma): delivered as a
+        // command event and mapped to `.open_settings` in main.zig's
+        // `command` — the same code path the app-menu Settings item uses.
+        .{ .id = "monitor.settings", .key = ",", .modifiers = .{"primary"} },
+    },
     .shell = .{
         .windows = .{
             .{

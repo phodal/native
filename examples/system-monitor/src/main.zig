@@ -13,8 +13,8 @@
 //! Authoring split (markup-first): the header and the three sparkline
 //! charts are comptime-compiled `.native` views (each sparkline is one
 //! `<chart>` binding the model's NaN-padded sample window); the tiles,
-//! toolbar (vector icons paired with press handlers), table, and the
-//! confirmation overlay are Zig. See `src/view.zig`.
+//! toolbar, table, and the confirmation overlay are Zig. See
+//! `src/view.zig`.
 
 const std = @import("std");
 const runner = @import("runner");
@@ -44,14 +44,32 @@ pub const window_height = view_mod.window_height;
 pub const window_min_width: f32 = view_mod.window_width;
 pub const window_min_height: f32 = view_mod.window_height;
 
-// The model-declared settings WINDOW (dev-2's SettingsView shape): the
-// gear chip dispatches `.toggle_settings`, `windows_fn` declares the
-// window while the flag is set, and its canvas renders
-// `view_mod.settingsView` from the same model as the main window.
+// The model-declared settings WINDOW (dev-2's SettingsView shape):
+// `.open_settings` sets the flag, `windows_fn` declares the window while
+// it is set, and its canvas renders `view_mod.settingsView` from the
+// same model as the main window. It opens the standard way only — the
+// app-menu Settings item and its keyboard shortcut (primary+comma) both
+// deliver `cmd_settings` through `command` below; there is no in-window
+// settings button. Fixed-size: the content is one grouped form row, so
+// the window is exactly that row plus its insets.
 pub const settings_window_label = "settings";
 pub const settings_canvas_label = "settings-canvas";
-pub const settings_window_width: f32 = 360;
-pub const settings_window_height: f32 = 320;
+pub const settings_window_width: f32 = 420;
+pub const settings_window_height: f32 = 76;
+
+// ---------------------------------------------------------------- commands
+
+/// The settings command id: registered as the primary+comma shortcut in
+/// app.zon (`.shortcuts`) and shared by every settings entry point, so
+/// menu and keyboard land on the same `.open_settings` dispatch.
+pub const cmd_settings = "monitor.settings";
+
+/// Shell command events (menu items, registered shortcuts) map to Msgs
+/// here — one code path for every way the OS asks the app to act.
+pub fn command(name: []const u8) ?Msg {
+    if (std.mem.eql(u8, name, cmd_settings)) return .open_settings;
+    return null;
+}
 
 const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
 const shell_views = [_]native_sdk.ShellView{
@@ -92,6 +110,7 @@ pub fn monitorOptions() MonitorApp.Options {
         .view = rootView,
         .windows_fn = monitorWindows,
         .window_view = monitorWindowView,
+        .on_command = command,
         .tokens_fn = tokensFromModel,
         .on_appearance = onAppearance,
         .on_chrome = onChrome,
@@ -100,18 +119,22 @@ pub fn monitorOptions() MonitorApp.Options {
 
 /// The declared window set derives from the model: the settings window
 /// exists exactly while `settings_open` is set. The runtime reconciles
-/// after every dispatch — a Msg opens it, a Msg closes it, and the
-/// user's close button dispatches `.settings_closed` so the model
-/// agrees (keep the flag set to veto and it comes right back).
+/// after every dispatch — `.open_settings` opens it, and the user's
+/// close button dispatches `.settings_closed` so the model agrees (keep
+/// the flag set to veto and it comes right back).
 fn monitorWindows(model: *const Model, scratch: *MonitorApp.WindowsScratch) []const MonitorApp.WindowDescriptor {
     var count: usize = 0;
     if (model.settings_open) {
         scratch.windows[count] = .{
             .label = settings_window_label,
             .canvas_label = settings_canvas_label,
-            .title = "Monitor Settings",
+            .title = "Settings",
             .width = settings_window_width,
             .height = settings_window_height,
+            // A settings window is fixed-size: the content is a form
+            // machined for exactly this box, so resizing could only
+            // stretch or clip it.
+            .resizable = false,
             .on_close = .settings_closed,
         };
         count += 1;

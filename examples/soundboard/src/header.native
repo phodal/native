@@ -22,7 +22,9 @@
       <button size="sm" selected="{songsShowing}" on-press="show_songs">Songs</button>
     </tabs>
     <spacer grow="1" />
-    <search-field text="{search}" placeholder="Search albums, artists, songs…" width="280" on-input="search_edit" label="Search library" />
+    <!-- One size register per row: search matches the sm tab buttons so
+         the band's controls share one height. -->
+    <search-field size="sm" text="{search}" placeholder="Search albums, artists, songs…" width="280" on-input="search_edit" label="Search library" />
   </row>
   <separator />
 </column>

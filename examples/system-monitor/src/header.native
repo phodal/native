@@ -2,8 +2,8 @@
      holds the trailing corner like an ops-room wall clock — the band's
      one informative element, the rest stays bare drag surface. Compiled at
      comptime (canvas.CompiledMarkupView) and composed under the Zig root
-     view; the sampling toggle, search, and sort controls live in the Zig
-     toolbar because they pair vector icons with press handlers. The app
+     view; the sampling button, search, and sort controls live in the Zig
+     toolbar, composed with the Zig-authored table they act on. The app
      follows the system appearance (on_appearance); there is no
      in-window theme control. -->
 <column>

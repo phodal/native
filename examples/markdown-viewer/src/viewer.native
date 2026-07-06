@@ -17,7 +17,7 @@
          over the toolbar's siblings (late z-pass, window-clipped, no
          reflow). Open state is the model's; Escape/click-outside dismiss
          through on-dismiss, picking closes in update. -->
-    <stack height="28">
+    <stack>
       <select size="sm" width="176" on-press="toggle_sample_picker" label="Sample picker">{docTitle}</select>
       <if test="{sample_picker_open}">
         <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="close_sample_picker" label="Samples">
@@ -28,7 +28,9 @@
       </if>
     </stack>
     <spacer width="16" />
-    <text-field text="{path}" placeholder="/path/to/document.md" on-input="edit_path" on-submit="open_doc" grow="1" label="Document path" />
+    <!-- One size register per row: every toolbar control is sm, so the
+         row renders one control height. -->
+    <text-field size="sm" text="{path}" placeholder="/path/to/document.md" on-input="edit_path" on-submit="open_doc" grow="1" label="Document path" />
     <!-- Inline button icons: icon + label are one widget, so the icon
          follows the disabled tint (Save greys out whole while unsaved
          paths make it unavailable) — the gap that kept this toolbar

@@ -71,6 +71,14 @@ fn findByLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
     return null;
 }
 
+fn findTextContaining(widget: canvas.Widget, needle: []const u8) ?canvas.Widget {
+    if (widget.kind == .text and std.mem.indexOf(u8, widget.text, needle) != null) return widget;
+    for (widget.children) |child| {
+        if (findTextContaining(child, needle)) |found| return found;
+    }
+    return null;
+}
+
 fn countListItems(widget: canvas.Widget) usize {
     var total: usize = 0;
     if (widget.semantics.role == .listitem) total += 1;
@@ -849,24 +857,28 @@ fn settingsWidgetIdByLabel(live: LiveApp, window_id: u64, label: []const u8) !?c
     return null;
 }
 
-test "the settings window opens by Msg, drives sampling from its own canvas, and round-trips close" {
+test "the settings window opens by the settings command, drives sampling from its own canvas, and round-trips close" {
     if (!sampler.supported) return error.SkipZigTest;
     const live = try LiveApp.start();
     defer live.stop();
     const model = &live.app_state.model;
     try testing.expect(settingsWindowInfo(live) == null);
 
-    // Open through the REAL press path: the toolbar gear chip via the
-    // automation widget verb.
-    var snapshot = live.harness.runtime.automationSnapshot("System Monitor");
-    const gear = snapshotByName(snapshot, "Open settings window").?;
+    // Open through the REAL command path: the registered settings
+    // shortcut id via the automation shortcut channel — the same
+    // platform event a primary+comma keypress (or the app-menu Settings
+    // item) emits, resolved through `main.command`.
     var command_buffer: [96]u8 = undefined;
-    const open_press = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.canvas_label, gear.id });
-    try live.harness.runtime.dispatchAutomationCommand(live.app, open_press);
+    try live.harness.runtime.dispatchAutomationCommand(live.app, "shortcut " ++ main.cmd_settings);
     try testing.expect(model.settings_open);
     const info = settingsWindowInfo(live) orelse return error.TestUnexpectedResult;
     try testing.expect(info.open);
-    try testing.expectEqualStrings("Monitor Settings", info.title);
+    try testing.expectEqualStrings("Settings", info.title);
+
+    // Reissuing the command while open is idempotent: opening is not a
+    // toggle, so the window stays declared.
+    try live.harness.runtime.dispatchAutomationCommand(live.app, "shortcut " ++ main.cmd_settings);
+    try testing.expect(model.settings_open);
 
     // The settings canvas installs on its own first frame.
     try live.harness.runtime.dispatchPlatformEvent(live.app, .{ .gpu_surface_frame = .{
@@ -879,10 +891,11 @@ test "the settings window opens by Msg, drives sampling from its own canvas, and
         .nonblank = true,
     } });
 
-    // Pause sampling INSIDE the settings window, by automation verb
-    // addressed at the settings canvas label: one dispatch updates both
-    // windows (same model). Appearance is not a setting — the system
-    // scheme reaches BOTH canvases through on_appearance.
+    // Pause sampling INSIDE the settings window — the form row's switch,
+    // by automation verb addressed at the settings canvas label: one
+    // dispatch updates both windows (same model), live, no Apply step.
+    // Appearance is not a setting — the system scheme reaches BOTH
+    // canvases through on_appearance.
     const pause_id = (try settingsWidgetIdByLabel(live, info.id, "Pause or resume sampling")) orelse return error.TestUnexpectedResult;
     const pause_press = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.settings_canvas_label, pause_id });
     try live.harness.runtime.dispatchAutomationCommand(live.app, pause_press);
@@ -892,13 +905,12 @@ test "the settings window opens by Msg, drives sampling from its own canvas, and
     try testing.expectEqualDeep(theme.dark_colors, (try live.harness.runtime.canvasWidgetDesignTokens(info.id, main.settings_canvas_label)).colors);
 
     // The snapshot enumerates both windows.
-    snapshot = live.harness.runtime.automationSnapshot("System Monitor");
+    const snapshot = live.harness.runtime.automationSnapshot("System Monitor");
     try testing.expectEqual(@as(usize, 2), snapshot.windows.len);
 
     // Close by Msg: the model stops declaring the window and the
     // reconcile closes it — no user-close Msg fires.
-    const close_press = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.canvas_label, gear.id });
-    try live.harness.runtime.dispatchAutomationCommand(live.app, close_press);
+    try live.dispatch(.settings_closed);
     try testing.expect(!model.settings_open);
     const closed = settingsWindowInfo(live);
     try testing.expect(closed == null or !closed.?.open);
@@ -907,7 +919,7 @@ test "the settings window opens by Msg, drives sampling from its own canvas, and
     // the window down like the real delegates do and reports it gone):
     // the open=false event dispatches `.settings_closed` and the model
     // clears its flag — the window stays closed.
-    try live.harness.runtime.dispatchAutomationCommand(live.app, open_press);
+    try live.harness.runtime.dispatchAutomationCommand(live.app, "shortcut " ++ main.cmd_settings);
     try testing.expect(model.settings_open);
     const reopened = settingsWindowInfo(live) orelse return error.TestUnexpectedResult;
     const close_event = live.harness.null_platform.userCloseWindow(reopened.id).?;
@@ -915,6 +927,108 @@ test "the settings window opens by Msg, drives sampling from its own canvas, and
     try testing.expect(!model.settings_open);
     const user_closed = settingsWindowInfo(live);
     try testing.expect(user_closed == null or !user_closed.?.open);
+}
+
+test "the settings command maps to .open_settings and the platform shortcut event drives it" {
+    // One code path for every settings entry point: the shortcut id (and
+    // any menu item carrying it) resolves through `main.command`.
+    try testing.expectEqual(@as(?Msg, .open_settings), main.command(main.cmd_settings));
+    try testing.expect(main.command("monitor.unknown") == null);
+
+    if (!sampler.supported) return error.SkipZigTest;
+    const live = try LiveApp.start();
+    defer live.stop();
+    const model = &live.app_state.model;
+
+    // The platform shortcut event — what a real primary+comma keypress
+    // emits for the registered id — lands as `.open_settings`.
+    try live.harness.runtime.dispatchPlatformEvent(live.app, .{ .shortcut = .{
+        .id = main.cmd_settings,
+        .key = ",",
+        .window_id = 1,
+    } });
+    try testing.expect(model.settings_open);
+    try testing.expect(settingsWindowInfo(live) != null);
+
+    // Opening is idempotent, not a toggle: a second press keeps it open.
+    try live.harness.runtime.dispatchPlatformEvent(live.app, .{ .shortcut = .{
+        .id = main.cmd_settings,
+        .key = ",",
+        .window_id = 1,
+    } });
+    try testing.expect(model.settings_open);
+}
+
+test "the settings window is one grouped form row: a live switch, no title copy, no window instructions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    model.settings_open = true;
+
+    var ui = Ui.init(arena);
+    const tree = try ui.finalizeWithTokens(view_mod.settingsView(&ui, &model), main.tokensFromModel(&model));
+
+    // The one setting is a real switch, on while sampling is live, and
+    // it drives the SAME `.toggle_sampling` dispatch the toolbar button
+    // uses — changes apply immediately, no Apply/OK ceremony (and no
+    // button of that kind exists here).
+    const sampling_switch = findByKind(tree.root, .switch_control) orelse return error.TestUnexpectedResult;
+    try testing.expect(sampling_switch.state.selected);
+    try testing.expect(findByKind(tree.root, .button) == null);
+    apply(&model, tree.msgFor(sampling_switch.id, .toggle).?);
+    try testing.expect(model.paused);
+
+    var paused_ui = Ui.init(arena);
+    const paused_tree = try paused_ui.finalizeWithTokens(view_mod.settingsView(&paused_ui, &model), main.tokensFromModel(&model));
+    try testing.expect(!findByKind(paused_tree.root, .switch_control).?.state.selected);
+
+    // The window's titlebar owns the "Settings" title and the window
+    // needs no instructions about being a window: no in-content title,
+    // no close-this-window copy.
+    try testing.expect(findByText(tree.root, .text, "Settings") == null);
+    try testing.expect(findByLabel(tree.root, "Settings title") == null);
+    try testing.expect(findTextContaining(tree.root, "Close this window") == null);
+    try testing.expect(findTextContaining(tree.root, "close button") == null);
+}
+
+test "the toolbar renders one control height and carries no settings button" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = edgeModel();
+    const tree = try buildTree(arena_state.allocator(), &model);
+
+    // Settings opens via the app menu / shortcut only: nothing in the
+    // main window's tree offers it.
+    try testing.expect(findByLabel(tree.root, "Open settings window") == null);
+    try testing.expect(findByText(tree.root, .text, "Settings") == null);
+
+    // Every control in the toolbar row sits on one size register, so
+    // the row renders exactly one control height.
+    var nodes: [1024]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, main.window_width, main.window_height), &nodes);
+    const control_labels = [_][]const u8{ "Pause or resume sampling", "Filter processes", "Sort by CPU", "Sort by Memory", "Sort by PID", "Sort by Name" };
+    var height: ?f32 = null;
+    var seen: usize = 0;
+    for (layout.nodes) |node| {
+        for (control_labels) |label| {
+            if (!std.mem.eql(u8, node.widget.semantics.label, label)) continue;
+            seen += 1;
+            if (height) |expected| {
+                try testing.expectEqual(expected, node.frame.height);
+            } else {
+                height = node.frame.height;
+            }
+        }
+    }
+    try testing.expectEqual(control_labels.len, seen);
+
+    // The pause control is a real button on the control scale, not a
+    // hand-sized panel.
+    const pause = findByLabel(tree.root, "Pause or resume sampling").?;
+    try testing.expectEqual(canvas.WidgetKind.button, pause.kind);
 }
 
 // -------------------------------------------------------- showcase shots

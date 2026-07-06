@@ -94,9 +94,11 @@ pub const Msg = union(enum) {
     /// pads its leading edge past the traffic lights and matches its
     /// height to the titlebar band. Delivered through `on_chrome`.
     chrome_changed: native_sdk.WindowChrome,
-    /// Toolbar gear: show/hide the settings WINDOW (model-declared —
-    /// the window exists exactly while this flag is set).
-    toggle_settings,
+    /// Open the settings WINDOW (model-declared — the window exists
+    /// exactly while the flag is set). Dispatched by the app-menu
+    /// Settings item and its standard keyboard shortcut, both landing
+    /// through `main.command`; idempotent while already open.
+    open_settings,
     /// The user closed the settings window (its close button): the
     /// model owns the consequence and clears the flag.
     settings_closed,
@@ -172,8 +174,8 @@ pub const Model = struct {
     chrome_leading: f32 = 0,
     header_height: f32 = header_natural_height,
     /// The settings window's open flag: `windows_fn` declares the
-    /// window while this is set, so a Msg opens it and a Msg (or the
-    /// user's close button, via `settings_closed`) closes it.
+    /// window while this is set, so `.open_settings` opens it and the
+    /// user's close button (via `settings_closed`) closes it.
     settings_open: bool = false,
 
     // ------------------------------------------------------------ queries
@@ -607,7 +609,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // height is the floor when no band overlays the content.
             model.header_height = @max(header_natural_height, chrome.insets.top);
         },
-        .toggle_settings => model.settings_open = !model.settings_open,
+        .open_settings => model.settings_open = true,
         .settings_closed => model.settings_open = false,
     }
 }

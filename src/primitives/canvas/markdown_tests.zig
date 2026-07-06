@@ -429,7 +429,12 @@ test "dev-2 README renders through the mapper and the reference renderer" {
 // estimator always charged) and sans-only bands are byte-identical;
 // spot-reviewed the sandbox steps and file-table bands before/after —
 // no overlap, no clipping.
-const dev2_readme_reference_signature: u64 = 3343703635343987888;
+// Regenerated for the monochrome primary (2026-07-06): color-only —
+// links and accent runs now ink the register's near-black primary
+// (still underlined, so links stay distinguishable from body text);
+// no metric feeding markdown layout changed, so glyph and rule
+// geometry are byte-identical.
+const dev2_readme_reference_signature: u64 = 3649472737707445406;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {

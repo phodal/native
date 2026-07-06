@@ -237,8 +237,13 @@ pub fn emitModalSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: D
 pub fn emitPanelWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = surfaceControlVisualTokens(widget, tokens);
     const radius = controlRadius(widget, visual, tokens.radius.lg);
+    const background = widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface));
     const shadow_token = tokens.shadow.sm;
-    if (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0) {
+    // Only an opaque surface casts a drop shadow: a translucent or
+    // fully transparent panel (a dismiss catcher, a tinted wash) has
+    // nothing to occlude the light, and the shadow would read as an
+    // extra dim showing through the see-through fill.
+    if (background.a >= 1 and (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0)) {
         try builder.shadow(.{
             .id = widgetPartId(widget.id, 1),
             .rect = widget.frame,
@@ -254,7 +259,7 @@ pub fn emitPanelWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTo
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface)),
+        .fill = colorFill(background),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 3),

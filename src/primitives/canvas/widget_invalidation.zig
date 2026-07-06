@@ -110,7 +110,10 @@ pub fn diffWidgetLayoutTrees(previous: anytype, next: anytype, tokens: DesignTok
                 .kind = .removed,
                 .id = id,
                 .previous_index = previous_index,
-                .dirty_bounds = widgetClippedDirtyBounds(previous, previous_index, widgetFullPaintBounds(previous_node, tokens)),
+                .dirty_bounds = widgetClippedDirtyBounds(previous, previous_index, unionOptionalBounds(
+                    widgetFullPaintBounds(previous_node, tokens),
+                    widgetModalScrimBounds(previous, previous_node.widget, tokens),
+                )),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -121,13 +124,25 @@ pub fn diffWidgetLayoutTrees(previous: anytype, next: anytype, tokens: DesignTok
         var change = widgetChange(previous_node, next_ref.node, previous_index, next_ref.index, tokens);
         if (previous_node.widget.semantics.hidden != next_ref.node.widget.semantics.hidden) {
             change.dirty_bounds = unionOptionalBounds(
-                widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
-                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
+                unionOptionalBounds(
+                    widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
+                    widgetModalScrimBounds(previous, previous_node.widget, tokens),
+                ),
+                unionOptionalBounds(
+                    widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
+                    widgetModalScrimBounds(next, next_ref.node.widget, tokens),
+                ),
             );
         } else if (previous_node.widget.opacity != next_ref.node.widget.opacity or !affinesEqual(previous_node.widget.transform, next_ref.node.widget.transform)) {
             change.dirty_bounds = unionOptionalBounds(
-                widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
-                widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
+                unionOptionalBounds(
+                    widgetVisibleSubtreeFullPaintBounds(previous, previous_index, tokens),
+                    widgetModalScrimBounds(previous, previous_node.widget, tokens),
+                ),
+                unionOptionalBounds(
+                    widgetVisibleSubtreeFullPaintBounds(next, next_ref.index, tokens),
+                    widgetModalScrimBounds(next, next_ref.node.widget, tokens),
+                ),
             );
         } else {
             change.dirty_bounds = widgetChangedClippedDirtyBounds(previous, previous_index, next, next_ref.index, change.dirty_bounds);
@@ -146,7 +161,10 @@ pub fn diffWidgetLayoutTrees(previous: anytype, next: anytype, tokens: DesignTok
                 .kind = .added,
                 .id = id,
                 .next_index = next_index,
-                .dirty_bounds = widgetClippedDirtyBounds(next, next_index, widgetFullPaintBounds(next_node, tokens)),
+                .dirty_bounds = widgetClippedDirtyBounds(next, next_index, unionOptionalBounds(
+                    widgetFullPaintBounds(next_node, tokens),
+                    widgetModalScrimBounds(next, next_node.widget, tokens),
+                )),
                 .layout_dirty = true,
                 .paint_dirty = true,
                 .semantics_dirty = true,
@@ -244,6 +262,7 @@ fn widgetChange(previous: WidgetLayoutNode, next: WidgetLayoutNode, previous_ind
         !affinesEqual(previous.widget.transform, next.widget.transform) or
         previous.widget.backdrop_blur != next.widget.backdrop_blur or
         previous.widget.backdrop_blur_token != next.widget.backdrop_blur_token or
+        previous.widget.scrim != next.widget.scrim or
         previous.widget.text_alignment != next.widget.text_alignment or
         previous.widget.text_no_wrap != next.widget.text_no_wrap or
         previous.widget.variant != next.widget.variant or
@@ -326,6 +345,14 @@ fn appendOptionalObjectId(output: []?ObjectId, len: *usize, maybe_id: ?ObjectId)
 
 fn widgetFullPaintBounds(node: WidgetLayoutNode, tokens: DesignTokens) geometry.RectF {
     return widgetFullPaintBoundsWithTransform(node, widgetTransform(node.widget), tokens);
+}
+
+/// A modal surface's paint extends past its own frame: its chrome emits
+/// the scrim (blur + wash) across the whole root bounds, so appearing,
+/// disappearing, hiding, or fading one dirties that full region too.
+fn widgetModalScrimBounds(layout: anytype, widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    if (!widget_render.widgetEmitsModalScrim(widget, tokens)) return null;
+    return widget_render.widgetLayoutRootBounds(layout);
 }
 
 fn widgetFullPaintBoundsWithTransform(node: WidgetLayoutNode, transform: Affine, tokens: DesignTokens) geometry.RectF {

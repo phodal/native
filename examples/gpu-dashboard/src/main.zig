@@ -76,7 +76,11 @@ const expected_dashboard_interaction_command_count: usize = 71;
 // draws an app-name title in its chrome prefix (a window never labels
 // itself), so the prefix is one command shorter and the mode control
 // leads the band right after the window controls.
-const expected_dashboard_reference_signature: u64 = 14940616558550130966;
+// Regenerated 2026-07-06 for the monochrome primary register: color-only
+// — checked/filled-primary states and accent-inked chrome move from the
+// blue-violet to the register's near-black/porcelain pair; geometry is
+// unchanged. Reviewed via the automation screenshot pass.
+const expected_dashboard_reference_signature: u64 = 3801279993758385369;
 const expected_dashboard_widget_node_count: usize = 48;
 const expected_dashboard_snapshot_widget_count: usize = 48;
 const refresh_command = "dashboard.refresh";

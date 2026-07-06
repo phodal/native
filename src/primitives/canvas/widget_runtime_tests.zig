@@ -1470,8 +1470,9 @@ test "widget display list renders through reference surface" {
     try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
     try expectPixelRgba8(.{ 255, 255, 255, 255 }, surface, 220, 20);
-    // The progress fill is the blue-violet primary of the house preset.
-    try expectPixelRgba8(.{ 20, 71, 230, 255 }, surface, 20, 100);
+    // The progress fill is the monochrome near-black primary of the
+    // house register.
+    try expectPixelRgba8(.{ 23, 23, 23, 255 }, surface, 20, 100);
 }
 
 test "widget emitter applies button state tokens" {

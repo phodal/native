@@ -132,54 +132,58 @@ pub fn boot(model: *Model, fx: *Effects) void {
 // ------------------------------------------------------------------- theme
 
 /// A paper-and-evergreen palette derived per rebuild from the model's
-/// scheme; the runtime stamps the surface scale afterwards. The shadow
-/// token is deliberately stronger than usual: it draws the dialog's drop
-/// shadow AND fills the dialog backdrop scrim (the markup paints the
-/// backdrop panel with `background="shadow"`), and nothing else in this
-/// app casts shadows.
+/// scheme; the runtime stamps the surface scale afterwards. The
+/// neutrals are the register's warm (stone) scale — anchors converted
+/// from their published oklch values — so notes keeps its paper warmth
+/// without tinted grays; the evergreen personality lives in the teal
+/// accent alone (light oklch(0.511 0.096 186.391) = #00786f). The
+/// dialog scrim is token-driven through the modal chrome (dim + blur),
+/// so the shadow token is just a shadow again.
 pub fn notesTokens(model: *const Model) canvas.DesignTokens {
     const scheme = model.system_scheme;
     var tokens = canvas.DesignTokens.theme(.{ .color_scheme = scheme });
     tokens.colors = switch (scheme) {
         .light => .{
-            .background = canvas.Color.rgb8(250, 250, 248),
+            .background = canvas.Color.rgb8(250, 250, 249),
             .surface = canvas.Color.rgb8(255, 255, 255),
-            .surface_subtle = canvas.Color.rgb8(242, 242, 238),
-            .surface_pressed = canvas.Color.rgb8(228, 230, 223),
-            .text = canvas.Color.rgb8(28, 27, 23),
-            .text_muted = canvas.Color.rgb8(124, 121, 110),
-            .border = canvas.Color.rgb8(230, 230, 223),
-            .accent = canvas.Color.rgb8(15, 118, 110),
-            .accent_text = canvas.Color.rgb8(250, 253, 252),
-            .destructive = canvas.Color.rgb8(190, 48, 42),
-            .destructive_text = canvas.Color.rgb8(253, 250, 250),
-            .success = canvas.Color.rgb8(22, 138, 90),
-            .success_text = canvas.Color.rgb8(248, 253, 250),
-            .warning = canvas.Color.rgb8(178, 120, 12),
-            .warning_text = canvas.Color.rgb8(255, 252, 245),
-            .focus_ring = canvas.Color.rgb8(15, 118, 110),
-            .shadow = canvas.Color.rgba8(30, 32, 28, 88),
-            .disabled = canvas.Color.rgb8(240, 240, 235),
+            .surface_subtle = canvas.Color.rgb8(245, 245, 244),
+            .surface_pressed = canvas.Color.rgb8(231, 229, 228),
+            .text = canvas.Color.rgb8(12, 10, 9),
+            .text_muted = canvas.Color.rgb8(121, 113, 107),
+            .border = canvas.Color.rgb8(231, 229, 228),
+            .accent = canvas.Color.rgb8(0, 120, 111),
+            .accent_text = canvas.Color.rgb8(240, 253, 250),
+            .destructive = canvas.Color.rgb8(231, 0, 11),
+            .destructive_text = canvas.Color.rgb8(250, 250, 250),
+            .success = canvas.Color.rgb8(22, 163, 74),
+            .success_text = canvas.Color.rgb8(250, 250, 250),
+            .warning = canvas.Color.rgb8(217, 119, 6),
+            .warning_text = canvas.Color.rgb8(250, 250, 250),
+            .focus_ring = canvas.Color.rgb8(166, 160, 155),
+            .shadow = canvas.Color.rgba8(0, 0, 0, 26),
+            .disabled = canvas.Color.rgb8(245, 245, 244),
         },
         .dark => .{
-            .background = canvas.Color.rgb8(19, 21, 20),
-            .surface = canvas.Color.rgb8(27, 30, 28),
-            .surface_subtle = canvas.Color.rgb8(36, 40, 37),
-            .surface_pressed = canvas.Color.rgb8(48, 54, 50),
-            .text = canvas.Color.rgb8(238, 240, 236),
-            .text_muted = canvas.Color.rgb8(152, 158, 150),
-            .border = canvas.Color.rgb8(42, 47, 44),
-            .accent = canvas.Color.rgb8(84, 199, 176),
-            .accent_text = canvas.Color.rgb8(10, 30, 26),
-            .destructive = canvas.Color.rgb8(240, 112, 102),
-            .destructive_text = canvas.Color.rgb8(42, 12, 10),
-            .success = canvas.Color.rgb8(96, 206, 152),
-            .success_text = canvas.Color.rgb8(9, 28, 19),
-            .warning = canvas.Color.rgb8(235, 182, 80),
-            .warning_text = canvas.Color.rgb8(35, 25, 6),
-            .focus_ring = canvas.Color.rgb8(96, 210, 190),
-            .shadow = canvas.Color.rgba8(0, 0, 0, 170),
-            .disabled = canvas.Color.rgb8(38, 42, 39),
+            .background = canvas.Color.rgb8(12, 10, 9),
+            .surface = canvas.Color.rgb8(28, 25, 23),
+            .surface_subtle = canvas.Color.rgb8(41, 37, 36),
+            .surface_pressed = canvas.Color.rgba8(255, 255, 255, 38),
+            .text = canvas.Color.rgb8(250, 250, 249),
+            .text_muted = canvas.Color.rgb8(166, 160, 155),
+            .border = canvas.Color.rgba8(255, 255, 255, 26),
+            .accent = canvas.Color.rgb8(0, 187, 167),
+            .accent_text = canvas.Color.rgb8(12, 10, 9),
+            .destructive = canvas.Color.rgb8(255, 100, 103),
+            .destructive_text = canvas.Color.rgb8(250, 250, 250),
+            .success = canvas.Color.rgb8(34, 197, 94),
+            .success_text = canvas.Color.rgb8(9, 9, 11),
+            .warning = canvas.Color.rgb8(245, 158, 11),
+            .warning_text = canvas.Color.rgb8(9, 9, 11),
+            .info = canvas.Color.rgb8(167, 139, 250),
+            .info_text = canvas.Color.rgb8(9, 9, 11),
+            .focus_ring = canvas.Color.rgb8(121, 113, 107),
+            .shadow = canvas.Color.rgba8(0, 0, 0, 150),
+            .disabled = canvas.Color.rgb8(41, 37, 36),
         },
     };
     tokens.radius = .{ .sm = 6, .md = 8, .lg = 11, .xl = 14 };

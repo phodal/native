@@ -387,7 +387,8 @@ pub const color_token_names = [_][]const u8{
     "text",         "text_muted",  "border",           "accent",
     "accent_text",  "destructive", "destructive_text", "success",
     "success_text", "warning",     "warning_text",     "info",
-    "info_text",    "focus_ring",  "shadow",           "disabled",
+    "info_text",    "focus_ring",  "shadow",           "scrim",
+    "disabled",
 };
 
 pub const radius_token_names = [_][]const u8{ "sm", "md", "lg", "xl" };

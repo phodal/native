@@ -125,6 +125,13 @@ fn resetFramePathScratch() void {
     frame_path_len = 0;
 }
 
+/// Frame-lifetime scratch (same single-threaded emit contract as the
+/// path-element scratch above) holding the root bounds of the tree being
+/// emitted: the rect a modal surface's scrim covers. Chrome emission
+/// happens deep in the recursion where no ancestor frame is in scope, so
+/// the entry points record it here.
+threadlocal var scrim_viewport: ?geometry.RectF = null;
+
 fn allocFramePathElements(count: usize) Error![]drawing_model.PathElement {
     if (frame_path_len + count > frame_path_elements.len) return error.ChartPathElementListFull;
     const start = frame_path_len;
@@ -134,6 +141,7 @@ fn allocFramePathElements(count: usize) Error![]drawing_model.PathElement {
 
 pub fn emitWidgetTree(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     resetFramePathScratch();
+    scrim_viewport = widget.frame.normalized();
     try emitWidgetDepth(builder, widget, tokens, 0);
 }
 
@@ -143,8 +151,21 @@ pub fn emitWidgetLayout(builder: *Builder, layout: anytype, tokens: DesignTokens
 
 pub fn emitWidgetLayoutWithState(builder: *Builder, layout: anytype, tokens: DesignTokens, state: WidgetRenderState) Error!void {
     resetFramePathScratch();
+    scrim_viewport = widgetLayoutRootBounds(layout);
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
     try emitWidgetLayoutAnchored(builder, layout, tokens, state);
+}
+
+/// The union of the layout's root-node frames: the whole laid-out
+/// surface, which is what a modal scrim covers.
+pub fn widgetLayoutRootBounds(layout: anytype) ?geometry.RectF {
+    var bounds: ?geometry.RectF = null;
+    for (layout.nodes) |node| {
+        if (node.parent_index != null) continue;
+        const frame = node.frame.normalized();
+        bounds = if (bounds) |current| geometry.RectF.unionWith(current, frame) else frame;
+    }
+    return bounds;
 }
 
 /// The late z-pass for anchored floating surfaces: they are skipped by
@@ -323,9 +344,18 @@ fn emitWidgetLayoutNodeContent(
         },
         .alert => try widget_render_surfaces.emitAlertWidgetChrome(builder, paint_widget, tokens),
         .card => try widget_render_surfaces.emitCardWidgetChrome(builder, paint_widget, tokens),
-        .dialog => try widget_render_surfaces.emitDialogSurfaceWidgetChrome(builder, paint_widget, tokens),
-        .drawer => try widget_render_surfaces.emitDrawerSurfaceWidgetChrome(builder, paint_widget, tokens),
-        .sheet => try widget_render_surfaces.emitSheetSurfaceWidgetChrome(builder, paint_widget, tokens),
+        .dialog => {
+            try emitModalSurfaceScrim(builder, paint_widget, tokens);
+            try widget_render_surfaces.emitDialogSurfaceWidgetChrome(builder, paint_widget, tokens);
+        },
+        .drawer => {
+            try emitModalSurfaceScrim(builder, paint_widget, tokens);
+            try widget_render_surfaces.emitDrawerSurfaceWidgetChrome(builder, paint_widget, tokens);
+        },
+        .sheet => {
+            try emitModalSurfaceScrim(builder, paint_widget, tokens);
+            try widget_render_surfaces.emitSheetSurfaceWidgetChrome(builder, paint_widget, tokens);
+        },
         .accordion => try widget_render_surfaces.emitAccordionWidgetChrome(builder, paint_widget, tokens),
         .bubble, .resizable, .panel => try widget_render_surfaces.emitPanelWidgetChrome(builder, paint_widget, tokens),
         .popover => try widget_render_surfaces.emitPopoverWidgetChrome(builder, paint_widget, tokens),
@@ -442,6 +472,51 @@ pub fn widgetBackdropBlur(widget: Widget, tokens: DesignTokens) f32 {
     return 0;
 }
 
+/// True when this widget's chrome carries the modal scrim: dialogs,
+/// drawers, and sheets are modal — the user must deal with them before
+/// the content behind — so the surface behind gets the token-driven
+/// blur + dim treatment. Anchored surfaces (popover, menus, tooltips)
+/// are NOT modal and never scrim.
+pub fn widgetEmitsModalScrim(widget: Widget, tokens: DesignTokens) bool {
+    if (!widget.scrim) return false;
+    return switch (widget.kind) {
+        .dialog, .drawer, .sheet => tokens.colors.scrim.a > 0 or nonNegative(tokens.blur.scrim) > 0,
+        else => false,
+    };
+}
+
+/// The scrim behind a modal surface: a backdrop blur of everything
+/// already painted across the whole root bounds (real content blur —
+/// the reference rasterizer samples the framebuffer, the GPU packet
+/// carries the same region-blur command), then the translucent wash on
+/// top. Emitted immediately before the surface's own chrome, so
+/// everything below the modal in paint order is behind the glass and
+/// the modal itself stays crisp. Slots 13/14 (blur/wash) sit clear of
+/// the chrome slots (fill 1, border 2, clip 9, text 10, widget backdrop
+/// blur 12). Static by design: it tracks the surface's opacity/transform
+/// wrappers, and honoring reduced motion costs nothing because nothing
+/// here moves.
+fn emitModalSurfaceScrim(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
+    if (!widgetEmitsModalScrim(widget, tokens)) return;
+    const viewport = (scrim_viewport orelse widget.frame.normalized());
+    if (viewport.isEmpty()) return;
+    const blur_radius = nonNegative(tokens.blur.scrim);
+    if (blur_radius > 0) {
+        try builder.blur(.{
+            .id = widgetPartId(widget.id, 13),
+            .rect = viewport,
+            .radius = blur_radius,
+        });
+    }
+    if (tokens.colors.scrim.a > 0) {
+        try builder.fillRect(.{
+            .id = widgetPartId(widget.id, 14),
+            .rect = viewport,
+            .fill = colorFill(tokens.colors.scrim),
+        });
+    }
+}
+
 fn widgetContentClip(widget: Widget, tokens: DesignTokens) Clip {
     return .{
         .id = widgetPartId(widget.id, 9),
@@ -473,16 +548,19 @@ fn emitCardWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth
 }
 
 fn emitDialogSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitModalSurfaceScrim(builder, widget, tokens);
     try widget_render_surfaces.emitDialogSurfaceWidgetChrome(builder, widget, tokens);
     try emitWidgetClippedChildren(builder, widget, tokens, depth);
 }
 
 fn emitDrawerSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitModalSurfaceScrim(builder, widget, tokens);
     try widget_render_surfaces.emitDrawerSurfaceWidgetChrome(builder, widget, tokens);
     try emitWidgetClippedChildren(builder, widget, tokens, depth);
 }
 
 fn emitSheetSurfaceWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    try emitModalSurfaceScrim(builder, widget, tokens);
     try widget_render_surfaces.emitSheetSurfaceWidgetChrome(builder, widget, tokens);
     try emitWidgetClippedChildren(builder, widget, tokens, depth);
 }

@@ -544,9 +544,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
 
 // ------------------------------------------------------------------- theme
 
-/// A refined two-mode palette (stone neutrals + indigo accent) derived
+/// A refined two-mode palette (the register's warm stone neutrals +
+/// indigo accent, light oklch(0.457 0.24 277.023) = #432dd7) derived
 /// per rebuild from the model's scheme; the runtime stamps the surface
-/// scale afterwards.
+/// scale afterwards. Every neutral is a stone-scale anchor converted
+/// from its published oklch value, so both modes sit on the same warm
+/// foundation.
 pub fn viewerTokens(model: *const Model) canvas.DesignTokens {
     const scheme = model.system_scheme;
     var tokens = canvas.DesignTokens.theme(.{ .color_scheme = scheme });
@@ -556,40 +559,42 @@ pub fn viewerTokens(model: *const Model) canvas.DesignTokens {
             .surface = canvas.Color.rgb8(255, 255, 255),
             .surface_subtle = canvas.Color.rgb8(245, 245, 244),
             .surface_pressed = canvas.Color.rgb8(231, 229, 228),
-            .text = canvas.Color.rgb8(28, 25, 23),
+            .text = canvas.Color.rgb8(12, 10, 9),
             .text_muted = canvas.Color.rgb8(121, 113, 107),
             .border = canvas.Color.rgb8(231, 229, 228),
-            .accent = canvas.Color.rgb8(79, 70, 229),
-            .accent_text = canvas.Color.rgb8(255, 255, 255),
-            .destructive = canvas.Color.rgb8(220, 38, 38),
+            .accent = canvas.Color.rgb8(67, 45, 215),
+            .accent_text = canvas.Color.rgb8(238, 242, 255),
+            .destructive = canvas.Color.rgb8(231, 0, 11),
             .destructive_text = canvas.Color.rgb8(250, 250, 250),
             .success = canvas.Color.rgb8(22, 163, 74),
             .success_text = canvas.Color.rgb8(250, 250, 250),
             .warning = canvas.Color.rgb8(217, 119, 6),
             .warning_text = canvas.Color.rgb8(250, 250, 250),
-            .focus_ring = canvas.Color.rgb8(99, 102, 241),
-            .shadow = canvas.Color.rgba8(28, 25, 23, 24),
+            .focus_ring = canvas.Color.rgb8(166, 160, 155),
+            .shadow = canvas.Color.rgba8(0, 0, 0, 26),
             .disabled = canvas.Color.rgb8(245, 245, 244),
         },
         .dark => .{
-            .background = canvas.Color.rgb8(18, 18, 21),
-            .surface = canvas.Color.rgb8(28, 28, 33),
-            .surface_subtle = canvas.Color.rgb8(38, 38, 44),
-            .surface_pressed = canvas.Color.rgb8(51, 51, 58),
-            .text = canvas.Color.rgb8(244, 244, 245),
-            .text_muted = canvas.Color.rgb8(161, 161, 170),
-            .border = canvas.Color.rgb8(42, 42, 49),
-            .accent = canvas.Color.rgb8(129, 140, 248),
-            .accent_text = canvas.Color.rgb8(30, 27, 75),
-            .destructive = canvas.Color.rgb8(239, 68, 68),
+            .background = canvas.Color.rgb8(12, 10, 9),
+            .surface = canvas.Color.rgb8(28, 25, 23),
+            .surface_subtle = canvas.Color.rgb8(41, 37, 36),
+            .surface_pressed = canvas.Color.rgba8(255, 255, 255, 38),
+            .text = canvas.Color.rgb8(250, 250, 249),
+            .text_muted = canvas.Color.rgb8(166, 160, 155),
+            .border = canvas.Color.rgba8(255, 255, 255, 26),
+            .accent = canvas.Color.rgb8(124, 134, 255),
+            .accent_text = canvas.Color.rgb8(12, 10, 9),
+            .destructive = canvas.Color.rgb8(255, 100, 103),
             .destructive_text = canvas.Color.rgb8(250, 250, 250),
             .success = canvas.Color.rgb8(34, 197, 94),
             .success_text = canvas.Color.rgb8(9, 9, 11),
             .warning = canvas.Color.rgb8(245, 158, 11),
             .warning_text = canvas.Color.rgb8(9, 9, 11),
-            .focus_ring = canvas.Color.rgb8(129, 140, 248),
+            .info = canvas.Color.rgb8(167, 139, 250),
+            .info_text = canvas.Color.rgb8(9, 9, 11),
+            .focus_ring = canvas.Color.rgb8(121, 113, 107),
             .shadow = canvas.Color.rgba8(0, 0, 0, 150),
-            .disabled = canvas.Color.rgb8(38, 38, 44),
+            .disabled = canvas.Color.rgb8(41, 37, 36),
         },
     };
     return tokens;

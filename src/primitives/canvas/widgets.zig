@@ -695,6 +695,12 @@ pub const Widget = struct {
     text_composition: ?TextRange = null,
     value: f32 = 0,
     layer: ?i32 = null,
+    /// Modal surfaces (dialog/drawer/sheet) paint a token-driven scrim
+    /// (dim + backdrop blur) across the whole tree behind them. False
+    /// opts a surface out — for embedding one as an inline PREVIEW
+    /// (a component catalog card, a docs specimen) where it is not
+    /// actually modal. Ignored on every other kind.
+    scrim: bool = true,
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
     variant: WidgetVariant = .default,
@@ -755,6 +761,9 @@ pub const BuiltinComponentOptions = struct {
     text_composition: ?TextRange = null,
     value: f32 = 0,
     layer: ?i32 = null,
+    /// See `Widget.scrim`: false embeds a modal surface as an inline
+    /// preview without the behind-it dim + blur.
+    scrim: bool = true,
     state: WidgetState = .{},
     layout: WidgetLayoutStyle = .{},
     variant: ?WidgetVariant = null,
@@ -775,12 +784,18 @@ pub const BuiltinSurfacePlacementOptions = struct {
     margin: f32 = 24,
 };
 
+/// The input-catcher behind a modal surface: a full-bounds panel whose
+/// job is the dismiss hit target and the semantics node — VISUALS live
+/// elsewhere. The modal chrome itself paints the scrim (the token-driven
+/// blur + dim across the whole surface), so the backdrop defaults to a
+/// fully transparent fill; a non-default `background` stacks on top of
+/// that scrim, for apps that want an additional tinted wash.
 pub const BuiltinSurfaceBackdropOptions = struct {
     id: ObjectId = 0,
     frame: geometry.RectF,
     layer: ?i32 = null,
     label: []const u8 = "Surface backdrop",
-    background: Color = Color.rgba8(0, 0, 0, 154),
+    background: Color = Color.rgba8(0, 0, 0, 0),
     dismissible: bool = true,
 };
 
@@ -829,6 +844,7 @@ pub fn builtinComponentWidget(kind: BuiltinComponentKind, options: BuiltinCompon
         .text_composition = options.text_composition,
         .value = options.value,
         .layer = options.layer,
+        .scrim = options.scrim,
         .state = options.state,
         .layout = builtinComponentLayout(kind, options.size orelse builtinComponentDefaultSize(kind), options.layout),
         .variant = options.variant orelse builtinComponentDefaultVariant(kind),

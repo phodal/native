@@ -1,9 +1,11 @@
 //! calculator theme: the house register — pure neutrals, hairline
 //! borders, and exactly one accent (action blue) that only appears when
-//! something is live: the pending operator, the press flash on any key,
-//! the focus ring. The operator column and equals are the inverted
-//! monochrome keys (near-black faces on light, near-white faces on
-//! dark), so the board reads black-and-white at rest.
+//! something is live: the pending operator and the press flash on any
+//! key. The focus ring stays the register's neutral mid-gray. The
+//! operator column and equals are the inverted monochrome keys
+//! (near-black faces on light, near-white faces on dark) — the same
+//! treatment as the register's monochrome primary — so the board reads
+//! black-and-white at rest.
 //!
 //! High-contrast requests fall back to the framework's high-contrast
 //! palettes (accessibility beats brand) and reduce-motion zeroes the
@@ -49,17 +51,17 @@ pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion
         out.controls.button_primary = switch (scheme) {
             .light => .{
                 .background = Color.rgb8(23, 23, 23),
-                .hover_background = Color.rgb8(56, 56, 56),
+                .hover_background = Color.rgb8(38, 38, 38),
                 .active_background = light_colors.accent,
-                .foreground = Color.rgb8(255, 255, 255),
+                .foreground = Color.rgb8(250, 250, 250),
                 .border = Color.rgb8(23, 23, 23),
             },
             .dark => .{
-                .background = Color.rgb8(237, 237, 237),
-                .hover_background = Color.rgb8(255, 255, 255),
+                .background = Color.rgb8(229, 229, 229),
+                .hover_background = Color.rgb8(250, 250, 250),
                 .active_background = dark_colors.accent,
-                .foreground = Color.rgb8(10, 10, 10),
-                .border = Color.rgb8(237, 237, 237),
+                .foreground = Color.rgb8(23, 23, 23),
+                .border = Color.rgb8(229, 229, 229),
             },
         };
     }
@@ -78,48 +80,58 @@ pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion
     return out;
 }
 
-/// Paper white: white keys lifted off a near-white window by hairlines;
-/// action blue as the only color.
+/// Paper white on the register's neutral scale: white keys lifted off a
+/// near-white window by hairlines; action blue (the register's blue
+/// primary, oklch(0.488 0.243 264.376) = #1447e6) as the only color.
+/// Every neutral is a scale anchor, so the board sits on exactly the
+/// same gray foundation as the default theme — only the accent differs.
 pub const light_colors = canvas.ColorTokens{
     .background = Color.rgb8(250, 250, 250),
     .surface = Color.rgb8(255, 255, 255),
-    .surface_subtle = Color.rgb8(240, 240, 240),
+    .surface_subtle = Color.rgb8(245, 245, 245),
     .surface_pressed = Color.rgb8(229, 229, 229),
-    .text = Color.rgb8(23, 23, 23),
-    .text_muted = Color.rgb8(102, 102, 102),
-    .border = Color.rgb8(232, 232, 232),
-    .accent = Color.rgb8(0, 112, 243),
-    .accent_text = Color.rgb8(255, 255, 255),
-    .destructive = Color.rgb8(217, 48, 55),
-    .destructive_text = Color.rgb8(255, 255, 255),
-    .success = Color.rgb8(23, 125, 66),
-    .success_text = Color.rgb8(255, 255, 255),
-    .warning = Color.rgb8(170, 90, 0),
-    .warning_text = Color.rgb8(255, 255, 255),
-    .focus_ring = Color.rgb8(0, 112, 243),
-    .shadow = Color.rgba8(0, 0, 0, 24),
-    .disabled = Color.rgb8(244, 244, 244),
+    .text = Color.rgb8(10, 10, 10),
+    .text_muted = Color.rgb8(115, 115, 115),
+    .border = Color.rgb8(229, 229, 229),
+    .accent = Color.rgb8(20, 71, 230),
+    .accent_text = Color.rgb8(239, 246, 255),
+    .destructive = Color.rgb8(231, 0, 11),
+    .destructive_text = Color.rgb8(250, 250, 250),
+    .success = Color.rgb8(22, 163, 74),
+    .success_text = Color.rgb8(250, 250, 250),
+    .warning = Color.rgb8(217, 119, 6),
+    .warning_text = Color.rgb8(250, 250, 250),
+    .focus_ring = Color.rgb8(161, 161, 161),
+    .shadow = Color.rgba8(0, 0, 0, 26),
+    .disabled = Color.rgb8(245, 245, 245),
 };
 
-/// True graphite: near-black window, graphite keys; the accent lightens
-/// one step so dark glyphs sit on it.
+/// True graphite on the register's dark neutrals: translucent-white
+/// hairlines and pressed washes (they brighten what they overlap instead
+/// of muddying it); the accent lifts to the scale's bright-blue step
+/// (oklch(0.623 0.214 259.815) = #2b7fff) so the pending-operator flash
+/// is unmistakable on graphite keys.
 pub const dark_colors = canvas.ColorTokens{
     .background = Color.rgb8(10, 10, 10),
     .surface = Color.rgb8(23, 23, 23),
     .surface_subtle = Color.rgb8(38, 38, 38),
-    .surface_pressed = Color.rgb8(51, 51, 51),
-    .text = Color.rgb8(237, 237, 237),
+    .surface_pressed = Color.rgba8(255, 255, 255, 38),
+    .text = Color.rgb8(250, 250, 250),
     .text_muted = Color.rgb8(161, 161, 161),
-    .border = Color.rgb8(46, 46, 46),
-    .accent = Color.rgb8(50, 145, 255),
+    .border = Color.rgba8(255, 255, 255, 26),
+    .accent = Color.rgb8(43, 127, 255),
+    // Near-black on the bright accent (6.0:1) — the light near-white
+    // pairing only reaches 3.5:1 on this step.
     .accent_text = Color.rgb8(10, 10, 10),
-    .destructive = Color.rgb8(255, 97, 102),
-    .destructive_text = Color.rgb8(10, 10, 10),
-    .success = Color.rgb8(69, 222, 143),
-    .success_text = Color.rgb8(10, 10, 10),
-    .warning = Color.rgb8(255, 176, 32),
-    .warning_text = Color.rgb8(10, 10, 10),
-    .focus_ring = Color.rgb8(50, 145, 255),
+    .destructive = Color.rgb8(255, 100, 103),
+    .destructive_text = Color.rgb8(250, 250, 250),
+    .success = Color.rgb8(34, 197, 94),
+    .success_text = Color.rgb8(9, 9, 11),
+    .warning = Color.rgb8(245, 158, 11),
+    .warning_text = Color.rgb8(9, 9, 11),
+    .info = Color.rgb8(167, 139, 250),
+    .info_text = Color.rgb8(9, 9, 11),
+    .focus_ring = Color.rgb8(115, 115, 115),
     .shadow = Color.rgba8(0, 0, 0, 150),
-    .disabled = Color.rgb8(32, 32, 32),
+    .disabled = Color.rgb8(38, 38, 38),
 };

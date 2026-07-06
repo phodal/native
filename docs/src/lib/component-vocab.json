@@ -977,6 +977,7 @@
     "info_text",
     "focus_ring",
     "shadow",
+    "scrim",
     "disabled"
   ],
   "radiusTokens": [

@@ -184,11 +184,15 @@ const catalog_dialog_children = [_]canvas.Widget{canvas.builtinComponentWidget(.
     .id = 19201,
     .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
     .text = "Confirm",
+    // Inline catalog specimen, not an open modal: no scrim behind it.
+    .scrim = false,
 })};
 const catalog_drawer_children = [_]canvas.Widget{canvas.builtinComponentWidget(.drawer, .{
     .id = 19301,
     .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
     .text = "Drawer",
+    // Inline catalog specimen, not an open modal: no scrim behind it.
+    .scrim = false,
 })};
 const catalog_dropdown_items = [_]canvas.Widget{
     .{ .id = 19401, .kind = .menu_item, .text = "Copy" },
@@ -248,6 +252,8 @@ const catalog_sheet_children = [_]canvas.Widget{canvas.builtinComponentWidget(.s
     .id = 20201,
     .frame = rect(0, catalog_preview_y, catalog_preview_width, 58),
     .text = "Sheet",
+    // Inline catalog specimen, not an open modal: no scrim behind it.
+    .scrim = false,
 })};
 const catalog_skeleton_children = [_]canvas.Widget{canvas.builtinComponentWidget(.skeleton, .{
     .id = 20301,

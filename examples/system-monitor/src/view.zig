@@ -405,18 +405,20 @@ fn statusBarView(ui: *Ui, model: *const Model) Ui.Node {
 
 // ---------------------------------------------------------- kill confirm
 
-/// The SIGTERM confirmation: a dimming scrim over the whole window with a
-/// centered dialog. The scrim is pressable and cancels — clicking outside
-/// the dialog never terminates anything.
+/// The SIGTERM confirmation: a centered dialog whose modal chrome
+/// paints the scrim (token-driven dim + backdrop blur across the whole
+/// window). The full-bleed panel underneath is the cancel catcher —
+/// clicking outside the dialog never terminates anything.
 fn confirmOverlay(ui: *Ui, model: *const Model) Ui.Node {
     const pending = model.pending_kill orelse unreachable;
-    // A panel, not a column: layout containers paint nothing, and the
-    // scrim must both dim the app and catch the cancel press. Radius and
-    // stroke are zeroed so no window-edge chrome shows through the dim.
+    // A panel, not a column: the catcher must claim the press route
+    // itself, and a fully transparent zero-radius fill paints nothing
+    // while keeping the whole window pressable (the dialog chrome owns
+    // the visible scrim).
     return ui.panel(.{
         .grow = 1,
         .on_press = .cancel_kill,
-        .style = .{ .background = canvas.Color.rgba8(9, 15, 17, 130), .radius = 0, .stroke_width = 0 },
+        .style = .{ .background = canvas.Color.rgba8(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },
         .semantics = .{ .label = "Confirm termination" },
     }, ui.column(.{ .grow = 1, .main = .center, .cross = .center }, .{
         ui.el(.dialog, .{

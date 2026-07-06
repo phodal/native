@@ -686,11 +686,11 @@ test "design tokens provide theme and contrast palettes" {
     try std.testing.expectEqual(default_mono_font_family, light.typography.mono_font_family);
     try std.testing.expectEqualStrings("Geist", light.typography.bodyFamilyName());
     try std.testing.expectEqualStrings("Geist Mono", light.typography.monoFamilyName());
-    // The default palette is the house neutral + blue preset (see
-    // ColorTokens): near-black foreground, blue-violet primary, mid-gray
-    // ring.
+    // The default palette is the house neutral register (see
+    // ColorTokens): near-black foreground, MONOCHROME near-black
+    // primary, mid-gray ring.
     try std.testing.expectEqualDeep(Color.rgb8(10, 10, 10), light.colors.text);
-    try std.testing.expectEqualDeep(Color.rgb8(20, 71, 230), light.colors.accent);
+    try std.testing.expectEqualDeep(Color.rgb8(23, 23, 23), light.colors.accent);
     try std.testing.expectEqualDeep(Color.rgb8(161, 161, 161), light.colors.focus_ring);
 
     const dark = DesignTokens.theme(.{ .color_scheme = .dark, .density = .compact });
@@ -700,8 +700,10 @@ test "design tokens provide theme and contrast palettes" {
     try std.testing.expectEqualDeep(Color.rgb8(250, 250, 250), dark.colors.text);
     // Dark hairlines are translucent white, not a gray fill.
     try std.testing.expectEqualDeep(Color.rgba8(255, 255, 255, 26), dark.colors.border);
-    try std.testing.expectEqualDeep(Color.rgb8(25, 60, 184), dark.colors.accent);
-    try std.testing.expectEqualDeep(Color.rgb8(239, 246, 255), dark.colors.accent_text);
+    // The monochrome primary flips in dark: porcelain fill, near-black
+    // accent text.
+    try std.testing.expectEqualDeep(Color.rgb8(229, 229, 229), dark.colors.accent);
+    try std.testing.expectEqualDeep(Color.rgb8(23, 23, 23), dark.colors.accent_text);
     try std.testing.expectEqualDeep(Color.rgb8(115, 115, 115), dark.colors.focus_ring);
 
     const high_contrast = DesignTokens.theme(.{ .color_scheme = .dark, .contrast = .high, .density = .spacious });
@@ -1306,7 +1308,10 @@ test "built-in modal surfaces render house chrome and semantics" {
     });
     try std.testing.expectEqual(WidgetKind.panel, backdrop.kind);
     try std.testing.expectEqual(@as(?i32, 20), backdrop.layer);
-    try std.testing.expectEqualDeep(Color.rgba8(0, 0, 0, 154), backdrop.style.background.?);
+    // The backdrop is the dismiss hit target, not the dim: modal chrome
+    // paints the scrim itself, so the default backdrop fill is fully
+    // transparent.
+    try std.testing.expectEqualDeep(Color.rgba8(0, 0, 0, 0), backdrop.style.background.?);
     try std.testing.expectEqualDeep(Color.rgba8(0, 0, 0, 0), backdrop.style.border.?);
     try std.testing.expectEqual(@as(?f32, 0), backdrop.style.radius);
     try std.testing.expectEqual(@as(?f32, 0), backdrop.style.stroke_width);
@@ -1463,18 +1468,45 @@ test "built-in modal surfaces render house chrome and semantics" {
             },
         },
     };
-    var commands: [18]CanvasCommand = undefined;
+    var commands: [24]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, tokens);
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 18), display_list.commandCount());
+    // 17 chrome/text/clip commands (the transparent backdrop casts no
+    // drop shadow) plus the three modal scrims (a backdrop blur and a
+    // wash fill per dialog/drawer/sheet).
+    try std.testing.expectEqual(@as(usize, 23), display_list.commandCount());
     switch (display_list.findCommandById(widgetPartId(49, 2)).?.command) {
         .fill_rounded_rect => |fill| {
             try std.testing.expectEqualDeep(Radius.all(0), fill.radius);
-            try expectFillColor(Color.rgba8(0, 0, 0, 154), fill.fill);
+            try expectFillColor(Color.rgba8(0, 0, 0, 0), fill.fill);
         },
         else => return error.TestUnexpectedResult,
     }
+    // Each modal surface scrims the WHOLE root bounds: a real backdrop
+    // blur of the already-painted content (slot 13), then the
+    // translucent wash (slot 14) — token-driven from blur.scrim and
+    // colors.scrim.
+    const root_bounds = geometry.RectF.init(0, 0, 920, 240);
+    for ([_]ObjectId{ 50, 51, 52 }) |surface_id| {
+        switch (display_list.findCommandById(widgetPartId(surface_id, 13)).?.command) {
+            .blur => |blur| {
+                try std.testing.expectEqualDeep(root_bounds, blur.rect);
+                try std.testing.expectEqual(@as(f32, 4), blur.radius);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+        switch (display_list.findCommandById(widgetPartId(surface_id, 14)).?.command) {
+            .fill_rect => |fill| {
+                try std.testing.expectEqualDeep(root_bounds, fill.rect);
+                try expectFillColor(Color.rgba8(0, 0, 0, 26), fill.fill);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    // The backdrop panel (49) is not a modal surface: no scrim slots.
+    try std.testing.expect(display_list.findCommandById(widgetPartId(49, 13)) == null);
+    try std.testing.expect(display_list.findCommandById(widgetPartId(49, 14)) == null);
     switch (display_list.findCommandById(widgetPartId(49, 3)).?.command) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width);
@@ -1503,6 +1535,66 @@ test "built-in modal surfaces render house chrome and semantics" {
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "modal scrim is token-driven and never behind anchored surfaces" {
+    // Anchored/floating surfaces are not modal: no scrim slots for the
+    // popover, the menu surface, or the tooltip — only the dialog.
+    const children = [_]Widget{
+        .{ .id = 60, .kind = .popover, .frame = geometry.RectF.init(8, 8, 200, 120) },
+        builtinComponentWidget(.dropdown_menu, .{ .id = 61, .frame = geometry.RectF.init(220, 8, 180, 140) }),
+        builtinComponentWidget(.tooltip, .{ .id = 62, .frame = geometry.RectF.init(420, 8, 120, 32), .text = "Hint" }),
+        builtinComponentWidget(.dialog, .{ .id = 63, .frame = geometry.RectF.init(200, 160, 240, 140) }),
+    };
+    const root = Widget{
+        .id = 1,
+        .kind = .stack,
+        .frame = geometry.RectF.init(0, 0, 640, 360),
+        .children = &children,
+    };
+
+    var commands: [24]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, root, .{});
+    const display_list = builder.displayList();
+    for ([_]ObjectId{ 60, 61, 62 }) |anchored_id| {
+        try std.testing.expect(display_list.findCommandById(widgetPartId(anchored_id, 13)) == null);
+        try std.testing.expect(display_list.findCommandById(widgetPartId(anchored_id, 14)) == null);
+    }
+    switch (display_list.findCommandById(widgetPartId(63, 13)).?.command) {
+        .blur => |blur| {
+            // The scrim blurs the whole tree the dialog covers, not just
+            // the dialog frame.
+            try std.testing.expectEqualDeep(geometry.RectF.init(0, 0, 640, 360), blur.rect);
+            try std.testing.expectEqual(@as(f32, 4), blur.radius);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(63, 14)).?.command) {
+        .fill_rect => |fill| try expectFillColor(Color.rgba8(0, 0, 0, 26), fill.fill),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Themes opt out per channel: zero blur leaves only the wash, and a
+    // zero-alpha wash with zero blur removes the scrim entirely.
+    const wash_only = DesignTokens{ .blur = .{ .scrim = 0 } };
+    var wash_commands: [24]CanvasCommand = undefined;
+    var wash_builder = Builder.init(&wash_commands);
+    try emitWidgetTree(&wash_builder, root, wash_only);
+    const wash_list = wash_builder.displayList();
+    try std.testing.expect(wash_list.findCommandById(widgetPartId(63, 13)) == null);
+    try std.testing.expect(wash_list.findCommandById(widgetPartId(63, 14)) != null);
+
+    const no_scrim = DesignTokens{
+        .colors = .{ .scrim = Color.rgba8(0, 0, 0, 0) },
+        .blur = .{ .scrim = 0 },
+    };
+    var bare_commands: [24]CanvasCommand = undefined;
+    var bare_builder = Builder.init(&bare_commands);
+    try emitWidgetTree(&bare_builder, root, no_scrim);
+    const bare_list = bare_builder.displayList();
+    try std.testing.expect(bare_list.findCommandById(widgetPartId(63, 13)) == null);
+    try std.testing.expect(bare_list.findCommandById(widgetPartId(63, 14)) == null);
 }
 
 test "built-in component widgets expose house semantics and render tokens" {

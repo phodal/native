@@ -69,13 +69,17 @@ pub const ThemeOptions = struct {
     reduce_motion: bool = false,
 };
 
-/// The default palette is the house "neutral + blue" preset,
-/// converted from its published oklch values to sRGB hex (D65, standard
-/// oklch -> linear sRGB -> gamma-encoded; conversions are exact to the
-/// nearest 8-bit channel). Neutral gray scale for surfaces and text, a
-/// blue-violet primary for accents, translucent-white hairlines in dark
-/// mode, and card/popover surfaces one step lighter than the dark
-/// background. Rationale per token is on the field.
+/// The default palette is the house neutral register, converted from
+/// its published oklch values to sRGB hex (D65, standard oklch ->
+/// linear sRGB -> gamma-encoded; conversions are exact to the nearest
+/// 8-bit channel). Neutral gray scale for surfaces and text, a
+/// MONOCHROME primary — near-black filled controls on light,
+/// porcelain-white filled controls on dark — translucent-white
+/// hairlines in dark mode, and card/popover surfaces one step lighter
+/// than the dark background. Color is spent only where it means
+/// something (destructive/success/warning/info and per-app accent
+/// overrides); at rest the register reads black-and-white, which is
+/// what makes it read premium. Rationale per token is on the field.
 pub const ColorTokens = struct {
     /// oklch(1 0 0) = #ffffff — the page background.
     background: Color = Color.rgb8(255, 255, 255),
@@ -94,12 +98,12 @@ pub const ColorTokens = struct {
     text_muted: Color = Color.rgb8(115, 115, 115),
     /// Border/input hairline; oklch(0.922 0 0) = #e5e5e5.
     border: Color = Color.rgb8(229, 229, 229),
-    /// Primary; oklch(0.488 0.243 264.376) = #1447e6 — the blue-violet
-    /// that identifies checked, active, and filled-primary states.
-    accent: Color = Color.rgb8(20, 71, 230),
-    /// Primary foreground; oklch(0.97 0.014 254.604) = #eff6ff — a
-    /// blue-tinted near-white that reads as white on the primary.
-    accent_text: Color = Color.rgb8(239, 246, 255),
+    /// Primary; oklch(0.205 0 0) = #171717 — the monochrome near-black
+    /// that identifies checked, active, and filled-primary states. Apps
+    /// that want a hue override this; the base register stays neutral.
+    accent: Color = Color.rgb8(23, 23, 23),
+    /// Primary foreground; oklch(0.985 0 0) = #fafafa.
+    accent_text: Color = Color.rgb8(250, 250, 250),
     /// Destructive; oklch(0.577 0.245 27.325) = #e7000b.
     destructive: Color = Color.rgb8(231, 0, 11),
     destructive_text: Color = Color.rgb8(250, 250, 250),
@@ -120,6 +124,12 @@ pub const ColorTokens = struct {
     /// reads as an outline, not a second border color.
     focus_ring: Color = Color.rgb8(161, 161, 161),
     shadow: Color = Color.rgba8(0, 0, 0, 26),
+    /// Modal scrim: the wash drawn across the whole surface behind
+    /// dialogs, drawers, and sheets. Black at 10% — deliberately light,
+    /// because the backdrop blur (`BlurTokens.scrim`) carries the
+    /// modality signal; the dim only settles the blurred content. Same
+    /// value in both schemes. Alpha 0 disables the wash.
+    scrim: Color = Color.rgba8(0, 0, 0, 26),
     /// Disabled wash; the muted surface step, oklch(0.97 0 0) = #f5f5f5.
     disabled: Color = Color.rgb8(245, 245, 245),
 
@@ -160,12 +170,12 @@ pub const ColorTokens = struct {
             // Dark borders are translucent white (10%), not a gray fill:
             // hairlines brighten what they overlap instead of muddying it.
             .border = Color.rgba8(255, 255, 255, 26),
-            // Primary; oklch(0.424 0.199 265.638) = #193cb8 — the same
-            // blue-violet hue, stepped down for dark surfaces.
-            .accent = Color.rgb8(25, 60, 184),
-            // Primary foreground stays the blue-tinted near-white,
-            // oklch(0.97 0.014 254.604) = #eff6ff.
-            .accent_text = Color.rgb8(239, 246, 255),
+            // Primary; oklch(0.922 0 0) = #e5e5e5 — the monochrome
+            // register flips in dark: porcelain filled controls with
+            // near-black text on them.
+            .accent = Color.rgb8(229, 229, 229),
+            // Primary foreground; oklch(0.205 0 0) = #171717.
+            .accent_text = Color.rgb8(23, 23, 23),
             // Destructive; oklch(0.704 0.191 22.216) = #ff6467.
             .destructive = Color.rgb8(255, 100, 103),
             .destructive_text = Color.rgb8(250, 250, 250),
@@ -178,6 +188,9 @@ pub const ColorTokens = struct {
             // Ring; oklch(0.556 0 0) = #737373.
             .focus_ring = Color.rgb8(115, 115, 115),
             .shadow = Color.rgba8(0, 0, 0, 150),
+            // Same 10% wash as light: the scrim's job in dark is to
+            // settle the blurred backdrop, not to blacken it.
+            .scrim = Color.rgba8(0, 0, 0, 26),
             // Disabled wash; the muted step, oklch(0.269 0 0) = #262626.
             .disabled = Color.rgb8(38, 38, 38),
         };
@@ -193,10 +206,10 @@ pub const ColorTokens = struct {
             .text = Color.rgb8(0, 0, 0),
             .text_muted = Color.rgb8(64, 64, 64),
             .border = Color.rgba8(0, 0, 0, 180),
-            // The dark-scheme primary (oklch(0.424 0.199 265.638) =
-            // #193cb8): same blue-violet identity, deep enough for
-            // 8.8:1 against the near-white accent text.
-            .accent = Color.rgb8(25, 60, 184),
+            // The monochrome primary at its contrast extreme: pure
+            // black filled controls, 21:1 against the white accent
+            // text.
+            .accent = Color.rgb8(0, 0, 0),
             .accent_text = Color.rgb8(255, 255, 255),
             .destructive = Color.rgb8(127, 29, 29),
             .destructive_text = Color.rgb8(255, 255, 255),
@@ -206,10 +219,15 @@ pub const ColorTokens = struct {
             .warning_text = Color.rgb8(255, 255, 255),
             .info = Color.rgb8(76, 29, 149),
             .info_text = Color.rgb8(255, 255, 255),
-            // The primary itself (oklch(0.488 0.243 264.376) = #1447e6):
-            // high-contrast rings should shout, and the brand blue does.
-            .focus_ring = Color.rgb8(20, 71, 230),
+            // High-contrast rings should shout: pure black on the
+            // white surface, the same monochrome extreme the accent
+            // sits on.
+            .focus_ring = Color.rgb8(0, 0, 0),
             .shadow = Color.rgba8(0, 0, 0, 96),
+            // High contrast trades the translucent glass treatment for
+            // a decisive dim: 63% black keeps the modal unmistakably
+            // separated even where blur is unavailable or unwanted.
+            .scrim = Color.rgba8(0, 0, 0, 160),
             .disabled = Color.rgb8(163, 163, 163),
         };
     }
@@ -223,10 +241,10 @@ pub const ColorTokens = struct {
             .text = Color.rgb8(255, 255, 255),
             .text_muted = Color.rgb8(229, 229, 229),
             .border = Color.rgba8(255, 255, 255, 190),
-            // A lifted primary (oklch(0.707 0.165 254.624) = #51a2ff):
-            // the blue-violet identity at 7.9:1 against black accent
-            // text, replacing the old hueless white accent.
-            .accent = Color.rgb8(81, 162, 255),
+            // The monochrome primary at its contrast extreme: pure
+            // white filled controls, 21:1 against the black accent
+            // text.
+            .accent = Color.rgb8(255, 255, 255),
             .accent_text = Color.rgb8(0, 0, 0),
             .destructive = Color.rgb8(248, 113, 113),
             .destructive_text = Color.rgb8(0, 0, 0),
@@ -236,8 +254,14 @@ pub const ColorTokens = struct {
             .warning_text = Color.rgb8(0, 0, 0),
             .info = Color.rgb8(196, 181, 253),
             .info_text = Color.rgb8(0, 0, 0),
-            .focus_ring = Color.rgb8(147, 197, 253),
+            // Pure white ring: the same monochrome extreme the accent
+            // sits on.
+            .focus_ring = Color.rgb8(255, 255, 255),
             .shadow = Color.rgba8(0, 0, 0, 180),
+            // The decisive high-contrast dim (see highContrastLight):
+            // heavier still, because black over near-black content
+            // needs more alpha to read as a separation.
+            .scrim = Color.rgba8(0, 0, 0, 200),
             .disabled = Color.rgb8(82, 82, 82),
         };
     }
@@ -330,6 +354,16 @@ pub const BlurTokens = struct {
     none: f32 = 0,
     sm: f32 = 8,
     md: f32 = 16,
+    /// Backdrop-blur strength (Gaussian sigma, in points) applied to
+    /// the already-painted content behind a modal surface's scrim —
+    /// dialogs, drawers, and sheets. 4 is deliberately soft: with the
+    /// 10% `ColorTokens.scrim` wash on top it reads as frosted glass,
+    /// not fog. 0 disables the blur and leaves only the wash (themes
+    /// that avoid transparency effects should zero this and raise the
+    /// scrim alpha instead). Not part of `BlurTokenRef`: widgets opt
+    /// into sm/md backdrops individually, while this one is applied by
+    /// the modal chrome itself.
+    scrim: f32 = 4,
 
     pub fn value(self: BlurTokens, token: BlurTokenRef) f32 {
         return switch (token) {
@@ -688,6 +722,7 @@ pub const ColorTokenOverrides = struct {
     info_text: ?Color = null,
     focus_ring: ?Color = null,
     shadow: ?Color = null,
+    scrim: ?Color = null,
     disabled: ?Color = null,
 
     pub fn apply(self: ColorTokenOverrides, base: ColorTokens) ColorTokens {
@@ -773,6 +808,7 @@ pub const BlurTokenOverrides = struct {
     none: ?f32 = null,
     sm: ?f32 = null,
     md: ?f32 = null,
+    scrim: ?f32 = null,
 
     pub fn apply(self: BlurTokenOverrides, base: BlurTokens) BlurTokens {
         return applyFlatTokenOverrides(BlurTokens, base, self);

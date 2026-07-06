@@ -455,11 +455,12 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
 // Pinned after pixel review of the CHART_GOLDEN_DUMP artifacts (line +
 // area fill + gridlines in accent, zero-baseline bars in success, band
 // envelope in info; both themes clear with their background token).
-// Regenerated for the house default palette: the accent series is now
-// the blue-violet primary and the gridline/border neutrals moved to the
-// neutral scale; geometry is unchanged.
-const golden_light_signature: u64 = 8077067691017829510;
-const golden_dark_signature: u64 = 6697849663957189366;
+// Regenerated for the monochrome primary (2026-07-06): color-only — the
+// accent series now inks near-black in light and porcelain in dark (the
+// register's mono primary); success bars, info band, and all geometry
+// are byte-identical.
+const golden_light_signature: u64 = 18163542738859226189;
+const golden_dark_signature: u64 = 13341310235756667434;
 
 fn goldenDumpRequested() bool {
     if (comptime !@import("builtin").link_libc) return false;

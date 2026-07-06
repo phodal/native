@@ -4,15 +4,15 @@ An eval harness for AI-agent authoring of Native SDK apps. It formalizes the "cl
 
 Per case the runner:
 
-1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills). The workspace is then **pre-warmed** (`zig build test` once) so the agent's own builds are incremental and its wall-clock isn't spent compiling the framework.
+1. **Scaffolds** a fresh workspace with the repo's own CLI — `zig build` at the repo root, then `zig-out/bin/native init evals/.workspaces/<case> --frontend native` — and delivers the skill exactly the way a real user gets it: `native skills get native-ui` written to the workspace's `.claude/skills/native-ui/SKILL.md` (`init` does not ship skills). The workspace is then **pre-warmed** (`native test` once — workspaces are zero-config, so builds go through the CLI verbs) so the agent's own builds are incremental and its wall-clock isn't spent compiling the SDK.
 2. **Runs the agent-under-test**: `claude -p "<task prompt>"` headless in the workspace, routed through the Vercel AI Gateway, with a per-run `CLAUDE_CONFIG_DIR` so no user-level memory/plugins/hooks leak in, `--max-turns`, a wall-clock timeout, and the full `stream-json` transcript captured to `results/`.
-3. **Grades** with deterministic checks: `zig build test` in the workspace, `native markup check` on the `.native` files, per-case file greps (e.g. "the board uses `<template>`"), and live automation-snapshot greps (build with `-Dautomation=true`, launch, `native automate wait`, grep `snapshot.txt` for expected roles/names).
+3. **Grades** with deterministic checks: `native test` in the workspace, `native markup check` on the `.native` files, per-case file greps (e.g. "the board uses `<template>`"), and live automation-snapshot greps (`native build` with `-Dautomation=true`, launch, wait for the automation snapshot, grep it for expected roles/names).
 4. **Judges** quality the deterministic checks can't see — idiomatic Model/Msg design, template factoring, test meaningfulness — with an `llm_judge` check: a judge model called directly through the gateway scores case-specific criteria 0–10 against the task prompt and the agent's code. Advisory by default (the score is recorded and printed but never fails the case); set `"advisory": false` on a case to make `minScore` a gate. Skipped in `--dry-run`.
 5. **Reports** a per-case `result.json` (pass/fail per check, judge scores, durations, model, turns, cost) plus a console summary table.
 
 ## Requirements
 
-- macOS (live snapshot checks launch the app; use `--skip-live` elsewhere), Zig 0.16.0, node >= 22, pnpm 10.x.
+- macOS (live snapshot checks launch the app; use `--skip-live` elsewhere, or `--sandbox` for the Linux lane), Zig 0.16.0, node >= 24, pnpm 10.x.
 - The [Claude Code CLI](https://code.claude.com/docs) (`claude`) on PATH.
 - A [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) API key for real runs:
 
@@ -50,11 +50,12 @@ pnpm eval --keep-workspaces           # keep .workspaces/<case> around for inspe
 pnpm eval --trials 5 expenses-table   # 5 independent trials per case; report pass rates
 pnpm eval --concurrency 3             # run up to 3 case trials in parallel (default 2 locally)
 pnpm eval --sandbox                   # run each case in its own Vercel Sandbox microVM
+pnpm eval --sandbox --dry-run         # full sandbox path minus the model call
 pnpm eval --sandbox --sandbox-vcpus 8 # bigger sandboxes (2048 MB RAM per vCPU)
 pnpm typecheck
 ```
 
-Cases run in parallel (log lines are prefixed `[case-name]`); `--concurrency` caps how many at once — locally the default is 2 to keep zig builds from thrashing, with `--sandbox` everything runs at once since each has its own VM.
+Cases run in parallel (log lines are prefixed `[case-name]`); `--concurrency` caps how many at once — locally the default is 2 to keep zig builds from thrashing, with `--sandbox` the default is 4 (each case has its own VM, but plans rate-limit vCPU allocation).
 
 ### Trials
 
@@ -74,26 +75,45 @@ results/<stamp>/
 
 The summary table swaps the PASS/FAIL column for a `pass rate` column, the `checks` column shows per-check pass counts (`3/3 2/3 ...`, `s` = skipped in every trial), `judge` is the mean score, `cost`/`time` are totals across trials, and a per-check breakdown is printed under the table. A real run exits non-zero if any trial failed.
 
+### Lanes
+
+Every result carries a **lane** — where the case ran and got graded — and the summary table has a lane column:
+
+- `macos-local` (default): the run described above; live snapshot checks launch the app directly and require macOS.
+- `linux-sandbox` (`--sandbox`): each case trial runs in its own isolated [Vercel Sandbox](https://vercel.com/docs/sandbox) microVM booted from a pre-baked Linux image, **including the live checks** — the app builds with `-Dplatform=linux -Dweb-engine=system -Dautomation=true`, launches under Xvfb, and is driven through the same automation dropbox the macOS lane uses. An engine screenshot of the app's gpu_surface is captured through the dropbox and pulled back with the results.
+
+A check that greps a surface which exists on only one OS can declare `"lanes": ["macos-local"]` in `eval.json`; on other lanes it reports **skipped** (`not graded on the ... lane`) instead of failing, so the summary distinguishes "fails" from "not applicable on this lane". Audited 2026-07-05: none of the ten shipped cases needs a lane annotation — every snapshot pattern asserts roles/names from the SDK's own automation snapshot, and the surfaces they cover (secondary windows, gpu charts, trees, tables) are proven on Linux by `tools/linux-truth/`. A Linux-lane failure is therefore a real failure until a case says otherwise.
+
 ### Vercel Sandbox mode
 
-`--sandbox` runs each case in an isolated [Vercel Sandbox](https://vercel.com/docs/sandbox) (Amazon Linux microVM, `node24` runtime): the runner packs the repo **working tree** into a tarball, uploads it, installs zig + pnpm + the Claude Code CLI in the VM, and re-invokes this same harness inside (`pnpm eval --skip-permissions <case>`), then pulls `result.json` and the transcript back into the local `results/` dir. Snapshot checks self-skip (no display); everything else — build+test, markup check, greps, judge — runs as usual. `--dangerously-skip-permissions` is safe there because the whole VM is the throwaway.
+`--sandbox` boots each case trial from a custom image (see `evals/sandbox/`) that bakes the Linux GUI stack (GTK4 + WebKitGTK + Xvfb), zig, node/pnpm, the Claude Code CLI, and a **pre-warmed build layer**: the repo at a pinned ref with the CLI, workspace-test, and automation build graphs already compiled into fixed cache paths. Per case the runner then:
 
-Auth: the SDK needs `VERCEL_OIDC_TOKEN`. One-time setup in `evals/`:
+1. uploads the repo **working tree** as a tarball and rsyncs it over the baked repo — deletions propagate, caches survive, so builds against the current tip are incremental on top of the bake;
+2. starts Xvfb and re-invokes this same harness inside (`pnpm eval --skip-permissions --lane linux-sandbox <case>`) with the gateway env assembled exactly like a local run;
+3. pulls the whole case results directory home — `result.json`, `transcript.jsonl`, `live-*.png` engine screenshots — before the microVM is destroyed.
+
+`--dangerously-skip-permissions` is safe there because the whole VM is the throwaway. `--sandbox --dry-run` exercises the entire path — provisioning, refresh, scaffold, graders (which FAIL against the untouched scaffold, as designed), artifact pull — without the model call, and exits 0.
+
+**Image**: build and push once with `evals/sandbox/build-image.sh` (needs a Docker login to the registry — the two token variants are in the script header). Rebuild when the Dockerfile changes, when zig bumps, or when the tip has drifted far enough from the baked ref that in-sandbox builds stop feeling incremental; runs stay *correct* without a rebuild because of the working-tree refresh. After a push the registry prepares the image for a few minutes; the runner retries `image_not_ready` for up to 10 minutes. `--sandbox-image` overrides the default reference (`eval-sandbox`, resolved in the linked project).
+
+**Auth** (checked before any sandbox work): either an OIDC token — one-time setup in `evals/`:
 
 ```sh
-vercel link --scope vercel-labs --project native-sdk
+vercel link --scope vercel-labs --project zero-native
 vercel env pull .env.local   # the runner auto-loads VERCEL_OIDC_TOKEN from .env.local
 ```
 
-The OIDC token expires (~12h); re-run `vercel env pull .env.local` when sandbox auth fails.
+(the token expires ~12h; re-run `vercel env pull .env.local` when sandbox auth fails) — or `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` for environments where OIDC is unavailable. Real runs additionally need `AI_GATEWAY_API_KEY` as usual.
 
-Real runs exit non-zero if any case fails. Workspaces live in `.workspaces/` and results in `results/<timestamp>/<case>/` (`result.json`, `transcript.jsonl`, the isolated `claude-config/`); both directories are gitignored.
+**Cost and limits**: sandbox compute is metered (active CPU + provisioned memory) — a 4-vCPU case trial that runs 20-30 minutes lands around $0.20-0.35 plus the model tokens through the gateway. Sandboxes cap at 45 minutes wall clock on the Hobby plan (the runner's per-sandbox timeout), and vCPU allocation is rate-limited per plan, which is why the default `--concurrency` in sandbox mode is 4.
+
+Real runs exit non-zero if any case fails. Workspaces live in `.workspaces/` and results in `results/<timestamp>/<case>/` (`result.json`, `transcript.jsonl`, the isolated `claude-config/` — kept in-VM and not pulled for sandbox runs, plus `live-*.png` screenshots from the Linux lane); both directories are gitignored.
 
 ### Permissions for the agent-under-test
 
 By default the agent runs with `--permission-mode acceptEdits` plus an allowlist covering `zig ...`, `native-sdk ...`, and basic file commands — enough for unattended edit/build/test loops without granting arbitrary shell. `--skip-permissions` switches to `--dangerously-skip-permissions`; only use it if the default allowlist blocks a case, and remember the workspace is a throwaway dir but the process is not otherwise sandboxed.
 
-In both modes the runner passes `--disallowedTools` deny rules for `evals/cases/**` and `evals/results/**`: the workspace references the framework repo by path, so the harness itself is reachable from the agent's cwd, and agents exploring the repo for docs/examples were observed reading their own grading config (3/20 runs of the 2026-07-04 suite). Framework source and examples stay readable on purpose — a real user has the repo.
+In both modes the runner passes `--disallowedTools` deny rules for `evals/cases/**` and `evals/results/**`: the workspace references the SDK repo by path, so the harness itself is reachable from the agent's cwd, and agents exploring the repo for docs/examples were observed reading their own grading config (3/20 runs of the 2026-07-04 suite). SDK source and examples stay readable on purpose — a real user has the repo.
 
 ## Cases
 

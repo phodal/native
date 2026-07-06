@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { exec, resolveFiles, tailLines } from "./util.ts";
 import { judgeWorkspace } from "./judge.ts";
-import type { CheckResult, CheckSpec, LlmJudgeCheck, SnapshotGrepCheck } from "./types.ts";
+import type { CheckResult, CheckSpec, Lane, LlmJudgeCheck, SnapshotGrepCheck } from "./types.ts";
 import type { Workspace } from "./scaffold.ts";
 
 export interface GradeContext {
@@ -15,6 +15,14 @@ export interface GradeContext {
   skipLive: boolean;
   /** Dry runs make no model calls; llm_judge checks report "skipped". */
   dryRun: boolean;
+  /** Grading lane: decides live-check build flags and lane-scoped skips. */
+  lane: Lane;
+  /**
+   * Where grading artifacts (live screenshots) are written. On the
+   * linux-sandbox lane this is the case results dir, which the outer runner
+   * pulls back before the microVM is destroyed.
+   */
+  artifactsDir?: string | undefined;
   /** The case's task prompt, shown to the judge alongside the code. */
   taskPrompt: string;
   judgeModel: string;
@@ -41,7 +49,33 @@ export async function runChecks(
 
 type PendingResult = Omit<CheckResult, "durationMs">;
 
+/** The check's summary-table description without running it (for lane skips). */
+function checkDescription(check: CheckSpec): string {
+  switch (check.type) {
+    case "build_test":
+      return `native test${check.args?.length ? ` ${check.args.join(" ")}` : ""}`;
+    case "markup_check":
+      return "native markup check src/*.native";
+    case "file_grep":
+      return check.description;
+    case "snapshot_grep":
+      return `snapshot: ${check.description}`;
+    case "llm_judge":
+      return `judge${(check.advisory ?? true) ? " (advisory)" : ""}: ${check.description}`;
+  }
+}
+
 async function runCheck(check: CheckSpec, context: GradeContext): Promise<PendingResult> {
+  // Lane-scoped checks skip (never fail) on lanes they do not grade: a
+  // surface that exists on only one OS is an annotation, not a failure.
+  if (check.lanes && !check.lanes.includes(context.lane)) {
+    return {
+      type: check.type,
+      description: checkDescription(check),
+      status: "skipped",
+      detail: `not graded on the ${context.lane} lane (lanes: ${check.lanes.join(", ")})`,
+    };
+  }
   switch (check.type) {
     case "build_test":
       return buildTest(check.args ?? [], context);
@@ -97,8 +131,11 @@ async function llmJudge(check: LlmJudgeCheck, context: GradeContext): Promise<Pe
 }
 
 async function buildTest(args: string[], context: GradeContext): Promise<PendingResult> {
-  const description = `zig build test${args.length ? ` ${args.join(" ")}` : ""}`;
-  const result = await exec("zig", ["build", "test", ...args], {
+  // Workspaces are zero-config (app.zon + src, no build.zig), so the app's
+  // test suite runs through the CLI verb — a bare `zig build test` would
+  // resolve up the tree to the SDK's own build.zig and grade the wrong graph.
+  const description = `native test${args.length ? ` ${args.join(" ")}` : ""}`;
+  const result = await exec(context.workspace.cliPath, ["test", ...args], {
     cwd: context.workspace.path,
     timeoutMs: 15 * 60 * 1000,
   });
@@ -158,8 +195,11 @@ function fileGrep(
 
 /**
  * Live grading through the automation harness: build with -Dautomation=true,
- * launch the app, `native automate wait`, then grep the widget snapshot.
- * Mirrors the repo's linux-canvas-smoke CI job, but local-macOS.
+ * launch the app, wait for the automation snapshot, then grep it. On the
+ * macos-local lane the app launches directly (mirrors the repo's canvas
+ * smoke, but local); on the linux-sandbox lane it launches on the sandbox's
+ * Xvfb display and an engine screenshot is captured through the automation
+ * dropbox as a run artifact before the microVM is destroyed.
  */
 async function snapshotGrep(
   check: SnapshotGrepCheck,
@@ -169,13 +209,31 @@ async function snapshotGrep(
   if (context.skipLive) {
     return { type: "snapshot_grep", description, status: "skipped", detail: "--skip-live" };
   }
-  if (process.platform !== "darwin") {
+  const linuxLane = context.lane === "linux-sandbox";
+  if (!linuxLane && process.platform !== "darwin") {
     return { type: "snapshot_grep", description, status: "skipped", detail: "requires macOS" };
   }
+  if (linuxLane && (process.platform !== "linux" || !process.env.DISPLAY)) {
+    return {
+      type: "snapshot_grep",
+      description,
+      status: "skipped",
+      detail: "linux-sandbox lane needs a Linux host with DISPLAY set (Xvfb)",
+    };
+  }
   const workspace = context.workspace.path;
+  const platformArg = linuxLane ? "-Dplatform=linux" : "-Dplatform=macos";
+  // CLI verb, not bare zig: workspaces are zero-config. macOS grades at the
+  // Debug shape (`native build` alone would inject ReleaseFast and spend
+  // grader wall-clock on optimization). Linux grades at ReleaseSafe: Debug
+  // x86_64-linux binaries go through zig's self-hosted code generator, which
+  // currently half-writes one stack-passed pointer in the 22-argument GTK
+  // host create-view call (segfault on an 0xaaaa... address at launch);
+  // ReleaseSafe selects the LLVM backend and keeps safety checks on.
+  const optimizeArg = linuxLane ? "-Doptimize=ReleaseSafe" : "-Doptimize=Debug";
   const build = await exec(
-    "zig",
-    ["build", "-Dplatform=macos", "-Dweb-engine=system", "-Dautomation=true"],
+    context.workspace.cliPath,
+    ["build", platformArg, "-Dweb-engine=system", "-Dautomation=true", optimizeArg],
     { cwd: workspace, timeoutMs: 15 * 60 * 1000 },
   );
   if (build.code !== 0) {
@@ -188,17 +246,28 @@ async function snapshotGrep(
   rmSync(join(workspace, ".zig-cache", "native-sdk-automation"), { recursive: true, force: true });
   const app = spawn(binary, [], { cwd: workspace, stdio: "ignore" });
   try {
-    const wait = await exec(context.workspace.cliPath, ["automate", "wait"], {
-      cwd: workspace,
-      timeoutMs: 60 * 1000,
-    });
-    // `automate wait` reports status on stderr and exits 0 once ready.
-    if (wait.code !== 0 || !`${wait.stdout}\n${wait.stderr}`.includes("ready=true")) {
+    // Readiness budget: headless Linux shows a long stall between EGL init
+    // and the first published frame (the repo's Linux CI smoke measured a
+    // consistent ~27 s on shared runners), so that lane gets a 90 s window;
+    // `automate assert` polls until the deadline. macOS keeps the CLI's
+    // default `automate wait` behavior.
+    const wait = linuxLane
+      ? await exec(
+          context.workspace.cliPath,
+          ["automate", "assert", "--timeout-ms", "90000", "ready=true"],
+          { cwd: workspace, timeoutMs: 120 * 1000 },
+        )
+      : await exec(context.workspace.cliPath, ["automate", "wait"], {
+          cwd: workspace,
+          timeoutMs: 60 * 1000,
+        });
+    // Readiness is reported on stderr; exit 0 once ready.
+    if (wait.code !== 0 || (!linuxLane && !`${wait.stdout}\n${wait.stderr}`.includes("ready=true"))) {
       return {
         type: "snapshot_grep",
         description,
         status: "fail",
-        detail: `automate wait did not report ready=true:\n${tailLines(wait, 6)}`,
+        detail: `automation snapshot never became ready:\n${tailLines(wait, 6)}`,
       };
     }
     const snapshotPath = join(workspace, ".zig-cache", "native-sdk-automation", "snapshot.txt");
@@ -213,6 +282,13 @@ async function snapshotGrep(
       if (missing.length === 0) break;
       await sleep(300);
     }
+    // Capture pixels while the app is still alive — pass or fail, the
+    // screenshot is evidence that leaves the sandbox with the results.
+    if (linuxLane && context.artifactsDir) {
+      await captureEngineScreenshot(context, snapshotPath).catch((error: Error) => {
+        context.log(`[live] screenshot capture failed: ${error.message}`);
+      });
+    }
     if (missing.length === 0) return { type: "snapshot_grep", description, status: "pass" };
     return {
       type: "snapshot_grep",
@@ -223,6 +299,42 @@ async function snapshotGrep(
   } finally {
     app.kill("SIGKILL");
   }
+}
+
+/**
+ * Engine screenshot through the automation dropbox: resolve the app's
+ * gpu_surface view label from the snapshot, queue `automate screenshot`
+ * (the dropbox is single-slot — the CLI paces one command at a time), and
+ * poll for the rendered png. Best-effort: grading never fails on this.
+ */
+async function captureEngineScreenshot(
+  context: GradeContext,
+  snapshotPath: string,
+): Promise<void> {
+  const workspace = context.workspace.path;
+  const snapshot = existsSync(snapshotPath) ? readFileSync(snapshotPath, "utf8") : "";
+  const canvas = /view @w\d+\/(\S+) kind=gpu_surface/.exec(snapshot)?.[1];
+  if (!canvas) {
+    context.log("[live] no gpu_surface view in snapshot; skipping screenshot");
+    return;
+  }
+  const shot = await exec(context.workspace.cliPath, ["automate", "screenshot", canvas], {
+    cwd: workspace,
+    timeoutMs: 30 * 1000,
+  });
+  if (shot.code !== 0) throw new Error(`automate screenshot exited ${shot.code}`);
+  const pngPath = join(workspace, ".zig-cache", "native-sdk-automation", `screenshot-${canvas}.png`);
+  const deadline = Date.now() + 10 * 1000;
+  while (Date.now() < deadline) {
+    if (existsSync(pngPath) && statSync(pngPath).size > 0) {
+      const artifact = join(context.artifactsDir!, `live-${canvas}.png`);
+      copyFileSync(pngPath, artifact);
+      context.log(`[live] engine screenshot captured: live-${canvas}.png`);
+      return;
+    }
+    await sleep(200);
+  }
+  throw new Error("screenshot file never appeared");
 }
 
 function findAppBinary(workspace: string): string | undefined {

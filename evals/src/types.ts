@@ -16,6 +16,23 @@ export interface EvalCase {
   checks: CheckSpec[];
 }
 
+/**
+ * Where a case ran and got graded. `macos-local` is the default local run;
+ * `linux-sandbox` is a per-case Vercel Sandbox microVM (Linux, headless X).
+ */
+export type Lane = "macos-local" | "linux-sandbox";
+
+/** Fields every check type accepts. */
+interface CheckCommon {
+  /**
+   * Lanes this check grades on; omitted means every lane. Annotate a check
+   * here when the surface it greps exists on only one OS, so on the other
+   * lane it reports "skipped (lane)" instead of failing the case — the
+   * summary then distinguishes "fails" from "not applicable on this lane".
+   */
+  lanes?: Lane[];
+}
+
 export type CheckSpec =
   | BuildTestCheck
   | MarkupCheckCheck
@@ -23,20 +40,20 @@ export type CheckSpec =
   | SnapshotGrepCheck
   | LlmJudgeCheck;
 
-/** Run `zig build test <args>` in the workspace. */
-export interface BuildTestCheck {
+/** Run `native test <args>` in the workspace (zero-config app test suite). */
+export interface BuildTestCheck extends CheckCommon {
   type: "build_test";
-  /** Extra args, e.g. ["-Dplatform=null"]. */
+  /** Extra zig build flags passed through, e.g. ["-Dplatform=null"]. */
   args?: string[];
 }
 
 /** Run `native markup check` on every `src/**\/*.native` in the workspace. */
-export interface MarkupCheckCheck {
+export interface MarkupCheckCheck extends CheckCommon {
   type: "markup_check";
 }
 
 /** Grep workspace files for a pattern. */
-export interface FileGrepCheck {
+export interface FileGrepCheck extends CheckCommon {
   type: "file_grep";
   /** Glob-ish file selector relative to the workspace: exact path or "src/*.native". */
   files: string;
@@ -48,11 +65,13 @@ export interface FileGrepCheck {
 }
 
 /**
- * Build the workspace app with `-Dautomation=true`, launch it, wait for the
- * automation server, then grep the widget snapshot. macOS-local only; skipped
- * (reported as "skipped", not passed) when --skip-live is set.
+ * Build the workspace app with `-Dautomation=true`, launch it (directly on
+ * the macos-local lane, under the sandbox's Xvfb display on linux-sandbox),
+ * wait for the automation server, then grep the widget snapshot. Skipped
+ * (reported as "skipped", not passed) when --skip-live is set or the lane
+ * has no way to launch the app.
  */
-export interface SnapshotGrepCheck {
+export interface SnapshotGrepCheck extends CheckCommon {
   type: "snapshot_grep";
   /** Each JavaScript regexp source must match somewhere in snapshot.txt. */
   patterns: string[];
@@ -66,7 +85,7 @@ export interface SnapshotGrepCheck {
  * score is recorded and printed but never fails the case. Skipped in
  * --dry-run (no model calls).
  */
-export interface LlmJudgeCheck {
+export interface LlmJudgeCheck extends CheckCommon {
   type: "llm_judge";
   /** Case-specific criteria, each scored 0-10 by the judge. */
   criteria: string[];
@@ -108,6 +127,8 @@ export interface CaseResult {
   case: string;
   /** 1-based trial number; only present when the run had --trials > 1. */
   trial?: number;
+  /** Where the case ran and got graded. */
+  lane: Lane;
   workspace: string;
   startedAt: string;
   dryRun: boolean;
@@ -164,4 +185,14 @@ export interface RunnerOptions {
   /** Run each case in its own Vercel Sandbox microVM instead of locally. */
   sandbox: boolean;
   sandboxVcpus: number;
+  /**
+   * Registry reference for the sandbox image (see evals/sandbox/). A bare
+   * repository name resolves within the linked project; `latest` tag.
+   */
+  sandboxImage: string;
+  /**
+   * Grading lane. Local runs grade on macos-local; the sandbox path passes
+   * --lane linux-sandbox to the harness invocation inside the microVM.
+   */
+  lane: Lane;
 }

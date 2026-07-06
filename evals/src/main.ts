@@ -31,7 +31,10 @@ options:
   --list               list available cases and exit
   --dry-run            everything except the model call: scaffold, deliver the
                        skill, print the env assembly + claude argv, then run
-                       the graders against the workspace as-scaffolded
+                       the graders against the workspace as-scaffolded; with
+                       --sandbox this provisions real microVMs and exercises
+                       the whole sandbox path (needs sandbox auth, no
+                       gateway key)
   --skip-live          skip snapshot_grep checks (no app launch)
   --skip-permissions   run claude with --dangerously-skip-permissions instead
                        of acceptEdits + an allowlist (sandbox dirs only)
@@ -40,10 +43,18 @@ options:
                        own workspace, agent run, checks, judge) and report
                        per-case pass rates; default 1
   --concurrency <n>    run up to n case trials in parallel (default: 2 locally,
-                       everything at once with --sandbox)
-  --sandbox            run each case in its own Vercel Sandbox microVM
-                       (needs VERCEL_OIDC_TOKEN via vercel link + env pull)
+                       4 with --sandbox)
+  --sandbox            run each case in its own Vercel Sandbox microVM booted
+                       from the pre-baked image (see evals/sandbox/); needs
+                       VERCEL_OIDC_TOKEN via vercel link + env pull, or
+                       VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID
   --sandbox-vcpus <n>  vCPUs per sandbox (default 4; 2048 MB RAM per vCPU)
+  --sandbox-image <r>  registry reference for the sandbox image (default:
+                       eval-sandbox — the linked project's repository,
+                       latest tag)
+  --lane <lane>        grading lane: macos-local (default) or linux-sandbox
+                       (what --sandbox passes to the harness run inside the
+                       microVM; rarely set by hand)
   --model <slug>       coder model slug (default: ${DEFAULT_MODEL};
                        also via ZN_EVAL_MODEL)
   --judge-model <slug> judge model slug for llm_judge checks (default:
@@ -61,10 +72,6 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  if (options.sandbox && options.dryRun) {
-    console.error("--sandbox and --dry-run are mutually exclusive (dry runs are local by definition)");
-    process.exit(2);
-  }
   const gatewayKey = findGatewayKey(process.env);
   if (!gatewayKey && !options.dryRun) {
     console.error(
@@ -96,9 +103,12 @@ async function main(): Promise<void> {
   const tasks = cases.flatMap((evalCase) =>
     Array.from({ length: trials }, (_, index) => ({ evalCase, trial: index + 1 })),
   );
+  // Sandbox default stays bounded: each case is its own microVM, but plans
+  // rate-limit vCPU allocation (Hobby: 40 vCPUs per 10 minutes), so at the
+  // default 4 vCPUs a wave of 4 sandboxes fits comfortably under the limit.
   const concurrency = Math.max(
     1,
-    Math.min(options.concurrency ?? (options.sandbox ? tasks.length : 2), tasks.length),
+    Math.min(options.concurrency ?? (options.sandbox ? 4 : 2), tasks.length),
   );
   if (tasks.length > 1) {
     const trialNote = trials > 1 ? ` x ${trials} trials` : "";
@@ -123,10 +133,12 @@ async function main(): Promise<void> {
         result = await runCaseInSandbox({
           evalCase,
           tarballPath: tarballPath!,
-          gatewayKey: gatewayKey!,
+          gatewayKey,
           model: options.model,
           judgeModel: options.judgeModel,
           vcpus: options.sandboxVcpus,
+          image: options.sandboxImage,
+          dryRun: options.dryRun,
           localResultsDir: caseResultsDir,
           log,
         });
@@ -153,6 +165,7 @@ async function main(): Promise<void> {
       log(`FAILED: ${(error as Error).message}`);
       const result: CaseResult = {
         case: evalCase.name,
+        lane: options.sandbox ? "linux-sandbox" : options.lane,
         workspace: "-",
         startedAt: new Date().toISOString(),
         dryRun: options.dryRun,
@@ -269,6 +282,8 @@ async function runCaseLocal(
     log,
     skipLive: options.skipLive,
     dryRun: options.dryRun,
+    lane: options.lane,
+    artifactsDir: context.caseResultsDir,
     taskPrompt: evalCase.prompt,
     judgeModel: options.judgeModel,
     gatewayKey: context.gatewayKey,
@@ -279,6 +294,7 @@ async function runCaseLocal(
     agentOk && checks.every((check) => check.status !== "fail" || check.advisory === true);
   const caseResult: CaseResult = {
     case: evalCase.name,
+    lane: options.lane,
     workspace: workspace.path,
     startedAt,
     dryRun: options.dryRun,
@@ -327,6 +343,8 @@ function parseArgs(argv: string[]): RunnerOptions {
     concurrency: undefined,
     sandbox: false,
     sandboxVcpus: 4,
+    sandboxImage: "eval-sandbox",
+    lane: "macos-local",
   };
   let listOnly = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -375,6 +393,26 @@ function parseArgs(argv: string[]): RunnerOptions {
       case "--sandbox":
         options.sandbox = true;
         break;
+      case "--sandbox-image": {
+        const value = argv[index + 1];
+        if (!value) {
+          console.error("--sandbox-image requires a value");
+          process.exit(2);
+        }
+        options.sandboxImage = value;
+        index += 1;
+        break;
+      }
+      case "--lane": {
+        const value = argv[index + 1];
+        if (value !== "macos-local" && value !== "linux-sandbox") {
+          console.error("--lane must be macos-local or linux-sandbox");
+          process.exit(2);
+        }
+        options.lane = value;
+        index += 1;
+        break;
+      }
       case "--trials":
       case "--concurrency":
       case "--sandbox-vcpus": {
@@ -514,6 +552,7 @@ function printTrialSummary(aggregates: CaseAggregate[], options: RunnerOptions):
   );
   const rows = aggregates.map((aggregate) => ({
     case: aggregate.case,
+    lane: aggregate.results[0]?.lane ?? options.lane,
     "pass rate": `${aggregate.passedTrials}/${aggregate.trials}`,
     checks: aggregate.checks
       .map((check) =>
@@ -526,7 +565,7 @@ function printTrialSummary(aggregates: CaseAggregate[], options: RunnerOptions):
     cost: aggregate.totalCostUsd !== undefined ? `$${aggregate.totalCostUsd.toFixed(4)}` : "-",
     time: formatDuration(aggregate.totalDurationMs),
   }));
-  const columns = ["case", "pass rate", "checks", "judge", "turns", "cost", "time"] as const;
+  const columns = ["case", "lane", "pass rate", "checks", "judge", "turns", "cost", "time"] as const;
   const widths = columns.map((column) =>
     Math.max(column.length, ...rows.map((row) => row[column].length)),
   );
@@ -562,6 +601,7 @@ function printSummary(results: CaseResult[], options: RunnerOptions): void {
       .map((check) => `${check.score!.toFixed(1)}/10`);
     return {
       case: result.case,
+      lane: result.lane ?? options.lane,
       result: result.passed ? "PASS" : "FAIL",
       checks: checkSummary,
       judge: judgeScores.join(" ") || "-",
@@ -570,7 +610,7 @@ function printSummary(results: CaseResult[], options: RunnerOptions): void {
       time: formatDuration(result.agent.durationMs + result.checks.reduce((sum, check) => sum + check.durationMs, 0)),
     };
   });
-  const columns = ["case", "result", "checks", "judge", "turns", "cost", "time"] as const;
+  const columns = ["case", "lane", "result", "checks", "judge", "turns", "cost", "time"] as const;
   const widths = columns.map((column) =>
     Math.max(column.length, ...rows.map((row) => row[column].length)),
   );

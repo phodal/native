@@ -66,18 +66,19 @@ export async function scaffoldWorkspace(
 }
 
 /**
- * Pre-warm the workspace's zig cache before the agent starts: the first
- * `zig build test` in a fresh workspace compiles the whole framework
- * (minutes); doing it up front makes the agent's own builds incremental and
- * stops billing agent wall-clock for compilation. Also proves the scaffold
- * is healthy before spending model tokens.
+ * Pre-warm the workspace before the agent starts: the first `native test`
+ * in a fresh zero-config workspace compiles the whole SDK (minutes); doing
+ * it up front makes the agent's own builds incremental and stops billing
+ * agent wall-clock for compilation. Runs the same command the agent's loop
+ * and the build_test grader use, so it warms exactly the graph they hit —
+ * and proves the scaffold is healthy before spending model tokens.
  */
 export async function prewarmWorkspace(
   workspace: Workspace,
   log: (line: string) => void,
 ): Promise<void> {
-  log("[prewarm] zig build test -Dplatform=null (cold framework build)...");
-  const result = await exec("zig", ["build", "test", "-Dplatform=null"], {
+  log("[prewarm] native test (cold SDK build)...");
+  const result = await exec(workspace.cliPath, ["test"], {
     cwd: workspace.path,
     timeoutMs: 15 * 60 * 1000,
   });

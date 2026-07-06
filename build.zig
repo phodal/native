@@ -2063,6 +2063,12 @@ fn addFileContainsCheckStep(b: *std.Build, checker: *std.Build.Step.Compile, gro
     const step = b.step(name, description);
     for (checks) |check_value| {
         const check = b.addRunArtifact(checker);
+        // The checked paths are relative to this build script. Run steps
+        // otherwise inherit the invoking process's cwd, and `zig build test`
+        // is also invoked from zero-config app directories that resolve up
+        // to this build.zig (scaffolded workspaces, examples) — from there
+        // the relative paths would point into the app, not the repo.
+        check.setCwd(b.path("."));
         check.addArg(check_value.path);
         check.addArg(check_value.pattern);
         step.dependOn(&check.step);

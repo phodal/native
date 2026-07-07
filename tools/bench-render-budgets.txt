@@ -38,3 +38,13 @@ chart-tick 200
 # markdown-doc-edit: guards markdown re-render + plan cost on a
 # README-sized doc; the pre-fix number was ~2400.
 markdown-doc-edit 1500
+# keystroke-measured-text: guards the batched measure seam and its
+# retained caches on the provider path (a counting synthetic provider
+# stands in for CoreText). Healthy p50 ~540-660 across calibration runs.
+# The scenario ALSO hard-caps two deterministic provider counters per
+# keystroke — per-prefix bytes (healthy 3355, seam disabled 17465,
+# pre-batching hundreds of thousands; cap 8000) and batched calls
+# (healthy 1, a broken cache refetches tens per rebuild; cap 20) — so
+# the regression class trips even when the synthetic provider's cheap
+# engine-side calls keep this time budget green.
+keystroke-measured-text 900

@@ -26,6 +26,7 @@ const std = @import("std");
 const geometry = @import("geometry");
 const canvas = @import("root.zig");
 const token_model = @import("tokens.zig");
+const text_measure_cache = @import("text_measure_cache.zig");
 const text_metrics = @import("text_metrics.zig");
 const text_interaction = @import("text_interaction.zig");
 
@@ -199,12 +200,40 @@ pub fn textSpansWrappedHeight(spans: []const TextSpan, options: TextSpanLayoutOp
 
 fn measureSpanSlice(span: TextSpan, slice: []const u8, options: TextSpanLayoutOptions) f32 {
     if (slice.len == 0) return 0;
-    return text_metrics.measureTextWidthForFont(
-        options.measure,
-        textSpanFontId(span, options.typography),
-        slice,
-        textSpanSize(span, options.size),
-    );
+    const font_id = textSpanFontId(span, options.typography);
+    const size = textSpanSize(span, options.size);
+    // Batched provider path: every slice the span breaker measures is a
+    // subslice of `span.text`, so one batched fetch per span (cached
+    // across slices, lines, and rebuilds) answers all of them as advance
+    // sums — words, held-back whitespace, cluster-wrap prefixes, and
+    // selection prefixes stop costing one provider round-trip each. The
+    // byte-order sum equals the per-cluster accumulation exactly
+    // (continuation zeros are f32 identities), so any provider whose
+    // slice widths are its advance sums breaks lines byte-identically
+    // to the unbatched seam (pinned by the span parity tests).
+    if (spanSliceAdvances(span, slice, options, font_id, size)) |advances| {
+        var width: f32 = 0;
+        for (advances) |advance| width += advance;
+        return width;
+    }
+    return text_metrics.measureTextWidthForFont(options.measure, font_id, slice, size);
+}
+
+/// The batched advances of `slice` within its span, or null when the
+/// seam is unbatched (no provider, no batched entry, host declined) or
+/// `slice` does not alias `span.text` (hand-built spans). The slice
+/// aliases threadlocal cache storage: consumed immediately by the one
+/// caller above.
+fn spanSliceAdvances(span: TextSpan, slice: []const u8, options: TextSpanLayoutOptions, font_id: FontId, size: f32) ?[]const f32 {
+    const provider = options.measure orelse return null;
+    if (provider.measure_advances_fn == null) return null;
+    const base = @intFromPtr(span.text.ptr);
+    const start = @intFromPtr(slice.ptr);
+    if (start < base) return null;
+    const offset = start - base;
+    if (offset + slice.len > span.text.len) return null;
+    const advances = text_measure_cache.textRunAdvances(provider, font_id, size, span.text) orelse return null;
+    return advances[offset..][0..slice.len];
 }
 
 const LayoutState = struct {
@@ -316,7 +345,27 @@ const LayoutState = struct {
 
 /// Lay the paragraph out into `runs_storage`. Never fails: capacity
 /// overflow truncates trailing content and sets `truncated`.
+///
+/// Provider-measured paragraphs ride the retained wrap cache below:
+/// steady-state rebuilds of an unchanged paragraph at an unchanged
+/// width rebase the cached runs onto the caller's storage without
+/// measuring anything. Estimator paragraphs (measure == null) go
+/// straight to the uncached breaker — that path stays byte-identical
+/// to the pre-cache behavior (goldens, signatures, reference renders).
 pub fn layoutTextSpans(spans: []const TextSpan, options: TextSpanLayoutOptions, runs_storage: []TextSpanRun) TextSpanLayout {
+    if (options.measure != null and runs_storage.len >= max_text_span_runs_per_paragraph) {
+        const key = spanWrapKey(spans, options);
+        if (findSpanWrapEntry(key)) |entry_index| {
+            if (rebaseSpanWrapEntry(entry_index, spans, options, runs_storage)) |layout| return layout;
+        }
+        const layout = layoutTextSpansUncached(spans, options, runs_storage);
+        storeSpanWrapEntry(key, spans, layout);
+        return layout;
+    }
+    return layoutTextSpansUncached(spans, options, runs_storage);
+}
+
+fn layoutTextSpansUncached(spans: []const TextSpan, options: TextSpanLayoutOptions, runs_storage: []TextSpanRun) TextSpanLayout {
     var state = LayoutState{
         .spans = spans,
         .options = options,
@@ -372,6 +421,249 @@ pub fn layoutTextSpans(spans: []const TextSpan, options: TextSpanLayoutOptions, 
             @as(f32, @floatFromInt(line_count)) * state.line_height,
         ),
         .truncated = state.truncated,
+    };
+}
+
+// ------------------------------------------------------------------
+// Retained wrap cache (provider-measured paragraphs only).
+//
+// A rebuild re-lays-out every mounted paragraph whether it changed or
+// not: widget layout asks for wrapped heights (often several times per
+// paragraph while heights bubble), rendering lays the runs out again to
+// emit commands, and interaction queries lay out once more. With a live
+// measure provider each of those used to reach the host; with the
+// batched advance cache they still re-break every line. This cache
+// retains the RESULT: keyed on the paragraph's layout-affecting content
+// (text bytes and the style fields that pick a font or size — weight,
+// slant, mono, scale; colors, decorations, and links never feed
+// measurement, so a retheme that only recolors keeps hitting), the base
+// size, the wrap width, wrap and alignment modes, the line height, the
+// typography font ids, the provider identity, and the global measure
+// generation (`bumpTextMeasureGeneration`: font registration, appearance
+// flips, runtime construction — the same invalidation the advance cache
+// obeys).
+//
+// Values store runs in OFFSET form (span index + byte range) rather
+// than byte slices: retained span storage is rewritten every rebuild,
+// so cached pointers would dangle. A hit rebases the offsets onto the
+// caller's current spans, whose bytes hash-match the key.
+//
+// Bounded and threadlocal like the advance cache (and the planner
+// scratch in text_layout_cache.zig): least-recently-used slot eviction,
+// no allocation, one cache per thread on the single-threaded frame
+// path. Only requests with full-capacity run storage participate, so a
+// truncated layout against a smaller caller buffer can never be served
+// to (or captured from) a caller with different capacity.
+// ------------------------------------------------------------------
+
+/// Sized past the mounted hot set: a transcript screen's visible
+/// paragraphs times the couple of candidate widths height bubbling asks
+/// for (each wrap width is its own key). Least-recently-used eviction
+/// degrades to a 100% miss rate when the steadily revisited set
+/// outgrows the slots, so capacity errs generously (256 x ~4 KiB of
+/// threadlocal storage).
+pub const span_wrap_cache_capacity: usize = 256;
+
+const SpanWrapKey = struct {
+    fingerprint: u64 = 0,
+    span_count: usize = 0,
+    size_bits: u32 = 0,
+    line_height_bits: u32 = 0,
+    max_width_bits: u32 = 0,
+    wrap: TextWrap = .word,
+    alignment: TextAlign = .start,
+    font_id: FontId = 0,
+    mono_font_id: FontId = 0,
+    provider_context: usize = 0,
+    provider_fn: usize = 0,
+    generation: u64 = 0,
+    used: bool = false,
+};
+
+/// One cached run in offset form; `size` and `font_id` are recomputed
+/// from the (hash-matched) span at rebase time, so they are not stored.
+const SpanWrapRun = struct {
+    span_index: u32 = 0,
+    text_start: u32 = 0,
+    text_len: u32 = 0,
+    line_index: u32 = 0,
+    x: f32 = 0,
+    width: f32 = 0,
+    baseline: f32 = 0,
+};
+
+const SpanWrapEntry = struct {
+    key: SpanWrapKey = .{},
+    run_len: usize = 0,
+    line_count: usize = 0,
+    line_height: f32 = 0,
+    size: geometry.SizeF = .{},
+    truncated: bool = false,
+    last_used: u64 = 0,
+};
+
+threadlocal var span_wrap_entries: [span_wrap_cache_capacity]SpanWrapEntry = @splat(.{});
+threadlocal var span_wrap_runs: [span_wrap_cache_capacity][max_text_span_runs_per_paragraph]SpanWrapRun = undefined;
+threadlocal var span_wrap_use_tick: u64 = 0;
+threadlocal var span_wrap_hit_count: u64 = 0;
+threadlocal var span_wrap_miss_count: u64 = 0;
+
+/// Cache observability for tests and benchmarks.
+pub fn textSpanWrapCacheHitCount() u64 {
+    return span_wrap_hit_count;
+}
+
+pub fn textSpanWrapCacheMissCount() u64 {
+    return span_wrap_miss_count;
+}
+
+fn spanWrapKey(spans: []const TextSpan, options: TextSpanLayoutOptions) SpanWrapKey {
+    var hasher = std.hash.Wyhash.init(0x7370616e77726170);
+    const span_count = @min(spans.len, max_text_spans_per_paragraph);
+    for (spans[0..span_count]) |span| {
+        // Length prefix keeps concatenation honest ("ab"+"c" never
+        // hashes like "a"+"bc"); only layout-affecting style fields
+        // fold in (see the module comment above).
+        hasher.update(std.mem.asBytes(&span.text.len));
+        hasher.update(span.text);
+        hasher.update(&[_]u8{
+            @intFromEnum(span.weight),
+            @intFromBool(span.italic),
+            @intFromBool(span.monospace),
+        });
+        hasher.update(std.mem.asBytes(&span.scale));
+    }
+    const provider = options.measure.?;
+    return .{
+        .fingerprint = hasher.final(),
+        .span_count = spans.len,
+        .size_bits = @bitCast(options.size),
+        .line_height_bits = @bitCast(options.line_height),
+        .max_width_bits = @bitCast(options.max_width),
+        .wrap = options.wrap,
+        .alignment = options.alignment,
+        .font_id = options.typography.font_id,
+        .mono_font_id = options.typography.mono_font_id,
+        .provider_context = @intFromPtr(provider.context),
+        .provider_fn = @intFromPtr(provider.measure_fn),
+        .generation = text_measure_cache.textMeasureGeneration(),
+        .used = true,
+    };
+}
+
+fn spanWrapKeysEqual(a: SpanWrapKey, b: SpanWrapKey) bool {
+    return a.used and b.used and
+        a.fingerprint == b.fingerprint and
+        a.span_count == b.span_count and
+        a.size_bits == b.size_bits and
+        a.line_height_bits == b.line_height_bits and
+        a.max_width_bits == b.max_width_bits and
+        a.wrap == b.wrap and
+        a.alignment == b.alignment and
+        a.font_id == b.font_id and
+        a.mono_font_id == b.mono_font_id and
+        a.provider_context == b.provider_context and
+        a.provider_fn == b.provider_fn and
+        a.generation == b.generation;
+}
+
+fn findSpanWrapEntry(key: SpanWrapKey) ?usize {
+    for (&span_wrap_entries, 0..) |*entry, index| {
+        if (spanWrapKeysEqual(entry.key, key)) {
+            span_wrap_use_tick += 1;
+            entry.last_used = span_wrap_use_tick;
+            span_wrap_hit_count += 1;
+            return index;
+        }
+    }
+    span_wrap_miss_count += 1;
+    return null;
+}
+
+fn storeSpanWrapEntry(key: SpanWrapKey, spans: []const TextSpan, layout: TextSpanLayout) void {
+    if (layout.runs.len > max_text_span_runs_per_paragraph) return;
+    // Offsets require every run to alias its span's bytes; the breaker
+    // only ever emits subslices of span.text, so a failure here would be
+    // a bug upstream — decline to cache rather than store a lie.
+    for (layout.runs) |run| {
+        if (spanRunOffset(spans, run) == null) return;
+    }
+
+    var victim: usize = 0;
+    var victim_tick: u64 = std.math.maxInt(u64);
+    for (&span_wrap_entries, 0..) |*entry, index| {
+        const tick = if (entry.key.used) entry.last_used else 0;
+        if (tick < victim_tick) {
+            victim_tick = tick;
+            victim = index;
+        }
+    }
+    span_wrap_use_tick += 1;
+    for (layout.runs, 0..) |run, run_index| {
+        const offset = spanRunOffset(spans, run).?;
+        span_wrap_runs[victim][run_index] = .{
+            .span_index = @intCast(run.span_index),
+            .text_start = @intCast(offset),
+            .text_len = @intCast(run.text.len),
+            .line_index = @intCast(run.line_index),
+            .x = run.x,
+            .width = run.width,
+            .baseline = run.baseline,
+        };
+    }
+    span_wrap_entries[victim] = .{
+        .key = key,
+        .run_len = layout.runs.len,
+        .line_count = layout.line_count,
+        .line_height = layout.line_height,
+        .size = layout.size,
+        .truncated = layout.truncated,
+        .last_used = span_wrap_use_tick,
+    };
+}
+
+fn spanRunOffset(spans: []const TextSpan, run: TextSpanRun) ?usize {
+    if (run.span_index >= spans.len) return null;
+    const base = @intFromPtr(spans[run.span_index].text.ptr);
+    const start = @intFromPtr(run.text.ptr);
+    if (start < base) return null;
+    const offset = start - base;
+    if (offset + run.text.len > spans[run.span_index].text.len) return null;
+    return offset;
+}
+
+/// Materialize a cached layout onto the caller's storage: run slices
+/// rebase onto the CURRENT spans' bytes (hash-matched to the cached
+/// paragraph), per-run size and font id re-derive from the span and
+/// typography exactly as the breaker derives them. Null when a cached
+/// offset does not fit the current spans — only reachable through a
+/// content-hash collision, and answered by re-laying-out instead of
+/// serving mismatched geometry.
+fn rebaseSpanWrapEntry(entry_index: usize, spans: []const TextSpan, options: TextSpanLayoutOptions, runs_storage: []TextSpanRun) ?TextSpanLayout {
+    const entry = &span_wrap_entries[entry_index];
+    for (span_wrap_runs[entry_index][0..entry.run_len]) |cached| {
+        if (cached.span_index >= spans.len) return null;
+        if (cached.text_start + cached.text_len > spans[cached.span_index].text.len) return null;
+    }
+    for (span_wrap_runs[entry_index][0..entry.run_len], 0..) |cached, run_index| {
+        const span = spans[cached.span_index];
+        runs_storage[run_index] = .{
+            .span_index = cached.span_index,
+            .text = span.text[cached.text_start .. cached.text_start + cached.text_len],
+            .line_index = cached.line_index,
+            .x = cached.x,
+            .width = cached.width,
+            .baseline = cached.baseline,
+            .size = textSpanSize(span, options.size),
+            .font_id = textSpanFontId(span, options.typography),
+        };
+    }
+    return .{
+        .runs = runs_storage[0..entry.run_len],
+        .line_count = entry.line_count,
+        .line_height = entry.line_height,
+        .size = entry.size,
+        .truncated = entry.truncated,
     };
 }
 

@@ -128,7 +128,11 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             // pointer stamped into tokens stays valid for the runtime's
             // lifetime, matching the platform provider's contract.
             if (index == 0) {
-                self.canvas_font_measure_provider = .{ .context = self, .measure_fn = canvasFontMeasure };
+                self.canvas_font_measure_provider = .{
+                    .context = self,
+                    .measure_fn = canvasFontMeasure,
+                    .measure_advances_fn = canvasFontMeasureAdvances,
+                };
             }
             noteCanvasFontsChanged(self);
         }
@@ -172,6 +176,30 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             return canvas.estimateTextWidthForFont(font_id, text, size);
         }
 
+        /// Batched twin of `canvasFontMeasure`: per-cluster advances from
+        /// the same face (or estimator) tables, cluster advance at the
+        /// lead byte and 0 at continuation bytes. Both underlying width
+        /// functions are plain per-cluster sums, so a slice's width is
+        /// exactly the sum of these advances — line breaks from the
+        /// batched path are bit-identical to the per-prefix path, and the
+        /// registered-face provider drops from O(L²) cluster walks per
+        /// line to O(L) per run like the host providers.
+        fn canvasFontMeasureAdvances(context: ?*anyopaque, font_id: canvas.FontId, size: f32, text: []const u8, advances: []f32) bool {
+            const runtime: *Runtime = @ptrCast(@alignCast(context));
+            const face = if (findCanvasFontIndex(runtime, font_id)) |index| &runtime.canvas_font_faces[index] else null;
+            var index: usize = 0;
+            while (index < text.len) {
+                const next = @min(text.len, index + canvas.utf8SequenceLength(text[index]));
+                advances[index] = if (face) |value|
+                    canvas.estimateTextWidthForFace(value, text[index..next], size)
+                else
+                    canvas.estimateTextAdvanceForBytes(font_id, text[index..next], size);
+                @memset(advances[index + 1 .. next], 0);
+                index = next;
+            }
+            return true;
+        }
+
         fn findCanvasFontIndex(self: *const Runtime, id: canvas.FontId) ?usize {
             for (self.canvas_font_entries[0..self.canvas_font_count], 0..) |entry, index| {
                 if (entry.id == id) return index;
@@ -184,6 +212,11 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
         /// be retained) and request frames so the repaint is not gated on
         /// other input — the image-registry choreography.
         fn noteCanvasFontsChanged(self: *Runtime) void {
+            // A new face changes what the measurement seam answers for
+            // its id (host providers just learned the face; the engine
+            // provider now charges its real advances): invalidate every
+            // cached advance batch and retained wrap result.
+            canvas.bumpTextMeasureGeneration();
             const frame_methods = canvas_frame_module.RuntimeCanvasFrames(Runtime);
             for (self.views[0..self.view_count], 0..) |*view, index| {
                 if (!view.open or view.kind != .gpu_surface) continue;

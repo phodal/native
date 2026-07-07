@@ -372,6 +372,166 @@ fn transcriptOptions() TranscriptApp.Options {
     };
 }
 
+// -------------------- fixture: measured-text chat (provider path)
+
+// The provider-path regression class: a live text measure provider
+// (CoreText on macOS) turns every text measurement into a host call, so
+// the interesting number is measured CALLS per interaction, not just
+// wall time. This fixture mirrors the profiled hot case — a focused
+// input above a couple dozen wrapped chat messages, full TEA rebuild
+// per keystroke — against a counting synthetic provider with
+// kerning-ish per-cluster advances (additive, like the class the
+// batched-seam parity law covers). The scenario asserts a hard cap on
+// provider calls per keystroke: the pre-batching seam measured every
+// growing line prefix once per cluster (tens of thousands of calls per
+// keystroke at this fixture size), the batched seam plus the retained
+// caches keep steady-state typing to a handful.
+
+const measured_chat_messages = 24;
+
+var measured_chat_storage: [measured_chat_messages][192]u8 = undefined;
+var measured_chat_sources: [measured_chat_messages][]const u8 = undefined;
+
+fn initMeasuredChatFixture() void {
+    for (0..measured_chat_messages) |index| {
+        measured_chat_sources[index] = std.fmt.bufPrint(
+            &measured_chat_storage[index],
+            "**voice-{d}**: message {d} in the measured transcript wraps across several lines at pane width, with `inline code` and *emphasis* mixed in for span variety.",
+            .{ index % 5, index },
+        ) catch unreachable;
+    }
+}
+
+const MeasuredCounters = struct {
+    unit_calls: u64 = 0,
+    /// Bytes measured through the per-prefix seam. THE ratchet metric:
+    /// the convicted regression class measures the growing line prefix
+    /// once per cluster, which is quadratic in BYTES while staying
+    /// modest in calls — the healthy steady state is a handful of
+    /// whole-slice widths per frame (line bounds and label widths), so
+    /// bytes separate the two regimes by orders of magnitude where raw
+    /// call counts blur them.
+    unit_bytes: u64 = 0,
+    batch_calls: u64 = 0,
+
+    fn total(self: MeasuredCounters) u64 {
+        return self.unit_calls + self.batch_calls;
+    }
+};
+
+var measured_counters: MeasuredCounters = .{};
+
+/// Kerning-ish synthetic advance: varies per cluster lead byte and byte
+/// length so cumulative widths are irregular like shaped text, while
+/// staying additive — the class the batched seam contract covers.
+fn measuredClusterAdvance(font_id: u64, size: f32, cluster: []const u8) f32 {
+    const lead: f32 = @floatFromInt(cluster[0] % 13);
+    const len: f32 = @floatFromInt(cluster.len);
+    const font: f32 = @floatFromInt(font_id % 5);
+    return size * (0.31 + lead * 0.037 + len * 0.041 + font * 0.011);
+}
+
+fn measuredMeasureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
+    _ = context;
+    measured_counters.unit_calls += 1;
+    measured_counters.unit_bytes += text.len;
+    var width: f32 = 0;
+    var index: usize = 0;
+    while (index < text.len) {
+        const next = @min(text.len, index + canvas.utf8SequenceLength(text[index]));
+        width += measuredClusterAdvance(font_id, size, text[index..next]);
+        index = next;
+    }
+    return width;
+}
+
+fn measuredMeasureTextAdvances(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8, advances: []f32) bool {
+    _ = context;
+    measured_counters.batch_calls += 1;
+    var index: usize = 0;
+    while (index < text.len) {
+        const next = @min(text.len, index + canvas.utf8SequenceLength(text[index]));
+        advances[index] = measuredClusterAdvance(font_id, size, text[index..next]);
+        @memset(advances[index + 1 .. next], 0);
+        index = next;
+    }
+    return true;
+}
+
+const MeasuredChatMsg = union(enum) {
+    typed,
+    scrolled: canvas.ScrollState,
+};
+
+const measured_chat_draft_capacity = 96;
+
+const MeasuredChatModel = struct {
+    offset: f32 = 0,
+    draft: [measured_chat_draft_capacity]u8 = @splat('m'),
+    draft_len: usize = 4,
+    typed: u32 = 0,
+};
+
+/// Each keystroke is a MODEL edit (a bound composer), so the whole view
+/// rebuilds — the convicted path: every mounted wrapped paragraph gets
+/// its height re-asked and its runs re-emitted per keystroke, changed
+/// or not. The draft cycles inside its capacity so every iteration is
+/// an identical steady-state edit.
+fn measuredChatUpdate(model: *MeasuredChatModel, msg: MeasuredChatMsg) void {
+    switch (msg) {
+        .typed => {
+            model.typed += 1;
+            model.draft[model.draft_len % measured_chat_draft_capacity] = 'a' + @as(u8, @intCast(model.typed % 26));
+            model.draft_len = (model.draft_len % measured_chat_draft_capacity) + 1;
+        },
+        .scrolled => |scroll| model.offset = scroll.offset,
+    }
+}
+
+const MeasuredChatApp = native_sdk.UiApp(MeasuredChatModel, MeasuredChatMsg);
+const MeasuredChatUi = MeasuredChatApp.Ui;
+const MeasuredChatMarkdown = canvas.markdown.Markdown(MeasuredChatMsg);
+
+fn measuredChatMessageKey(source: *const []const u8) canvas.UiKey {
+    return canvas.uiKey(source.*);
+}
+
+fn measuredChatMessageView(ui: *MeasuredChatUi, context: void, source: *const []const u8) MeasuredChatUi.Node {
+    _ = context;
+    return MeasuredChatMarkdown.view(ui, source.*, .{});
+}
+
+fn measuredChatTextLeaf(ui: *MeasuredChatUi, kind: canvas.WidgetKind, options: MeasuredChatUi.ElementOptions, content: []const u8) MeasuredChatUi.Node {
+    var node = ui.el(kind, options, .{});
+    node.widget.text = content;
+    return node;
+}
+
+fn measuredChatView(ui: *MeasuredChatUi, model: *const MeasuredChatModel) MeasuredChatUi.Node {
+    return ui.column(.{ .padding = 12, .gap = 8 }, .{
+        ui.scroll(.{
+            .grow = 1,
+            .value = model.offset,
+            .on_scroll = MeasuredChatUi.scrollMsg(.scrolled),
+            .semantics = .{ .label = "Measured transcript" },
+        }, ui.column(.{ .gap = 10 }, ui.eachCtx({}, measured_chat_sources[0..], measuredChatMessageKey, measuredChatMessageView))),
+        measuredChatTextLeaf(ui, .text_field, .{
+            .height = 32,
+            .semantics = .{ .label = "Composer" },
+        }, ui.fmt("{s}", .{model.draft[0..model.draft_len]})),
+    });
+}
+
+fn measuredChatOptions() MeasuredChatApp.Options {
+    return .{
+        .name = "bench-measured-chat",
+        .scene = bench_scene,
+        .canvas_label = canvas_label,
+        .update = measuredChatUpdate,
+        .view = measuredChatView,
+    };
+}
+
 // ------------------------------------------ fixture: chart dashboard
 
 const chart_points = 120;
@@ -594,6 +754,95 @@ fn scenarioTranscriptScroll() !ScenarioReport {
     );
 }
 
+/// The two provider-call caps guarding the batched seam and its caches.
+/// Both counters are deterministic (synthetic provider, scripted
+/// interactions), so the caps sit close to the measured signatures:
+///
+/// - Per-prefix BYTES per keystroke — healthy 3355 (whole-slice widths
+///   only: per-frame line bounds and label widths over the retained
+///   runs); with the batched seam disabled 17465 (prefix re-measures
+///   come back for the composer and elided labels even though the wrap
+///   cache still absorbs the paragraphs); pre-batching, hundreds of
+///   thousands. Bytes rather than calls: a whole-line bounds measure
+///   and a one-cluster prefix step are one call each, so the quadratic
+///   class multiplies bytes by orders of magnitude while call counts
+///   blur.
+/// - Batched CALLS per keystroke — healthy 1 (the composer's changed
+///   text; everything else hits the retained advance and wrap caches);
+///   a broken cache (always-miss keying, generation stuck bumping)
+///   refetches every mounted paragraph every rebuild (tens per
+///   keystroke) while keeping per-prefix bytes low, which is why the
+///   byte cap alone cannot see it.
+const measured_chat_unit_byte_cap_per_keystroke: u64 = 8_000;
+const measured_chat_batch_call_cap_per_keystroke: u64 = 20;
+
+fn scenarioMeasuredKeystroke() !ScenarioReport {
+    var bench = try Bench(MeasuredChatApp).create(measuredChatOptions());
+    defer bench.destroy();
+    // Install the counting provider the way platforms install CoreText:
+    // on the runtime, before the measured interactions (tokens re-stamp
+    // it on the next rebuild). The provider value lives on the runtime,
+    // so its pointer identity is stable across frames like a real host's.
+    bench.runtime().text_measure_provider = .{
+        .measure_fn = measuredMeasureText,
+        .measure_advances_fn = measuredMeasureTextAdvances,
+    };
+    // One rebuild with the provider installed so the first measured
+    // iteration is steady-state, not the cold token flip.
+    try bench.app.dispatch(&bench.harness.runtime, 1, .typed);
+    try bench.frame();
+    const step = struct {
+        fn run(b: *Bench(MeasuredChatApp)) !void {
+            // The composer edit dispatches the way UiApp dispatches
+            // command Msgs: model change -> full TEA rebuild -> present.
+            try b.app.dispatch(&b.harness.runtime, 1, .typed);
+            try b.frame();
+        }
+    };
+    const before = measured_counters;
+    const report = try measure(
+        "keystroke-measured-text",
+        "typed char over 24 wrapped messages, live measure provider",
+        &bench,
+        measured_iterations,
+        step,
+    );
+    // The snapshot above precedes `measure`, whose window is warmup plus
+    // measured iterations — every one an identical steady-state
+    // keystroke, so the per-iteration average over the whole window is
+    // the honest per-keystroke number (the first-ever keystroke's cold
+    // fetches amortize into it and still fit the cap with room).
+    const iterations: u64 = @intCast(warmup_iterations + measured_iterations);
+    const calls_per_keystroke = (measured_counters.total() - before.total()) / iterations;
+    const unit_bytes_per_keystroke = (measured_counters.unit_bytes - before.unit_bytes) / iterations;
+    std.debug.print(
+        "bench-render: keystroke-measured-text per keystroke: {d} provider calls ({d} batched + {d} per-prefix), {d} per-prefix bytes (cap {d})\n",
+        .{
+            calls_per_keystroke,
+            measured_counters.batch_calls - before.batch_calls,
+            measured_counters.unit_calls - before.unit_calls,
+            unit_bytes_per_keystroke,
+            measured_chat_unit_byte_cap_per_keystroke,
+        },
+    );
+    if (unit_bytes_per_keystroke > measured_chat_unit_byte_cap_per_keystroke) {
+        std.debug.print(
+            "bench-render: keystroke-measured-text measured {d} per-prefix bytes per keystroke (cap {d}) — the batched measurement seam regressed\n",
+            .{ unit_bytes_per_keystroke, measured_chat_unit_byte_cap_per_keystroke },
+        );
+        return error.MeasuredTextByteCapExceeded;
+    }
+    const batch_calls_per_keystroke = (measured_counters.batch_calls - before.batch_calls) / iterations;
+    if (batch_calls_per_keystroke > measured_chat_batch_call_cap_per_keystroke) {
+        std.debug.print(
+            "bench-render: keystroke-measured-text made {d} batched provider calls per keystroke (cap {d}) — the advance or wrap cache regressed\n",
+            .{ batch_calls_per_keystroke, measured_chat_batch_call_cap_per_keystroke },
+        );
+        return error.MeasuredTextBatchCapExceeded;
+    }
+    return report;
+}
+
 fn scenarioChartTick() !ScenarioReport {
     var bench = try Bench(ChartApp).create(chartOptions());
     defer bench.destroy();
@@ -759,7 +1008,7 @@ fn fmtUs(value: u64) []const u8 {
 
 // ---------------------------------------------------------- check mode
 
-const scenario_count = 6;
+const scenario_count = 7;
 const check_passes = 3;
 
 fn runAllScenarios() ![scenario_count]ScenarioReport {
@@ -770,6 +1019,7 @@ fn runAllScenarios() ![scenario_count]ScenarioReport {
     reports[3] = try scenarioTranscriptScroll();
     reports[4] = try scenarioChartTick();
     reports[5] = try scenarioDocEdit();
+    reports[6] = try scenarioMeasuredKeystroke();
     return reports;
 }
 
@@ -901,6 +1151,7 @@ pub fn main(init: std.process.Init) !void {
     initBigFormFixture();
     initTranscriptFixture();
     initDocFixture();
+    initMeasuredChatFixture();
 
     if (budgets_path) |path| return runCheck(init, path);
 

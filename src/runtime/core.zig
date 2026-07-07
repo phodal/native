@@ -343,9 +343,19 @@ pub const Runtime = struct {
         self.frame_profile = .{};
         self.started_timestamp_ns = timestampToU64(nowNanoseconds());
         self.text_measure_provider = if (options.platform.services.measure_text_fn) |measure_fn|
-            .{ .context = options.platform.services.context, .measure_fn = measure_fn }
+            .{
+                .context = options.platform.services.context,
+                .measure_fn = measure_fn,
+                .measure_advances_fn = options.platform.services.measure_text_advances_fn,
+            }
         else
             null;
+        // Measured-text caches (batched advances, retained wrap results)
+        // key on provider identity, and a fresh runtime can recycle a
+        // predecessor's provider context address in the same process
+        // (tests do constantly): bump the generation so nothing measured
+        // against a previous runtime's provider can be served to this one.
+        canvas.bumpTextMeasureGeneration();
     }
 
     fn fieldHasSmallDefault(comptime field: std.builtin.Type.StructField) bool {

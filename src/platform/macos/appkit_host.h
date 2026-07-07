@@ -378,6 +378,17 @@ int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host
 size_t native_sdk_appkit_clipboard_read(native_sdk_appkit_host_t *host, char *buffer, size_t buffer_len);
 double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len);
 
+/* Batched measurement: fill advances[text_len] with per-cluster
+ * typographic advances for the whole single-line run, shaped with the
+ * same font resolution native_sdk_appkit_measure_text measures with.
+ * Layout contract: the advance of the UTF-8 cluster starting at byte i
+ * lands at advances[i]; the cluster's continuation bytes hold exactly 0.
+ * One call per run replaces one measure_text round-trip per cluster of
+ * every growing line prefix. Returns 1 on success, 0 when the bytes are
+ * not valid UTF-8 or the font id cannot resolve (the engine then keeps
+ * its per-prefix path for that run). */
+int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const char *text, size_t text_len, float *advances);
+
 // Register engine-validated TrueType bytes under a canvas font id so
 // measurement and packet text drawing resolve the id to this exact face.
 // Returns 1 on success, 0 when CoreText rejects the data.

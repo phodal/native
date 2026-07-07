@@ -13,6 +13,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 @class NativeSdkAppKitHost;
@@ -1707,6 +1708,90 @@ double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char 
         double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
         [widthCache setObject:@(width) forKey:key];
         return width;
+    }
+}
+
+// Batched per-cluster advances for a single-line run: one CTLine over
+// the whole run (the same attributed-string shaping the width above
+// summarizes), glyph advances accumulated onto the UTF-16 character
+// each glyph belongs to, then folded onto UTF-8 cluster lead bytes.
+// Kerning and ligatures ride the glyph advances: a ligature's whole
+// advance lands on its first cluster and the swallowed clusters hold 0,
+// so cumulative widths stay honest at every cluster boundary. One host
+// call per text run replaces one measure_text round-trip per cluster of
+// every growing line prefix — the engine caches the batch, so a run is
+// typically shaped here once per content change, not once per frame.
+int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const char *text, size_t text_len, float *advances) {
+    if (!text || text_len == 0 || !advances) return 0;
+    CGFloat clamped = MAX(1, size);
+    @autoreleasepool {
+        NSString *value = [[NSString alloc] initWithBytes:text length:text_len encoding:NSUTF8StringEncoding];
+        if (!value) return 0;
+        NSFont *font = NativeSdkFontForFontId(font_id, clamped);
+        if (!font) return 0;
+        NSAttributedString *attributed = [[NSAttributedString alloc] initWithString:value
+                                                                         attributes:@{ NSFontAttributeName : font }];
+        CTLineRef line = CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)attributed);
+        if (!line) return 0;
+
+        // Per-UTF-16-unit accumulation. UTF-16 length never exceeds the
+        // UTF-8 byte length (1-3 byte sequences map to one unit, 4-byte
+        // sequences to two), so text_len bounds the buffer.
+        NSUInteger utf16_len = value.length;
+        double *unit_advances = calloc(utf16_len > 0 ? utf16_len : 1, sizeof(double));
+        if (!unit_advances) {
+            CFRelease(line);
+            return 0;
+        }
+        CFArrayRef runs = CTLineGetGlyphRuns(line);
+        CFIndex run_count = runs ? CFArrayGetCount(runs) : 0;
+        for (CFIndex run_index = 0; run_index < run_count; run_index++) {
+            CTRunRef run = (CTRunRef)CFArrayGetValueAtIndex(runs, run_index);
+            CFIndex glyph_count = CTRunGetGlyphCount(run);
+            CGSize advance_chunk[64];
+            CFIndex index_chunk[64];
+            for (CFIndex start = 0; start < glyph_count; start += 64) {
+                CFIndex chunk = MIN(64, glyph_count - start);
+                CTRunGetAdvances(run, CFRangeMake(start, chunk), advance_chunk);
+                CTRunGetStringIndices(run, CFRangeMake(start, chunk), index_chunk);
+                for (CFIndex glyph = 0; glyph < chunk; glyph++) {
+                    CFIndex string_index = index_chunk[glyph];
+                    if (string_index >= 0 && (NSUInteger)string_index < utf16_len) {
+                        unit_advances[string_index] += advance_chunk[glyph].width;
+                    }
+                }
+            }
+        }
+        CFRelease(line);
+
+        // Fold UTF-16 unit advances onto UTF-8 cluster lead bytes. The
+        // walks stay in lockstep because NSString accepted the bytes as
+        // valid UTF-8: 1-3 byte clusters own one UTF-16 unit, 4-byte
+        // clusters own a surrogate pair (two units).
+        size_t byte_index = 0;
+        NSUInteger unit_index = 0;
+        while (byte_index < text_len) {
+            unsigned char lead = (unsigned char)text[byte_index];
+            size_t cluster_bytes = (lead & 0x80) == 0 ? 1
+                : (lead & 0xE0) == 0xC0               ? 2
+                : (lead & 0xF0) == 0xE0               ? 3
+                : (lead & 0xF8) == 0xF0               ? 4
+                                                      : 1;
+            if (cluster_bytes > text_len - byte_index) cluster_bytes = text_len - byte_index;
+            NSUInteger cluster_units = cluster_bytes == 4 ? 2 : 1;
+            double total = 0;
+            for (NSUInteger unit = 0; unit < cluster_units && unit_index + unit < utf16_len; unit++) {
+                total += unit_advances[unit_index + unit];
+            }
+            for (size_t offset = 1; offset < cluster_bytes; offset++) {
+                advances[byte_index + offset] = 0;
+            }
+            advances[byte_index] = (float)total;
+            unit_index += cluster_units;
+            byte_index += cluster_bytes;
+        }
+        free(unit_advances);
+        return 1;
     }
 }
 

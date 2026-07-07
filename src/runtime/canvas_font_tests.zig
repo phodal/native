@@ -170,6 +170,35 @@ test "registered faces measure with their own advances through the runtime provi
     try std.testing.expect(harness.runtime.tokensWithTextMeasure(.{}).text_measure == provider);
 }
 
+test "registered faces answer the batched advances seam identically to per-prefix widths" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: RegistryApp = .{};
+    try harness.start(app_state.app());
+
+    const generation_before = canvas.textMeasureGeneration();
+    try harness.runtime.registerCanvasFont(registered_font_id, mono_bytes);
+    // Registration changes what the seam answers for the id: cached
+    // advances and retained wrap results must miss.
+    try std.testing.expect(canvas.textMeasureGeneration() > generation_before);
+
+    const provider = harness.runtime.textMeasureProvider().?;
+    try std.testing.expect(provider.measure_advances_fn != null);
+
+    // Batched advances sum to exactly the per-prefix width for both a
+    // registered id (face advances) and a built-in id (estimator
+    // advances) — the additive property the parity law rides on.
+    const text = "Hello 123 \xc3\xa9";
+    const ids = [_]canvas.FontId{ registered_font_id, canvas.default_sans_font_id };
+    for (ids) |font_id| {
+        var advances: [text.len]f32 = undefined;
+        try std.testing.expect(provider.measureAdvances(font_id, 10.0, text, &advances));
+        var sum: f32 = 0;
+        for (advances) |advance| sum += advance;
+        try std.testing.expectEqual(provider.measureWidth(font_id, 10.0, text), sum);
+    }
+}
+
 fn installFontFixtureWidgets(harness: anytype) !void {
     _ = try harness.runtime.createView(.{
         .window_id = 1,

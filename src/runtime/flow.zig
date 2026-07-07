@@ -214,6 +214,12 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 },
                 .appearance_changed => |appearance| {
                     self.appearance = appearance;
+                    // Appearance flips re-resolve theme typography (and a
+                    // host may re-resolve its fonts with it): cached
+                    // advance batches and retained wrap results must miss
+                    // rather than serve metrics measured under the
+                    // previous appearance.
+                    canvas.bumpTextMeasureGeneration();
                     try dispatchEvent(self, app, .{ .appearance_changed = appearance });
                 },
                 .surface_resized => |surface_value| {

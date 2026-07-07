@@ -350,3 +350,43 @@ test "runtime wraps a platform text measure service into a canvas provider" {
     // checks in the reconcile path stay quiescent frame to frame.
     try std.testing.expect(std.meta.eql(tokens, runtime.tokensWithTextMeasure(.{})));
 }
+
+fn countedBatchedMeasureForTests(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8, advances: []f32) bool {
+    _ = context;
+    _ = font_id;
+    _ = size;
+    // Flat 7px per byte, matching fixedTextMeasureForTests so batched
+    // sums and per-prefix widths agree exactly.
+    for (advances[0..text.len]) |*advance| advance.* = 7;
+    return true;
+}
+
+test "runtime threads the batched measure service into the canvas provider" {
+    var null_platform = platform.NullPlatform.init(.{});
+    var measured_platform = null_platform.platform();
+    measured_platform.services.measure_text_fn = fixedTextMeasureForTests;
+    measured_platform.services.measure_text_advances_fn = countedBatchedMeasureForTests;
+
+    const runtime = try std.testing.allocator.create(Runtime);
+    defer std.testing.allocator.destroy(runtime);
+    Runtime.initAt(runtime, .{ .platform = measured_platform });
+
+    const provider = runtime.textMeasureProvider() orelse return error.MissingProvider;
+    try std.testing.expect(provider.measure_advances_fn != null);
+    var advances: [5]f32 = undefined;
+    try std.testing.expect(provider.measureAdvances(1, 12, "hello", &advances));
+    for (advances) |advance| try std.testing.expectEqual(@as(f32, 7), advance);
+    // The batched sum agrees with the unbatched width for this provider.
+    try std.testing.expectEqual(@as(f32, 35), provider.measureWidth(1, 12, "hello"));
+}
+
+test "runtime construction bumps the text measure generation" {
+    var null_platform = platform.NullPlatform.init(.{});
+    const before = canvas.textMeasureGeneration();
+    const runtime = try std.testing.allocator.create(Runtime);
+    defer std.testing.allocator.destroy(runtime);
+    Runtime.initAt(runtime, .{ .platform = null_platform.platform() });
+    // A recycled provider context address from a destroyed runtime must
+    // never serve a fresh runtime stale advances or wrap results.
+    try std.testing.expect(canvas.textMeasureGeneration() > before);
+}

@@ -127,9 +127,23 @@ pub const textEllipsisAdvance = text_model.textEllipsisAdvance;
 pub const textLayoutKeysEqual = text_model.textLayoutKeysEqual;
 pub const TextLayoutOptions = text_model.TextLayoutOptions;
 pub const TextMeasureProvider = text_model.TextMeasureProvider;
+/// Batched-measurement invalidation seam (see text_measure_cache.zig):
+/// bump when anything that could change a provider's answers changes —
+/// font registration, appearance flips, runtime construction. Cached
+/// advances and retained wrap results both key on the generation.
+pub const bumpTextMeasureGeneration = @import("text_measure_cache.zig").bumpTextMeasureGeneration;
+pub const textMeasureGeneration = @import("text_measure_cache.zig").textMeasureGeneration;
+/// Batched-measurement observability (per-thread counters) for tests
+/// and the render benchmark's provider-call ratchet.
+pub const textAdvanceFetchCount = @import("text_measure_cache.zig").textAdvanceFetchCount;
+pub const textAdvanceHitCount = @import("text_measure_cache.zig").textAdvanceHitCount;
+pub const textSpanWrapCacheHitCount = text_spans.textSpanWrapCacheHitCount;
+pub const textSpanWrapCacheMissCount = text_spans.textSpanWrapCacheMissCount;
 pub const measureTextWidthForFont = text_model.measureTextWidthForFont;
 pub const estimateTextWidthForFont = text_model.estimateTextWidthForFont;
 pub const estimateTextWidthForFace = text_model.estimateTextWidthForFace;
+pub const estimateTextAdvanceForBytes = text_model.estimateTextAdvanceForBytes;
+pub const utf8SequenceLength = text_model.utf8SequenceLength;
 /// The fixed pitch (em units) mono runs measure and ink at.
 pub const mono_advance_em = text_model.mono_advance_em;
 pub const TextLine = text_model.TextLine;

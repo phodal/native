@@ -19,12 +19,34 @@ const utf8SequenceLength = text_interaction.utf8SequenceLength;
 pub const TextMeasureProvider = struct {
     context: ?*anyopaque = null,
     measure_fn: *const fn (context: ?*anyopaque, font_id: FontId, size: f32, text: []const u8) f32,
+    /// Optional batched measurement: fill `advances` (per byte, `text.len`
+    /// entries) with per-cluster advances — the advance of the UTF-8
+    /// cluster starting at byte `i` lands at index `i`, continuation
+    /// bytes hold 0 — and return true. Returning false (or leaving this
+    /// null) keeps callers on the per-call `measureWidth` seam. This is
+    /// the O(L) escape from measuring a growing line prefix once per
+    /// cluster: one provider round-trip per RUN instead of per cluster,
+    /// with line breaks then derived from cumulative advances exactly as
+    /// the estimator path derives them.
+    measure_advances_fn: ?*const fn (context: ?*anyopaque, font_id: FontId, size: f32, text: []const u8, advances: []f32) bool = null,
 
     pub fn measureWidth(self: TextMeasureProvider, font_id: FontId, size: f32, text: []const u8) f32 {
         if (text.len == 0) return 0;
         const width = self.measure_fn(self.context, font_id, size, text);
         if (!(width >= 0) or !isFiniteF32(width)) return estimateTextWidthForFont(font_id, text, size);
         return width;
+    }
+
+    /// Batched per-cluster advances for `text` into `advances[0..text.len]`.
+    /// False means "no batched answer" — the provider has no batched
+    /// entry or the host declined (invalid UTF-8, unresolvable font);
+    /// callers fall back to `measureWidth` prefix measurement, which
+    /// carries its own per-call estimator fallback.
+    pub fn measureAdvances(self: TextMeasureProvider, font_id: FontId, size: f32, text: []const u8, advances: []f32) bool {
+        const advances_fn = self.measure_advances_fn orelse return false;
+        if (text.len == 0) return true;
+        if (advances.len < text.len) return false;
+        return advances_fn(self.context, font_id, size, text, advances[0..text.len]);
     }
 };
 

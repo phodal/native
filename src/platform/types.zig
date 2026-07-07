@@ -1874,6 +1874,21 @@ pub const PlatformServices = struct {
     /// real font metrics (the null platform), which keeps layout on the
     /// deterministic estimator.
     measure_text_fn: ?*const fn (context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 = null,
+    /// Batched single-line text measurement: fill `advances` (per byte,
+    /// `text.len` entries) with per-cluster typographic advances for the
+    /// same font resolution `measure_text_fn` measures with — the advance
+    /// of the UTF-8 cluster starting at byte `i` at index `i`, exactly 0
+    /// at continuation bytes — and return true. Return false when the
+    /// host cannot answer (invalid UTF-8, unresolvable font); the engine
+    /// then keeps its per-prefix measurement path for that run. This is
+    /// the O(L) seam line breaking batches through: one host call per
+    /// text run instead of one `measure_text_fn` round-trip per cluster
+    /// of every growing line prefix. Null on platforms without host-side
+    /// text metrics (GTK / Win32 / the null platform), whose layout
+    /// already runs on the engine's deterministic estimator or the
+    /// engine-side registered-face provider — both batch engine-side
+    /// without any platform seam.
+    measure_text_advances_fn: ?*const fn (context: ?*anyopaque, font_id: u64, size: f32, text: []const u8, advances: []f32) bool = null,
     /// Decode encoded image bytes (PNG, JPEG, ... — whatever the platform
     /// codec supports) into tightly packed, row-major, straight-alpha
     /// (non-premultiplied) RGBA8 written into `buffer`, returning the

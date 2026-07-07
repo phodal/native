@@ -2412,6 +2412,19 @@ double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char 
     return -1;
 }
 
+/* Batched advances twin of the decline above: no host metrics means no
+ * host advances either. Returning 0 declines the batch, and the engine
+ * takes the same estimator fallback the per-prefix seam takes — the
+ * decline route is pinned by the text batch parity tests. */
+int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const char *text, size_t text_len, float *advances) {
+    (void)font_id;
+    (void)size;
+    (void)text;
+    (void)text_len;
+    (void)advances;
+    return 0;
+}
+
 /* Mirror of the AppKit host's decoder: pure CoreGraphics/ImageIO with no
  * host state, so both engines decode identically. See appkit_host.h for
  * the pixel-format and return-value contract. */

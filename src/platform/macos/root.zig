@@ -158,6 +158,7 @@ extern fn native_sdk_appkit_set_webview_layer(host: *AppKitHost, window_id: u64,
 extern fn native_sdk_appkit_close_webview(host: *AppKitHost, window_id: u64, label: [*]const u8, label_len: usize) c_int;
 extern fn native_sdk_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
 extern fn native_sdk_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
+extern fn native_sdk_appkit_measure_text_advances(font_id: u64, size: f64, text: [*]const u8, text_len: usize, advances: [*]f32) c_int;
 extern fn native_sdk_appkit_register_font(font_id: u64, bytes: [*]const u8, bytes_len: usize) c_int;
 extern fn native_sdk_appkit_register_bundled_fonts() void;
 extern fn native_sdk_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
@@ -508,6 +509,7 @@ pub const MacPlatform = struct {
                 .register_gpu_surface_font_fn = registerGpuSurfaceFont,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
                 .measure_text_fn = measureText,
+                .measure_text_advances_fn = measureTextAdvances,
                 .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
@@ -760,12 +762,24 @@ fn readClipboard(context: ?*anyopaque, buffer: []u8) anyerror![]const u8 {
 pub fn installHeadlessTextServices(services: *platform_mod.PlatformServices) void {
     native_sdk_appkit_register_bundled_fonts();
     services.measure_text_fn = measureText;
+    services.measure_text_advances_fn = measureTextAdvances;
     services.register_gpu_surface_font_fn = registerGpuSurfaceFont;
 }
 
 fn measureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
     _ = context;
     return @floatCast(native_sdk_appkit_measure_text(font_id, size, text.ptr, text.len));
+}
+
+/// Batched CoreText measurement: per-cluster advances for the whole run
+/// in one host call (see the layout contract on the platform service).
+/// A zero host answer (invalid UTF-8, unresolvable font) surfaces as
+/// false so the canvas seam keeps its per-prefix path for that run.
+fn measureTextAdvances(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8, advances: []f32) bool {
+    _ = context;
+    if (text.len == 0) return true;
+    if (advances.len < text.len) return false;
+    return native_sdk_appkit_measure_text_advances(font_id, size, text.ptr, text.len, advances.ptr) == 1;
 }
 
 /// CGImageSource-backed image decoding (PNG, JPEG, ... — every codec

@@ -5,6 +5,7 @@ const text_atlas = @import("text_atlas.zig");
 const text_layout_types = @import("text_layout_types.zig");
 const text_layout_cache = @import("text_layout_cache.zig");
 const text_layout_hash = @import("text_layout_hash.zig");
+const text_measure_cache = @import("text_measure_cache.zig");
 const text_metrics = @import("text_metrics.zig");
 
 const Error = canvas.Error;
@@ -116,6 +117,9 @@ const LineElision = struct {
 fn plainLineElision(text: []const u8, start: usize, end: usize, font_id: FontId, size: f32, options: TextLayoutOptions) LineElision {
     if (!lineElisionEnabled(options) or end <= start) return .{};
     if (options.measure == null) return estimatedPlainLineElision(text, start, end, font_id, size, options);
+    if (text_measure_cache.textRunAdvances(options.measure.?, font_id, size, text)) |advances| {
+        return advancePlainLineElision(text, start, end, font_id, size, options, advances);
+    }
     const full_width = measureTextWidthForFont(options.measure, font_id, text[start..end], size);
     if (full_width <= options.max_width + text_elision_slack) return .{ .painted_width = full_width };
     const ellipsis_advance = textEllipsisAdvance(options.measure, font_id, size);
@@ -139,6 +143,46 @@ fn plainLineElision(text: []const u8, start: usize, end: usize, font_id: FontId,
     else
         measureTextWidthForFont(options.measure, font_id, text[start..trimmed], size);
     return .{ .text_len = trimmed - start, .ellipsis_advance = ellipsis_advance, .painted_width = painted_width };
+}
+
+/// The batched-provider half of `plainLineElision`, fused into ONE
+/// cluster walk over the run's fetched advances — the same fusion the
+/// estimator half performs, and valid for the same reason: batched
+/// advances are additive by contract (a slice's width is the sum of its
+/// per-cluster advances in accumulation order), so a single pass
+/// accumulates the full width AND tracks the widest prefix that leaves
+/// room for the marker. The advance accumulation performs the identical
+/// f32 additions the old per-prefix provider measurement summed, so the
+/// kept prefix is byte-identical for any provider whose prefix widths
+/// are its advance sums (pinned by the seam-parity tests). The trailing
+/// break-byte trim subtracts the byte's own advance; the subtraction can
+/// drift from a fresh prefix measure by an ulp, which only feeds painted
+/// bounds — never a break or elision decision.
+fn advancePlainLineElision(text: []const u8, start: usize, end: usize, font_id: FontId, size: f32, options: TextLayoutOptions, advances: []const f32) LineElision {
+    const ellipsis_advance = textEllipsisAdvance(options.measure, font_id, size);
+    const budget = options.max_width - ellipsis_advance;
+    var width: f32 = 0;
+    var fit = start;
+    var fit_width: f32 = 0;
+    var index = start;
+    while (index < end) {
+        const next_index = nextTextOffset(text, index);
+        width += advances[index];
+        if (width <= budget) {
+            fit = next_index;
+            fit_width = width;
+        }
+        index = next_index;
+    }
+    if (width <= options.max_width + text_elision_slack) return .{ .painted_width = width };
+    if (ellipsis_advance > options.max_width) return .{ .text_len = 0, .ellipsis_advance = 0, .painted_width = 0 };
+    var trimmed = fit;
+    var painted_width = fit_width;
+    while (trimmed > start and isTextBreakByte(text[trimmed - 1])) {
+        painted_width -= advances[trimmed - 1];
+        trimmed -= 1;
+    }
+    return .{ .text_len = trimmed - start, .ellipsis_advance = ellipsis_advance, .painted_width = @max(0, painted_width) };
 }
 
 /// The estimator half of `plainLineElision`, fused into ONE cluster
@@ -546,6 +590,18 @@ pub fn nextTextLineEnd(text: []const u8, start: usize, font_id: FontId, size: f3
         return nextExplicitLineEnd(text, start);
     }
 
+    // Batched provider path: fetch the run's per-cluster advances once
+    // (cached across the run's lines and across rebuilds) and break from
+    // cumulative sums — O(L) per run instead of measuring the growing
+    // line prefix once per cluster (O(L²), one provider round-trip
+    // each). Falls through to the unbatched loop when the provider has
+    // no batched entry or the host declined this run.
+    if (options.measure) |provider| {
+        if (text_measure_cache.textRunAdvances(provider, font_id, size, text)) |advances| {
+            return nextTextLineEndFromAdvances(text, start, max_width, options.wrap, advances);
+        }
+    }
+
     var index = start;
     var last_break: ?usize = null;
     while (index < text.len) {
@@ -562,6 +618,39 @@ pub fn nextTextLineEnd(text: []const u8, start: usize, font_id: FontId, size: f3
             }
             return index;
         }
+        index = next_index;
+    }
+    return text.len;
+}
+
+/// The batched twin of the unbatched `nextTextLineEnd` loop below it:
+/// the same cursor walk, the same break bookkeeping, the same return
+/// points — only `next_width` comes from accumulating the run's
+/// per-cluster advances instead of re-measuring the growing prefix.
+/// The accumulation performs the identical f32 additions a per-prefix
+/// provider whose widths are its advance sums would produce, so the
+/// chosen break offsets are byte-identical (pinned by the seam-parity
+/// tests, including kerning-ish non-uniform advances and multi-byte
+/// clusters).
+fn nextTextLineEndFromAdvances(text: []const u8, start: usize, max_width: f32, wrap: TextWrap, advances: []const f32) usize {
+    var index = start;
+    var width: f32 = 0;
+    var last_break: ?usize = null;
+    while (index < text.len) {
+        if (text[index] == '\n') return index;
+        const next_index = nextTextOffset(text, index);
+        const next_width = width + advances[index];
+        if (isTextBreakByte(text[index])) last_break = next_index;
+        if (next_width > max_width) {
+            if (index == start) return next_index;
+            if (wrap == .word) {
+                if (last_break) |break_index| {
+                    if (break_index > start) return trimTrailingTextBreak(text, start, break_index);
+                }
+            }
+            return index;
+        }
+        width = next_width;
         index = next_index;
     }
     return text.len;
@@ -817,9 +906,28 @@ pub fn textLineBounds(text: DrawText, text_start: usize, text_len: usize, glyph_
     return geometry.RectF.init(
         text.origin.x,
         baseline - text.size,
-        measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[text_start..@min(text.text.len, text_start + text_len)], text.size),
+        plainLineSliceWidth(text, text_start, @min(text.text.len, text_start + text_len)),
         line_height_value,
     );
+}
+
+/// Width of the plain line `text.text[start..end)` on the run's own
+/// measurement seam. With a batch-capable provider this sums the run's
+/// ALREADY-CACHED per-cluster advances (a peek hit right after the line
+/// breaker or the elision check fetched them — line bounds stop costing
+/// one provider round-trip per line per frame). It deliberately never
+/// fetches: bounds run per frame over every retained run, and fetching
+/// here turned one memoized host width per single-line run into a full
+/// host shape per run per frame once the retained set outgrew the
+/// cache. Unbatched (and estimator) runs keep the historical per-slice
+/// measure byte-identically.
+fn plainLineSliceWidth(text: DrawText, start: usize, end: usize) f32 {
+    if (drawTextMeasure(text)) |provider| {
+        if (text_measure_cache.cachedTextRunAdvances(provider, text.font_id, text.size, text.text)) |advances| {
+            return text_measure_cache.advanceSliceWidth(advances, start, end);
+        }
+    }
+    return measureTextWidthForFont(drawTextMeasure(text), text.font_id, text.text[start..end], text.size);
 }
 
 pub fn isTextBreakByte(byte: u8) bool {

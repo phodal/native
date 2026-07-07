@@ -336,6 +336,23 @@ pub const RuntimeView = struct {
     /// selection (0 = none). One static selection per view; starting a
     /// selection elsewhere (or pressing anywhere else) clears it.
     canvas_widget_selected_text_id: canvas.ObjectId = 0,
+    /// Multi-click chain state for the double/triple-click text
+    /// gestures. The runtime derives a click count from consecutive
+    /// primary pointer-downs (recorded timestamps within the interval,
+    /// points within the slop — see canvas_widget_events.zig), because
+    /// hosts do not forward a native click count and the recorded
+    /// event stream must replay deterministically. `count` is the
+    /// count of the most recent primary down (0 = no down seen yet).
+    canvas_widget_click_count: u8 = 0,
+    canvas_widget_click_timestamp_ns: u64 = 0,
+    canvas_widget_click_point: geometry.PointF = .{},
+    /// The anchor RUN of an in-flight multi-click drag: the word (or
+    /// line) selected by the initiating double (triple) click. Drag
+    /// extension unions the run under the pointer with this range, so
+    /// the anchor word survives dragging in both directions. Only
+    /// consulted while a multi-click press is held; each qualifying
+    /// down overwrites it.
+    canvas_widget_multi_click_anchor: canvas.TextRange = .{},
     canvas_widget_cursor: platform.Cursor = .arrow,
     widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
     widget_text_len: usize = 0,

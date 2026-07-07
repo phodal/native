@@ -30,6 +30,23 @@ const canvasWidgetSpatialFocusAllowed = canvas_widget_runtime.canvasWidgetSpatia
 const canvasWidgetGroupDirectionalFocusTarget = canvas_widget_runtime.canvasWidgetGroupDirectionalFocusTarget;
 const canvasWidgetGroupFocusEdgeTarget = canvas_widget_runtime.canvasWidgetGroupFocusEdgeTarget;
 
+/// Multi-click chain window: a primary pointer-down within this many
+/// nanoseconds of the previous one (and within the slop below) raises
+/// the click count instead of starting over. 500 ms is the common
+/// platform default double-click speed; the runtime derives the count
+/// itself instead of threading a host click count because (a) the
+/// derivation runs identically on every platform including the null
+/// platform tests, and (b) it reads only fields the session journal
+/// already records (timestamp, point, button), so replay reproduces
+/// the exact same gesture without a journal format change. The
+/// tradeoff — the user's system double-click speed setting is not
+/// consulted — is accepted and pinned here.
+const canvas_widget_multi_click_interval_ns: u64 = 500 * std.time.ns_per_ms;
+
+/// Movement slop per axis (canvas points) between chained clicks: a
+/// hand tremor keeps the chain, a click somewhere else breaks it.
+const canvas_widget_multi_click_slop: f32 = 4.0;
+
 pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
     return struct {
         pub fn routeCanvasWidgetPointerInput(self: *const Runtime, input_event: GpuSurfaceInputEvent, output: []canvas.WidgetEventRouteEntry) anyerror!?CanvasWidgetPointerEvent {
@@ -214,6 +231,54 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .source = route.target,
                 .route = route.entries,
             };
+        }
+
+        /// Stamp the routed pointer event with its click count and
+        /// advance the view's multi-click chain. Downs count (a rapid
+        /// same-spot primary down raises the count, anything else
+        /// restarts at 1); moves and ups carry the count of the press
+        /// that started the gesture, so a double-click drag extends by
+        /// words all the way to its release. Timestamps of 0 (a host or
+        /// test that never stamps them) never chain — such inputs
+        /// honestly degrade to single clicks instead of making every
+        /// click a double-click.
+        pub fn updateCanvasWidgetClickCountFromPointer(self: *Runtime, input_event: GpuSurfaceInputEvent, pointer_event: *CanvasWidgetPointerEvent) void {
+            const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
+            if (self.views[index].kind != .gpu_surface) return;
+            switch (pointer_event.pointer.phase) {
+                .down => {
+                    if (input_event.button != 0) {
+                        // A non-primary press breaks the chain (its own
+                        // gesture — middle-click — never multi-clicks
+                        // text; right-click was consumed by the context
+                        // menu path before reaching here).
+                        self.views[index].canvas_widget_click_count = 0;
+                        self.views[index].canvas_widget_click_timestamp_ns = 0;
+                        return;
+                    }
+                    const previous_count = self.views[index].canvas_widget_click_count;
+                    const previous_timestamp = self.views[index].canvas_widget_click_timestamp_ns;
+                    const previous_point = self.views[index].canvas_widget_click_point;
+                    const point = pointer_event.pointer.point;
+                    const chained = previous_count != 0 and
+                        previous_timestamp != 0 and
+                        input_event.timestamp_ns >= previous_timestamp and
+                        input_event.timestamp_ns - previous_timestamp <= canvas_widget_multi_click_interval_ns and
+                        @abs(point.x - previous_point.x) <= canvas_widget_multi_click_slop and
+                        @abs(point.y - previous_point.y) <= canvas_widget_multi_click_slop;
+                    // Clamp at 3: a fourth rapid click repeats the
+                    // triple behavior, the platform text-view rule.
+                    const count: u8 = if (chained) @min(previous_count + 1, 3) else 1;
+                    self.views[index].canvas_widget_click_count = count;
+                    self.views[index].canvas_widget_click_timestamp_ns = input_event.timestamp_ns;
+                    self.views[index].canvas_widget_click_point = point;
+                    pointer_event.pointer.click_count = count;
+                },
+                .move, .up => {
+                    pointer_event.pointer.click_count = @max(self.views[index].canvas_widget_click_count, 1);
+                },
+                .hover, .cancel, .wheel => {},
+            }
         }
 
         pub fn updateCanvasWidgetFocusFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {
@@ -492,6 +557,7 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 target_id,
                 pointer_event.pointer.point,
                 pointer_event.pointer.phase == .move,
+                pointer_event.pointer.click_count,
             ) orelse return;
             if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
                 self.invalidateFor(.state, dirty_region);

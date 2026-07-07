@@ -46,6 +46,16 @@ pub const WidgetPointerEvent = struct {
     point: geometry.PointF,
     delta: geometry.OffsetF = .{},
     captured_id: ?ObjectId = null,
+    /// How many rapid same-spot primary clicks this pointer event is
+    /// part of: 1 = plain click, 2 = double (text inputs select the
+    /// word under the pointer), 3 = triple (select all / the clicked
+    /// line). The runtime derives it from recorded event timestamps —
+    /// hosts do not forward a native click count — and clamps at 3, so
+    /// a fourth rapid click repeats the triple behavior like platform
+    /// text views. `.move` events during a drag carry the count of the
+    /// press that started the gesture, which is how a double-click
+    /// drag knows to extend by words.
+    click_count: u8 = 1,
 };
 
 pub const WidgetKeyboardPhase = enum {

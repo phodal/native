@@ -189,6 +189,11 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             var dismissed_surface_id: canvas.ObjectId = 0;
             var window_drag_started = false;
             if (widget_pointer_event) |*pointer_event| {
+                // Click count stamps first: every pass below (and the
+                // app's `canvas_widget_pointer` dispatch at the end)
+                // sees the same double/triple-click verdict for this
+                // input.
+                CanvasWidgetEventMethods().updateCanvasWidgetClickCountFromPointer(self, input_event, pointer_event);
                 dismissed_surface_id = try CanvasWidgetEventMethods().dismissCanvasWidgetSurfaceFromPointerInput(self, pointer_event.*);
                 // A down consumed by a window-drag region skips the whole
                 // widget press pipeline: the OS owns the pointer from here

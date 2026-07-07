@@ -1746,3 +1746,359 @@ test "a widget text budget overflow on input degrades instead of exiting" {
         .key = "arrowleft",
     } });
 }
+
+/// Scan the widget's frame for a pointer location whose caret offset is
+/// exactly `target`, so multi-click tests aim at text offsets without
+/// hard-coding font metrics.
+fn pointForTextOffset(widget: canvas.Widget, tokens: canvas.DesignTokens, target: usize) ?geometry.PointF {
+    var y: f32 = widget.frame.y + 2;
+    while (y < widget.frame.y + widget.frame.height) : (y += 4) {
+        var x: f32 = widget.frame.x + 1;
+        while (x < widget.frame.x + widget.frame.width) : (x += 0.5) {
+            const point = geometry.PointF.init(x, y);
+            const offset = canvas.textOffsetForWidgetPoint(widget, point, tokens) orelse continue;
+            if (offset == target) return point;
+        }
+    }
+    return null;
+}
+
+fn dispatchTimedPointer(harness: *TestHarness(), app: App, kind: platform.GpuSurfaceInputKind, point: geometry.PointF, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = kind,
+        .timestamp_ns = timestamp_ns,
+        .x = point.x,
+        .y = point.y,
+    } });
+}
+
+fn retainedTextSelection(harness: *TestHarness(), node_index: usize) !canvas.TextSelection {
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    return retained.nodes[node_index].widget.text_selection orelse error.TestExpectedSelection;
+}
+
+test "double-click selects the word run under the pointer; a slow second click only moves the caret" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-double-click-word", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 200),
+    });
+
+    // "hello, world" pins all three run classes in one field:
+    // word (0..5), punctuation (5..6), whitespace (6..7), word (7..12).
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 240, 36),
+        .text = "hello, world",
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const widget = (try harness.runtime.canvasWidgetLayout(1, "canvas")).nodes[1].widget;
+
+    const ms = std.time.ns_per_ms;
+    const in_word = pointForTextOffset(widget, .{}, 2).?;
+    const on_comma = pointForTextOffset(widget, .{}, 5).?;
+    const on_space = pointForTextOffset(widget, .{}, 6).?;
+    const past_end = pointForTextOffset(widget, .{}, 12).?;
+
+    // The chain's first click is a plain caret placement...
+    try dispatchTimedPointer(harness, app, .pointer_down, in_word, 1_000 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(2), try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_word, 1_030 * ms);
+    // ...and the rapid second click selects the whole word.
+    try dispatchTimedPointer(harness, app, .pointer_down, in_word, 1_200 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 5 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_word, 1_230 * ms);
+
+    // Double-click on punctuation selects the punctuation cluster.
+    try dispatchTimedPointer(harness, app, .pointer_down, on_comma, 3_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, on_comma, 3_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, on_comma, 3_100 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 5, .focus = 6 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, on_comma, 3_130 * ms);
+
+    // Double-click on whitespace selects the gap, not a neighbor word.
+    try dispatchTimedPointer(harness, app, .pointer_down, on_space, 5_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, on_space, 5_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, on_space, 5_100 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 6, .focus = 7 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, on_space, 5_130 * ms);
+
+    // Double-click at (or past) the end of the text selects the
+    // trailing run.
+    try dispatchTimedPointer(harness, app, .pointer_down, past_end, 7_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, past_end, 7_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, past_end, 7_100 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 7, .focus = 12 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, past_end, 7_130 * ms);
+
+    // A second click OUTSIDE the double-click window never chains: the
+    // caret just moves, the platform single-click contract.
+    try dispatchTimedPointer(harness, app, .pointer_down, in_word, 9_000 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(2), try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_word, 9_030 * ms);
+}
+
+test "double-click never splits multibyte codepoints when selecting words" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-double-click-utf8", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 200),
+    });
+
+    // "héllo wörld": é and ö are two-byte codepoints, so byte runs are
+    // héllo = 0..6, space = 6..7, wörld = 7..13.
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 240, 36),
+        .text = "h\xc3\xa9llo w\xc3\xb6rld",
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const widget = (try harness.runtime.canvasWidgetLayout(1, "canvas")).nodes[1].widget;
+
+    const ms = std.time.ns_per_ms;
+    // Caret offset 8 sits between 'w' and 'ö', inside the second word.
+    const in_accented_word = pointForTextOffset(widget, .{}, 8).?;
+    try dispatchTimedPointer(harness, app, .pointer_down, in_accented_word, 1_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_accented_word, 1_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_accented_word, 1_100 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 7, .focus = 13 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_accented_word, 1_130 * ms);
+}
+
+test "double-click drag extends the selection by whole words in both directions" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-word-drag", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 360, 200),
+    });
+
+    // "alpha beta gamma": alpha = 0..5, beta = 6..10, gamma = 11..16.
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 300, 36),
+        .text = "alpha beta gamma",
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 360, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const widget = (try harness.runtime.canvasWidgetLayout(1, "canvas")).nodes[1].widget;
+
+    const ms = std.time.ns_per_ms;
+    const in_beta = pointForTextOffset(widget, .{}, 8).?;
+    const in_gamma = pointForTextOffset(widget, .{}, 13).?;
+    const in_alpha = pointForTextOffset(widget, .{}, 2).?;
+
+    // Double-click selects the anchor word.
+    try dispatchTimedPointer(harness, app, .pointer_down, in_beta, 1_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_beta, 1_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_beta, 1_100 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 6, .focus = 10 }, try retainedTextSelection(harness, 1));
+
+    // Dragging forward swallows gamma whole; the anchor word's start
+    // holds the selection's anchor.
+    try dispatchTimedPointer(harness, app, .pointer_drag, in_gamma, 1_150 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 6, .focus = 16 }, try retainedTextSelection(harness, 1));
+
+    // Dragging back before the anchor word flips direction: the anchor
+    // word's END anchors, the focus lands at alpha's start — the whole
+    // anchor word stays selected.
+    try dispatchTimedPointer(harness, app, .pointer_drag, in_alpha, 1_200 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 10, .focus = 0 }, try retainedTextSelection(harness, 1));
+
+    // Returning inside the anchor word restores exactly the anchor word.
+    try dispatchTimedPointer(harness, app, .pointer_drag, in_beta, 1_250 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 6, .focus = 10 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_beta, 1_300 * ms);
+}
+
+test "triple-click selects all in a single-line input and the clicked line in a textarea" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-triple-click", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 240),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 240, 36),
+        .text = "hello world",
+        .semantics = .{ .label = "Title" },
+    };
+    // "first line" = 0..10, '\n' at 10, "second line" = 11..22.
+    const textarea = canvas.Widget{
+        .id = 3,
+        .kind = .textarea,
+        .frame = geometry.RectF.init(12, 70, 240, 96),
+        .text = "first line\nsecond line",
+        .semantics = .{ .label = "Body" },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{ text_field, textarea } }, geometry.RectF.init(0, 0, 320, 240), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    const field_widget = retained.nodes[1].widget;
+    const area_widget = retained.nodes[2].widget;
+
+    const ms = std.time.ns_per_ms;
+
+    // Triple-click in the single-line field selects the entire text.
+    const in_field = pointForTextOffset(field_widget, .{}, 2).?;
+    try dispatchTimedPointer(harness, app, .pointer_down, in_field, 1_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_field, 1_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_field, 1_100 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_field, 1_130 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_field, 1_200 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 11 }, try retainedTextSelection(harness, 1));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_field, 1_230 * ms);
+
+    // Triple-click on the textarea's SECOND line selects that line's
+    // text (the hard newline stays outside the selection).
+    const in_second_line = pointForTextOffset(area_widget, .{}, 13).?;
+    try dispatchTimedPointer(harness, app, .pointer_down, in_second_line, 3_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_second_line, 3_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_second_line, 3_100 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_second_line, 3_130 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_second_line, 3_200 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 11, .focus = 22 }, try retainedTextSelection(harness, 2));
+
+    // Triple-click drag extends line-wise: dragging up onto the first
+    // line selects both lines, anchored at the clicked line's end.
+    const in_first_line = pointForTextOffset(area_widget, .{}, 2).?;
+    try dispatchTimedPointer(harness, app, .pointer_drag, in_first_line, 3_250 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 22, .focus = 0 }, try retainedTextSelection(harness, 2));
+    try dispatchTimedPointer(harness, app, .pointer_up, in_first_line, 3_300 * ms);
+}
+
+test "word selection feeds the shared selection state: copy and shift-arrow just work" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-word-select-interplay", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 200),
+    });
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 240, 36),
+        .text = "hello world",
+        .semantics = .{ .label = "Message" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const widget = (try harness.runtime.canvasWidgetLayout(1, "canvas")).nodes[1].widget;
+
+    const ms = std.time.ns_per_ms;
+    const in_word = pointForTextOffset(widget, .{}, 2).?;
+    try dispatchTimedPointer(harness, app, .pointer_down, in_word, 1_000 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_word, 1_030 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_down, in_word, 1_100 * ms);
+    try dispatchTimedPointer(harness, app, .pointer_up, in_word, 1_130 * ms);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 5 }, try retainedTextSelection(harness, 1));
+
+    // Copy reads the word selection through the same clipboard path
+    // every selection uses.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "c",
+        .modifiers = .{ .primary = true, .command = true },
+    } });
+    var clipboard_buffer: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("hello", try harness.runtime.readClipboard(&clipboard_buffer));
+
+    // Shift-arrow extends from the word selection's focus — no special
+    // casing, the selection is ordinary anchor/focus state.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowright",
+        .modifiers = .{ .shift = true },
+    } });
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 6 }, try retainedTextSelection(harness, 1));
+}

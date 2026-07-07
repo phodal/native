@@ -23,6 +23,12 @@ const nextConfig = {
   // CI-style builds set NEXT_DIST_DIR so `pnpm check` never shares .next
   // with a running dev server (a shared dist dir corrupts the dev cache).
   distDir: process.env.NEXT_DIST_DIR || ".next",
+  // The gate builds into .next-gate INSIDE this dir; without an ignore,
+  // the dev watcher sees every one of those build files land and
+  // recompiles continuously whenever a gate runs.
+  watchOptions: {
+    ignored: ["**/.next-gate/**", "**/.next-check/**"],
+  },
   async redirects() {
     return [
       // The Philosophy page became the Introduction, the opening page of the docs.

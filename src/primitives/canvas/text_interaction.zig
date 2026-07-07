@@ -358,12 +358,76 @@ pub fn isUtf8ContinuationByte(byte: u8) bool {
     return (byte & 0xc0) == 0x80;
 }
 
-fn textOffsetStartsWord(text: []const u8, offset: usize) bool {
+/// The three character classes the double-click gesture selects runs
+/// of. `word` is deliberately the SAME class the caret's word-jump
+/// (`previousTextWordOffset`/`nextTextWordOffset`) walks — ASCII
+/// alphanumerics, `_`, and every non-ASCII codepoint — so a
+/// double-click and an alt+arrow agree on where a word ends. The
+/// non-word remainder splits in two: whitespace runs and punctuation
+/// clusters select separately, matching platform text fields (a
+/// double-click between words selects the gap, not the neighbors).
+const TextRunClass = enum { word, space, other };
+
+/// Class of the codepoint whose UTF-8 sequence contains `offset`
+/// (continuation bytes snap back to their lead). Null past the end of
+/// the text. Multibyte sequences classify by their lead byte alone —
+/// all their bytes have the high bit set, so a run never splits a
+/// codepoint.
+fn textRunClassAt(text: []const u8, offset: usize) ?TextRunClass {
     const cursor = snapTextOffset(text, offset);
-    if (cursor >= text.len) return false;
+    if (cursor >= text.len) return null;
     const lead = text[cursor];
-    if ((lead & 0x80) != 0) return true;
-    return std.ascii.isAlphanumeric(lead) or lead == '_';
+    if ((lead & 0x80) != 0) return .word;
+    if (std.ascii.isAlphanumeric(lead) or lead == '_') return .word;
+    if (std.ascii.isWhitespace(lead)) return .space;
+    return .other;
+}
+
+/// The double-click selection: the run of same-class codepoints under
+/// `offset` (word characters, whitespace, or punctuation — see
+/// `TextRunClass`). A click at or past the end of the text selects the
+/// trailing run, the platform text-field convention. Anchor is the run
+/// start and focus the run end, so a subsequent shift-arrow extends
+/// forward from the word.
+pub fn textWordSelectionAtOffset(text: []const u8, offset: usize) TextSelection {
+    if (text.len == 0) return TextSelection.collapsed(0);
+    var cursor = snapTextOffset(text, offset);
+    if (cursor >= text.len) cursor = previousTextOffset(text, text.len);
+    const class = textRunClassAt(text, cursor) orelse return TextSelection.collapsed(text.len);
+    var start = cursor;
+    while (start > 0) {
+        const previous = previousTextOffset(text, start);
+        const previous_class = textRunClassAt(text, previous) orelse break;
+        if (previous_class != class) break;
+        start = previous;
+    }
+    var end = nextTextOffset(text, cursor);
+    while (end < text.len) {
+        const next_class = textRunClassAt(text, end) orelse break;
+        if (next_class != class) break;
+        end = nextTextOffset(text, end);
+    }
+    return .{ .anchor = start, .focus = end };
+}
+
+/// The triple-click selection in a multi-line editor: the hard-newline
+/// delimited line containing `offset`. The trailing newline stays
+/// OUTSIDE the selection (pinned: deleting a triple-click selection
+/// empties the line but keeps the line break, and copy takes the line's
+/// text without a stray terminator). Scanning raw bytes for `\n` is
+/// UTF-8 safe — 0x0A never appears inside a multibyte sequence.
+pub fn textLineSelectionAtOffset(text: []const u8, offset: usize) TextSelection {
+    const cursor = @min(offset, text.len);
+    var start = cursor;
+    while (start > 0 and text[start - 1] != '\n') start -= 1;
+    var end = cursor;
+    while (end < text.len and text[end] != '\n') end += 1;
+    return .{ .anchor = start, .focus = end };
+}
+
+fn textOffsetStartsWord(text: []const u8, offset: usize) bool {
+    const class = textRunClassAt(text, offset) orelse return false;
+    return class == .word;
 }
 
 /// Fixed-capacity editor state for elm-style text fields: the model applies
@@ -461,6 +525,46 @@ fn clampedInsertEvent(state: TextEditState, event: TextInputEvent, capacity: usi
     const clamped_len = snapTextOffset(insertion, available);
     if (clamped_len == 0) return null;
     return .{ .insert_text = insertion[0..clamped_len] };
+}
+
+test "textWordSelectionAtOffset selects word, whitespace, and punctuation runs" {
+    const text = "hello  world, ok";
+    // Middle of a word selects the whole word.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 5 }, textWordSelectionAtOffset(text, 2));
+    // The word's first byte belongs to the word too.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 5 }, textWordSelectionAtOffset(text, 0));
+    // A click on whitespace selects the whitespace run, not a neighbor.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 5, .focus = 7 }, textWordSelectionAtOffset(text, 5));
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 5, .focus = 7 }, textWordSelectionAtOffset(text, 6));
+    // Punctuation selects the punctuation cluster.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 12, .focus = 13 }, textWordSelectionAtOffset(text, 12));
+    // At (or past) the end of the text the trailing run selects.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 14, .focus = 16 }, textWordSelectionAtOffset(text, text.len));
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 14, .focus = 16 }, textWordSelectionAtOffset(text, 99));
+    // Empty text collapses at 0.
+    try std.testing.expectEqualDeep(TextSelection.collapsed(0), textWordSelectionAtOffset("", 0));
+}
+
+test "textWordSelectionAtOffset never splits multibyte codepoints" {
+    // "héllo wörld" — é and ö are 2-byte codepoints; non-ASCII is word
+    // class, so accented words select whole.
+    const text = "h\xc3\xa9llo w\xc3\xb6rld";
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 6 }, textWordSelectionAtOffset(text, 0));
+    // Offset landing on the continuation byte snaps to its codepoint.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 6 }, textWordSelectionAtOffset(text, 2));
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 7, .focus = 13 }, textWordSelectionAtOffset(text, 9));
+    // Underscores join words, the caret word-jump's rule.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 9 }, textWordSelectionAtOffset("snake_car go", 3));
+}
+
+test "textLineSelectionAtOffset selects the newline-delimited line without its break" {
+    const text = "first line\nsecond\n\nfourth";
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 0, .focus = 10 }, textLineSelectionAtOffset(text, 4));
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 11, .focus = 17 }, textLineSelectionAtOffset(text, 13));
+    // A click on an empty line collapses on it (nothing to select).
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 18, .focus = 18 }, textLineSelectionAtOffset(text, 18));
+    // The last line has no trailing newline; it still selects fully.
+    try std.testing.expectEqualDeep(TextSelection{ .anchor = 19, .focus = 25 }, textLineSelectionAtOffset(text, 22));
 }
 
 test "TextBuffer mirrors edits, truncates at capacity, and clears" {

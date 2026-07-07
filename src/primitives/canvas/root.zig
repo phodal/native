@@ -555,6 +555,8 @@ pub const applyTextInputEvent = text_model.applyTextInputEvent;
 pub const snapTextOffset = text_model.snapTextOffset;
 pub const snapTextRange = text_model.snapTextRange;
 pub const snapTextSelection = text_model.snapTextSelection;
+pub const textWordSelectionAtOffset = text_model.textWordSelectionAtOffset;
+pub const textLineSelectionAtOffset = text_model.textLineSelectionAtOffset;
 
 pub const sampleCanvasRenderAnimations = render_model.sampleCanvasRenderAnimations;
 

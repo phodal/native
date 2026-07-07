@@ -80,7 +80,7 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
             return canvasWidgetEditableTextKind(widget.kind) and !widget.state.disabled;
         }
 
-        pub fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool) anyerror!?geometry.RectF {
+        pub fn applyCanvasWidgetTextPointer(self: *RuntimeView, target_id: canvas.ObjectId, point: geometry.PointF, extend: bool, click_count: u8) anyerror!?geometry.RectF {
             const index = self.canvasWidgetNodeIndexById(target_id) orelse return null;
             const widget = self.widget_layout_nodes[index].widget;
             if (widget.state.disabled) return null;
@@ -88,8 +88,7 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
             if (!canvasWidgetEditableTextKind(widget.kind)) return null;
 
             const current_selection = widget.text_selection orelse canvas.TextSelection.collapsed(widget.text.len);
-            const anchor: ?usize = if (extend) current_selection.anchor else null;
-            const next_selection = canvas.textSelectionForWidgetPoint(widget, point, anchor, self.widget_tokens) orelse return null;
+            const next_selection = canvasWidgetEditableTextPointerSelection(self, widget, point, extend, click_count, current_selection) orelse return null;
             // A widget with NO stored selection must store one even when
             // it matches the implied default: the emitters draw a caret
             // only for a present selection, so short-circuiting here left
@@ -102,6 +101,72 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
             return self.canvasWidgetDirtyBounds(index, widget.frame);
+        }
+
+        /// The selection a pointer event produces in an editable text
+        /// widget, by click count. Count 1 is the classic gesture:
+        /// press places the caret, drag extends per-character from the
+        /// press anchor. Counts 2 and 3 are the multi-click family —
+        /// the down selects a whole RUN (the word/whitespace/
+        /// punctuation cluster under the pointer, or the line/whole
+        /// text for a triple), remembers it as the gesture's anchor
+        /// run, and the drag unions the run under the pointer with
+        /// that anchor, so extension works in both directions and the
+        /// anchor word is never lost. Everything lands in the same
+        /// `text_selection` state the keyboard, clipboard, and
+        /// renderer already consume — no parallel selection model.
+        fn canvasWidgetEditableTextPointerSelection(
+            self: *RuntimeView,
+            widget: canvas.Widget,
+            point: geometry.PointF,
+            extend: bool,
+            click_count: u8,
+            current_selection: canvas.TextSelection,
+        ) ?canvas.TextSelection {
+            if (click_count >= 2) {
+                const offset = canvas.textOffsetForWidgetPoint(widget, point, self.widget_tokens) orelse return null;
+                const unit = canvasWidgetMultiClickUnitSelection(widget, offset, click_count);
+                if (!extend) {
+                    self.canvas_widget_multi_click_anchor = unit.range(widget.text.len);
+                    return unit;
+                }
+                return canvasWidgetMultiClickDragSelection(self.canvas_widget_multi_click_anchor, unit, widget.text.len);
+            }
+            const anchor: ?usize = if (extend) current_selection.anchor else null;
+            return canvas.textSelectionForWidgetPoint(widget, point, anchor, self.widget_tokens);
+        }
+
+        /// The run one multi-click selects at `offset`. Triple-click
+        /// pins the platform convention: single-line kinds (input,
+        /// text field, search field, combobox) select the entire text;
+        /// a textarea selects the clicked hard-newline line. Double
+        /// selects the word/whitespace/punctuation run — the same
+        /// boundaries the caret's word-jump uses.
+        fn canvasWidgetMultiClickUnitSelection(widget: canvas.Widget, offset: usize, click_count: u8) canvas.TextSelection {
+            if (click_count >= 3) {
+                if (canvasWidgetSingleLineTextKind(widget.kind)) return .{ .anchor = 0, .focus = widget.text.len };
+                return canvas.textLineSelectionAtOffset(widget.text, offset);
+            }
+            return canvas.textWordSelectionAtOffset(widget.text, offset);
+        }
+
+        /// Union the run under the drag pointer with the gesture's
+        /// anchor run, oriented so the selection FOCUS sits at the
+        /// dragged edge (a shift-arrow after the drag keeps extending
+        /// from where the pointer stopped): dragging before the anchor
+        /// run anchors at its end, dragging past it anchors at its
+        /// start, and a pointer back inside the anchor run restores
+        /// exactly the anchor run.
+        fn canvasWidgetMultiClickDragSelection(anchor: canvas.TextRange, unit: canvas.TextSelection, text_len: usize) canvas.TextSelection {
+            const anchor_range = anchor.normalized(text_len);
+            const unit_range = unit.range(text_len);
+            if (unit_range.start < anchor_range.start) {
+                return .{ .anchor = anchor_range.end, .focus = unit_range.start };
+            }
+            if (unit_range.end > anchor_range.end) {
+                return .{ .anchor = anchor_range.start, .focus = unit_range.end };
+            }
+            return .{ .anchor = anchor_range.start, .focus = anchor_range.end };
         }
 
         /// Click-drag selection inside one static `.text` widget. Press

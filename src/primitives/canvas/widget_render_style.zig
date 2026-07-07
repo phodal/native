@@ -126,6 +126,15 @@ pub fn controlRadius(widget: Widget, visual: ControlVisualTokens, fallback: f32)
     return Radius.all(nonNegative(widgetSizedRadiusValue(widget, visual.radius orelse fallback)));
 }
 
+/// Button corners hold ONE radius across the size ladder (unlike
+/// `controlRadius`, which steps with the size): a sm button with a
+/// tighter corner reads as a chip and a lg one with a rounder corner
+/// reads as a card — sizes change the box, never the corner language.
+pub fn buttonControlRadius(widget: Widget, visual: ControlVisualTokens, tokens: DesignTokens) Radius {
+    if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
+    return Radius.all(nonNegative(visual.radius orelse tokens.radius.md));
+}
+
 pub fn widgetSizedRadiusValue(widget: Widget, fallback: f32) f32 {
     return switch (widget.size) {
         .sm => @max(0, fallback - 2),
@@ -145,32 +154,83 @@ pub fn controlStrokeWidth(widget: Widget, visual: ControlVisualTokens, fallback:
 }
 
 pub fn buttonFill(widget: Widget, tokens: DesignTokens) Fill {
-    if (widget.state.disabled) return colorFill(tokens.colors.disabled);
-    const active = widget.state.pressed or widget.state.selected;
+    return colorFill(buttonFillColor(widget, tokens));
+}
+
+pub fn buttonFillColor(widget: Widget, tokens: DesignTokens) Color {
+    // Disabled keeps the variant's identity at half strength — the same
+    // wash the selection controls wear — instead of collapsing every
+    // variant to one gray block (which used to hand a disabled GHOST a
+    // filled box it never had). A quiet variant's transparent body stays
+    // transparent; the label and border carry the muted read.
+    if (widget.state.disabled) return disabledWash(buttonFillColor(restStateWidget(widget), tokens), true);
+    const pressed = widget.state.pressed;
+    const selected = widget.state.selected;
+    const hovered = widget.state.hovered;
     // On the quiet variants `selected` means two different things by
     // kind: a toggle's on-state earns the muted wash, while a nav
     // button's currency (the current page, the open trigger) shows
     // through its variant chrome alone — a permanently washed page
     // number would read as stuck hover.
     const toggle_kind = widget.kind == .toggle_button or widget.kind == .toggle;
-    const quiet_active = widget.state.pressed or (widget.state.selected and toggle_kind);
+    const selected_toggle = selected and toggle_kind;
     const visual = buttonControlVisualTokens(widget, tokens);
     return switch (widget.variant) {
-        .default => if (active)
-            colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent))
-        else if (widget.state.hovered)
-            colorFill(widgetBackgroundColor(widget, visual.hover_background orelse tokens.colors.surface_subtle))
+        .default => if (pressed or selected)
+            widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent)
+        else if (hovered)
+            widgetBackgroundColor(widget, visual.hover_background orelse tokens.colors.surface_subtle)
         else
-            colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface)),
-        // Filled variants hover by dropping their fill to 90% alpha (80%
-        // for secondary) — the wash lightens on light surfaces and
-        // deepens on dark ones without a second color per scheme.
-        .primary => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, hoverWash(tokens.colors.accent, active, widget.state.hovered, 0.9)))),
-        .secondary => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, active, widget.state.hovered, if (active) tokens.colors.surface_pressed else hoverWash(tokens.colors.surface_subtle, false, widget.state.hovered, 0.8)))),
-        .outline => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, quiet_active, widget.state.hovered, if (quiet_active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
-        .ghost => colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, quiet_active, widget.state.hovered, if (quiet_active or widget.state.hovered) tokens.colors.surface_subtle else transparentColor()))),
-        .destructive => colorFill(widgetAccentColor(widget, buttonStateBackground(visual, active, widget.state.hovered, hoverWash(tokens.colors.destructive, active, widget.state.hovered, 0.9)))),
+            widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface),
+        // Filled variants speak one wash channel: rest at full strength,
+        // hover at 90%, pressed one step past hover at 80% — the wash
+        // lightens on light surfaces and deepens on dark ones without a
+        // second color per scheme. A persistent `selected` keeps the
+        // rest fill: an on-state is identity, not feedback.
+        .primary => widgetAccentColor(widget, filledStateBackground(visual, tokens.colors.accent, pressed, selected, hovered)),
+        .destructive => widgetAccentColor(widget, filledStateBackground(visual, tokens.colors.destructive, pressed, selected, hovered)),
+        .secondary => widgetBackgroundColor(widget, buttonStateBackground(visual, pressed or selected, hovered, if (pressed or selected) tokens.colors.surface_pressed else hoverWash(tokens.colors.surface_subtle, false, hovered, 0.8))),
+        // The quiet variants step through the neutral washes: hover and
+        // a toggle's on-state sit on the muted wash, a press deepens one
+        // step further so the moment of commitment is visible under the
+        // pointer, and rest is bare.
+        .outline, .ghost => widgetBackgroundColor(widget, quietStateBackground(visual, tokens, pressed, selected_toggle, hovered)),
     };
+}
+
+/// The filled variants' state ladder over one base color, honoring any
+/// themed control tokens first: pressed prefers `active_background`,
+/// hover prefers `hover_background`, both fall back to the base at a
+/// reduced alpha (90% hover, 80% pressed). Selected-at-rest keeps the
+/// full-strength fill.
+fn filledStateBackground(visual: ControlVisualTokens, base: Color, pressed: bool, selected: bool, hovered: bool) Color {
+    if (pressed) return visual.active_background orelse visual.hover_background orelse visual.background orelse colorWithAlpha(base, 0.8 * base.a);
+    if (selected) return visual.active_background orelse visual.hover_background orelse visual.background orelse base;
+    if (hovered) return visual.hover_background orelse visual.background orelse colorWithAlpha(base, 0.9 * base.a);
+    return visual.background orelse base;
+}
+
+/// The quiet (outline/ghost) state ladder: transparent at rest, the
+/// muted wash on hover and on a toggle's on-state, the pressed wash —
+/// one neutral step deeper — while the pointer is down.
+fn quietStateBackground(visual: ControlVisualTokens, tokens: DesignTokens, pressed: bool, selected_toggle: bool, hovered: bool) Color {
+    if (pressed) return visual.active_background orelse visual.hover_background orelse tokens.colors.surface_pressed;
+    if (selected_toggle) return visual.active_background orelse visual.hover_background orelse tokens.colors.surface_subtle;
+    if (hovered) return visual.hover_background orelse tokens.colors.surface_subtle;
+    return visual.background orelse transparentColor();
+}
+
+/// The same widget with interaction FEEDBACK cleared: the appearance
+/// the disabled wash mutes. `selected` survives — it is identity, not
+/// feedback — so a disabled toggle that is ON still reads as on (the
+/// same rule the selection controls' disabled register follows).
+fn restStateWidget(widget: Widget) Widget {
+    var rest = widget;
+    rest.state.disabled = false;
+    rest.state.pressed = false;
+    rest.state.hovered = false;
+    rest.state.focused = false;
+    return rest;
 }
 
 /// The hover state of a filled control: the base color at reduced
@@ -191,7 +251,12 @@ pub fn disabledWash(color: Color, disabled: bool) Color {
 }
 
 pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
-    if (widget.state.disabled) return tokens.colors.text_muted;
+    // Disabled ink is the variant's own ink at half strength, matching
+    // the half-strength fill — the whole control fades as one piece
+    // (primary keeps knockout text on its washed fill; the quiet
+    // variants keep their body ink) instead of swapping to the shared
+    // muted gray, which read as a live-but-secondary label.
+    if (widget.state.disabled) return disabledWash(buttonTextColorForWidget(restStateWidget(widget), tokens), true);
     const active = widget.state.pressed or widget.state.selected;
     const visual = buttonControlVisualTokens(widget, tokens);
     return switch (widget.variant) {
@@ -206,24 +271,20 @@ pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
 }
 
 pub fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
-    if (widget.style.border) |border| return colorFill(border);
-    const visual = buttonControlVisualTokens(widget, tokens);
-    // A disabled button drops to the muted disabled fill, so the border
-    // mutes with it: the filled variants' accent edge would otherwise
-    // outline the gray fill in full-strength accent (the "idle button
-    // wearing a blue ring" read). Ghost keeps its no-border shape.
-    if (widget.state.disabled) {
-        return switch (widget.variant) {
-            .ghost => colorFill(widgetBorderColor(widget, visual.border orelse transparentColor())),
-            else => colorFill(widgetBorderColor(widget, visual.border orelse tokens.colors.border)),
+    // The disabled edge is the variant's own edge at half strength, so
+    // it fades in lockstep with the half-strength fill and ink — a
+    // full-strength edge around a washed body would read as a live
+    // control wearing a ring. Ghost keeps its no-border shape.
+    const border = widget.style.border orelse blk: {
+        const visual = buttonControlVisualTokens(widget, tokens);
+        break :blk switch (widget.variant) {
+            .primary => widgetAccentColor(widget, visual.border orelse tokens.colors.accent),
+            .destructive => widgetAccentColor(widget, visual.border orelse tokens.colors.destructive),
+            .ghost => widgetBorderColor(widget, visual.border orelse transparentColor()),
+            else => widgetBorderColor(widget, visual.border orelse tokens.colors.border),
         };
-    }
-    return switch (widget.variant) {
-        .primary => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.accent)),
-        .destructive => colorFill(widgetAccentColor(widget, visual.border orelse tokens.colors.destructive)),
-        .ghost => colorFill(widgetBorderColor(widget, visual.border orelse transparentColor())),
-        else => colorFill(widgetBorderColor(widget, visual.border orelse tokens.colors.border)),
     };
+    return colorFill(disabledWash(border, widget.state.disabled));
 }
 
 pub fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {

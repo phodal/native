@@ -489,7 +489,8 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
     const display_list = builder.displayList();
-    // Fill + border + transform-in + icon strokes + transform-out + label.
+    // Shadow + fill + border + transform-in + icon strokes +
+    // transform-out + label.
     const label = switch (display_list.findCommandById(widgetPartId(63, 4)).?.command) {
         .draw_text => |text| text,
         else => return error.TestUnexpectedResult,
@@ -506,20 +507,23 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
     const registered = canvas.icons.find("save").?;
     try std.testing.expectEqual(registered.elements.ptr, icon_stroke.elements.ptr);
 
-    // Disabled: BOTH the icon stroke and the label drop to the muted
-    // text color — the tint-tracking cost of the old overlay idiom.
+    // Disabled: BOTH the icon stroke and the label drop to the same
+    // half-strength wash of the button's own ink — the whole control
+    // fades as one piece, and the tint keeps tracking through the
+    // disabled state (the tint-tracking cost of the old overlay idiom).
     var disabled = button;
     disabled.state.disabled = true;
     var disabled_commands: [16]CanvasCommand = undefined;
     var disabled_builder = Builder.init(&disabled_commands);
     try emitWidgetTree(&disabled_builder, disabled, tokens);
     const disabled_list = disabled_builder.displayList();
+    const disabled_ink = Color.rgba(tokens.colors.text.r, tokens.colors.text.g, tokens.colors.text.b, 0.5);
     switch (disabled_list.findCommandById(widgetPartId(63, 4)).?.command) {
-        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.text_muted, text.color),
+        .draw_text => |text| try std.testing.expectEqualDeep(disabled_ink, text.color),
         else => return error.TestUnexpectedResult,
     }
     switch (disabled_list.findCommandById(widgetPartId(63, 6)).?.command) {
-        .stroke_path => |stroke| try expectFillColor(tokens.colors.text_muted, stroke.stroke.fill),
+        .stroke_path => |stroke| try expectFillColor(disabled_ink, stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
 
@@ -536,10 +540,12 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
 }
 
 test "disabled filled buttons mute their border with the fill" {
-    // A disabled primary/destructive button drops to the muted disabled
-    // fill; the border must drop with it. The accent border over the
-    // gray fill read as a focus ring on every idle disabled button (the
-    // "Comment button wearing a blue outline at rest" regression).
+    // A disabled primary/destructive button washes its fill to half
+    // strength; the border must wash with it, in the SAME hue — a
+    // full-strength accent edge over the washed fill read as a focus
+    // ring on every idle disabled button (the "Comment button wearing
+    // an outline at rest" regression), and the old neutral-gray border
+    // made the faded fill look like a live secondary control.
     const tokens = DesignTokens{};
     const variants = [_]struct { variant: canvas.WidgetVariant, enabled_border: Color }{
         .{ .variant = .primary, .enabled_border = tokens.colors.accent },
@@ -566,8 +572,9 @@ test "disabled filled buttons mute their border with the fill" {
         var disabled_commands: [8]CanvasCommand = undefined;
         var disabled_builder = Builder.init(&disabled_commands);
         try emitWidgetTree(&disabled_builder, disabled, tokens);
+        const washed_border = Color.rgba(case.enabled_border.r, case.enabled_border.g, case.enabled_border.b, 0.5 * case.enabled_border.a);
         switch (disabled_builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
-            .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
+            .stroke_rect => |stroke| try expectFillColor(washed_border, stroke.stroke.fill),
             else => return error.TestUnexpectedResult,
         }
 
@@ -1667,17 +1674,23 @@ test "built-in component widgets expose house semantics and render tokens" {
         .frame = geometry.RectF.init(0, 0, 120, 34),
         .text = "Primary",
     });
-    var commands: [4]CanvasCommand = undefined;
+    var commands: [5]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, .{});
 
+    // Shadow + fill + border + label: the filled button casts the
+    // whisper shadow beneath its chrome.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
     switch (display_list.commands[0]) {
+        .shadow => {},
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
         .fill_rounded_rect => |fill| try expectFillColor(ColorTokens.light().accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(ColorTokens.light().accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2265,26 +2278,28 @@ test "design token overrides flow into widget display lists" {
         .state = .{ .selected = true, .focused = true },
     };
 
-    var commands: [4]CanvasCommand = undefined;
+    var commands: [5]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
+    // Shadow + fill + border + focus ring + label: the selected default
+    // button rests on an opaque fill, so it casts the whisper shadow.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
-    switch (display_list.commands[0]) {
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    switch (display_list.commands[1]) {
         .fill_rounded_rect => |fill| {
             try expectFillColor(tokens.colors.accent, fill.fill);
             try std.testing.expectEqualDeep(Radius.all(5), fill.radius);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[3]) {
         .stroke_rect => |stroke| {
             try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
             try std.testing.expectEqual(@as(f32, 4), stroke.stroke.width);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[4]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2313,25 +2328,30 @@ test "themed design tokens flow into widget display lists" {
         .state = .{ .selected = true, .focused = true },
     };
 
-    var commands: [4]CanvasCommand = undefined;
+    var commands: [5]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
+    // Shadow + fill + border + focus ring + label.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
 
     switch (display_list.commands[0]) {
-        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
+        .shadow => {},
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[1]) {
-        .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
+        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[2]) {
-        .stroke_rect => |stroke| try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill),
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[3]) {
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[4]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }

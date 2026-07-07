@@ -1208,7 +1208,9 @@ test "runtime invalidates canvas widget layout and semantics changes" {
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", moved);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
-    try std.testing.expectEqualDeep(geometry.RectF.init(59.5, 79.5, 101, 33), harness.runtime.pendingDirtyRegions()[0]);
+    // Damage budgets the button's whisper-shadow halo at both the old
+    // and the new position.
+    try std.testing.expectEqualDeep(geometry.RectF.init(58, 79, 104, 36), harness.runtime.pendingDirtyRegions()[0]);
 
     const renamed_children = [_]canvas.Widget{.{
         .id = 2,

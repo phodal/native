@@ -1426,7 +1426,9 @@ fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
         widget_metrics.widgetButtonIconExtent(widget, tokens) + widget_metrics.widgetButtonIconGap(widget, tokens)
     else
         0;
-    const text_width = measuredTextWidth(tokens, widget.text, widgetButtonTextSize(widget, tokens));
+    // Measured with the button-label face (not the body face) so the
+    // medium advances the render draws are the widths layout reserves.
+    const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.buttonFontId(), widget.text, widgetButtonTextSize(widget, tokens));
     const width = @max(widgetSizedDensityValue(widget, tokens, 44), icon_width + text_width + widgetButtonInset(widget, tokens) * 2);
     return geometry.SizeF.init(width, height);
 }

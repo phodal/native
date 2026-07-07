@@ -646,7 +646,19 @@ test "gpu components display list renders stable reference snapshot" {
     // any label near its box edge re-rasterizes at the elision boundary
     // even when no glyph is dropped. Reviewed via regenerated docs
     // previews (only the separator hero pair changed) before blessing.
-    try std.testing.expectEqual(@as(u64, 15848940963031201602), referenceSurfaceSignature(pixels));
+    // Regenerated 2026-07-06 (button fidelity round): the button family
+    // takes the reference register head-on — heights land on the
+    // whole-pixel 32/36/40 ladder, side insets breathe at 12/16/24
+    // (one step tighter with an inline icon), corner radius and the
+    // 14px label hold ONE step across sizes, labels draw with the
+    // medium companion face (regular outlines at medium advances in
+    // this deterministic render), filled variants cast a 1px whisper
+    // shadow and press one wash step past hover, quiet variants press
+    // to the deeper neutral wash, and disabled buttons fade every part
+    // (fill/border/ink) to half strength instead of collapsing to a
+    // gray block. Reviewed via regenerated docs button/toggle previews
+    // in light and dark before blessing.
+    try std.testing.expectEqual(@as(u64, 53431914548693936), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

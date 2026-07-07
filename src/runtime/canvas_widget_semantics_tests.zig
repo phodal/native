@@ -103,7 +103,9 @@ test "runtime retains canvas widget layout for automation semantics" {
     try std.testing.expectEqual(@as(usize, 1), info.widget_semantics_count);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
-    try std.testing.expectEqualDeep(geometry.RectF.init(59.5, 81.5, 97, 33), harness.runtime.pendingDirtyRegions()[0]);
+    // The button's damage budgets its whisper-shadow halo (1px drop,
+    // 2px blur) beyond the stroke-inflated frame.
+    try std.testing.expectEqualDeep(geometry.RectF.init(58, 81, 100, 36), harness.runtime.pendingDirtyRegions()[0]);
 
     const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
     try std.testing.expectEqual(@as(usize, 2), retained.nodeCount());
@@ -244,7 +246,9 @@ test "runtime emits canvas display list from focused widget layout" {
         .stroke = .{ .focus = 3 },
     });
     try std.testing.expectEqual(@as(u64, 1), info.canvas_revision);
-    try std.testing.expectEqual(@as(usize, 6), info.canvas_command_count);
+    // Each button leads with its whisper shadow ahead of fill + border
+    // + label (pointer focus is not focus-visible, so no ring).
+    try std.testing.expectEqual(@as(usize, 8), info.canvas_command_count);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expect(harness.runtime.pendingDirtyRegions().len > 0);
 
@@ -630,7 +634,8 @@ test "runtime clears focused canvas widget when layout replacement hides it" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expect(harness.runtime.pendingDirtyRegions().len >= 2);
-    try std.testing.expectEqualDeep(geometry.RectF.init(59.5, 79.5, 81, 33), harness.runtime.pendingDirtyRegions()[0]);
+    // Damage budgets the button's whisper-shadow halo.
+    try std.testing.expectEqualDeep(geometry.RectF.init(58, 79, 84, 36), harness.runtime.pendingDirtyRegions()[0]);
     // Focus dirty bounds include the ring's 2px outside offset.
     try std.testing.expectEqualDeep(geometry.RectF.init(57, 77, 86, 38), harness.runtime.pendingDirtyRegions()[1]);
 

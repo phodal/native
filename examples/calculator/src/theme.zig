@@ -65,7 +65,8 @@ pub fn tokens(scheme: native_sdk.ColorScheme, high_contrast: bool, reduce_motion
             },
         };
     }
-    // Calculator keys carry 18px glyphs; the sm theme button derives 17.
+    // Calculator keys carry 18px glyphs at every key size (button
+    // labels hold one size across the control ladder).
     out.typography.button_size = 18;
     // The result line sits on the display typography rung, themed to
     // 36px: at the mono pitch (0.6 em) the 12-digit entry window needs

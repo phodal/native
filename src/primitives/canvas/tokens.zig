@@ -9,6 +9,7 @@ const Affine = canvas.Affine;
 const CanvasRenderAnimation = canvas.CanvasRenderAnimation;
 const default_sans_font_id = canvas.default_sans_font_id;
 const default_mono_font_id = canvas.default_mono_font_id;
+const default_sans_medium_font_id = canvas.default_sans_medium_font_id;
 const default_sans_font_family = FontFamily.geist;
 const default_mono_font_family = FontFamily.geist_mono;
 
@@ -292,6 +293,14 @@ pub const TypographyTokens = struct {
     label_size: f32 = 13,
     title_size: f32 = 20,
     button_size: f32 = 14,
+    /// The face button labels draw with. Null (the default) resolves to
+    /// the medium companion of the house sans — a button label carries
+    /// slightly more ink than body text so the control reads as a
+    /// command, not a caption. Themes that swap `font_id` for a custom
+    /// face keep their face on buttons automatically (a stranger face
+    /// has no known medium companion to reach for); set this explicitly
+    /// to pick a registered weight.
+    button_font_id: ?FontId = null,
     /// Section-heading rung above `title_size`: 28 continues the house
     /// step ratio (body 14 → title 20 ≈ x1.4; title 20 → heading 28 =
     /// x1.4) and doubles `body_size`, so a heading's 1.25 line height
@@ -307,6 +316,18 @@ pub const TypographyTokens = struct {
 
     pub fn bodyFamilyName(self: TypographyTokens) []const u8 {
         return self.font_family.cssName();
+    }
+
+    /// Resolve the button-label face: the explicit override when set;
+    /// otherwise the medium companion while the house sans is in play,
+    /// or the theme's own face when it swapped `font_id`. Hosts that
+    /// have not mapped the medium id fall back to the regular outlines
+    /// at the same estimator advances, so measured and painted widths
+    /// always agree.
+    pub fn buttonFontId(self: TypographyTokens) FontId {
+        if (self.button_font_id) |font_id| return font_id;
+        if (self.font_id == default_sans_font_id) return default_sans_medium_font_id;
+        return self.font_id;
     }
 
     pub fn monoFamilyName(self: TypographyTokens) []const u8 {
@@ -346,6 +367,12 @@ pub const ShadowToken = struct {
 
 pub const ShadowTokens = struct {
     none: ShadowToken = .{ .y = 0, .blur = 0, .spread = 0 },
+    /// The whisper step under filled buttons: a 1px drop with a 2px
+    /// blur, drawn at half the house shadow ink (~5% black). It never
+    /// reads as elevation — it settles a solid control onto the page
+    /// the way a hairline settles a card. Zeroing it flattens buttons
+    /// without touching surface shadows.
+    xs: ShadowToken = .{ .y = 1, .blur = 2, .spread = 0 },
     sm: ShadowToken = .{ .y = 2, .blur = 8, .spread = -4 },
     md: ShadowToken = .{ .y = 8, .blur = 24, .spread = -12 },
 };
@@ -765,6 +792,7 @@ pub const TypographyTokenOverrides = struct {
     label_size: ?f32 = null,
     title_size: ?f32 = null,
     button_size: ?f32 = null,
+    button_font_id: ?FontId = null,
     heading_size: ?f32 = null,
     display_size: ?f32 = null,
 
@@ -818,12 +846,14 @@ pub const ShadowTokenOverrides = struct {
 
 pub const ShadowTokensOverrides = struct {
     none: ShadowTokenOverrides = .{},
+    xs: ShadowTokenOverrides = .{},
     sm: ShadowTokenOverrides = .{},
     md: ShadowTokenOverrides = .{},
 
     pub fn apply(self: ShadowTokensOverrides, base: ShadowTokens) ShadowTokens {
         var next = base;
         next.none = self.none.apply(next.none);
+        next.xs = self.xs.apply(next.xs);
         next.sm = self.sm.apply(next.sm);
         next.md = self.md.apply(next.md);
         return next;

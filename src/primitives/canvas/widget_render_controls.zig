@@ -71,6 +71,7 @@ const widgetForegroundColor = widget_render_style.widgetForegroundColor;
 const widgetAccentForegroundColor = widget_render_style.widgetAccentForegroundColor;
 const widgetRadius = widget_render_style.widgetRadius;
 const controlRadius = widget_render_style.controlRadius;
+const buttonControlRadius = widget_render_style.buttonControlRadius;
 const widgetSizedRadiusValue = widget_render_style.widgetSizedRadiusValue;
 const controlStrokeWidth = widget_render_style.controlStrokeWidth;
 const buttonFill = widget_render_style.buttonFill;
@@ -132,9 +133,10 @@ fn pixelSnapTextPoint(tokens: DesignTokens, point: geometry.PointF) geometry.Poi
 
 pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = controlRadius(widget, visual, tokens.radius.md);
+    const radius = buttonControlRadius(widget, visual, tokens);
     const text_size = widgetButtonTextSize(widget, tokens);
     const text_inset = widgetButtonInset(widget, tokens);
+    try emitButtonShadow(builder, widget, tokens, radius);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -170,7 +172,7 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
             return;
         }
         const gap = widgetButtonIconGap(widget, tokens);
-        const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, widget.text, text_size);
+        const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.buttonFontId(), widget.text, text_size);
         const available = @max(0, widget.frame.width - text_inset * 2);
         const content_width = @min(available, icon_extent + gap + text_width);
         const start_x = widget.frame.x + text_inset + @max(0, (available - content_width) * 0.5);
@@ -199,7 +201,9 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         );
         try builder.drawText(.{
             .id = widgetPartId(widget.id, 4),
-            .font_id = tokens.typography.font_id,
+            // The button-label face: medium ink so the label reads as a
+            // command, not a caption (layout measured with the same id).
+            .font_id = tokens.typography.buttonFontId(),
             .size = text_size,
             .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(text_frame, text_size, 0)),
             .color = content_color,
@@ -210,7 +214,9 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
     }
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 4),
-        .font_id = tokens.typography.font_id,
+        // The button-label face: medium ink so the label reads as a
+        // command, not a caption (layout measured with the same id).
+        .font_id = tokens.typography.buttonFontId(),
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
         .color = content_color,
@@ -221,7 +227,8 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
 
 pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = controlRadius(widget, visual, tokens.radius.md);
+    const radius = buttonControlRadius(widget, visual, tokens);
+    try emitButtonShadow(builder, widget, tokens, radius);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -269,6 +276,43 @@ pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTok
             .text = widget.text,
         });
     }
+}
+
+/// The whisper shadow under filled buttons: the xs shadow step at half
+/// the house shadow ink, drawn beneath the fill so a solid control
+/// settles onto the page instead of floating on it. Only an opaque
+/// rest fill casts one — the quiet variants' transparent bodies have
+/// nothing to occlude the light. The toggle family stays flat (a
+/// pressed-state chip is page furniture, not a raised command), and a
+/// disabled button drops its shadow with the rest of its strength.
+fn emitButtonShadow(builder: *Builder, widget: Widget, tokens: DesignTokens, radius: Radius) Error!void {
+    if (widget.state.disabled) return;
+    if (widget.kind == .toggle_button or widget.kind == .toggle) return;
+    const rest_fill = widget_render_style.buttonFillColor(restStateButton(widget), tokens);
+    if (rest_fill.a < 1) return;
+    const shadow_token = tokens.shadow.xs;
+    if (shadow_token.y == 0 and shadow_token.blur == 0 and shadow_token.spread == 0) return;
+    try builder.shadow(.{
+        .id = widgetPartId(widget.id, 0),
+        .rect = widget.frame,
+        .radius = radius,
+        .offset = .{ .dx = 0, .dy = shadow_token.y },
+        .blur = shadow_token.blur,
+        .spread = shadow_token.spread,
+        .color = widget_render_style.colorWithAlpha(tokens.colors.shadow, 0.5 * tokens.colors.shadow.a),
+    });
+}
+
+/// The widget with interaction feedback cleared, so the shadow decision
+/// reads the rest fill (hover's translucent wash must not flicker the
+/// shadow off mid-interaction). `selected` survives as identity state,
+/// matching the disabled wash's rest resolution.
+fn restStateButton(widget: Widget) Widget {
+    var rest = widget;
+    rest.state.pressed = false;
+    rest.state.hovered = false;
+    rest.state.focused = false;
+    return rest;
 }
 
 /// Draw a parsed vector icon fitted (contain, centered) into `rect`: a

@@ -421,14 +421,17 @@ export function ComponentPreviewLive({
         <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] leading-4 text-gray-900">
           {name}
         </span>
-        {interactive && live ? (
+        {interactive ? (
           <div className="ml-auto flex items-center gap-1.5 pl-3">
             {/* Theme-pack toggle, a titlebar control: the quiet
                 text-tab register (active foreground, inactive muted,
                 thin divider) in the same pill chrome as the badge.
-                Live-only — the static webp underlay is only ever
-                rendered in the default pack, so offering the toggle on
-                a static tile would be a false affordance. */}
+                Always visible once hydrated — activation is
+                visibility-driven, and a choice made before the engine
+                instance exists is carried by packRef and applied before
+                the first paint, so the affordance is honest even on the
+                brief static frame. Hidden only pre-hydration (no-JS
+                readers never meet a dead control). */}
             <div
               role="tablist"
               aria-label="Preview theme pack"

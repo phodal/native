@@ -400,159 +400,182 @@ export function ComponentPreviewLive({
   const logicalWidth = width / 2;
 
   return (
+    // The tile is a small app window in the homepage hero's register:
+    // same corner radius, border, titlebar band, traffic-light dots,
+    // and resting shadow as HeroWindow, so every preview on the site
+    // reads as the same artifact — an app in a window. The chrome is
+    // presentation-only DOM around the engine output; the static webp
+    // underlay and the live canvas sit inside it identically, so going
+    // live never shifts a pixel.
     <div
-      ref={containerRef}
-      // Visibility normally activates the tile, but the container stays
-      // focusable while static so keyboard-only readers (and any tile
-      // the observer hasn't reached yet) can upgrade it directly; once
-      // live the canvas itself is the tab stop. Inert until hydration
-      // so no-JS readers never meet a dead button. Pointer-enter stays
-      // as a belt-and-suspenders activation path.
-      tabIndex={interactive && !live ? 0 : -1}
-      role={interactive ? "button" : undefined}
-      aria-label={interactive && !live ? `Load interactive preview: ${alt}` : undefined}
-      className="group/live relative mx-auto overflow-hidden rounded-md border border-gray-alpha-400 bg-background-100 outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
+      className="mx-auto overflow-hidden rounded-md border border-gray-alpha-400 bg-background-100 shadow-[0_16px_40px_-24px_rgba(0,0,0,0.25)] dark:border-gray-alpha-500 dark:shadow-none"
       style={{ maxWidth: `${logicalWidth}px` }}
       onPointerEnter={activate}
-      onFocus={activate}
     >
-      {(["light", "dark"] as const).map((scheme) => (
-        <Image
-          key={`${name}-${scheme}`}
-          src={`/components/${name}-${scheme}.webp`}
-          alt={`${alt} (${scheme} theme)`}
-          width={width}
-          height={height}
-          unoptimized
-          className={`h-auto w-full ${scheme === "light" ? "block dark:hidden" : "hidden dark:block"} ${
-            painted ? "invisible" : ""
-          }`}
-        />
-      ))}
-      {live ? (
-        <canvas
-          ref={canvasRef}
-          role="application"
-          aria-label={`${alt} — interactive WASM preview`}
-          aria-roledescription="Interactive component preview rendered by the Native SDK engine. Press Escape to leave."
-          tabIndex={0}
-          className={`absolute inset-0 h-full w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-blue-700 ${
-            painted ? "opacity-100" : "opacity-0"
-          }`}
-          onPointerDown={(event) => {
-            pointerDownRef.current = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            // preventScroll: a partially-visible tile must not scroll
-            // itself into view MID-CLICK — the page would shift between
-            // pointer-down and pointer-up and the press would land on
-            // the wrong widget (or a drag would jump).
-            event.currentTarget.focus({ preventScroll: true });
-            sendPointer(PointerKind.down, event);
-            event.preventDefault();
-          }}
-          onPointerMove={(event) => {
-            sendPointer(pointerDownRef.current ? PointerKind.drag : PointerKind.move, event);
-          }}
-          onPointerUp={(event) => {
-            pointerDownRef.current = false;
-            sendPointer(PointerKind.up, event);
-          }}
-          onPointerCancel={(event) => {
-            pointerDownRef.current = false;
-            sendPointer(PointerKind.cancel, event);
-          }}
-          onPointerLeave={(event) => {
-            if (!pointerDownRef.current) sendPointer(PointerKind.move, event);
-          }}
-          onFocus={() => {
-            const preview = previewRef.current;
-            if (!preview) return;
-            preview.setFocused(true);
-            wake();
-          }}
-          onBlur={() => {
-            const preview = previewRef.current;
-            if (!preview) return;
-            preview.setFocused(false);
-            wake();
-          }}
-          onKeyDown={(event) => {
-            const preview = previewRef.current;
-            if (!preview) return;
-            if (event.key === "Escape") {
-              event.currentTarget.blur();
-              return;
-            }
-            if (!engineConsumesKey(event)) return;
-            const printable = event.key.length === 1 && !event.metaKey && !event.ctrlKey;
-            preview.setNow(performance.now());
-            preview.key(0, engineKeyName(event.key), printable ? event.key : "", engineModifiers(event));
-            wake();
-            event.preventDefault();
-          }}
-          onKeyUp={(event) => {
-            const preview = previewRef.current;
-            if (!preview) return;
-            if (!engineConsumesKey(event)) return;
-            preview.setNow(performance.now());
-            preview.key(1, engineKeyName(event.key), "", engineModifiers(event));
-            wake();
-            event.preventDefault();
-          }}
-        />
-      ) : null}
-      {interactive && live ? (
-        <div className="absolute right-2 top-2 flex items-center gap-1.5">
-          {/* Theme-pack toggle: the quiet text-tab register (active
-              foreground, inactive muted, thin divider) in the same pill
-              chrome as the badge so it stays legible over any canvas
-              pixels. Live-only — the static webp underlay is only ever
-              rendered in the default pack, so offering the toggle on a
-              static tile would be a false affordance. */}
-          <div
-            role="tablist"
-            aria-label="Preview theme pack"
-            className="inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4"
-          >
-            {pack_tabs.map((tab, index) => (
-              <Fragment key={tab.pack}>
-                {index > 0 && <span aria-hidden className="h-3 w-px bg-gray-alpha-400" />}
-                <button
-                  ref={(el) => {
-                    packTabRefs.current[index] = el;
-                  }}
-                  role="tab"
-                  aria-selected={pack === tab.pack}
-                  // Roving tabindex: one tab stop for the whole toggle,
-                  // arrows move within it — so tabbing past the tile
-                  // still reaches the canvas in one step.
-                  tabIndex={pack === tab.pack ? 0 : -1}
-                  onClick={() => setPack(tab.pack)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
-                    event.preventDefault();
-                    const step = event.key === "ArrowRight" ? 1 : -1;
-                    const next = (index + step + pack_tabs.length) % pack_tabs.length;
-                    setPack(pack_tabs[next].pack);
-                    packTabRefs.current[next]?.focus();
-                  }}
-                  className={`transition-colors ${
-                    pack === tab.pack ? "text-gray-1000" : "text-gray-700 hover:text-gray-1000"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              </Fragment>
-            ))}
+      <div className="flex items-center border-b border-gray-alpha-400 bg-background-200 px-3.5 py-2 dark:bg-gray-alpha-100">
+        <span aria-hidden className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+          <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+          <span className="h-2.5 w-2.5 rounded-full bg-gray-500" />
+        </span>
+        <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] leading-4 text-gray-900">
+          {name}
+        </span>
+        {interactive && live ? (
+          <div className="ml-auto flex items-center gap-1.5 pl-3">
+            {/* Theme-pack toggle, a titlebar control: the quiet
+                text-tab register (active foreground, inactive muted,
+                thin divider) in the same pill chrome as the badge.
+                Live-only — the static webp underlay is only ever
+                rendered in the default pack, so offering the toggle on
+                a static tile would be a false affordance. */}
+            <div
+              role="tablist"
+              aria-label="Preview theme pack"
+              className="inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4"
+            >
+              {pack_tabs.map((tab, index) => (
+                <Fragment key={tab.pack}>
+                  {index > 0 && <span aria-hidden className="h-3 w-px bg-gray-alpha-400" />}
+                  <button
+                    ref={(el) => {
+                      packTabRefs.current[index] = el;
+                    }}
+                    role="tab"
+                    aria-selected={pack === tab.pack}
+                    // Roving tabindex: one tab stop for the whole
+                    // toggle, arrows move within it — so tabbing past
+                    // the titlebar still reaches the canvas in one
+                    // step.
+                    tabIndex={pack === tab.pack ? 0 : -1}
+                    onClick={() => setPack(tab.pack)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+                      event.preventDefault();
+                      const step = event.key === "ArrowRight" ? 1 : -1;
+                      const next = (index + step + pack_tabs.length) % pack_tabs.length;
+                      setPack(pack_tabs[next].pack);
+                      packTabRefs.current[next]?.focus();
+                    }}
+                    className={`transition-colors ${
+                      pack === tab.pack ? "text-gray-1000" : "text-gray-700 hover:text-gray-1000"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                </Fragment>
+              ))}
+            </div>
+            <span
+              aria-hidden
+              className="pointer-events-none hidden items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900 sm:inline-flex"
+            >
+              WASM Preview
+            </span>
           </div>
-          <span
-            aria-hidden
-            className="pointer-events-none inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900"
-          >
-            WASM Preview
-          </span>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
+      <div
+        ref={containerRef}
+        // Visibility normally activates the tile, but the content area
+        // stays focusable while static so keyboard-only readers (and
+        // any tile the observer hasn't reached yet) can upgrade it
+        // directly; once live the canvas itself is the tab stop. Inert
+        // until hydration so no-JS readers never meet a dead button.
+        // Pointer-enter on the window shell stays as a
+        // belt-and-suspenders activation path.
+        tabIndex={interactive && !live ? 0 : -1}
+        role={interactive ? "button" : undefined}
+        aria-label={interactive && !live ? `Load interactive preview: ${alt}` : undefined}
+        className="group/live relative outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-700"
+        onFocus={activate}
+      >
+        {(["light", "dark"] as const).map((scheme) => (
+          <Image
+            key={`${name}-${scheme}`}
+            src={`/components/${name}-${scheme}.webp`}
+            alt={`${alt} (${scheme} theme)`}
+            width={width}
+            height={height}
+            unoptimized
+            className={`h-auto w-full ${scheme === "light" ? "block dark:hidden" : "hidden dark:block"} ${
+              painted ? "invisible" : ""
+            }`}
+          />
+        ))}
+        {live ? (
+          <canvas
+            ref={canvasRef}
+            role="application"
+            aria-label={`${alt} — interactive WASM preview`}
+            aria-roledescription="Interactive component preview rendered by the Native SDK engine. Press Escape to leave."
+            tabIndex={0}
+            className={`absolute inset-0 h-full w-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-700 ${
+              painted ? "opacity-100" : "opacity-0"
+            }`}
+            onPointerDown={(event) => {
+              pointerDownRef.current = true;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              // preventScroll: a partially-visible tile must not scroll
+              // itself into view MID-CLICK — the page would shift between
+              // pointer-down and pointer-up and the press would land on
+              // the wrong widget (or a drag would jump).
+              event.currentTarget.focus({ preventScroll: true });
+              sendPointer(PointerKind.down, event);
+              event.preventDefault();
+            }}
+            onPointerMove={(event) => {
+              sendPointer(pointerDownRef.current ? PointerKind.drag : PointerKind.move, event);
+            }}
+            onPointerUp={(event) => {
+              pointerDownRef.current = false;
+              sendPointer(PointerKind.up, event);
+            }}
+            onPointerCancel={(event) => {
+              pointerDownRef.current = false;
+              sendPointer(PointerKind.cancel, event);
+            }}
+            onPointerLeave={(event) => {
+              if (!pointerDownRef.current) sendPointer(PointerKind.move, event);
+            }}
+            onFocus={() => {
+              const preview = previewRef.current;
+              if (!preview) return;
+              preview.setFocused(true);
+              wake();
+            }}
+            onBlur={() => {
+              const preview = previewRef.current;
+              if (!preview) return;
+              preview.setFocused(false);
+              wake();
+            }}
+            onKeyDown={(event) => {
+              const preview = previewRef.current;
+              if (!preview) return;
+              if (event.key === "Escape") {
+                event.currentTarget.blur();
+                return;
+              }
+              if (!engineConsumesKey(event)) return;
+              const printable = event.key.length === 1 && !event.metaKey && !event.ctrlKey;
+              preview.setNow(performance.now());
+              preview.key(0, engineKeyName(event.key), printable ? event.key : "", engineModifiers(event));
+              wake();
+              event.preventDefault();
+            }}
+            onKeyUp={(event) => {
+              const preview = previewRef.current;
+              if (!preview) return;
+              if (!engineConsumesKey(event)) return;
+              preview.setNow(performance.now());
+              preview.key(1, engineKeyName(event.key), "", engineModifiers(event));
+              wake();
+              event.preventDefault();
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

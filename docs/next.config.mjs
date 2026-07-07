@@ -1,12 +1,19 @@
 import createMDX from "@next/mdx";
+import { createRequire } from "node:module";
+
+// Resolve the plugin to an absolute path (still a string, so the config
+// stays serializable for Turbopack). A bare "remark-gfm" is require()d
+// from the MDX loader's own package context, which under pnpm's strict
+// module isolation cannot see this app's dependencies — production
+// builds resolved it, the Turbopack dev server did not.
+const require = createRequire(import.meta.url);
 
 const withMDX = createMDX({
   options: {
-    // Plugin named as a string so the config stays serializable for
-    // Turbopack. GFM is what gives .mdx pages pipe tables (plus autolinks
-    // and strikethrough) — without it, table markdown renders as a plain
+    // GFM is what gives .mdx pages pipe tables (plus autolinks and
+    // strikethrough) — without it, table markdown renders as a plain
     // paragraph of pipes.
-    remarkPlugins: [["remark-gfm"]],
+    remarkPlugins: [[require.resolve("remark-gfm")]],
   },
 });
 

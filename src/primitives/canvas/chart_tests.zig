@@ -274,6 +274,251 @@ test "gridlines and baseline draw as token hairlines" {
     try testing.expectEqual(@as(usize, 4), hairlines);
 }
 
+// ------------------------------------------------------- value formatting
+
+test "chart value formatting is deterministic, trimmed, and honest" {
+    var buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+    // Step-driven decimals: whole steps label whole numbers, fractional
+    // steps add exactly the places that keep neighbors distinct.
+    try testing.expectEqual(@as(u8, 0), chart_model.chartTickDecimals(25));
+    try testing.expectEqual(@as(u8, 1), chart_model.chartTickDecimals(0.25));
+    try testing.expectEqual(@as(u8, 2), chart_model.chartTickDecimals(0.025));
+    try testing.expectEqual(@as(u8, 3), chart_model.chartTickDecimals(0.0025));
+    try testing.expectEqual(@as(u8, 2), chart_model.chartTickDecimals(0));
+
+    try testing.expectEqualStrings("3", chart_model.formatChartValue(&buffer, 3.0, 2));
+    try testing.expectEqualStrings("0.5", chart_model.formatChartValue(&buffer, 0.5, 2));
+    try testing.expectEqualStrings("0.42", chart_model.formatChartValue(&buffer, 0.42, 2));
+    try testing.expectEqualStrings("-1.5", chart_model.formatChartValue(&buffer, -1.5, 1));
+    try testing.expectEqualStrings("237", chart_model.formatChartValue(&buffer, 237, 0));
+    // A negative rounding remainder never labels as "-0".
+    try testing.expectEqualStrings("0", chart_model.formatChartValue(&buffer, -0.001, 1));
+    // Non-finite values name themselves instead of posing as data.
+    try testing.expectEqualStrings("nan", chart_model.formatChartValue(&buffer, std.math.nan(f32), 2));
+    try testing.expectEqualStrings("inf", chart_model.formatChartValue(&buffer, std.math.inf(f32), 2));
+    // f32's full range fits the label buffer (the formatter must never
+    // fail mid-frame).
+    _ = chart_model.formatChartValue(&buffer, -std.math.floatMax(f32), 3);
+}
+
+test "the y tick lattice snaps to nice steps so labels are exact" {
+    // 0..0.74 with a 4-interval hint: nice step 0.2, ticks 0/0.2/0.4/0.6
+    // — every label names its line exactly (no rounding lie).
+    const lattice = chart_model.chartTickLattice(.{ .min = 0, .max = 0.74 }, 4);
+    try testing.expectEqual(@as(f32, 0.2), lattice.step);
+    try testing.expectEqual(@as(usize, 4), lattice.count);
+    try testing.expectEqual(@as(u8, 1), lattice.decimals);
+    try testing.expectEqual(@as(f32, 0), lattice.value(0));
+    try testing.expectEqual(@as(f32, 0.6000000238418579), lattice.value(3));
+
+    // 0..1 with a 2-interval hint: 0, 0.5, 1 — the tick can land on the
+    // domain max.
+    const unit = chart_model.chartTickLattice(.{ .min = 0, .max = 1 }, 2);
+    try testing.expectEqual(@as(f32, 0.5), unit.step);
+    try testing.expectEqual(@as(usize, 3), unit.count);
+
+    // A domain that starts off-lattice: 0.13..0.94 hints 3 -> step 0.5?
+    // raw 0.27 -> nice 0.5; first tick at 0.5 only. Labels float where
+    // their values are, never pinned to the edges.
+    const offset = chart_model.chartTickLattice(.{ .min = 0.13, .max = 0.94 }, 3);
+    try testing.expectEqual(@as(f32, 0.5), offset.step);
+    try testing.expectEqual(@as(usize, 1), offset.count);
+
+    // Large spans label whole numbers.
+    const large = chart_model.chartTickLattice(.{ .min = 0, .max = 500 }, 4);
+    try testing.expectEqual(@as(f32, 200), large.step);
+    try testing.expectEqual(@as(u8, 0), large.decimals);
+
+    // The tick count is bounded: a huge hint cannot turn the axis into
+    // a texture.
+    const dense = chart_model.chartTickLattice(.{ .min = 0, .max = 1 }, 200);
+    try testing.expect(dense.count <= chart_model.max_chart_axis_ticks + 1);
+}
+
+// ------------------------------------------------------------------ hover
+
+test "hover snapping inverts the x mapping for lattice and slot charts" {
+    const line_values = [_]f32{ 0, 1, 2, 3 };
+    const line_data = canvas.ChartData{ .series = &.{.{ .kind = .line, .values = &line_values }} };
+    // Lattice: 4 points at fractions 0, 1/3, 2/3, 1 — the midpoint of a
+    // segment rounds to its nearer end.
+    try testing.expectEqual(@as(?usize, 0), chart_model.chartHoverIndex(line_data, 0));
+    try testing.expectEqual(@as(?usize, 1), chart_model.chartHoverIndex(line_data, 0.34));
+    try testing.expectEqual(@as(?usize, 3), chart_model.chartHoverIndex(line_data, 1));
+    try testing.expectEqual(@as(?usize, 3), chart_model.chartHoverIndex(line_data, 2)); // clamped
+    // Bars-only: equal-width slots, hovered index = slot under pointer.
+    const bar_data = canvas.ChartData{ .series = &.{.{ .kind = .bar, .values = &line_values }} };
+    try testing.expectEqual(@as(?usize, 0), chart_model.chartHoverIndex(bar_data, 0.2));
+    try testing.expectEqual(@as(?usize, 1), chart_model.chartHoverIndex(bar_data, 0.3));
+    try testing.expectEqual(@as(?usize, 3), chart_model.chartHoverIndex(bar_data, 0.99));
+    // Nothing to snap to.
+    try testing.expectEqual(@as(?usize, null), chart_model.chartHoverIndex(.{}, 0.5));
+    try testing.expectEqual(@as(?usize, null), chart_model.chartHoverIndex(line_data, std.math.nan(f32)));
+}
+
+// ------------------------------------------------------------- axis labels
+
+test "axis labels draw muted in reserved gutters and thin to fit" {
+    const values = [_]f32{ 0.2, 0.8, 0.4, 0.6, 0.3, 0.7 };
+    const labels = [_][]const u8{ "jan", "feb", "mar", "apr", "may", "jun" };
+    var widget = Widget{
+        .id = 93,
+        .kind = WidgetKind.chart,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+        .chart = .{
+            .series = &.{.{ .kind = .line, .values = &values }},
+            .y_min = 0,
+            .y_max = 1,
+            .grid_lines = 1,
+            .x_labels = &labels,
+            .y_labels = true,
+        },
+    };
+    const tokens = DesignTokens{};
+    var commands: [32]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, widget, tokens);
+    const display_list = builder.displayList();
+    // Every label draws muted. The y lattice (0, 0.5, 1: min, gridline,
+    // max) and all six month labels appear — 240px fits every "jan"-
+    // size label — and y ticks right-align into the left gutter.
+    const plot = canvas.chartWidgetPlotRect(widget, tokens);
+    var x_label_count: usize = 0;
+    var y_label_count: usize = 0;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                try testing.expect(std.meta.eql(tokens.colors.text_muted, text.color));
+                var is_month = false;
+                for (labels) |label| {
+                    if (std.mem.eql(u8, text.text, label)) is_month = true;
+                }
+                if (is_month) {
+                    x_label_count += 1;
+                } else {
+                    y_label_count += 1;
+                    try testing.expect(text.origin.x < plot.x);
+                    const on_lattice = std.mem.eql(u8, text.text, "0") or
+                        std.mem.eql(u8, text.text, "0.5") or
+                        std.mem.eql(u8, text.text, "1");
+                    try testing.expect(on_lattice);
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 3), y_label_count);
+    try testing.expectEqual(@as(usize, 6), x_label_count);
+
+    // A narrow plot thins deterministically: every Nth label, never a
+    // collision, at least one drawn.
+    widget.frame = geometry.RectF.init(0, 0, 80, 120);
+    var narrow_commands: [32]CanvasCommand = undefined;
+    var narrow_builder = Builder.init(&narrow_commands);
+    try emitWidgetTree(&narrow_builder, widget, tokens);
+    var narrow_x_labels: usize = 0;
+    const narrow_plot = canvas.chartWidgetPlotRect(widget, tokens);
+    for (narrow_builder.displayList().commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                for (labels) |label| {
+                    if (std.mem.eql(u8, text.text, label)) narrow_x_labels += 1;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(narrow_x_labels >= 1);
+    try testing.expect(narrow_x_labels < 6);
+
+    // Labels reserve gutters: the plot is strictly inside the frame.
+    try testing.expect(narrow_plot.x > widget.frame.x);
+    try testing.expect(narrow_plot.maxY() < widget.frame.maxY());
+}
+
+test "hover-detail chrome renders only under interaction and is deterministic" {
+    const values = [_]f32{ 0.2, 0.8, 0.4, 0.6 };
+    const labels = [_][]const u8{ "q1", "q2", "q3", "q4" };
+    const chart_widget = Widget{
+        .id = 94,
+        .kind = WidgetKind.chart,
+        // Explicit author size: layout honors min/max both set.
+        .layout = .{
+            .min_size = geometry.SizeF.init(300, 140),
+            .max_size = geometry.SizeF.init(300, 140),
+        },
+        .chart = .{
+            .series = &.{.{ .kind = .line, .values = &values, .label = "cpu" }},
+            .y_min = 0,
+            .y_max = 1,
+            .x_labels = &labels,
+            .hover_details = true,
+        },
+    };
+    const root = Widget{
+        .id = 90,
+        .kind = WidgetKind.stack,
+        .frame = geometry.RectF.init(0, 0, 480, 200),
+        .children = &.{chart_widget},
+    };
+    const tokens = DesignTokens{};
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTreeWithTokens(root, root.frame, tokens, &nodes);
+
+    // Static state: no hover chrome (the card's shadow is the tell — a
+    // cold chart emits none), with or without hover_details.
+    var cold_commands: [64]CanvasCommand = undefined;
+    var cold_builder = Builder.init(&cold_commands);
+    try layout.emitDisplayListWithState(&cold_builder, tokens, .{});
+    for (cold_builder.displayList().commands) |command| {
+        try testing.expect(std.meta.activeTag(command) != .shadow);
+    }
+    const cold_count = cold_builder.displayList().commandCount();
+
+    // Hovered with a live pointer: cursor hairline, point dot, card
+    // chrome, title, and the series row appear. Mid-plot on a 4-point
+    // lattice snaps to index 2, so the title repeats sample 2's axis
+    // label ("q3" draws once as an axis label, once as the card title).
+    const hover_point = geometry.PointF.init(150, 70);
+    const state = canvas.WidgetRenderState{ .hovered_id = 94, .hover_point = hover_point };
+    var hot_commands: [64]CanvasCommand = undefined;
+    var hot_builder = Builder.init(&hot_commands);
+    try layout.emitDisplayListWithState(&hot_builder, tokens, state);
+    try testing.expect(hot_builder.displayList().commandCount() > cold_count);
+    var title_count: usize = 0;
+    var saw_row_name = false;
+    var saw_value = false;
+    var saw_shadow = false;
+    for (hot_builder.displayList().commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                if (std.mem.eql(u8, text.text, "q3")) title_count += 1;
+                if (std.mem.eql(u8, text.text, "cpu")) saw_row_name = true;
+                if (std.mem.eql(u8, text.text, "0.4")) saw_value = true;
+            },
+            .shadow => saw_shadow = true,
+            else => {},
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), title_count);
+    try testing.expect(saw_row_name);
+    try testing.expect(saw_value);
+    try testing.expect(saw_shadow);
+
+    // Deterministic: the same state emits the same commands.
+    var again_commands: [64]CanvasCommand = undefined;
+    var again_builder = Builder.init(&again_commands);
+    try layout.emitDisplayListWithState(&again_builder, tokens, state);
+    try testing.expectEqual(hot_builder.displayList().commandCount(), again_builder.displayList().commandCount());
+
+    // The runtime's repaint gate: both a point inside sample 2's snap
+    // range and the emitted geometry agree on the index.
+    var hovered = chart_widget;
+    hovered.frame = layout.nodes[1].frame;
+    try testing.expectEqual(@as(?usize, 2), canvas.chartWidgetHoverIndex(hovered, tokens, hover_point));
+    try testing.expectEqual(@as(?usize, null), canvas.chartWidgetHoverIndex(root, tokens, hover_point));
+}
+
 // ------------------------------------------------------------ path budget
 
 test "a downsampled 10k-point multi-series chart renders within the frame path budget" {
@@ -313,10 +558,12 @@ test "a downsampled 10k-point multi-series chart renders within the frame path b
 
 // ----------------------------------------------------------------- golden
 
-const golden_width = 240;
+const golden_width = 340;
 const golden_height = 80;
 
-/// Three tiles — line+fill, bars, band — in one deterministic frame.
+/// Four tiles — line+fill, bars, band, and a labeled bar chart (x
+/// category labels + y ticks in the muted register) — in one
+/// deterministic frame.
 fn goldenChartRoot() Widget {
     const line_values = comptime blk: {
         var values: [60]f32 = undefined;
@@ -381,6 +628,19 @@ fn goldenChartRoot() Widget {
                 .series = &.{.{ .kind = .band, .values = &band_high, .low = &band_low, .color = .info }},
                 .y_min = 0,
                 .y_max = 1,
+            },
+        },
+        .{
+            .id = 104,
+            .kind = WidgetKind.chart,
+            .frame = geometry.RectF.init(244, 4, 92, 72),
+            .chart = .{
+                .series = &.{.{ .kind = .bar, .values = &.{ 0.35, 0.8, 0.55, 0.95 }, .color = .accent }},
+                .y_min = 0,
+                .y_max = 1,
+                .grid_lines = 1,
+                .x_labels = &.{ "q1", "q2", "q3", "q4" },
+                .y_labels = true,
             },
         },
     };
@@ -459,8 +719,12 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
 // accent series now inks near-black in light and porcelain in dark (the
 // register's mono primary); success bars, info band, and all geometry
 // are byte-identical.
-const golden_light_signature: u64 = 18163542738859226189;
-const golden_dark_signature: u64 = 13341310235756667434;
+// Regenerated for axis tick labels (2026-07-06): a fourth tile pins the
+// labeled register — muted y ticks (1, 0.5, 0) on the gridline lattice
+// and deterministically thinned x category labels (q1, q3) under the
+// bars; the first three tiles' geometry is unchanged.
+const golden_light_signature: u64 = 15930251867392191551;
+const golden_dark_signature: u64 = 12695102772465040625;
 
 fn goldenDumpRequested() bool {
     if (comptime !@import("builtin").link_libc) return false;

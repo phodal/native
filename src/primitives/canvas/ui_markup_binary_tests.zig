@@ -412,7 +412,7 @@ test "NSUI round-trips chart composites through registry codes" {
     const arena = arena_state.allocator();
     const source =
         \\<column>
-        \\  <chart y-min="0" y-max="1" grid-lines="4" baseline="true" stroke-width="2" label="CPU history">
+        \\  <chart y-min="0" y-max="1" grid-lines="4" baseline="true" x-labels="{months}" y-labels="true" hover-details="true" stroke-width="2" label="CPU history">
         \\    <series kind="area" values="{cpu_history}" color="accent" label="cpu" />
         \\    <series kind="bar" values="{latency}" />
         \\  </chart>
@@ -428,10 +428,15 @@ test "NSUI round-trips chart composites through registry codes" {
 
     // The chart element and its series attrs ride registry codes, so the
     // decoded names are the registry's spellings, not the source bytes.
+    // The axis/hover attrs (fresh codes 73..75) ride along: x-labels
+    // keeps its binding form, the flags keep their values.
     const chart_node = decoded.root.?.children[0];
     try testing.expectEqualStrings("chart", chart_node.name);
     try testing.expectEqualStrings("series", chart_node.children[0].name);
     try testing.expect(chart_node.children[0].attrEntry("values").?.typed.?.* == .binding);
+    try testing.expect(chart_node.attrEntry("x-labels").?.typed.?.* == .binding);
+    try testing.expectEqualStrings("true", chart_node.attr("y-labels").?);
+    try testing.expectEqualStrings("true", chart_node.attr("hover-details").?);
 
     // Determinism, and hash coverage over the chart vocabulary: a series
     // attribute edit is a structural change.

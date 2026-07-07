@@ -68,6 +68,7 @@ const Model = struct {
     cards: [2]Card = .{ .{ .id = 1 }, .{ .id = 2 } },
     hidden: u8 = 0,
     history: [4]f32 = .{ 0.1, 0.4, 0.2, 0.8 },
+    stages: [4][]const u8 = .{ "one", "two", "three", "four" },
     draft_buffer: canvas.TextBuffer(16) = .{},
 
     pub fn total(model: *const Model) i64 {
@@ -476,6 +477,28 @@ const fixtures = [_]Fixture{
         \\</column>
         ,
         .expect = "expected a number",
+    },
+    .{
+        .name = "a chart with string x-labels, y-labels, and hover-details accepts",
+        .source =
+        \\<column>
+        \\  <chart x-labels="{stages}" y-labels="true" hover-details="{active}">
+        \\    <series values="{history}" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = null,
+    },
+    .{
+        .name = "a chart x-labels binding to a non-string iterable rejects",
+        .source =
+        \\<column>
+        \\  <chart x-labels="{history}">
+        \\    <series values="{history}" />
+        \\  </chart>
+        \\</column>
+        ,
+        .expect = markup.chart_x_labels_message,
     },
 };
 

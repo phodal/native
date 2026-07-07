@@ -67,6 +67,7 @@ const WidgetRenderState = widget_model.WidgetRenderState;
 const WidgetSize = widget_model.WidgetSize;
 const Widget = widget_model.Widget;
 const estimateTextWidth = text_model.estimateTextWidth;
+const measureTextWidthForFont = text_model.measureTextWidthForFont;
 const affinesEqual = equality_model.affinesEqual;
 pub const textSelectionFillColor = widget_render_style.textSelectionFillColor;
 pub const textSelectionTextColor = widget_render_style.textSelectionTextColor;
@@ -124,8 +125,26 @@ const max_widget_depth: usize = 32;
 threadlocal var frame_path_elements: [chart_model.max_chart_path_elements_per_frame]drawing_model.PathElement = undefined;
 threadlocal var frame_path_len: usize = 0;
 
+/// Frame-lifetime scratch for formatted chart label text (y tick values
+/// and hover-detail rows): `drawText` commands slice into it under the
+/// same single-threaded copy-before-return contract as the path
+/// elements above. Overflow fails loudly by budget name.
+threadlocal var frame_label_bytes: [chart_model.max_chart_label_bytes_per_frame]u8 = undefined;
+threadlocal var frame_label_len: usize = 0;
+
 fn resetFramePathScratch() void {
     frame_path_len = 0;
+    frame_label_len = 0;
+}
+
+/// Persist a formatted label into the frame scratch so the emitted
+/// command outlives the local formatting buffer.
+fn allocFrameLabelBytes(text: []const u8) Error![]const u8 {
+    if (frame_label_len + text.len > frame_label_bytes.len) return error.ChartLabelBytesFull;
+    const start = frame_label_len;
+    frame_label_len += text.len;
+    @memcpy(frame_label_bytes[start..frame_label_len], text);
+    return frame_label_bytes[start..frame_label_len];
 }
 
 /// Frame-lifetime scratch (same single-threaded emit contract as the
@@ -157,6 +176,7 @@ pub fn emitWidgetLayoutWithState(builder: *Builder, layout: anytype, tokens: Des
     scrim_viewport = widgetLayoutRootBounds(layout);
     try emitWidgetLayoutChildren(builder, layout, null, tokens, state);
     try emitWidgetLayoutAnchored(builder, layout, tokens, state);
+    try emitWidgetLayoutChartHoverDetails(builder, layout, tokens, state);
 }
 
 /// The union of the layout's root-node frames: the whole laid-out
@@ -1474,21 +1494,40 @@ pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometr
 // ------------------------------------------------------------------ chart
 
 /// Draw a `.chart` widget: token-hairline gridlines and baseline first,
-/// then each series oldest-to-newest through the vector path pipeline —
-/// lines as one `strokePath` (plus an optional translucent baseline-fill
+/// then opt-in axis tick labels in the muted text register, then each
+/// series oldest-to-newest through the vector path pipeline — lines as
+/// one `strokePath` (plus an optional translucent baseline-fill
 /// `fillPath`), bands as one closed envelope `fillPath`, bars as one
 /// pixel-snapped `fillRoundedRect` per value. Series colors resolve from
 /// design tokens at emit time, so charts retheme with the palette.
 /// Deterministic by construction: geometry is a pure function of the
-/// series, the domain, and the frame.
+/// series, the domain, and the frame; axis labels reserve gutters
+/// (`chartWidgetPlotRect`) only when opted in, so unlabeled charts
+/// render byte-identically to before.
 fn emitChartWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const data = widget.chart;
-    const plot = widget.frame.inset(widget.layout.padding).normalized();
+    const plot = chartWidgetPlotRect(widget, tokens);
     if (plot.isEmpty() or plot.width <= 0 or plot.height <= 0) return;
     const domain = chart_model.chartDomain(data);
 
     const hairline = @max(1, tokens.stroke.hairline);
-    if (data.grid_lines > 0) {
+    if (data.grid_lines > 0 and data.y_labels) {
+        // A LABELED chart's gridlines ride the nice tick lattice (the
+        // labels are exact at those values, so grid and text can never
+        // disagree); `grid_lines` becomes the density hint. Interior
+        // ticks only — the plot edges and the baseline carry the ends.
+        const lattice = chart_model.chartTickLattice(domain, @as(usize, data.grid_lines) + 1);
+        for (0..lattice.count) |index| {
+            const value = lattice.value(index);
+            if (value <= domain.min or value >= domain.max) continue;
+            const y = chartMapY(value, domain, plot, 0);
+            try builder.fillRect(.{
+                .id = chartCommandId(widget.id, chart_grid_seed, 0, index),
+                .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(plot.x, y - hairline * 0.5, plot.width, hairline)),
+                .fill = colorFill(tokens.colors.border),
+            });
+        }
+    } else if (data.grid_lines > 0) {
         const divisions: f32 = @floatFromInt(@as(usize, data.grid_lines) + 1);
         for (0..data.grid_lines) |index| {
             const y = plot.y + plot.height * @as(f32, @floatFromInt(index + 1)) / divisions;
@@ -1507,6 +1546,7 @@ fn emitChartWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Erro
             .fill = colorFill(tokens.colors.border),
         });
     }
+    try emitChartAxisLabels(builder, widget, tokens, plot, domain);
 
     for (data.series, 0..) |series, series_index| {
         if (series.values.len == 0) continue;
@@ -1517,6 +1557,147 @@ fn emitChartWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Erro
             .band => try emitChartBand(builder, widget, plot, domain, series, series_index, color),
         }
     }
+}
+
+// ------------------------------------------------------ chart axis labels
+
+/// Tick-label type size: two rungs under the label register (13 -> 11
+/// with house tokens), floored at 9 so dense themes stay legible. Axis
+/// text is secondary chrome — it must never outweigh the data ink.
+fn chartTickTextSize(tokens: DesignTokens) f32 {
+    return @max(9, tokens.typography.label_size - 2);
+}
+
+/// Gap between the plot edge and its tick labels (the reference-grade
+/// breathing room that keeps labels from touching the data ink).
+const chart_axis_label_gap: f32 = 6;
+/// Minimum clear space between adjacent x labels before thinning kicks
+/// in (every Nth label draws).
+const chart_x_label_min_gap: f32 = 12;
+
+/// The rect the data plots into: the padded frame minus the gutters the
+/// opted-in axis labels reserve (a line below for x labels, a measured
+/// column at the left for y labels). Pure over the widget and tokens —
+/// the runtime's hover hit logic and the renderer share it, so the
+/// cursor snaps exactly where the ink is. Without labels this is the
+/// padded frame, byte-identical to the pre-label contract.
+pub fn chartWidgetPlotRect(widget: Widget, tokens: DesignTokens) geometry.RectF {
+    const data = widget.chart;
+    var plot = widget.frame.inset(widget.layout.padding).normalized();
+    if (data.x_labels.len > 0) {
+        const gutter = chartTickTextSize(tokens) * 1.25 + chart_axis_label_gap;
+        plot.height = @max(0, plot.height - gutter);
+    }
+    if (data.y_labels) {
+        const gutter = chartYLabelGutterWidth(data, tokens);
+        plot.x += gutter;
+        plot.width = @max(0, plot.width - gutter);
+    }
+    return plot;
+}
+
+/// The y tick lattice a labeled chart rides: the nice-step lattice
+/// (values exact at their precision), density-hinted by `grid_lines`
+/// so labels and gridlines share positions.
+fn chartYTickLattice(data: chart_model.ChartData, domain: chart_model.ChartDomain) chart_model.ChartTickLattice {
+    return chart_model.chartTickLattice(domain, @as(usize, data.grid_lines) + 1);
+}
+
+/// Width of the y-label gutter: the widest formatted tick plus the
+/// axis gap, measured through the same seam drawn text uses so the
+/// reserved column always fits the ink.
+fn chartYLabelGutterWidth(data: chart_model.ChartData, tokens: DesignTokens) f32 {
+    const domain = chart_model.chartDomain(data);
+    const lattice = chartYTickLattice(data, domain);
+    const size = chartTickTextSize(tokens);
+    var widest: f32 = 0;
+    var buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+    for (0..lattice.count) |ordinal| {
+        const text = chart_model.formatChartValue(&buffer, lattice.value(ordinal), lattice.decimals);
+        widest = @max(widest, measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, text, size));
+    }
+    return @ceil(widest) + chart_axis_label_gap;
+}
+
+/// Emit the opted-in tick labels: y values right-aligned into the left
+/// gutter (each vertically centered on its lattice line, clamped inside
+/// the padded frame so edge labels never ink outside the widget), and x
+/// category labels centered under their sample columns, deterministically
+/// thinned to every Nth so they never collide. Muted register — labels
+/// are chrome, not data.
+fn emitChartAxisLabels(builder: *Builder, widget: Widget, tokens: DesignTokens, plot: geometry.RectF, domain: chart_model.ChartDomain) Error!void {
+    const data = widget.chart;
+    const size = chartTickTextSize(tokens);
+    const line_height = size * 1.25;
+    const content = widget.frame.inset(widget.layout.padding).normalized();
+
+    if (data.y_labels) {
+        const lattice = chartYTickLattice(data, domain);
+        var buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+        for (0..lattice.count) |ordinal| {
+            const value = lattice.value(ordinal);
+            const formatted = chart_model.formatChartValue(&buffer, value, lattice.decimals);
+            const text = try allocFrameLabelBytes(formatted);
+            const width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, text, size);
+            const line_y = chartMapY(value, domain, plot, 0);
+            const top = std.math.clamp(line_y - line_height * 0.5, content.y, @max(content.y, content.maxY() - line_height));
+            try builder.drawText(.{
+                .id = chartCommandId(widget.id, chart_tick_seed, 0, ordinal),
+                .font_id = tokens.typography.font_id,
+                .size = size,
+                .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(plot.x - chart_axis_label_gap - width, top + size)),
+                .color = tokens.colors.text_muted,
+                .text = text,
+            });
+        }
+    }
+
+    if (data.x_labels.len > 0) {
+        const count = @max(chart_model.chartPointCount(data), data.x_labels.len);
+        // Thinning: the widest label plus the minimum gap defines the
+        // space one label needs; every Nth label draws so neighbors
+        // never touch. Pure over the labels and the plot width.
+        var widest: f32 = 0;
+        for (data.x_labels) |label| {
+            widest = @max(widest, measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, label, size));
+        }
+        const spacing = @max(1, widest + chart_x_label_min_gap);
+        const fit: usize = @max(1, @as(usize, @intFromFloat(plot.width / spacing)));
+        const stride = (data.x_labels.len + fit - 1) / fit;
+        const baseline = @min(plot.maxY() + chart_axis_label_gap + size, content.maxY());
+        var ordinal: usize = 0;
+        while (ordinal < data.x_labels.len) : (ordinal += @max(1, stride)) {
+            const label = data.x_labels[ordinal];
+            if (label.len == 0) continue;
+            const width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, label, size);
+            const center_x = chartSampleX(data, count, ordinal, plot);
+            const x = std.math.clamp(center_x - width * 0.5, content.x, @max(content.x, content.maxX() - width));
+            try builder.drawText(.{
+                .id = chartCommandId(widget.id, chart_tick_seed, 1, ordinal),
+                .font_id = tokens.typography.font_id,
+                .size = size,
+                .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(x, baseline)),
+                .color = tokens.colors.text_muted,
+                .text = label,
+            });
+        }
+    }
+}
+
+/// The x a sample index renders at: bars-only charts center samples in
+/// equal-width slots, everything else sits on the point lattice — the
+/// same split `chartHoverIndex` inverts, so labels, cursor, and dots
+/// all agree on where a sample lives.
+fn chartSampleX(data: chart_model.ChartData, count: usize, index: usize, plot: geometry.RectF) f32 {
+    var bars_only = true;
+    for (data.series) |series| {
+        if (series.values.len > 0 and series.kind != .bar) bars_only = false;
+    }
+    if (bars_only and count > 0) {
+        const slot = plot.width / @as(f32, @floatFromInt(count));
+        return plot.x + slot * (@as(f32, @floatFromInt(index)) + 0.5);
+    }
+    return chartMapX(index, count, plot, 0);
 }
 
 /// Where fills and bars anchor: zero when the domain includes it, else
@@ -1727,6 +1908,282 @@ const chart_line_seed: u64 = 0x5eed_c4a8_0000_0003;
 const chart_fill_seed: u64 = 0x5eed_c4a8_0000_0004;
 const chart_band_seed: u64 = 0x5eed_c4a8_0000_0005;
 const chart_bar_seed: u64 = 0x5eed_c4a8_0000_0006;
+const chart_tick_seed: u64 = 0x5eed_c4a8_0000_0007;
+const chart_hover_seed: u64 = 0x5eed_c4a8_0000_0008;
+const chart_hover_dot_seed: u64 = 0x5eed_c4a8_0000_0009;
+const chart_hover_row_seed: u64 = 0x5eed_c4a8_0000_000a;
+
+// ---------------------------------------------------- chart hover details
+
+/// Detail-card type size: one rung under the label register (13 -> 12
+/// with house tokens) — denser than control labels, a step above the
+/// tick chrome, floored for dense themes.
+fn chartDetailTextSize(tokens: DesignTokens) f32 {
+    return @max(10, tokens.typography.label_size - 1);
+}
+
+const chart_detail_pad_h: f32 = 10;
+const chart_detail_pad_v: f32 = 8;
+const chart_detail_row_gap: f32 = 2;
+const chart_detail_swatch: f32 = 8;
+const chart_detail_swatch_gap: f32 = 6;
+const chart_detail_column_gap: f32 = 16;
+const chart_detail_anchor_gap: f32 = 12;
+const chart_detail_edge_margin: f32 = 4;
+
+/// Resolved hover-detail geometry: which sample the pointer snapped to
+/// and where the floating card lands. Pure over the widget, tokens,
+/// pointer point, and the window bounds the card clamps into — the
+/// emitter and the invalidation path share it, so the repainted region
+/// always covers the painted chrome.
+pub const ChartHoverDetail = struct {
+    index: usize,
+    plot: geometry.RectF,
+    /// The x the hovered sample renders at (cursor line and dots).
+    sample_x: f32,
+    card: geometry.RectF,
+};
+
+/// Value formatting for detail rows: two orders of magnitude below the
+/// domain span, so a 0..1 chart reads "0.42" and a 0..500 chart reads
+/// "237" — resolution that matches what the plot can show.
+fn chartDetailDecimals(domain: chart_model.ChartDomain) u8 {
+    return chart_model.chartTickDecimals(domain.span() / 100);
+}
+
+fn chartDetailRowName(series: chart_model.ChartSeries) []const u8 {
+    return if (series.label.len > 0) series.label else @tagName(series.kind);
+}
+
+/// Compute the hover-detail geometry for a pointer over a chart, or
+/// null when there is no sample to snap to. The card prefers the right
+/// side of the hovered sample and flips left when the window edge is
+/// closer than the card is wide; vertically it centers on the plot —
+/// position depends only on the snapped index, never the raw pointer,
+/// so a pointer gliding within one sample repaints nothing.
+pub fn chartWidgetHoverDetail(widget: Widget, tokens: DesignTokens, point: geometry.PointF, bounds: geometry.RectF) ?ChartHoverDetail {
+    if (widget.kind != .chart or !widget.chart.hover_details) return null;
+    const data = widget.chart;
+    const plot = chartWidgetPlotRect(widget, tokens);
+    if (plot.isEmpty() or plot.width <= 0 or plot.height <= 0) return null;
+    const count = chart_model.chartPointCount(data);
+    const index = chart_model.chartHoverIndex(data, (point.x - plot.x) / plot.width) orelse return null;
+    const domain = chart_model.chartDomain(data);
+    const decimals = chartDetailDecimals(domain);
+    const size = chartDetailTextSize(tokens);
+    const line_height = size * 1.25;
+
+    // Measure the card: title line (the sample's category label, or its
+    // index) over one row per series that has this sample.
+    var buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+    const title = chartHoverDetailTitle(data, index, &buffer);
+    var content_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, title, size);
+    var rows: usize = 0;
+    for (data.series) |series| {
+        if (index >= series.values.len) continue;
+        rows += 1;
+        var value_buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+        const name_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, chartDetailRowName(series), size);
+        const value_text = chart_model.formatChartValue(&value_buffer, series.values[index], decimals);
+        const value_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, value_text, size);
+        content_width = @max(content_width, chart_detail_swatch + chart_detail_swatch_gap + name_width + chart_detail_column_gap + value_width);
+    }
+    if (rows == 0) return null;
+
+    const card_width = @ceil(content_width) + chart_detail_pad_h * 2;
+    const card_height = chart_detail_pad_v * 2 + line_height * @as(f32, @floatFromInt(rows + 1)) + chart_detail_row_gap * @as(f32, @floatFromInt(rows));
+    const sample_x = chartSampleX(data, count, index, plot);
+    var card_x = sample_x + chart_detail_anchor_gap;
+    if (card_x + card_width > bounds.maxX() - chart_detail_edge_margin) {
+        card_x = sample_x - chart_detail_anchor_gap - card_width;
+    }
+    card_x = std.math.clamp(card_x, bounds.x + chart_detail_edge_margin, @max(bounds.x + chart_detail_edge_margin, bounds.maxX() - card_width - chart_detail_edge_margin));
+    const card_y = std.math.clamp(plot.y + (plot.height - card_height) * 0.5, bounds.y + chart_detail_edge_margin, @max(bounds.y + chart_detail_edge_margin, bounds.maxY() - card_height - chart_detail_edge_margin));
+
+    return .{
+        .index = index,
+        .plot = plot,
+        .sample_x = sample_x,
+        .card = geometry.RectF.init(card_x, card_y, card_width, card_height),
+    };
+}
+
+/// The sample index a pointer over a hover-details chart snaps to, or
+/// null when the widget is not a hover-details chart (or has no data).
+/// The runtime's interaction path uses this to gate repaints: a pointer
+/// gliding within one sample changes nothing, so nothing repaints.
+pub fn chartWidgetHoverIndex(widget: Widget, tokens: DesignTokens, point: geometry.PointF) ?usize {
+    if (widget.kind != .chart or !widget.chart.hover_details) return null;
+    const plot = chartWidgetPlotRect(widget, tokens);
+    if (plot.isEmpty() or plot.width <= 0 or plot.height <= 0) return null;
+    return chart_model.chartHoverIndex(widget.chart, (point.x - plot.x) / plot.width);
+}
+
+/// The card's title: the hovered sample's category label when the chart
+/// carries x labels, else the sample index — never invented text.
+fn chartHoverDetailTitle(data: chart_model.ChartData, index: usize, buffer: *[chart_model.max_chart_value_label_bytes]u8) []const u8 {
+    if (index < data.x_labels.len and data.x_labels[index].len > 0) return data.x_labels[index];
+    return chart_model.formatChartValue(buffer, @floatFromInt(index), 0);
+}
+
+/// The region hover-detail chrome inks for a render state, for dirty
+/// invalidation: the chart's frame (cursor line and dots live inside
+/// it) unioned with the floating card. Null when the state paints no
+/// hover chrome.
+pub fn chartHoverDetailDirtyBounds(layout: anytype, state: WidgetRenderState, tokens: DesignTokens) ?geometry.RectF {
+    const node_index = chartHoverDetailNodeIndex(layout, state) orelse return null;
+    const point = state.hover_point orelse return null;
+    const node = layout.nodes[node_index];
+    const widget = widgetWithFrame(node.widget, node.frame);
+    const bounds = widgetLayoutRootBounds(layout) orelse widget.frame.normalized();
+    const detail = chartWidgetHoverDetail(widget, tokens, point, bounds) orelse return null;
+    return geometry.RectF.unionWith(widget.frame.normalized(), detail.card);
+}
+
+/// The layout node the state's hover chrome belongs to: the hovered
+/// widget when it is a hover-details chart that is actually visible.
+fn chartHoverDetailNodeIndex(layout: anytype, state: WidgetRenderState) ?usize {
+    const hovered_id = state.hovered_id orelse return null;
+    if (hovered_id == 0 or state.hover_point == null) return null;
+    for (layout.nodes, 0..) |node, index| {
+        if (node.widget.id != hovered_id) continue;
+        if (node.widget.kind != .chart or !node.widget.chart.hover_details) return null;
+        if (widget_tree.isWidgetHiddenInAncestors(layout, index)) return null;
+        return index;
+    }
+    return null;
+}
+
+/// The hover-detail z-pass: runs after the anchored-surface pass, so
+/// the cursor, point dots, and floating card paint above everything —
+/// the same clip-escaping contract tooltips have. Interaction-only by
+/// construction: static trees never carry a `hover_point`, so goldens
+/// and docs tiles stay byte-identical.
+fn emitWidgetLayoutChartHoverDetails(builder: *Builder, layout: anytype, tokens: DesignTokens, state: WidgetRenderState) Error!void {
+    const node_index = chartHoverDetailNodeIndex(layout, state) orelse return;
+    const point = state.hover_point orelse return;
+    const node = layout.nodes[node_index];
+    const widget = widgetWithFrame(node.widget, pixelSnapGeometryRect(tokens, node.frame));
+    const bounds = widgetLayoutRootBounds(layout) orelse widget.frame.normalized();
+    const detail = chartWidgetHoverDetail(widget, tokens, point, bounds) orelse return;
+    try emitChartHoverDetail(builder, widget, tokens, detail);
+}
+
+/// Draw the hover chrome: a hairline cursor at the hovered sample, a
+/// dot on every line series' hovered point, then the floating card —
+/// popover-grade chrome (surface fill, hairline border, small shadow)
+/// holding the sample's title over swatch/name/value rows. Values
+/// format deterministically into the frame label scratch.
+fn emitChartHoverDetail(builder: *Builder, widget: Widget, tokens: DesignTokens, detail: ChartHoverDetail) Error!void {
+    const data = widget.chart;
+    const domain = chart_model.chartDomain(data);
+    const decimals = chartDetailDecimals(domain);
+    const hairline = @max(1, tokens.stroke.hairline);
+
+    // Cursor: the vertical reading line the eye follows to the axis.
+    try builder.fillRect(.{
+        .id = chartCommandId(widget.id, chart_hover_seed, 0, 0),
+        .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(detail.sample_x - hairline * 0.5, detail.plot.y, hairline, detail.plot.height)),
+        .fill = colorFill(tokens.colors.border),
+    });
+
+    // Point dots on line series (bars read fine under the cursor line;
+    // bands are ranges, not points).
+    const stroke_inset = chartStrokeWidth(widget) * 0.5;
+    for (data.series, 0..) |series, series_index| {
+        if (series.kind != .line or detail.index >= series.values.len) continue;
+        const value = series.values[detail.index];
+        if (!std.math.isFinite(value)) continue;
+        const dot_extent: f32 = 6;
+        const dot_x = chartMapX(detail.index, series.values.len, detail.plot, stroke_inset);
+        const dot_y = chartMapY(value, domain, detail.plot, stroke_inset);
+        try builder.fillRoundedRect(.{
+            .id = chartCommandId(widget.id, chart_hover_dot_seed, series_index, 0),
+            .rect = geometry.RectF.init(dot_x - dot_extent * 0.5, dot_y - dot_extent * 0.5, dot_extent, dot_extent),
+            .radius = Radius.all(dot_extent * 0.5),
+            .fill = colorFill(text_spans_model.textSpanColorValue(tokens.colors, series.color)),
+        });
+    }
+
+    // Card chrome: the popover register (surface, hairline border, the
+    // small shadow step) — floating detail, not a modal surface.
+    const card = pixelSnapGeometryRect(tokens, detail.card);
+    const radius = Radius.all(tokens.radius.md);
+    const shadow_token = tokens.shadow.sm;
+    if (shadow_token.y != 0 or shadow_token.blur != 0 or shadow_token.spread != 0) {
+        try builder.shadow(.{
+            .id = chartCommandId(widget.id, chart_hover_seed, 0, 1),
+            .rect = card,
+            .radius = radius,
+            .offset = .{ .dx = 0, .dy = shadow_token.y },
+            .blur = shadow_token.blur,
+            .spread = shadow_token.spread,
+            .color = tokens.colors.shadow,
+        });
+    }
+    try builder.fillRoundedRect(.{
+        .id = chartCommandId(widget.id, chart_hover_seed, 0, 2),
+        .rect = card,
+        .radius = radius,
+        .fill = colorFill(tokens.colors.surface),
+    });
+    try builder.strokeRect(.{
+        .id = chartCommandId(widget.id, chart_hover_seed, 0, 3),
+        .rect = card,
+        .radius = radius,
+        .stroke = .{ .fill = colorFill(tokens.colors.border), .width = hairline },
+    });
+
+    // Title line, then one swatch/name/value row per series holding
+    // this sample. Values right-align on the card's inner edge so a
+    // column of numbers reads as one.
+    const size = chartDetailTextSize(tokens);
+    const line_height = size * 1.25;
+    var title_buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+    const title = chartHoverDetailTitle(data, detail.index, &title_buffer);
+    const title_text = try allocFrameLabelBytes(title);
+    var row_y = card.y + chart_detail_pad_v;
+    try builder.drawText(.{
+        .id = chartCommandId(widget.id, chart_hover_seed, 0, 4),
+        .font_id = tokens.typography.font_id,
+        .size = size,
+        .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(card.x + chart_detail_pad_h, row_y + size)),
+        .color = tokens.colors.text,
+        .text = title_text,
+    });
+    row_y += line_height;
+    for (data.series, 0..) |series, series_index| {
+        if (detail.index >= series.values.len) continue;
+        row_y += chart_detail_row_gap;
+        const swatch_y = row_y + (line_height - chart_detail_swatch) * 0.5;
+        try builder.fillRoundedRect(.{
+            .id = chartCommandId(widget.id, chart_hover_row_seed, series_index, 0),
+            .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(card.x + chart_detail_pad_h, swatch_y, chart_detail_swatch, chart_detail_swatch)),
+            .radius = Radius.all(2),
+            .fill = colorFill(text_spans_model.textSpanColorValue(tokens.colors, series.color)),
+        });
+        try builder.drawText(.{
+            .id = chartCommandId(widget.id, chart_hover_row_seed, series_index, 1),
+            .font_id = tokens.typography.font_id,
+            .size = size,
+            .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(card.x + chart_detail_pad_h + chart_detail_swatch + chart_detail_swatch_gap, row_y + size)),
+            .color = tokens.colors.text_muted,
+            .text = chartDetailRowName(series),
+        });
+        var value_buffer: [chart_model.max_chart_value_label_bytes]u8 = undefined;
+        const value_text = try allocFrameLabelBytes(chart_model.formatChartValue(&value_buffer, series.values[detail.index], decimals));
+        const value_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, value_text, size);
+        try builder.drawText(.{
+            .id = chartCommandId(widget.id, chart_hover_row_seed, series_index, 2),
+            .font_id = tokens.typography.font_id,
+            .size = size,
+            .origin = pixelSnapTextPoint(tokens, geometry.PointF.init(card.maxX() - chart_detail_pad_h - value_width, row_y + size)),
+            .color = tokens.colors.text,
+            .text = value_text,
+        });
+        row_y += line_height;
+    }
+}
 
 /// Stable hashed command ids per (family, series, ordinal), same scheme
 /// as span runs, so retained diffing tracks chart commands across frames.

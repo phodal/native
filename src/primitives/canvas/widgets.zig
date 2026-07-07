@@ -237,6 +237,12 @@ pub const WidgetRenderState = struct {
     focus_visible_id: ?ObjectId = null,
     hovered_id: ?ObjectId = null,
     pressed_id: ?ObjectId = null,
+    /// The pointer position while `hovered_id` is a widget that draws
+    /// hover-detail chrome (today: `.chart` with `hover_details`), in
+    /// the same coordinate space as widget frames. Null everywhere
+    /// else — static trees and reference renders never carry one, so
+    /// hover chrome renders only under live interaction.
+    hover_point: ?geometry.PointF = null,
 };
 
 pub const WidgetMainAlignment = enum {

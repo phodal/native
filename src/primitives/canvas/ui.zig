@@ -1582,6 +1582,21 @@ pub fn Ui(comptime Msg: type) type {
             baseline: bool = false,
             /// Line stroke width override (default 1.5).
             stroke_width: ?f32 = null,
+            /// Category labels for the x axis, one per sample index
+            /// (label i names sample i). Empty = no x axis; the renderer
+            /// reserves a gutter below the plot and thins the labels to
+            /// fit the width. Dropped when any series downsamples — the
+            /// bucketed indices no longer name the labeled samples.
+            x_labels: []const []const u8 = &.{},
+            /// Numeric y tick labels (opt-in): domain min, max, and each
+            /// gridline value in a measured gutter left of the plot,
+            /// muted, deterministically formatted.
+            y_labels: bool = false,
+            /// Pointer-hover point details (opt-in): hovering snaps to
+            /// the nearest sample and floats a card with its label and
+            /// every series' value. Interaction-only chrome — static
+            /// renders never show it. Presses still fall through.
+            hover_details: bool = false,
             /// Role defaults to `chart`; an empty label gets a generated
             /// series summary ("chart: line cpu 60 pts last 0.42; ...")
             /// so automation can assert on the data without pixels, and
@@ -1595,11 +1610,11 @@ pub fn Ui(comptime Msg: type) type {
         /// copied into the build arena and DOWNSAMPLED deterministically
         /// to `canvas.max_chart_points_per_series` points (index-bucket
         /// min/max, spikes preserved), so a 10k-point star-history series
-        /// renders within the path budget instead of erroring. Display-
-        /// only and not a hit target — presses fall through like text.
-        /// Compose axis labels from `text` widgets around the plot; the
-        /// widget itself draws no text. Zig-only: markup's scalar
-        /// bindings cannot carry series arrays (documented exclusion).
+        /// renders within the path budget instead of erroring. Axis tick
+        /// labels are opt-in (`x_labels`/`y_labels`, drawn muted in
+        /// reserved gutters) and hover details opt in per chart. Presses
+        /// fall through like text; with `hover_details` the chart is a
+        /// hover target only.
         pub fn chart(self: *Self, options: ChartOptions, series: []const canvas.ChartSeries) Node {
             var node = self.el(.chart, .{
                 .key = options.key,
@@ -1615,10 +1630,12 @@ pub fn Ui(comptime Msg: type) type {
                 self.failed = true;
                 return node;
             };
+            var downsampled = false;
             for (series, stored) |source, *entry| {
                 entry.* = source;
                 entry.values = self.downsampledChartCopy(source.values);
                 entry.low = if (source.kind == .band) self.downsampledChartCopy(source.low) else &.{};
+                if (entry.values.len != source.values.len) downsampled = true;
             }
             node.widget.chart = .{
                 .series = stored,
@@ -1626,6 +1643,12 @@ pub fn Ui(comptime Msg: type) type {
                 .y_max = options.y_max,
                 .grid_lines = options.grid_lines,
                 .baseline = options.baseline,
+                // Downsampling re-buckets sample indices, so per-sample
+                // category labels would name the wrong points: drop them
+                // (silence over a lie) — value-scale y labels survive.
+                .x_labels = if (downsampled) &.{} else options.x_labels,
+                .y_labels = options.y_labels,
+                .hover_details = options.hover_details,
             };
             if (node.widget.semantics.label.len == 0) {
                 node.widget.semantics.label = self.chartSummary(series);

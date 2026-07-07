@@ -357,17 +357,58 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .wheel => {},
             }
 
+            // Hover-detail chrome (chart cursor + floating card) tracks
+            // the pointer, but only SNAPPED: the stored point updates
+            // whenever the pointer is over a hover-detail widget, and a
+            // repaint fires only when the snapped sample index changes —
+            // gliding within one sample costs nothing.
+            const next_hover_point: ?geometry.PointF = if (pointer_event.pointer.phase != .cancel and
+                canvasChartHoverIndexForId(self, index, next_hovered_id, pointer_event.pointer.point) != null)
+                pointer_event.pointer.point
+            else
+                null;
+            const hover_detail_changed = !std.meta.eql(
+                canvasChartHoverKey(self, index, self.views[index].canvas_widget_hovered_id, self.views[index].canvas_widget_hover_point),
+                canvasChartHoverKey(self, index, next_hovered_id, next_hover_point),
+            );
+
             const interaction_changed = self.views[index].canvas_widget_hovered_id != next_hovered_id or
-                self.views[index].canvas_widget_pressed_id != next_pressed_id;
+                self.views[index].canvas_widget_pressed_id != next_pressed_id or
+                hover_detail_changed;
             const cursor_changed = self.views[index].canvas_widget_cursor != next_cursor;
+            // The stored point only advances when the snapped sample (or
+            // any other interaction) changes: hover chrome is a pure
+            // function of the snapped index, so a stale point that maps
+            // to the same sample renders the same pixels.
             if (!interaction_changed and !cursor_changed) return;
 
             const previous_state = self.views[index].canvasWidgetRenderState();
             self.views[index].canvas_widget_hovered_id = next_hovered_id;
             self.views[index].canvas_widget_pressed_id = next_pressed_id;
+            self.views[index].canvas_widget_hover_point = next_hover_point;
             self.views[index].canvas_widget_cursor = next_cursor;
             if (cursor_changed) try syncCanvasWidgetCursorForView(self, index);
             if (interaction_changed) try invalidateForCanvasWidgetRenderStateChange(self, index, previous_state, self.views[index].canvasWidgetRenderState());
+        }
+
+        /// The (widget id, snapped sample index) pair chart hover chrome
+        /// renders for, or null when the id/point pair paints none — the
+        /// equality key that gates hover-detail repaints.
+        const CanvasChartHoverKey = struct { id: canvas.ObjectId, index: usize };
+
+        fn canvasChartHoverKey(self: *Runtime, view_index: usize, hovered_id: canvas.ObjectId, point: ?geometry.PointF) ?CanvasChartHoverKey {
+            const hover_point = point orelse return null;
+            const sample = canvasChartHoverIndexForId(self, view_index, hovered_id, hover_point) orelse return null;
+            return .{ .id = hovered_id, .index = sample };
+        }
+
+        fn canvasChartHoverIndexForId(self: *Runtime, view_index: usize, hovered_id: canvas.ObjectId, point: geometry.PointF) ?usize {
+            if (hovered_id == 0) return null;
+            const layout = self.views[view_index].widgetLayoutTree();
+            const node = layout.findById(hovered_id) orelse return null;
+            var widget = node.widget;
+            widget.frame = node.frame;
+            return canvas.chartWidgetHoverIndex(widget, self.views[view_index].widget_tokens, point);
         }
 
         pub fn syncCanvasWidgetCursorForView(self: *Runtime, view_index: usize) anyerror!void {
@@ -383,7 +424,10 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         pub fn invalidateForCanvasWidgetRenderStateChange(self: *Runtime, view_index: usize, previous: canvas.WidgetRenderState, next: canvas.WidgetRenderState) anyerror!void {
             if (view_index >= self.view_count) return;
             if (self.views[view_index].kind != .gpu_surface) return;
-            const local_dirty = self.views[view_index].widgetLayoutTree().renderStateDirtyBounds(previous, next);
+            // Tokens matter here: chart hover chrome (axis gutters, the
+            // floating detail card) measures text through the view's
+            // live tokens, so the dirty region must measure the same way.
+            const local_dirty = self.views[view_index].widgetLayoutTree().renderStateDirtyBoundsWithTokens(previous, next, self.views[view_index].widget_tokens);
             invalidateForCanvasWidgetRenderStateDirty(self, view_index, local_dirty);
             const publish_accessibility = previous.focused_id != next.focused_id;
             _ = try runtime_canvas_widget_display.RuntimeCanvasWidgetDisplay(Runtime).refreshCanvasWidgetDisplayListIfOwnedWithAccessibility(self, view_index, publish_accessibility);
@@ -407,6 +451,9 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .focus_visible_id = if (previous.focus_visible_id) |id| if (next_focused_id != null and next_focused_id.? == id and layout.focusTargetById(id) != null) id else null else null,
                 .hovered_id = if (previous.hovered_id) |id| if (canvasWidgetInteractionTargetExists(layout, id)) id else null else null,
                 .pressed_id = if (previous.pressed_id) |id| if (canvasWidgetInteractionTargetExists(layout, id)) id else null else null,
+                // The hover point rides with the hovered widget: it
+                // survives exactly when the hover survives.
+                .hover_point = if (previous.hovered_id) |id| if (canvasWidgetInteractionTargetExists(layout, id)) previous.hover_point else null else null,
             };
         }
 
@@ -414,7 +461,16 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             return a.focused_id == b.focused_id and
                 a.focus_visible_id == b.focus_visible_id and
                 a.hovered_id == b.hovered_id and
-                a.pressed_id == b.pressed_id;
+                a.pressed_id == b.pressed_id and
+                canvasOptionalPointsEqual(a.hover_point, b.hover_point);
+        }
+
+        fn canvasOptionalPointsEqual(a: ?geometry.PointF, b: ?geometry.PointF) bool {
+            if (a) |point_a| {
+                const point_b = b orelse return false;
+                return point_a.x == point_b.x and point_a.y == point_b.y;
+            }
+            return b == null;
         }
 
         pub fn updateCanvasWidgetScrollFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {

@@ -1408,6 +1408,12 @@ fn expectSameChartData(expected: canvas.ChartData, actual: canvas.ChartData) !vo
     try testing.expectEqual(expected.y_max, actual.y_max);
     try testing.expectEqual(expected.grid_lines, actual.grid_lines);
     try testing.expectEqual(expected.baseline, actual.baseline);
+    try testing.expectEqual(expected.y_labels, actual.y_labels);
+    try testing.expectEqual(expected.hover_details, actual.hover_details);
+    try testing.expectEqual(expected.x_labels.len, actual.x_labels.len);
+    for (expected.x_labels, actual.x_labels) |expected_label, actual_label| {
+        try testing.expectEqualStrings(expected_label, actual_label);
+    }
     try testing.expectEqual(expected.series.len, actual.series.len);
     for (expected.series, actual.series) |expected_series, actual_series| {
         try testing.expectEqual(expected_series.kind, actual_series.kind);

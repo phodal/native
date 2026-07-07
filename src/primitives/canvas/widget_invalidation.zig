@@ -338,7 +338,23 @@ pub fn widgetRenderStateDirtyBounds(layout: anytype, previous: WidgetRenderState
         bounds = unionOptionalBounds(bounds, inputGroupFocusWithinBounds(layout, previous.focus_visible_id, tokens));
         bounds = unionOptionalBounds(bounds, inputGroupFocusWithinBounds(layout, next.focus_visible_id, tokens));
     }
+    // Chart hover-detail chrome floats OUTSIDE the hovered chart's frame
+    // (the card clamps to the window, not the widget), so whenever the
+    // hover point or the hovered id moved, both states' chrome regions
+    // dirty — the old card region clears, the new one paints.
+    if (previous.hovered_id != next.hovered_id or !optionalPointsEqual(previous.hover_point, next.hover_point)) {
+        bounds = unionOptionalBounds(bounds, widget_render.chartHoverDetailDirtyBounds(layout, previous, tokens));
+        bounds = unionOptionalBounds(bounds, widget_render.chartHoverDetailDirtyBounds(layout, next, tokens));
+    }
     return bounds;
+}
+
+fn optionalPointsEqual(a: ?geometry.PointF, b: ?geometry.PointF) bool {
+    if (a) |point_a| {
+        const point_b = b orelse return false;
+        return point_a.x == point_b.x and point_a.y == point_b.y;
+    }
+    return b == null;
 }
 
 /// The paint bounds of every `.input_group` ancestor's focus ring for a

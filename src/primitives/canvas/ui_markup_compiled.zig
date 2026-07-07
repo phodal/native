@@ -1048,6 +1048,9 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                         std.mem.eql(u8, attribute.name, "y-max") or
                         std.mem.eql(u8, attribute.name, "grid-lines") or
                         std.mem.eql(u8, attribute.name, "baseline") or
+                        std.mem.eql(u8, attribute.name, "x-labels") or
+                        std.mem.eql(u8, attribute.name, "y-labels") or
+                        std.mem.eql(u8, attribute.name, "hover-details") or
                         std.mem.eql(u8, attribute.name, "stroke-width") or
                         std.mem.eql(u8, attribute.name, "width") or
                         std.mem.eql(u8, attribute.name, "height") or
@@ -1082,6 +1085,15 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             }
             if (comptime (node.attr("baseline") != null)) {
                 options.baseline = evalExpr(node, entries, comptime node.attr("baseline").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("x-labels") != null)) {
+                options.x_labels = chartLabelsItems(node, entries, comptime node.attr("x-labels").?, ui, model, scope);
+            }
+            if (comptime (node.attr("y-labels") != null)) {
+                options.y_labels = evalExpr(node, entries, comptime node.attr("y-labels").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("hover-details") != null)) {
+                options.hover_details = evalExpr(node, entries, comptime node.attr("hover-details").?, ui, model, scope).truthy();
             }
             if (comptime (node.attr("stroke-width") != null)) {
                 options.stroke_width = floatAttr(node, entries, comptime node.attr("stroke-width").?, ui, model, scope);
@@ -1164,6 +1176,32 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 series.label = stringAttr(node, entries, comptime node.attr("label").?, ui, model, scope, markup.series_label_message);
             }
             return series;
+        }
+
+        /// Resolve a chart `x-labels` binding through the same sources
+        /// `for each` accepts, requiring a string element type at
+        /// comptime — the label twin of `chartValuesItems`.
+        fn chartLabelsItems(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, comptime raw: []const u8, ui: *Ui, model: *const ModelT, scope: anytype) []const []const u8 {
+            const path = comptime blk: {
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.chart_x_labels_message);
+                if (expression != .binding) fail(node, markup.chart_x_labels_message);
+                break :blk expression.binding;
+            };
+            const scope_index_opt = comptime scopeIndex(entries, path);
+            if (comptime (scope_index_opt != null)) {
+                const scope_index = comptime scope_index_opt.?;
+                comptime {
+                    if (entries[scope_index].kind != .slice_arg or entries[scope_index].Item != []const u8) {
+                        fail(node, markup.chart_x_labels_message);
+                    }
+                }
+                return scopePayload(entries, scope_index, scope);
+            }
+            const info = comptime (eachInfo(path) orelse fail(node, markup.chart_x_labels_message));
+            comptime {
+                if (info.Item != []const u8) fail(node, markup.chart_x_labels_message);
+            }
+            return eachItems(info, ui, model);
         }
 
         /// Resolve a series `values` binding through the same sources

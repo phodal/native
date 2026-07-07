@@ -122,6 +122,91 @@ test "chart data changes mark the widget dirty and repaint" {
     try std.testing.expect(harness.runtime.pendingDirtyRegions().len > 0);
 }
 
+test "chart hover details: pointer snaps to a sample, floats the card, and repaints only across samples" {
+    const harness = try startChartHarness(&chart_app_state);
+    defer harness.destroy(std.testing.allocator);
+    const app = chart_app_state.app();
+
+    const values = [_]f32{ 0.2, 0.4, 0.8, 0.6 };
+    const labels = [_][]const u8{ "q1", "q2", "q3", "q4" };
+    const series = [_]canvas.ChartSeries{.{ .kind = .line, .values = &values, .label = "cpu" }};
+    const children = [_]canvas.Widget{.{
+        .id = 2,
+        .kind = .chart,
+        .frame = geometry.RectF.init(10, 10, 200, 60),
+        .chart = .{
+            .series = &series,
+            .y_min = 0,
+            .y_max = 1,
+            .x_labels = &labels,
+            .hover_details = true,
+        },
+        .semantics = .{ .label = "cpu history" },
+    }};
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 240), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // The retained copy owns the label bytes too (same rule as series
+    // labels): the runtime reads "q1".."q4" from its own storage.
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("q3", retained.findById(2).?.widget.chart.x_labels[2]);
+
+    // Cold: no hover, no card (the card's shadow is the tell). The emit
+    // call takes display-list ownership, so hover refreshes re-emit.
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    var display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    for (display_list.commands) |command| {
+        try std.testing.expect(std.meta.activeTag(command) != .shadow);
+    }
+
+    // Hover mid-plot: a 4-sample lattice snaps x=110 (fraction 0.5) to
+    // sample 2 — the chart reads as hovered in the snapshot (the
+    // accessible summary stays untouched), and the display list gains
+    // the cursor, the dot, and the card with title + series row.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 110, .y = 40 } });
+    const snapshot = harness.runtime.automationSnapshot("ChartHover");
+    _ = testViewByLabel(snapshot.views, "canvas").?;
+    try std.testing.expectEqual(@as(usize, 1), snapshot.widgets.len);
+    try std.testing.expect(snapshot.widgets[0].hovered);
+    try std.testing.expectEqualStrings("cpu history", snapshot.widgets[0].name);
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var title_count: usize = 0;
+    var saw_row = false;
+    var saw_shadow = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .draw_text => |text| {
+                if (std.mem.eql(u8, text.text, "q3")) title_count += 1;
+                if (std.mem.eql(u8, text.text, "cpu")) saw_row = true;
+            },
+            .shadow => saw_shadow = true,
+            else => {},
+        }
+    }
+    // "q3" draws once as an axis label and once as the card title.
+    try std.testing.expectEqual(@as(usize, 2), title_count);
+    try std.testing.expect(saw_row);
+    try std.testing.expect(saw_shadow);
+
+    // Gliding within the same sample repaints nothing; crossing into
+    // the next sample invalidates.
+    harness.runtime.invalidated = false;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 112, .y = 42 } });
+    try std.testing.expect(!harness.runtime.invalidated);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 190, .y = 40 } });
+    try std.testing.expect(harness.runtime.invalidated);
+
+    // Leaving the chart clears the hover chrome.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 300, .y = 220 } });
+    display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    for (display_list.commands) |command| {
+        try std.testing.expect(std.meta.activeTag(command) != .shadow);
+    }
+    const cleared = harness.runtime.automationSnapshot("ChartHoverCleared");
+    try std.testing.expect(!cleared.widgets[0].hovered);
+}
+
 test "chart budgets fail loudly by name" {
     const harness = try startChartHarness(&chart_app_state);
     defer harness.destroy(std.testing.allocator);

@@ -174,6 +174,15 @@ pub const max_canvas_widget_context_menu_items_per_view: usize = 512;
 // series labels ride the existing widget-text budget.
 pub const max_canvas_widget_chart_series_per_view: usize = 64;
 pub const max_canvas_widget_chart_points_per_view: usize = 16384;
+// Chart x-axis category labels retained across all `.chart` widgets of
+// a view: one entry per labeled sample (a slice header; the bytes ride
+// the widget-text budget like series labels). `Ui.chart` drops labels
+// on any downsampled series, so a labeled chart carries at most
+// `canvas.max_chart_points_per_series` (256) of them — two maximal
+// labeled charts fill the pool, a dashboard of month-scale charts (12
+// labels) fits dozens. Entries are 16 B x 512 = 8 KiB per view.
+// Overflow is loud (`WidgetChartLabelsLimitReached`).
+pub const max_canvas_widget_chart_x_labels_per_view: usize = 512;
 pub const max_canvas_widget_invalidations_per_view: usize = max_canvas_widget_nodes_per_view * 2 + 1;
 // Scroll containers whose offset changed since the last app dispatch:
 // entries are node ids, deduped, and the dispatched event reads the

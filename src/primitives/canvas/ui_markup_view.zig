@@ -1005,6 +1005,20 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                     options.baseline = (try self.evalAttrExpression(scope, node, attribute)).truthy();
                     continue;
                 }
+                if (std.mem.eql(u8, attribute.name, "x-labels")) {
+                    const typed = markup.attrTyped(attribute);
+                    if (typed != .binding) return self.failNode(node, markup.chart_x_labels_message);
+                    options.x_labels = try self.stringItems(ui, scope, node, typed.binding, markup.chart_x_labels_message);
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "y-labels")) {
+                    options.y_labels = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    continue;
+                }
+                if (std.mem.eql(u8, attribute.name, "hover-details")) {
+                    options.hover_details = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                    continue;
+                }
                 if (std.mem.eql(u8, attribute.name, "stroke-width")) {
                     options.stroke_width = try self.floatAttr(scope, node, attribute);
                     continue;
@@ -1158,6 +1172,21 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 }
             }
             return null;
+        }
+
+        /// Resolve a string-list binding (chart `x-labels`) to a string
+        /// slice through the same sources `for each` accepts (scope slice
+        /// args shadow model fields, pub decls, and fns).
+        fn stringItems(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, path: []const u8, message: []const u8) BuildError![]const []const u8 {
+            @setEvalBranchQuota(scan_quota);
+            inline for (item_types, 0..) |Item, type_index| {
+                if (comptime (Item == []const u8)) {
+                    if (try self.iterateItems(ui, []const u8, type_index, scope, path)) |items| {
+                        return items;
+                    }
+                }
+            }
+            return self.failText(node, message);
         }
 
         /// Resolve a `details-expanded` binding to a bool slice through the

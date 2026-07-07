@@ -1005,13 +1005,27 @@ fn buildIconHero(ui: *Ui) Node {
 }
 
 fn buildChart(ui: *Ui) Node {
+    // The labeled register: muted x/y ticks in reserved gutters. Hover
+    // details are on, but they render only under live pointer
+    // interaction — the static webp stays cold; the LIVE wasm tile
+    // shows the snap cursor and floating detail card.
     return tile(ui, .{
-        ui.chart(.{ .width = 420, .height = 160, .grid_lines = 3, .baseline = true }, &.{
+        ui.chart(.{
+            .width = 420,
+            .height = 180,
+            .grid_lines = 3,
+            .baseline = true,
+            .x_labels = &chart_month_labels,
+            .y_labels = true,
+            .hover_details = true,
+        }, &.{
             .{ .kind = .line, .fill = true, .label = "cpu", .values = &.{ 0.18, 0.24, 0.21, 0.32, 0.45, 0.38, 0.52, 0.61, 0.55, 0.68, 0.62, 0.74 } },
             .{ .kind = .bar, .color = .text_muted, .label = "jobs", .values = &.{ 0.08, 0.12, 0.1, 0.16, 0.2, 0.15, 0.22, 0.28, 0.24, 0.3, 0.26, 0.34 } },
         }),
     });
 }
+
+const chart_month_labels = [_][]const u8{ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
 
 fn buildStatusBar(ui: *Ui) Node {
     return ui.column(.{ .grow = 1 }, .{
@@ -1164,7 +1178,14 @@ fn buildCardHero(ui: *Ui) Node {
 
 fn buildChartHero(ui: *Ui) Node {
     return heroTile(ui, .{
-        ui.chart(.{ .width = 300, .height = 140, .grid_lines = 3, .baseline = true }, &.{
+        ui.chart(.{
+            .width = 300,
+            .height = 140,
+            .grid_lines = 3,
+            .baseline = true,
+            .x_labels = &chart_month_labels,
+            .y_labels = true,
+        }, &.{
             .{ .kind = .line, .fill = true, .label = "cpu", .values = &.{ 0.18, 0.24, 0.21, 0.32, 0.45, 0.38, 0.52, 0.61, 0.55, 0.68, 0.62, 0.74 } },
         }),
     });

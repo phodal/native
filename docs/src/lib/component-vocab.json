@@ -234,7 +234,7 @@
     },
     {
       "name": "chart",
-      "doc": "Data chart: series children bind model f32 iterables and draw as token-colored line/area/bar plots (lowered through Ui.chart — same downsampling, theming, and semantics summary). Takes y-min, y-max, grid-lines, baseline, stroke-width, width, height, grow, padding, key, global-key, label. Display-only; the series set is static."
+      "doc": "Data chart: series children bind model f32 iterables and draw as token-colored line/area/bar plots (lowered through Ui.chart — same downsampling, theming, and semantics summary). Takes y-min, y-max, grid-lines, baseline, x-labels, y-labels, hover-details, stroke-width, width, height, grow, padding, key, global-key, label. Display-only (presses fall through); hover-details makes it a hover target; the series set is static."
     },
     {
       "name": "series",
@@ -630,6 +630,18 @@
       {
         "name": "baseline",
         "doc": "chart: draw a hairline at the baseline (zero clamped into the domain); true/false or a {binding}."
+      },
+      {
+        "name": "x-labels",
+        "doc": "chart: one {binding} naming a model iterable of strings — one category label per sample, oldest first (label i names sample i). Drawn muted below the plot, deterministically thinned to fit; dropped when a series downsamples (bucketed indices no longer name the labeled samples)."
+      },
+      {
+        "name": "y-labels",
+        "doc": "chart: numeric y tick labels (true/false or a {binding}). Ticks ride a nice-step lattice (1/2/5 x 10^k, exact at their precision); with grid-lines set, gridlines share the lattice so grid and labels never disagree."
+      },
+      {
+        "name": "hover-details",
+        "doc": "chart: pointer-hover point details (true/false or a {binding}) — hovering snaps to the nearest sample and floats a card with its label and every series' value. Interaction-only chrome (static renders never show it); presses still fall through."
       },
       {
         "name": "stroke-width",

@@ -405,6 +405,15 @@ pub const attrs = [_]AttrInfo{
     // appearances snap inside the runtime; documents declare nothing.
     .{ .code = 71, .name = "resize-duration", .class = .whole, .group = .option, .field = "resize_duration" },
     .{ .code = 72, .name = "resize-easing", .class = .option, .group = .option, .field = "resize_easing" },
+    // Chart axis/hover attributes (fresh codes, assigned at birth;
+    // reserved alongside 71/72 by parallel same-day waves, per the
+    // collision notes on 65..67 above). x-labels binds a model iterable
+    // of strings (one category label per sample, the same resolution
+    // set series values use), y-labels flags numeric ticks on,
+    // hover-details flags the pointer-hover detail card on.
+    .{ .code = 73, .name = "x-labels", .class = .binding_only, .group = .composite },
+    .{ .code = 74, .name = "y-labels", .class = .flag, .group = .composite },
+    .{ .code = 75, .name = "hover-details", .class = .flag, .group = .composite },
 };
 
 // ----------------------------------------------------------------- events

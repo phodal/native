@@ -47,6 +47,7 @@ pub const Error = error{
     InvalidTransform,
     WidgetDepthExceeded,
     ChartPathElementListFull,
+    ChartLabelBytesFull,
     WidgetEventRouteListFull,
     WidgetInvalidationListFull,
     WidgetLayoutListFull,
@@ -433,6 +434,15 @@ pub const downsampleChartValues = chart.downsampleChartValues;
 pub const downsampledChartLen = chart.downsampledChartLen;
 pub const max_chart_points_per_series = chart.max_chart_points_per_series;
 pub const max_chart_path_elements_per_frame = chart.max_chart_path_elements_per_frame;
+pub const max_chart_label_bytes_per_frame = chart.max_chart_label_bytes_per_frame;
+pub const max_chart_value_label_bytes = chart.max_chart_value_label_bytes;
+pub const chartTickDecimals = chart.chartTickDecimals;
+pub const formatChartValue = chart.formatChartValue;
+pub const ChartTickLattice = chart.ChartTickLattice;
+pub const chartTickLattice = chart.chartTickLattice;
+pub const max_chart_axis_ticks = chart.max_chart_axis_ticks;
+pub const chartPointCount = chart.chartPointCount;
+pub const chartHoverIndex = chart.chartHoverIndex;
 
 // GitHub-flavored-markdown mapper (markdown source -> widget tree + span
 // model) lives in `markdown.zig`; also exported as `native_sdk.markdown`.
@@ -573,6 +583,8 @@ pub const textCaretCommandId = widget_runtime.textCaretCommandId;
 pub const spinnerWidgetArcCommandId = widget_runtime.spinnerWidgetArcCommandId;
 pub const skeletonWidgetFillCommandId = widget_runtime.skeletonWidgetFillCommandId;
 pub const spinnerWidgetRotationCenter = widget_runtime.spinnerWidgetRotationCenter;
+pub const chartWidgetPlotRect = widget_runtime.chartWidgetPlotRect;
+pub const chartWidgetHoverIndex = widget_runtime.chartWidgetHoverIndex;
 pub const textSelectionCommandId = widget_runtime.textSelectionCommandId;
 pub const toggleWidgetKnobTravel = widget_runtime.toggleWidgetKnobTravel;
 pub const widgetControlAimPoint = widget_runtime.widgetControlAimPoint;

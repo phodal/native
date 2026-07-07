@@ -1205,8 +1205,26 @@ const Checker = struct {
                 try self.checkClassAttr(node, attribute, .whole);
                 continue;
             }
-            if (std.mem.eql(u8, attribute.name, "baseline")) {
+            if (std.mem.eql(u8, attribute.name, "baseline") or
+                std.mem.eql(u8, attribute.name, "y-labels") or
+                std.mem.eql(u8, attribute.name, "hover-details"))
+            {
                 _ = try self.attrKind(node, attribute, attribute.value);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "x-labels")) {
+                // Like series values, but the iterable's items are
+                // strings: a wrong item type fails with the model type
+                // named, so the fix is visible from the finding.
+                const expression = markup.parseAttrExpression(attribute.value) orelse continue;
+                if (expression != .binding) continue;
+                const item = try self.resolveIterable(node, expression.binding, markup.chart_x_labels_message);
+                if (!std.mem.eql(u8, item.type_name, "[]const u8")) {
+                    const message = std.fmt.allocPrint(self.arena, "{s} (\"{s}\" iterates {s})", .{
+                        markup.chart_x_labels_message, expression.binding, item.type_name,
+                    }) catch return error.OutOfMemory;
+                    return self.failAttr(node, attribute, message);
+                }
                 continue;
             }
             if (std.mem.eql(u8, attribute.name, "key") or std.mem.eql(u8, attribute.name, "global-key")) {

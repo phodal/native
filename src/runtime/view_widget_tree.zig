@@ -63,6 +63,7 @@ fn validateWidgetLayoutPoolBudgets(
     var menu_len: usize = 0;
     var series_len: usize = 0;
     var points_len: usize = 0;
+    var x_labels_len: usize = 0;
     for (layout.nodes, 0..) |node, node_index| {
         // The copy loop charges the RECONCILED node (runtime editor text
         // can outgrow the source's) — mirror the same transform.
@@ -80,11 +81,14 @@ fn validateWidgetLayoutPoolBudgets(
             text_len += series.label.len;
             points_len += series.values.len + series.low.len;
         }
+        x_labels_len += widget.chart.x_labels.len;
+        for (widget.chart.x_labels) |label| text_len += label.len;
     }
     if (span_len > canvas_limits.max_canvas_widget_spans_per_view) return error.WidgetSpanLimitReached;
     if (menu_len > canvas_limits.max_canvas_widget_context_menu_items_per_view) return error.WidgetContextMenuLimitReached;
     if (series_len > canvas_limits.max_canvas_widget_chart_series_per_view) return error.WidgetChartSeriesLimitReached;
     if (points_len > canvas_limits.max_canvas_widget_chart_points_per_view) return error.WidgetChartPointsLimitReached;
+    if (x_labels_len > canvas_limits.max_canvas_widget_chart_x_labels_per_view) return error.WidgetChartLabelsLimitReached;
     if (text_len > max_canvas_widget_text_bytes_per_view) return error.WidgetTextTooLarge;
 }
 
@@ -271,6 +275,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_context_menu_len = 0;
             self.widget_chart_series_len = 0;
             self.widget_chart_points_len = 0;
+            self.widget_chart_x_labels_len = 0;
 
             for (layout.nodes, 0..) |node, layout_index| {
                 const text_reconciled = canvasWidgetLayoutNodeWithTextReconcileState(node, layout, layout_index, &index_scratch.texts);
@@ -304,6 +309,9 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             if (self.canvas_widget_hovered_id != 0 and !canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), self.canvas_widget_hovered_id)) {
                 self.canvas_widget_hovered_id = 0;
             }
+            // The hover point belongs to the hovered widget's detail
+            // chrome; without a hovered widget it means nothing.
+            if (self.canvas_widget_hovered_id == 0) self.canvas_widget_hover_point = null;
             if (self.canvas_widget_pressed_id != 0 and !canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), self.canvas_widget_pressed_id)) {
                 self.canvas_widget_pressed_id = 0;
             }
@@ -331,6 +339,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 // the press fall-through so a click anywhere in a
                 // composite row lights the row, matching the hover walk.
                 .pressed_id = if (self.canvas_widget_pressed_id == 0) null else canvasWidgetPressWashTargetId(self, self.canvas_widget_pressed_id),
+                .hover_point = if (self.canvas_widget_hovered_id == 0) null else self.canvas_widget_hover_point,
             };
         }
 
@@ -743,8 +752,9 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// samples from a reused app buffer). Bounded by the per-view
         /// chart budgets in `canvas_limits`.
         pub fn copyWidgetChart(self: *RuntimeView, data: canvas.ChartData) anyerror!canvas.ChartData {
+            var copy = data;
+            copy.x_labels = try copyWidgetChartLabels(self, data.x_labels);
             if (data.series.len == 0) {
-                var copy = data;
                 copy.series = &.{};
                 return copy;
             }
@@ -758,9 +768,23 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 entry.low = try copyWidgetChartPoints(self, series.low);
                 entry.label = try self.copyWidgetText(series.label);
             }
-            var copy = data;
             copy.series = self.widget_chart_series_entries[start..end];
             return copy;
+        }
+
+        /// Retain a chart's x-axis category labels: the slice entries land
+        /// in per-view label storage, the bytes ride the widget-text
+        /// budget — same ownership rule as series labels.
+        fn copyWidgetChartLabels(self: *RuntimeView, labels: []const []const u8) anyerror![]const []const u8 {
+            if (labels.len == 0) return &.{};
+            const end = self.widget_chart_x_labels_len + labels.len;
+            if (end > self.widget_chart_x_labels.len) return error.WidgetChartLabelsLimitReached;
+            const start = self.widget_chart_x_labels_len;
+            self.widget_chart_x_labels_len = end;
+            for (labels, self.widget_chart_x_labels[start..end]) |label, *entry| {
+                entry.* = try self.copyWidgetText(label);
+            }
+            return self.widget_chart_x_labels[start..end];
         }
 
         fn copyWidgetChartPoints(self: *RuntimeView, points: []const f32) anyerror![]const f32 {

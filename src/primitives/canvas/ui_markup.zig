@@ -1736,7 +1736,8 @@ pub const timeline_item_attr_message = "unknown attribute for timeline-item - it
 pub const timeline_item_text_attr_message = "title, description, meta, and indicator expect text (a literal or one {binding})";
 pub const timeline_item_children_message = "timeline-item takes no children - the title, description, and meta attributes provide the content";
 pub const timeline_item_press_only_message = "timeline-item dispatches presses only - use on-press (other on-* events have no surface here)";
-pub const chart_attr_message = "unknown attribute for chart - it takes y-min, y-max, grid-lines, baseline, stroke-width, width, height, grow, padding, key, global-key, and label";
+pub const chart_attr_message = "unknown attribute for chart - it takes y-min, y-max, grid-lines, baseline, x-labels, y-labels, hover-details, stroke-width, width, height, grow, padding, key, global-key, and label";
+pub const chart_x_labels_message = "chart x-labels expects a {binding} naming a model iterable of strings (one category label per sample, oldest first)";
 pub const chart_children_message = "chart takes only series children - one <series values=\"{binding}\"/> per plotted series; the series set is static (vary the DATA through bindings), and dynamic series composition stays with the Zig builder (ui.chart)";
 pub const chart_series_required_message = "chart requires at least one series child (<series values=\"{history}\"/>)";
 pub const chart_display_only_message = "chart is display-only - presses fall through it like text, so on-* handlers have no surface here; put on-press on a container around it";
@@ -2304,10 +2305,21 @@ fn validateChart(node: MarkupNode) ?MarkupErrorInfo {
         if (std.mem.startsWith(u8, attribute.name, "on-")) {
             return attrError(node, attribute, chart_display_only_message);
         }
+        if (std.mem.eql(u8, attribute.name, "x-labels")) {
+            // Like series values: the data channel is a binding, never
+            // a literal — labels vary with the model.
+            const expression = parseAttrExpression(attribute.value);
+            if (expression == null or expression.? != .binding) {
+                return attrError(node, attribute, chart_x_labels_message);
+            }
+            continue;
+        }
         const known = std.mem.eql(u8, attribute.name, "y-min") or
             std.mem.eql(u8, attribute.name, "y-max") or
             std.mem.eql(u8, attribute.name, "grid-lines") or
             std.mem.eql(u8, attribute.name, "baseline") or
+            std.mem.eql(u8, attribute.name, "y-labels") or
+            std.mem.eql(u8, attribute.name, "hover-details") or
             std.mem.eql(u8, attribute.name, "stroke-width") or
             std.mem.eql(u8, attribute.name, "width") or
             std.mem.eql(u8, attribute.name, "height") or

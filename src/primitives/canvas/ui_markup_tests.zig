@@ -987,6 +987,9 @@ test "chart and series validate structure with teaching messages" {
     const valid_sources = [_][]const u8{
         "<column>\n  <chart y-min=\"0\" y-max=\"1\" grid-lines=\"4\" baseline=\"true\" width=\"239\" height=\"32\" label=\"CPU history\">\n    <series kind=\"bar\" values=\"{cpu_history}\" color=\"accent\" label=\"cpu\" />\n    <series kind=\"area\" values=\"{latency}\" />\n  </chart>\n</column>",
         "<column>\n  <chart grow=\"1\" stroke-width=\"2\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>",
+        // Axis labels and hover details: x-labels bind a string
+        // iterable, the flags are ordinary truthy attributes.
+        "<column>\n  <chart x-labels=\"{months}\" y-labels=\"true\" hover-details=\"true\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>",
     };
     for (valid_sources) |source| {
         var parser = markup.Parser.init(arena, source);
@@ -995,6 +998,8 @@ test "chart and series validate structure with teaching messages" {
 
     const cases = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "<column>\n  <chart gap=\"4\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.chart_attr_message },
+        // The label data channel is a binding, never a literal.
+        .{ .source = "<column>\n  <chart x-labels=\"jan\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.chart_x_labels_message },
         .{ .source = "<column>\n  <chart on-press=\"pick\">\n    <series values=\"{levels}\" />\n  </chart>\n</column>", .message = markup.chart_display_only_message },
         .{ .source = "<column>\n  <chart />\n</column>", .message = markup.chart_series_required_message },
         .{ .source = "<column>\n  <chart>\n    <text>x</text>\n  </chart>\n</column>", .message = markup.chart_children_message },

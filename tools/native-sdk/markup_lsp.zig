@@ -880,7 +880,7 @@ test "doc tables cover every known element, attribute, and event" {
     for ([_][]const u8{ "active", "title", "description", "meta", "indicator", "connector", "image" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
-    for ([_][]const u8{ "values", "y-min", "y-max", "grid-lines", "baseline", "stroke-width", "color" }) |name| {
+    for ([_][]const u8{ "values", "y-min", "y-max", "grid-lines", "baseline", "x-labels", "y-labels", "hover-details", "stroke-width", "color" }) |name| {
         try testing.expect(attributeDoc(name) != null);
     }
     for (ui_markup.known_events) |event| {

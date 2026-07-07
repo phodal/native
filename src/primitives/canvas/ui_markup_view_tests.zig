@@ -2881,6 +2881,8 @@ pub const ChartModel = struct {
     cpu_history: [6]f32 = .{ std.math.nan(f32), std.math.nan(f32), 0.2, 0.4, 0.35, 0.8 },
     latency: []const f32 = &.{ 12, 18, 9, 22 },
     names: []const []const u8 = &.{ "cpu", "mem" },
+    /// One category label per cpu_history sample (the x-labels channel).
+    months: []const []const u8 = &.{ "jan", "feb", "mar", "apr", "may", "jun" },
     limit: f32 = 1,
 
     /// Arena-computed series: the same fn shape `for each` accepts.
@@ -2893,7 +2895,7 @@ pub const ChartModel = struct {
 
 pub const chart_markup_source =
     \\<column gap="8">
-    \\  <chart width="240" height="48" y-min="0" y-max="{limit}" grid-lines="2" baseline="true" label="CPU history">
+    \\  <chart width="240" height="48" y-min="0" y-max="{limit}" grid-lines="2" baseline="true" x-labels="{months}" y-labels="true" hover-details="true" label="CPU history">
     \\    <series kind="bar" values="{cpu_history}" color="accent" label="cpu" />
     \\    <series kind="area" values="{load}" color="info" />
     \\  </chart>
@@ -2917,6 +2919,9 @@ pub fn handChartView(ui: *ChartUi, model: *const ChartModel) ChartUi.Node {
             .y_max = model.limit,
             .grid_lines = 2,
             .baseline = true,
+            .x_labels = model.months,
+            .y_labels = true,
+            .hover_details = true,
             .semantics = .{ .label = "CPU history" },
         }, &.{
             .{ .kind = .bar, .values = &model.cpu_history, .color = .accent, .label = "cpu" },
@@ -2971,6 +2976,13 @@ test "the chart element builds the hand-written Ui.chart tree with series bindin
     try testing.expectEqual(@as(?f32, 1), cpu_chart.chart.y_max);
     try testing.expectEqual(@as(u8, 2), cpu_chart.chart.grid_lines);
     try testing.expect(cpu_chart.chart.baseline);
+    // The axis/hover options land: x-labels bind the model's string
+    // iterable, the flags flip their features on.
+    try testing.expectEqual(@as(usize, 6), cpu_chart.chart.x_labels.len);
+    try testing.expectEqualStrings("jan", cpu_chart.chart.x_labels[0]);
+    try testing.expectEqualStrings("jun", cpu_chart.chart.x_labels[5]);
+    try testing.expect(cpu_chart.chart.y_labels);
+    try testing.expect(cpu_chart.chart.hover_details);
     try testing.expectEqualStrings("CPU history", cpu_chart.semantics.label);
     try testing.expectEqual(@as(usize, 2), cpu_chart.chart.series.len);
     const bar_series = cpu_chart.chart.series[0];

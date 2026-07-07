@@ -350,6 +350,14 @@ pub const RuntimeView = struct {
     canvas_widget_focus_visible_id: canvas.ObjectId = 0,
     canvas_widget_hovered_id: canvas.ObjectId = 0,
     canvas_widget_pressed_id: canvas.ObjectId = 0,
+    /// Pointer position while the hovered widget draws hover-detail
+    /// chrome (a `.chart` with hover details opted in); null everywhere
+    /// else. Feeds `WidgetRenderState.hover_point`, so the display list
+    /// can place the chart's cursor and floating detail card. Updates
+    /// only invalidate when the SNAPPED sample index changes (see
+    /// updateCanvasWidgetInteractionFromPointer), so a pointer gliding
+    /// within one sample repaints nothing.
+    canvas_widget_hover_point: ?geometry.PointF = null,
     /// The static `.text` widget owning the view's active click-drag
     /// selection (0 = none). One static selection per view; starting a
     /// selection elsewhere (or pressing anywhere else) clears it.
@@ -385,6 +393,8 @@ pub const RuntimeView = struct {
     widget_chart_series_len: usize = 0,
     widget_chart_points: [canvas_limits.max_canvas_widget_chart_points_per_view]f32 = undefined,
     widget_chart_points_len: usize = 0,
+    widget_chart_x_labels: [canvas_limits.max_canvas_widget_chart_x_labels_per_view][]const u8 = undefined,
+    widget_chart_x_labels_len: usize = 0,
     focused: bool = false,
     open: bool = false,
     label_storage: [platform.max_view_label_bytes]u8 = undefined,

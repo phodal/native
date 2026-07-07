@@ -217,6 +217,18 @@ pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometr
     return widget_render.spinnerWidgetRotationCenter(widget, tokens);
 }
 
+/// The rect a chart's data plots into (padded frame minus opted-in axis
+/// label gutters) — the runtime's hover logic and the renderer share it.
+pub fn chartWidgetPlotRect(widget: Widget, tokens: DesignTokens) geometry.RectF {
+    return widget_render.chartWidgetPlotRect(widget, tokens);
+}
+
+/// The sample index a pointer over a hover-details chart snaps to (null
+/// for anything else) — the runtime's repaint gate for chart hover.
+pub fn chartWidgetHoverIndex(widget: Widget, tokens: DesignTokens, point: geometry.PointF) ?usize {
+    return widget_render.chartWidgetHoverIndex(widget, tokens, point);
+}
+
 pub fn toggleWidgetKnobTravel(widget: Widget, tokens: DesignTokens) f32 {
     return widget_render.toggleWidgetKnobTravel(widget, tokens);
 }

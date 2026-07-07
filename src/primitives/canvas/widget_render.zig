@@ -201,6 +201,10 @@ fn emitWidgetLayoutAnchored(builder: *Builder, layout: anytype, tokens: DesignTo
     for (layout.nodes, 0..) |node, index| {
         if (!widget_tree.widgetIsAnchored(node.widget)) continue;
         if (widget_tree.isWidgetHiddenInAncestors(layout, index)) continue;
+        // A floating surface anchored inside a concealed disclosure
+        // subtree stays down with its anchor — concealed content is
+        // laid out but must not paint window-level chrome.
+        if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) continue;
         try emitWidgetLayoutNode(builder, layout, index, tokens, state, .none);
     }
 }
@@ -534,7 +538,27 @@ fn emitWidgetLayoutNodeContent(
             try emitModalSurfaceScrim(builder, paint_widget, tokens);
             try widget_render_surfaces.emitSheetSurfaceWidgetChrome(builder, paint_widget, tokens);
         },
-        .accordion => try widget_render_surfaces.emitAccordionWidgetChrome(builder, paint_widget, tokens),
+        .accordion => {
+            try widget_render_surfaces.emitAccordionWidgetChrome(builder, paint_widget, tokens);
+            // Disclosure emission is tri-state. Settled closed: the
+            // content (laid out at full size below the header) emits
+            // NOTHING — byte-identical to the pre-disclosure display
+            // list. Mid-reveal (or mid-conceal): the content paints at
+            // its full-size geometry, clipped to the item's animated
+            // frame, so text reveals without ever re-wrapping. Settled
+            // open: the shared unclipped children pass below, exactly
+            // as before.
+            switch (accordionLayoutDisclosure(layout, node_index, paint_widget, state)) {
+                .closed => return,
+                .revealing => {
+                    try builder.pushClip(.{ .id = widgetPartId(paint_widget.id, 9), .rect = paint_widget.frame });
+                    try emitWidgetLayoutChildren(builder, layout, node_index, tokens, state);
+                    try builder.popClip();
+                    return;
+                },
+                .open => {},
+            }
+        },
         .bubble => {
             try widget_render_surfaces.emitBubbleWidgetChrome(builder, paint_widget, tokens);
             // The bubble's variant re-inks its content: children render
@@ -787,20 +811,35 @@ fn emitBubbleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, dep
     try emitWidgetClippedChildren(builder, widget, widget_render_surfaces.bubbleContentTokens(widget, tokens), depth);
 }
 
-// Disclosure is DISCRETE by design, not animated: render animations are
-// post-layout overrides (opacity/transform/rotation on already-laid-out
-// commands) and never relayout, while an animated panel height is a
-// layout change every frame — the accordion's intrinsic height drives
-// where every sibling below it sits, and collapsed content is pruned
-// before layout, so there is nothing painted to clip a reveal from. A
-// height-reveal needs either an animated layout input (per-frame
-// relayout, which the animation system's no-rebuild invariant forbids)
-// or a clip override channel plus laying out hidden content; both are
-// new machinery, so open/close snaps between its two honest states.
+// The HIERARCHICAL walk's disclosure is discrete: this path emits
+// source trees directly (static scenes, docs specimens) where no
+// runtime tween exists, so a closed item simply skips its content.
+// Animated disclosure lives on the LAYOUT walk above — the runtime's
+// disclosure tween eases the retained frames and the layout emission
+// clips the full-size content to the animated frame mid-reveal.
 fn emitAccordionWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
     try widget_render_surfaces.emitAccordionWidgetChrome(builder, widget, tokens);
     if (!accordionChildrenVisible(widget)) return;
     try emitWidgetClippedChildren(builder, widget, tokens, depth);
+}
+
+/// One accordion's disclosure pose on the layout walk, judged from
+/// retained state plus geometry:
+///   - `open`: state open AND the frame holds everything the content
+///     reaches — the settled pose; content emits unclipped, exactly
+///     the pre-disclosure display list.
+///   - `revealing`: the frame trails the content — a reveal in flight
+///     (state open, frame still growing) or a conceal in flight (state
+///     closed, but the runtime's tween says this id is still moving).
+///   - `closed`: state closed with no tween in flight — content emits
+///     nothing.
+const AccordionLayoutDisclosure = enum { closed, revealing, open };
+
+fn accordionLayoutDisclosure(layout: anytype, node_index: usize, widget: Widget, state: WidgetRenderState) AccordionLayoutDisclosure {
+    if (accordionChildrenVisible(widget)) {
+        return if (widget_tree.disclosureSettledOpen(layout, node_index)) .open else .revealing;
+    }
+    return if (state.disclosureRevealing(widget.id)) .revealing else .closed;
 }
 
 fn emitTabsWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {

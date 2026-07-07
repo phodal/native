@@ -26,12 +26,17 @@ pub fn collectWidgetSemantics(layout: anytype, output: []WidgetSemanticsNode, sc
     var len: usize = 0;
     var semantic_stack: [max_widget_depth]?usize = [_]?usize{null} ** max_widget_depth;
     var hidden_depth: ?usize = null;
+    var concealed_depth: ?usize = null;
 
     for (layout.nodes, 0..) |node, node_index| {
         if (node.depth >= max_widget_depth) return error.WidgetDepthExceeded;
         if (hidden_depth) |depth| {
             if (node.depth > depth) continue;
             hidden_depth = null;
+        }
+        if (concealed_depth) |depth| {
+            if (node.depth > depth) continue;
+            concealed_depth = null;
         }
         var cursor = node.depth + 1;
         while (cursor < semantic_stack.len) : (cursor += 1) {
@@ -42,6 +47,15 @@ pub fn collectWidgetSemantics(layout: anytype, output: []WidgetSemanticsNode, sc
         if (node.widget.semantics.hidden) {
             hidden_depth = node.depth;
             continue;
+        }
+        // A disclosure widget that is not settled open conceals its
+        // CONTENT from assistive tech — the section reads as collapsed
+        // until the reveal lands — while the widget itself (the
+        // trigger, carrying the expanded/collapsed state) stays
+        // exposed. The hidden skip above drops the node too; this one
+        // drops only what sits under it.
+        if (widget_tree.widgetKindDisclosureAnimated(node.widget.kind) and !widget_tree.disclosureSettledOpen(layout, node_index)) {
+            concealed_depth = node.depth;
         }
         if (role == .none or node.widget.id == 0) continue;
         if (len >= output.len) return error.WidgetSemanticsListFull;
@@ -440,8 +454,23 @@ fn widgetScrollContentExtent(layout: anytype, scroll_index: usize, viewport: geo
     const offset = scroll_node.widget.value;
     var bottom = viewport.maxY();
     var index = scroll_index + 1;
-    while (index < layout.nodes.len and layout.nodes[index].depth > scroll_depth) : (index += 1) {
-        bottom = @max(bottom, layout.nodes[index].frame.maxY() + offset);
+    while (index < layout.nodes.len and layout.nodes[index].depth > scroll_depth) {
+        const node = layout.nodes[index];
+        bottom = @max(bottom, node.frame.maxY() + offset);
+        // A disclosure widget's own frame is authoritative for how far
+        // its content currently reaches: concealed content lays out at
+        // full size BELOW a closed item's header-only frame, and must
+        // not inflate the scrollable extent — so its subtree is skipped
+        // wholesale. Settled-open content sits inside the frame anyway,
+        // and a mid-reveal extent follows the animated frame, which is
+        // exactly the scrollbar motion the reveal should show.
+        if (widget_tree.widgetKindDisclosureAnimated(node.widget.kind)) {
+            const subtree_depth = node.depth;
+            index += 1;
+            while (index < layout.nodes.len and layout.nodes[index].depth > subtree_depth) : (index += 1) {}
+            continue;
+        }
+        index += 1;
     }
     return @max(0, bottom - viewport.y);
 }

@@ -243,6 +243,22 @@ pub const WidgetRenderState = struct {
     /// else — static trees and reference renders never carry one, so
     /// hover chrome renders only under live interaction.
     hover_point: ?geometry.PointF = null,
+    /// Disclosure widgets currently MID-TWEEN (the runtime's disclosure
+    /// tween is easing their extent). Render needs this for exactly one
+    /// asymmetry: a CLOSING item's state already says closed, but its
+    /// content must keep painting — clipped to the shrinking frame —
+    /// until the conceal lands. Static emission (no runtime) leaves
+    /// this empty and closed items skip their content, exactly as
+    /// before.
+    revealing_disclosure_ids: []const ObjectId = &.{},
+
+    pub fn disclosureRevealing(self: WidgetRenderState, id: ObjectId) bool {
+        if (id == 0) return false;
+        for (self.revealing_disclosure_ids) |revealing_id| {
+            if (revealing_id == id) return true;
+        }
+        return false;
+    }
 };
 
 pub const WidgetMainAlignment = enum {

@@ -57,6 +57,10 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 // before the pending-event dispatch below so the resize
                 // event each step notes reaches the app THIS frame.
                 try self.advanceCanvasWidgetLayoutTweensForFrame(index, frame_event.timestamp_ns);
+                // The disclosure tween steps on the same recorded clock,
+                // so accordion reveals replay frame for frame exactly
+                // like split fractions do.
+                try self.advanceCanvasWidgetDisclosureTweenForFrame(index, frame_event.timestamp_ns);
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
                 // Tween steps note split-resize events with no input in
                 // flight; drain them here so the controlled-split echo

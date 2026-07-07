@@ -50,6 +50,51 @@ pub const CanvasWidgetLayoutTweenState = struct {
     start_ns: u64 = 0,
 };
 
+/// One node's share of an armed DISCLOSURE tween: the frame it held in
+/// the pose the previous rebuild painted, and the frame the new rebuild
+/// declared. A disclosure reflow only ever moves the vertical channel —
+/// the flipped item's extent grows or shrinks and what stacks below it
+/// slides — so the record keeps y and height per endpoint and nothing
+/// else (an x or width delta disqualifies the tween at arm time).
+pub const CanvasWidgetDisclosureMove = struct {
+    node_index: usize,
+    from_y: f32,
+    from_height: f32,
+    to_y: f32,
+    to_height: f32,
+};
+
+/// The view's disclosure tween: one per rebuild, not one per widget —
+/// every disclosure flip a single rebuild lands shares one clock and
+/// one easing (they were one user action), and the tween simply PLAYS
+/// THE LAYOUT DIFF of that rebuild, easing every moved frame from the
+/// pose the user was looking at toward the pose the model declared.
+/// Node indices stay valid because a pure disclosure flip preserves
+/// the node sequence (accordion children are always laid out, open or
+/// closed); any rebuild that breaks that structure retires the tween
+/// and the new pose stands snapped — motion degrades, truth never does.
+pub const CanvasWidgetDisclosureTweenState = struct {
+    active: bool = false,
+    duration_ms: u32 = 0,
+    easing: canvas.Easing = .standard,
+    spring: canvas.SpringToken = .{},
+    /// 0 until the first advancing frame stamps the recorded clock —
+    /// the split layout tween's first-tick discipline, so replay of a
+    /// recorded session steps identical poses.
+    start_ns: u64 = 0,
+    /// Last eased progress applied to the retained frames, kept so a
+    /// mid-tween rebuild can re-restore the exact pose the user is
+    /// looking at instead of popping to the target for one frame.
+    progress: f32 = 0,
+    /// The disclosure widgets this tween is moving — the render walk
+    /// keeps painting a CLOSING item's content (clipped) only while
+    /// its id is in here.
+    revealing_ids: [canvas_limits.max_canvas_widget_disclosure_flips_per_view]canvas.ObjectId = undefined,
+    revealing_id_count: usize = 0,
+    moves: [canvas_limits.max_canvas_widget_disclosure_moves_per_view]CanvasWidgetDisclosureMove = undefined,
+    move_count: usize = 0,
+};
+
 pub const CanvasWidgetScrollSource = view_widget_scroll.CanvasWidgetScrollSource;
 pub const CanvasWidgetToggleAnimation = view_widget_control.CanvasWidgetToggleAnimation;
 pub const CanvasWidgetDisplayListChrome = view_canvas.CanvasWidgetDisplayListChrome;
@@ -192,6 +237,21 @@ pub const RuntimeView = struct {
     /// and the source-wins reconcile all behave exactly as a drag.
     canvas_widget_layout_tweens: [canvas_limits.max_canvas_widget_layout_tweens_per_view]CanvasWidgetLayoutTweenState = undefined,
     canvas_widget_layout_tween_count: usize = 0,
+    /// The view's DISCLOSURE tween (accordion open/close reveal):
+    /// armed by `setCanvasWidgetLayout` when a rebuild flips a
+    /// disclosure widget, advanced once per presented frame from the
+    /// frame event's recorded timestamp. See
+    /// `CanvasWidgetDisclosureTweenState`.
+    canvas_widget_disclosure_tween: CanvasWidgetDisclosureTweenState = .{},
+    /// Disclosure widgets whose open state the RUNTIME just toggled
+    /// (pointer, keyboard, or automation echo): the optimistic echo
+    /// flips the retained `selected` before the model's rebuild lands,
+    /// which would otherwise hide the flip from the rebuild-time
+    /// state comparison — so the toggle path notes the id here and the
+    /// next rebuild consumes (or, if the model ignored the toggle,
+    /// discards) the note.
+    canvas_widget_disclosure_pending_ids: [canvas_limits.max_canvas_widget_disclosure_flips_per_view]canvas.ObjectId = undefined,
+    canvas_widget_disclosure_pending_count: usize = 0,
     /// Command id of the caret currently carrying the looping blink
     /// animation (0 when no caret is showing), so display-list refreshes
     /// can retarget or remove the blink as focus and selection move.
@@ -563,6 +623,44 @@ pub const RuntimeView = struct {
         self.canvas_widget_layout_tweens[self.canvas_widget_layout_tween_count] = state;
         self.canvas_widget_layout_tween_count += 1;
         return true;
+    }
+
+    pub fn canvasWidgetDisclosureTweenActive(self: *const RuntimeView) bool {
+        return self.canvas_widget_disclosure_tween.active;
+    }
+
+    /// Retire the disclosure tween: frames stay wherever they are (the
+    /// caller either settled them at the target or replaced them with
+    /// a fresh rebuild's pose) and the revealing set empties, so the
+    /// next display emission paints closing items settled-closed.
+    pub fn clearCanvasWidgetDisclosureTween(self: *RuntimeView) void {
+        self.canvas_widget_disclosure_tween = .{};
+    }
+
+    /// The disclosure widgets currently mid-tween, for the render
+    /// walk's revealing set (see `WidgetRenderState`).
+    pub fn canvasWidgetRevealingDisclosureIds(self: *const RuntimeView) []const canvas.ObjectId {
+        if (!self.canvas_widget_disclosure_tween.active) return &.{};
+        return self.canvas_widget_disclosure_tween.revealing_ids[0..self.canvas_widget_disclosure_tween.revealing_id_count];
+    }
+
+    /// Note a runtime-side disclosure toggle echo (idempotent per id;
+    /// overflow drops the note, which merely snaps that flip).
+    pub fn noteCanvasWidgetDisclosureToggle(self: *RuntimeView, id: canvas.ObjectId) void {
+        if (id == 0) return;
+        for (self.canvas_widget_disclosure_pending_ids[0..self.canvas_widget_disclosure_pending_count]) |pending| {
+            if (pending == id) return;
+        }
+        if (self.canvas_widget_disclosure_pending_count >= self.canvas_widget_disclosure_pending_ids.len) return;
+        self.canvas_widget_disclosure_pending_ids[self.canvas_widget_disclosure_pending_count] = id;
+        self.canvas_widget_disclosure_pending_count += 1;
+    }
+
+    pub fn canvasWidgetDisclosureTogglePending(self: *const RuntimeView, id: canvas.ObjectId) bool {
+        for (self.canvas_widget_disclosure_pending_ids[0..self.canvas_widget_disclosure_pending_count]) |pending| {
+            if (pending == id) return true;
+        }
+        return false;
     }
 
     /// Retire a layout tween by widget id (order is not meaningful;

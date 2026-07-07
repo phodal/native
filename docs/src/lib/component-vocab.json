@@ -210,7 +210,7 @@
     },
     {
       "name": "icon",
-      "doc": "Built-in vector icon leaf: name selects one of the curated built-in stroke icons (comptime-validated), tint via foreground, size with width/height or size."
+      "doc": "Vector icon leaf: name selects a curated built-in stroke icon (comptime-validated), an app-registered app:<name> (canvas.icons.registerAppIcons; native check verifies the name against the model contract), or one {binding} resolving to such a name. Tint via foreground, size with width/height or size."
     },
     {
       "name": "markdown",
@@ -402,7 +402,7 @@
     },
     {
       "name": "icon",
-      "doc": "button, toggle-button, list-item, menu-item: built-in vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot; literal name, comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw). Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint."
+      "doc": "button, toggle-button, list-item, menu-item: vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot): a built-in name (comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw), an app-registered app:<name>, or one {binding} resolving to such a name. Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint."
     },
     {
       "name": "icon-placement",
@@ -781,7 +781,7 @@
     "template": [
       {
         "name": "name",
-        "doc": "template: the definition's name, referenced by use. icon: the built-in vector icon to draw (literal, comptime-validated against canvas.icons.known_icon_names)."
+        "doc": "template: the definition's name, referenced by use. icon: the vector icon to draw (a comptime-validated built-in name, app:<name>, or one {binding})."
       },
       {
         "name": "args",

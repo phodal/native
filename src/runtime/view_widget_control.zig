@@ -281,6 +281,14 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             const selected = canvasWidgetBooleanSelected(widget);
             self.widget_layout_nodes[index].widget.state.selected = !selected;
             self.widget_layout_nodes[index].widget.value = if (!selected) 1 else 0;
+            // Disclosure widgets note the toggle for the NEXT rebuild:
+            // this optimistic echo already flipped the retained state,
+            // so the rebuild-time flip detection that arms the
+            // disclosure tween would otherwise see both poses agreeing
+            // and skip the animation.
+            if (canvas.widgetKindDisclosureAnimated(widget.kind)) {
+                self.noteCanvasWidgetDisclosureToggle(widget.id);
+            }
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
             return self.canvasWidgetDirtyBounds(index, widget.frame);

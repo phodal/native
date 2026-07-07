@@ -1384,8 +1384,17 @@ test "built-in accordion disclosure state controls child layout and semantics" {
 
     var collapsed_nodes: [2]WidgetLayoutNode = undefined;
     const collapsed_layout = try layoutWidgetTree(collapsed, collapsed.frame, &collapsed_nodes);
-    try std.testing.expectEqual(@as(usize, 1), collapsed_layout.nodeCount());
-    try std.testing.expect(collapsed_layout.findById(46) == null);
+    // The disclosure contract: collapsed content still LAYS OUT — at
+    // full size, ready for the runtime's disclosure tween to reveal it
+    // without a single re-wrap — but stays concealed everywhere that
+    // matters: semantics, hit testing, and the emitted display list
+    // are indistinguishable from a content-less item.
+    try std.testing.expectEqual(@as(usize, 2), collapsed_layout.nodeCount());
+    const concealed_child = collapsed_layout.findById(46) orelse return error.TestUnexpectedResult;
+    const concealed_probe = geometry.PointF.init(concealed_child.frame.x + 4, concealed_child.frame.y + 4);
+    if (collapsed_layout.hitTest(concealed_probe)) |hit| {
+        try std.testing.expect(hit.id != 46);
+    }
 
     var collapsed_semantics_buffer: [2]WidgetSemanticsNode = undefined;
     const collapsed_semantics = try collapsed_layout.collectSemantics(&collapsed_semantics_buffer);

@@ -340,6 +340,10 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 // composite row lights the row, matching the hover walk.
                 .pressed_id = if (self.canvas_widget_pressed_id == 0) null else canvasWidgetPressWashTargetId(self, self.canvas_widget_pressed_id),
                 .hover_point = if (self.canvas_widget_hovered_id == 0) null else self.canvas_widget_hover_point,
+                // Closing disclosure widgets keep painting their content
+                // (clipped to the shrinking frame) only while the
+                // disclosure tween names them here.
+                .revealing_disclosure_ids = self.canvasWidgetRevealingDisclosureIds(),
             };
         }
 

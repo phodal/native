@@ -10,6 +10,7 @@ const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const runtime_canvas_widget_scroll_drivers = @import("canvas_widget_scroll_drivers.zig");
 const launch_timing = @import("launch_timing.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
+const runtime_view = @import("view.zig");
 const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
 const runtime_automation_widget_dispatch = @import("automation_widget_dispatch.zig");
 const widget_bridge = @import("widget_bridge.zig");
@@ -25,6 +26,7 @@ const canvasWidgetLayoutTreeWithRuntimeReconcileState = canvas_widget_runtime.ca
 const canvasWidgetEditableTextKind = canvas_widget_runtime.canvasWidgetEditableTextKind;
 const canvasWidgetAccessibilityActionSupported = widget_bridge.canvasWidgetAccessibilityActionSupported;
 const canvasWidgetAccessibilitySemanticAction = widget_bridge.canvasWidgetAccessibilitySemanticAction;
+const canvasWidgetBooleanSelected = canvas_widget_runtime.canvasWidgetBooleanSelected;
 
 pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
     return struct {
@@ -90,6 +92,13 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 previous_layout.renderStateDirtyBoundsWithTokens(previous_render_state, next_render_state, tokens)
             else
                 null;
+            // Disclosure tween planning reads BOTH poses — the retained
+            // tree the user is looking at and the reconciled tree this
+            // rebuild declared — so it runs before the copy below
+            // replaces the former. The plan applies after the copy,
+            // where it can restore the previous pose onto the freshly
+            // retained nodes.
+            const disclosure_plan = planCanvasWidgetDisclosureTween(self, index, previous_layout, reconciled_layout);
             const previous_cursor = self.views[index].canvas_widget_cursor;
             const previous_widget_revision = self.views[index].widget_revision;
             try self.views[index].copyWidgetLayoutTree(reconciled_layout, &self.canvas_widget_copy_scratch);
@@ -121,6 +130,12 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // into the same widget fields, so this one walk is the whole
             // consumer.
             try armSourceDeclaredLayoutTweens(self, index, layout);
+            // Disclosure tween application, still BEFORE the display
+            // refresh: an armed reveal restores the previous pose onto
+            // the retained frames so THIS rebuild keeps painting what
+            // the user was looking at, and the tween walks it to the
+            // declared pose one presented frame at a time.
+            try applyCanvasWidgetDisclosureTweenPlan(self, index, disclosure_plan);
             const requested_frame = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);
             if ((layout_dirty or widget_revision_changed) and !requested_frame) try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
             return self.views[index].info();
@@ -324,6 +339,253 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             return self.views[index].widget_layout_nodes[parent_index].widget.id == split_id;
         }
 
+        /// What `setCanvasWidgetLayout` should do about DISCLOSURE
+        /// motion this rebuild, decided by diffing the two poses:
+        ///   - `arm`: the rebuild flipped at least one disclosure
+        ///     widget and the reflow is pure vertical — play the diff;
+        ///   - `refresh`: no flip, but a tween is in flight — re-point
+        ///     its targets at the new tree and re-apply the mid-flight
+        ///     pose the copy just stomped;
+        ///   - `retire`: an in-flight tween can no longer replay (the
+        ///     node sequence changed, motion got disabled, or the
+        ///     reflow stopped being disclosure-shaped) — the new pose
+        ///     stands snapped;
+        ///   - `none`: nothing armed, nothing to arm.
+        const CanvasWidgetDisclosureAction = enum { none, arm, refresh, retire };
+
+        const CanvasWidgetDisclosurePlan = struct {
+            action: CanvasWidgetDisclosureAction = .none,
+            duration_ms: u32 = 0,
+            revealing_ids: [canvas_limits.max_canvas_widget_disclosure_flips_per_view]canvas.ObjectId = undefined,
+            revealing_id_count: usize = 0,
+            moves: [canvas_limits.max_canvas_widget_disclosure_moves_per_view]runtime_view.CanvasWidgetDisclosureMove = undefined,
+            move_count: usize = 0,
+        };
+
+        /// The planning half of the disclosure tween (see
+        /// `CanvasWidgetDisclosureTweenState` for the design): pure
+        /// reads over the previous retained pose and the reconciled
+        /// next pose, no mutation — the caller applies the plan after
+        /// the reconciled tree is retained.
+        fn planCanvasWidgetDisclosureTween(self: *Runtime, view_index: usize, previous: canvas.WidgetLayoutTree, next: canvas.WidgetLayoutTree) CanvasWidgetDisclosurePlan {
+            var plan = CanvasWidgetDisclosurePlan{};
+            const view = &self.views[view_index];
+            const was_active = view.canvas_widget_disclosure_tween.active;
+            const retire_or_none: CanvasWidgetDisclosureAction = if (was_active) .retire else .none;
+
+            // The tween replays frame motion BY NODE INDEX, which is
+            // only meaningful while both rebuilds describe the same
+            // node sequence. A pure disclosure flip preserves it —
+            // children lay out open or closed — so a mismatch means
+            // this rebuild changed more than disclosure: snap.
+            if (previous.nodes.len != next.nodes.len) {
+                plan.action = retire_or_none;
+                return plan;
+            }
+            for (previous.nodes, next.nodes) |previous_node, next_node| {
+                if (previous_node.widget.kind != next_node.widget.kind or previous_node.widget.id != next_node.widget.id) {
+                    plan.action = retire_or_none;
+                    return plan;
+                }
+            }
+
+            // Flips: a disclosure widget whose OPEN state changed
+            // across the rebuild, or whose toggle the runtime echoed
+            // since the last one (the echo already flipped the retained
+            // state, so the state comparison alone would miss it).
+            var flips_overflowed = false;
+            for (next.nodes, 0..) |node, node_index| {
+                if (!canvas.widgetKindDisclosureAnimated(node.widget.kind) or node.widget.id == 0) continue;
+                const was_open = canvasWidgetBooleanSelected(previous.nodes[node_index].widget);
+                const now_open = canvasWidgetBooleanSelected(node.widget);
+                if (was_open == now_open and !view.canvasWidgetDisclosureTogglePending(node.widget.id)) continue;
+                if (plan.revealing_id_count >= plan.revealing_ids.len) {
+                    flips_overflowed = true;
+                    break;
+                }
+                plan.revealing_ids[plan.revealing_id_count] = node.widget.id;
+                plan.revealing_id_count += 1;
+            }
+            if (flips_overflowed) {
+                plan.action = retire_or_none;
+                return plan;
+            }
+            if (plan.revealing_id_count == 0) {
+                plan.action = if (was_active) .refresh else .none;
+                return plan;
+            }
+
+            // Default-on motion from the register: the `normal` class
+            // duration and house easing, no app declaration anywhere.
+            // Reduced motion (or a zeroed register) snaps.
+            plan.duration_ms = view.widget_tokens.motion.durationMs(.normal);
+            if (self.appearance.reduce_motion or plan.duration_ms == 0) {
+                plan.action = retire_or_none;
+                return plan;
+            }
+
+            // The layout diff this tween will play. Disclosure reflow is
+            // vertical by construction; any horizontal delta means the
+            // rebuild moved more than disclosure (a resize riding the
+            // same dispatch), and a diff too large to record cannot
+            // replay honestly — both snap.
+            for (previous.nodes, next.nodes, 0..) |previous_node, next_node, node_index| {
+                if (previous_node.frame.x != next_node.frame.x or previous_node.frame.width != next_node.frame.width) {
+                    plan.action = retire_or_none;
+                    return plan;
+                }
+                if (previous_node.frame.y == next_node.frame.y and previous_node.frame.height == next_node.frame.height) continue;
+                if (plan.move_count >= plan.moves.len) {
+                    plan.action = retire_or_none;
+                    return plan;
+                }
+                plan.moves[plan.move_count] = .{
+                    .node_index = node_index,
+                    .from_y = previous_node.frame.y,
+                    .from_height = previous_node.frame.height,
+                    .to_y = next_node.frame.y,
+                    .to_height = next_node.frame.height,
+                };
+                plan.move_count += 1;
+            }
+            // A flip that moved nothing (an empty section, or a toggle
+            // echo the model ignored) has no motion to play.
+            if (plan.move_count == 0) {
+                plan.action = if (was_active) .refresh else .none;
+                return plan;
+            }
+            plan.action = .arm;
+            return plan;
+        }
+
+        /// The applying half: runs after the reconciled tree is
+        /// retained. Arming restores the PREVIOUS pose onto the
+        /// retained frames (the user keeps looking at what they were
+        /// looking at; the tween walks it to the declared pose on the
+        /// frame clock); refreshing re-applies an in-flight pose that
+        /// the copy stomped. Toggle-echo notes are consumed here on
+        /// every rebuild — applied or ignored, a note never outlives
+        /// the rebuild that had the chance to animate it.
+        fn applyCanvasWidgetDisclosureTweenPlan(self: *Runtime, view_index: usize, plan: CanvasWidgetDisclosurePlan) anyerror!void {
+            const view = &self.views[view_index];
+            view.canvas_widget_disclosure_pending_count = 0;
+            switch (plan.action) {
+                .none => {},
+                .retire => view.clearCanvasWidgetDisclosureTween(),
+                .refresh => try refreshCanvasWidgetDisclosurePose(self, view_index),
+                .arm => {
+                    view.canvas_widget_disclosure_tween = .{
+                        .active = true,
+                        .duration_ms = plan.duration_ms,
+                        .easing = view.widget_tokens.motion.easing,
+                        .spring = view.widget_tokens.motion.spring,
+                    };
+                    const tween = &view.canvas_widget_disclosure_tween;
+                    @memcpy(tween.revealing_ids[0..plan.revealing_id_count], plan.revealing_ids[0..plan.revealing_id_count]);
+                    tween.revealing_id_count = plan.revealing_id_count;
+                    @memcpy(tween.moves[0..plan.move_count], plan.moves[0..plan.move_count]);
+                    tween.move_count = plan.move_count;
+                    for (tween.moves[0..tween.move_count]) |move| {
+                        if (move.node_index >= view.widget_layout_node_count) continue;
+                        const node = &view.widget_layout_nodes[move.node_index];
+                        node.frame.y = move.from_y;
+                        node.frame.height = move.from_height;
+                        node.widget.frame = node.frame;
+                    }
+                    view.widget_revision += 1;
+                    try view.refreshCanvasWidgetSemantics();
+                    try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, view_index);
+                },
+            }
+        }
+
+        /// A rebuild landed while a disclosure tween is in flight
+        /// without flipping anything (the split tween's "same target
+        /// re-declared" case): the copy stomped the mid-flight pose
+        /// with the target pose, so re-point each move's target at the
+        /// fresh tree and re-apply the pose at the last eased progress —
+        /// the user never sees the one-frame pop, and the clock keeps
+        /// running.
+        fn refreshCanvasWidgetDisclosurePose(self: *Runtime, view_index: usize) anyerror!void {
+            const view = &self.views[view_index];
+            const tween = &view.canvas_widget_disclosure_tween;
+            var moved = false;
+            for (tween.moves[0..tween.move_count]) |*move| {
+                if (move.node_index >= view.widget_layout_node_count) continue;
+                const node = &view.widget_layout_nodes[move.node_index];
+                move.to_y = node.frame.y;
+                move.to_height = node.frame.height;
+                const y = move.from_y + (move.to_y - move.from_y) * tween.progress;
+                const height = move.from_height + (move.to_height - move.from_height) * tween.progress;
+                if (node.frame.y == y and node.frame.height == height) continue;
+                node.frame.y = y;
+                node.frame.height = height;
+                node.widget.frame = node.frame;
+                moved = true;
+            }
+            if (moved) {
+                view.widget_revision += 1;
+                try view.refreshCanvasWidgetSemantics();
+            }
+            try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, view_index);
+        }
+
+        /// One presented frame's worth of disclosure motion for a view,
+        /// the layout tween advance's sibling: sample the eased progress
+        /// at the frame's RECORDED timestamp (replay-deterministic, no
+        /// wall clock), walk every recorded move to its interpolated
+        /// frame, and land dirty regions through the same widget-dirty
+        /// path a drag uses — so mid-tween presents stay region-scoped
+        /// patches. The settle frame snaps every move to its exact
+        /// target, retires the tween (emptying the revealing set, which
+        /// drops a closing item's clipped content from the next
+        /// emission), and stops requesting frames.
+        pub fn advanceCanvasWidgetDisclosureTweenForFrame(self: *Runtime, view_index: usize, timestamp_ns: u64) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            const view = &self.views[view_index];
+            if (!view.canvas_widget_disclosure_tween.active) return;
+            const tween = &view.canvas_widget_disclosure_tween;
+
+            // First advancing frame stamps the clock — the split
+            // tween's discipline, so the ramp runs on the frame clock
+            // from the first frame that could have painted it.
+            if (tween.start_ns == 0 or timestamp_ns < tween.start_ns) {
+                tween.start_ns = timestamp_ns;
+            }
+            const progress = canvas.layoutTweenProgress(tween.easing, tween.spring, tween.start_ns, tween.duration_ms, timestamp_ns);
+            const done = progress >= 1;
+            tween.progress = progress;
+
+            var dirty: ?geometry.RectF = null;
+            for (tween.moves[0..tween.move_count]) |move| {
+                if (move.node_index >= view.widget_layout_node_count) continue;
+                const node = &view.widget_layout_nodes[move.node_index];
+                const y = if (done) move.to_y else move.from_y + (move.to_y - move.from_y) * progress;
+                const height = if (done) move.to_height else move.from_height + (move.to_height - move.from_height) * progress;
+                if (node.frame.y == y and node.frame.height == height) continue;
+                dirty = unionDisclosureDirty(dirty, node.frame.normalized());
+                node.frame.y = y;
+                node.frame.height = height;
+                node.widget.frame = node.frame;
+                dirty = unionDisclosureDirty(dirty, node.frame.normalized());
+            }
+            // Retire BEFORE the refresh below so the settle emission
+            // paints with an empty revealing set.
+            if (done) view.clearCanvasWidgetDisclosureTween();
+            if (dirty) |region| {
+                view.widget_revision += 1;
+                try view.refreshCanvasWidgetSemantics();
+                try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, view_index, region);
+            } else if (done) {
+                // Nothing moved on the settle frame, but the revealing
+                // set just emptied — re-emit so closing items drop
+                // their clipped content.
+                _ = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, view_index);
+            }
+            if (!done) try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, view_index);
+        }
+
         /// One presented frame's worth of layout-tween motion for a
         /// view, called from the frame event dispatch (the kinetic
         /// scroll's sibling). Each active tween samples its eased
@@ -439,6 +701,14 @@ fn AutomationWidgetMethods(comptime Runtime: type) type {
 
 fn ScrollDriverMethods(comptime Runtime: type) type {
     return runtime_canvas_widget_scroll_drivers.RuntimeCanvasWidgetScrollDrivers(Runtime);
+}
+
+/// Dirty-region accumulation for disclosure steps: the union of every
+/// moved frame's before and after — the moving band, not the surface.
+fn unionDisclosureDirty(current: ?geometry.RectF, frame: geometry.RectF) ?geometry.RectF {
+    if (frame.isEmpty()) return current;
+    const existing = current orelse return frame;
+    return geometry.RectF.unionWith(existing, frame);
 }
 
 fn validateRuntimeViewParent(self: anytype, window_id: platform.WindowId) !void {

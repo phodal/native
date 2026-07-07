@@ -243,7 +243,10 @@ pub const CanvasWidgetSourceControlEntry = struct {
 /// (pointer-driven) selection. Toggles/checkboxes keep the
 /// retained-wins contract locked by the control reconcile tests.
 pub fn canvasWidgetSourceControlKind(kind: canvas.WidgetKind) bool {
-    return kind == .toggle_button or kind == .slider or canvasWidgetSelectionClearsSiblings(kind);
+    // `accordion`: disclosure state tracks its source so a model-driven
+    // open/close (a flip, not a replay) wins reconcile — and arms the
+    // disclosure tween.
+    return kind == .toggle_button or kind == .slider or kind == .accordion or canvasWidgetSelectionClearsSiblings(kind);
 }
 
 pub fn collectCanvasWidgetSourceControlEntries(
@@ -591,8 +594,28 @@ pub fn canvasWidgetLayoutNodeWithControlReconcileState(
                 copy.widget.state.selected = selected;
                 copy.widget.value = if (selected) 1 else 0;
             },
-            .accordion, .checkbox, .switch_control, .toggle => {
+            .checkbox, .switch_control, .toggle => {
                 const selected = entry.state.selected or entry.value >= 0.5;
+                copy.widget.state.selected = selected;
+                copy.widget.value = if (selected) 1 else 0;
+            },
+            .accordion => {
+                // Disclosure state follows the exclusive-selectable
+                // reconcile rule: a source-side FLIP wins — a model
+                // that opens or closes a section programmatically (an
+                // "expand all" affordance, deep-link restore) must see
+                // it land — while a source replaying the same value
+                // keeps the retained (pointer-driven) state, so
+                // uncontrolled accordions keep working with zero app
+                // wiring. The flip is also what arms the default-on
+                // disclosure tween in `setCanvasWidgetLayout`.
+                const source_selected = canvasWidgetBooleanSelected(copy.widget);
+                const previous_source = previous_source_controls.firstWithKind(copy.widget.id, copy.widget.kind);
+                const source_moved = if (previous_source) |source_entry| source_selected != source_entry.selected else false;
+                const selected = if (source_moved)
+                    source_selected
+                else
+                    entry.state.selected or entry.value >= 0.5;
                 copy.widget.state.selected = selected;
                 copy.widget.value = if (selected) 1 else 0;
             },

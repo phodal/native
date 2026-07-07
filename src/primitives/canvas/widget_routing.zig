@@ -42,6 +42,7 @@ pub fn hitTestWidgetLayout(layout: anytype, point: geometry.PointF, tokens: Desi
         index -= 1;
         if (!widget_tree.widgetIsAnchored(layout.nodes[index].widget)) continue;
         if (isWidgetHiddenInAncestors(layout, index)) continue;
+        if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) continue;
         if (hitTestWidgetLayoutNode(layout, index, point, tokens)) |hit| return hit;
     }
     return hitTestWidgetLayoutChildren(layout, null, point, tokens);
@@ -70,7 +71,16 @@ fn hitTestWidgetLayoutNode(layout: anytype, node_index: usize, point: geometry.P
 
     const local_point = widgetLocalHitPoint(node.widget, point) orelse return null;
     if (widget_tree.widgetClipsContent(node.widget) and !node.frame.normalized().containsPoint(local_point)) return null;
-    if (hitTestWidgetLayoutChildren(layout, node_index, local_point, tokens)) |hit| return hit;
+    // Concealed disclosure content is inert: a closed — or still
+    // revealing — accordion hit-tests as ONE leaf (its trigger band),
+    // so a press inside a partially revealed region cannot reach
+    // content the reveal has not finished delivering, and the full-size
+    // content a closed item keeps laid out below its header never
+    // shadows the widgets that actually occupy that space.
+    const content_interactive = !widget_tree.widgetKindDisclosureAnimated(node.widget.kind) or widget_tree.disclosureSettledOpen(layout, node_index);
+    if (content_interactive) {
+        if (hitTestWidgetLayoutChildren(layout, node_index, local_point, tokens)) |hit| return hit;
+    }
 
     if (!widget_access.isHitTarget(node.widget)) return null;
     if (!node.frame.normalized().containsPoint(local_point)) return null;
@@ -234,6 +244,7 @@ fn widgetPointerTargetById(layout: anytype, id: ObjectId) ?WidgetHit {
     const node = layout.nodes[index];
     if (!widget_access.isHitTarget(node.widget)) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) return null;
     if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     return widgetHitFromNode(node, index);
 }
@@ -266,6 +277,7 @@ fn widgetDropTargetIndexAtPoint(layout: anytype, point: geometry.PointF) ?usize 
         const node = layout.nodes[index];
         if (!widget_access.isDropTarget(node.widget)) continue;
         if (isWidgetHiddenInAncestors(layout, index)) continue;
+        if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) continue;
         if (!node.frame.normalized().containsPoint(point)) continue;
         if (!isPointVisibleInWidgetAncestors(layout, index, point)) continue;
         return index;
@@ -279,6 +291,7 @@ fn widgetDragSourceIndex(layout: anytype, id: ObjectId) ?usize {
     const node = layout.nodes[index];
     if (!widget_access.isDragSource(node.widget)) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) return null;
     if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     return index;
 }
@@ -398,6 +411,10 @@ fn focusSpatial(layout: anytype, current_index: usize, direction: WidgetFocusDir
 fn focusTargetFromLayoutNode(layout: anytype, index: usize, scroll_semantics_fn: anytype) ?WidgetFocusTarget {
     if (index >= layout.nodes.len) return null;
     if (isWidgetHiddenInAncestors(layout, index)) return null;
+    // Concealed disclosure content never joins the focus order: a
+    // closed section's controls are unreachable by tab or arrows, and
+    // mid-reveal content stays unreachable until the reveal settles.
+    if (widget_tree.isWidgetConcealedByDisclosure(layout, index)) return null;
     if (!isWidgetFrameVisibleInWidgetAncestors(layout, index)) return null;
     const node = layout.nodes[index];
     if (node.widget.id == 0) return null;

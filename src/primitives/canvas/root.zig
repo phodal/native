@@ -557,6 +557,10 @@ pub const WidgetLayoutTree = widget_runtime.WidgetLayoutTree;
 pub const DisplayList = command_model.DisplayList;
 
 pub const emitWidgetTree = widget_runtime.emitWidgetTree;
+/// The chrome-slot command id scheme (widget id + slot) every widget
+/// emitter uses — exported so runtime-side tests and tools can pin
+/// specific chrome commands (fill 1, border 2, content clip 9, ...).
+pub const widgetPartId = widget_runtime.widgetPartId;
 pub const layoutWidgetTree = widget_runtime.layoutWidgetTree;
 pub const layoutWidgetTreeWithTokens = widget_runtime.layoutWidgetTreeWithTokens;
 
@@ -653,6 +657,14 @@ pub const widgetIsAnchored = @import("widget_tree.zig").widgetIsAnchored;
 pub const widgetVirtualRuntimeScrolled = @import("widget_tree.zig").widgetVirtualRuntimeScrolled;
 pub const widgetScrollPhysics = @import("widget_tree.zig").widgetScrollPhysics;
 pub const isWidgetHiddenInAncestors = @import("widget_tree.zig").isWidgetHiddenInAncestors;
+/// The disclosure family (widget_tree.zig): collapsible widgets whose
+/// content lays out at full size and REVEALS, plus the settled/concealed
+/// predicates that gate interaction and semantics while a reveal is in
+/// flight.
+pub const widgetKindDisclosureAnimated = @import("widget_tree.zig").widgetKindDisclosureAnimated;
+pub const disclosureSettledOpen = @import("widget_tree.zig").disclosureSettledOpen;
+pub const disclosureContentBottom = @import("widget_tree.zig").disclosureContentBottom;
+pub const isWidgetConcealedByDisclosure = @import("widget_tree.zig").isWidgetConcealedByDisclosure;
 pub const anchoredWidgetFrame = @import("widget_layout.zig").anchoredWidgetFrame;
 /// Split-pane geometry (widget_layout.zig): divider band width, the
 /// fraction clamp band from the panes' min widths, and the in-place

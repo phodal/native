@@ -104,12 +104,17 @@ pub fn layoutWidgetDepth(
         .split => try layoutSplitChildren(widget, content, index, depth, output, len, tokens),
         .menu_surface, .dropdown_menu => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         .accordion => {
-            if (accordionChildrenVisible(widget)) {
-                const child_content = accordionContentFrame(widget, content, tokens);
-                for (widget.children) |child| {
-                    if (child.layout.anchor != null) continue;
-                    _ = try layoutWidgetDepth(child, stackChildFrame(child_content, child), index, depth + 1, output, len, tokens);
-                }
+            // Disclosure contract: children lay out at FULL size whether
+            // or not the item is open. A closed (or still-revealing)
+            // item keeps its header-only extent — the content overflows
+            // the frame, unpainted and inert until revealed — so a
+            // reveal never re-wraps text mid-flight: child geometry is
+            // identical in both poses and only the item's own extent
+            // (plus whatever stacks below it) moves.
+            const child_content = accordionContentFrame(widget, content, tokens, depth);
+            for (widget.children) |child| {
+                if (child.layout.anchor != null) continue;
+                _ = try layoutWidgetDepth(child, stackChildFrame(child_content, child), index, depth + 1, output, len, tokens);
             }
         },
         .alert => {
@@ -1147,16 +1152,42 @@ fn stackChildFrame(content: geometry.RectF, child: Widget) geometry.RectF {
     );
 }
 
+/// Whether the accordion's EXTENT includes its content: only while
+/// open. This gates measurement (a closed item stacks at header height)
+/// but NOT child layout — children lay out at full size regardless, so
+/// the runtime's disclosure tween can reveal or conceal them without a
+/// single mid-flight re-wrap.
 fn accordionChildrenVisible(widget: Widget) bool {
     return widget.kind != .accordion or booleanControlSelected(widget);
 }
 
-fn accordionContentFrame(widget: Widget, content: geometry.RectF, tokens: DesignTokens) geometry.RectF {
+fn accordionContentFrame(widget: Widget, content: geometry.RectF, tokens: DesignTokens, depth: usize) geometry.RectF {
     if (widget.kind != .accordion) return content;
     const header_height = accordionHeaderHeight(widget, tokens);
     const gap = nonNegative(widget.layout.gap);
-    const y = @min(content.maxY(), content.y + header_height + gap);
-    return geometry.RectF.init(content.x, y, content.width, @max(0, content.maxY() - y));
+    const y = content.y + header_height + gap;
+    // An open item's frame reserves the content box below the header; a
+    // closed item's header-only frame reserves nothing, so the content
+    // box sizes itself from the children's own wrapped extent — the
+    // same measurement the open pose's extent is built from, which is
+    // what keeps child geometry identical across both poses.
+    const remaining = content.maxY() - y;
+    const height = if (remaining > 0) remaining else accordionOpenContentExtent(widget, content.width, tokens, depth);
+    return geometry.RectF.init(content.x, y, content.width, height);
+}
+
+/// The content height an OPEN pose grants: the tallest in-flow child at
+/// its wrapped width — the same per-child measurement the accordion's
+/// vertical extent uses, replayed so a closed pose can hand children
+/// full-size frames.
+fn accordionOpenContentExtent(widget: Widget, width: f32, tokens: DesignTokens, depth: usize) f32 {
+    var max_height: f32 = 0;
+    for (widget.children) |child| {
+        if (child.layout.anchor != null) continue;
+        const child_width = if (child.frame.width > 0) child.frame.width else width;
+        max_height = @max(max_height, wrappedVerticalExtentForWidth(child, child_width, tokens, depth + 1));
+    }
+    return max_height;
 }
 
 pub fn accordionHeaderHeight(widget: Widget, tokens: DesignTokens) f32 {

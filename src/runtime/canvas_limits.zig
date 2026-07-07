@@ -237,6 +237,21 @@ pub const max_canvas_widget_loop_animations_per_view: usize = 16;
 /// dropping the state change (motion degrades, truth never does).
 pub const max_canvas_widget_layout_tweens_per_view: usize = 8;
 
+/// Nodes one disclosure tween may move per view: a disclosure flip
+/// reflows the flipped item plus everything stacked below it (siblings,
+/// content-hugging ancestors, and THEIR following siblings), and the
+/// tween replays exactly that recorded reflow. A flip that moves more
+/// nodes than this snaps to its target instead of animating a partial
+/// pose (motion degrades under pressure, the state change always
+/// lands).
+pub const max_canvas_widget_disclosure_moves_per_view: usize = 256;
+
+/// Disclosure widgets one rebuild may animate at once (an exclusive
+/// accordion closes one section while opening another — two; a "expand
+/// all" affordance can flip more). Flips past the budget snap the whole
+/// rebuild: a half-animated, half-snapped reflow would tear.
+pub const max_canvas_widget_disclosure_flips_per_view: usize = 8;
+
 // Widget provenance (write-back's read half; `UiApp` retains it only in
 // markup-interpreter builds, and only fills it when automation is on).
 // One record per markup-authored widget of the main canvas view, so the

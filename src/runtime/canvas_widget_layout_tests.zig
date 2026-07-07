@@ -12,6 +12,7 @@ test {
     _ = @import("canvas_widget_accessibility_tests.zig");
     _ = @import("canvas_widget_chart_tests.zig");
     _ = @import("canvas_widget_split_tree_tests.zig");
+    _ = @import("canvas_widget_disclosure_tests.zig");
 }
 
 test "the automation snapshot widget cap tracks the per-view node budget" {

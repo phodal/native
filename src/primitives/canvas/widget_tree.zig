@@ -149,6 +149,74 @@ pub fn isWidgetHiddenInAncestors(layout: anytype, node_index: usize) bool {
     return false;
 }
 
+/// The DISCLOSURE family: collapsible widgets whose content lays out at
+/// full size and REVEALS — the widget's own extent grows toward (or
+/// shrinks away from) the content's, while the content itself never
+/// re-wraps. Today that is the accordion; collapsible rows and
+/// expandable cards join by adding their kind here and giving layout
+/// the same "children always laid out, extent follows the disclosed
+/// state" shape the accordion has.
+pub fn widgetKindDisclosureAnimated(kind: widget_model.WidgetKind) bool {
+    return kind == .accordion;
+}
+
+/// A pixel of slack for the settled-open comparison below: the frame an
+/// ancestor stack hands a disclosure widget and the bottom its content
+/// reaches are computed by different additions, so exact float equality
+/// is too brittle a settle test while half a pixel is far tighter than
+/// any real mid-reveal pose.
+const disclosure_settle_slack: f32 = 0.5;
+
+/// The bottom edge the disclosure widget's content REACHES: the deepest
+/// maxY among its in-flow children's subtrees. Anchored children float
+/// outside the flow (window-positioned) and never count.
+pub fn disclosureContentBottom(layout: anytype, node_index: usize) f32 {
+    const node = layout.nodes[node_index];
+    var bottom = -std.math.inf(f32);
+    var index = node_index + 1;
+    while (index < layout.nodes.len and layout.nodes[index].depth > node.depth) : (index += 1) {
+        const child = layout.nodes[index];
+        if (widgetIsAnchored(child.widget)) continue;
+        bottom = @max(bottom, child.frame.normalized().maxY());
+    }
+    return bottom;
+}
+
+/// Whether a disclosure widget is SETTLED OPEN: its state says open and
+/// its frame has grown to hold everything its content reaches. Both
+/// halves matter — mid-reveal the state is already open but the frame
+/// still trails the content, and mid-conceal the state is already
+/// closed while content is still sliding away. Interaction surfaces
+/// (hit testing, focus, semantics) gate on this, so partially revealed
+/// content stays inert until the reveal lands.
+pub fn disclosureSettledOpen(layout: anytype, node_index: usize) bool {
+    const widget = layout.nodes[node_index].widget;
+    // The boolean-control "open" register (`booleanControlSelected`):
+    // either state channel asserts it.
+    if (!(widget.state.selected or widget.value >= 0.5)) return false;
+    const bottom = disclosureContentBottom(layout, node_index);
+    if (bottom == -std.math.inf(f32)) return true;
+    return bottom <= layout.nodes[node_index].frame.normalized().maxY() + disclosure_settle_slack;
+}
+
+/// Whether any ANCESTOR disclosure widget conceals this node: the
+/// ancestor is closed, closing, or still revealing. Content under a
+/// concealed subtree lays out (at full size, ready to reveal) and may
+/// even paint clipped mid-reveal, but it never hit-tests, focuses, or
+/// appears in semantics — the interaction twin of
+/// `isWidgetHiddenInAncestors`.
+pub fn isWidgetConcealedByDisclosure(layout: anytype, node_index: usize) bool {
+    if (node_index >= layout.nodes.len) return false;
+    var current = layout.nodes[node_index].parent_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return false;
+        const node = layout.nodes[index];
+        if (widgetKindDisclosureAnimated(node.widget.kind) and !disclosureSettledOpen(layout, index)) return true;
+        current = node.parent_index;
+    }
+    return false;
+}
+
 pub fn gridColumnCount(child_count: usize, requested_columns: usize) usize {
     if (child_count == 0) return 0;
     return if (requested_columns > 0) @min(requested_columns, child_count) else child_count;

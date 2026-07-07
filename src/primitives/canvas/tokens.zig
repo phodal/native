@@ -1,6 +1,7 @@
 const std = @import("std");
 const canvas = @import("root.zig");
 const text_metrics = @import("text_metrics.zig");
+const geist_theme = @import("themes/geist.zig");
 
 const ObjectId = canvas.ObjectId;
 const FontId = canvas.FontId;
@@ -63,11 +64,44 @@ pub const ColorContrast = enum {
     high,
 };
 
+/// Built-in theme packs: complete token registers selectable by name.
+/// A pack is a whole design system — palette, control tables, metrics,
+/// type scale — resolved per scheme/contrast exactly like the house
+/// register, so packs flip light/dark (and honor high contrast) live.
+/// Pack selection is manifest/API vocabulary (`app.zon`'s `theme`
+/// field, `ThemeOptions.pack`), never markup vocabulary: a document
+/// describes structure, the app owns its look.
+pub const ThemePack = enum {
+    /// The default register: the monochrome house neutral scale defined
+    /// by the token defaults in this file.
+    house,
+    /// The Geist pack: the design register of the bundled Geist
+    /// typeface family — a cool neutral scale, monochrome primaries,
+    /// blue focus rings and identity hues, 6px control corners, and a
+    /// taller 32/40/48 control ladder.
+    geist,
+
+    /// Resolve a manifest-facing pack name ("house", "geist"). Null for
+    /// unknown names so callers can raise their own teaching error with
+    /// the offending string and the valid list.
+    pub fn fromName(name: []const u8) ?ThemePack {
+        inline for (@typeInfo(ThemePack).@"enum".fields) |field| {
+            if (std.mem.eql(u8, name, field.name)) return @field(ThemePack, field.name);
+        }
+        return null;
+    }
+};
+
 pub const ThemeOptions = struct {
     color_scheme: ColorScheme = .light,
     contrast: ColorContrast = .standard,
     density: Density = .regular,
     reduce_motion: bool = false,
+    /// Which built-in pack resolves the register. The default keeps the
+    /// house theme; packs compose with every other option (scheme,
+    /// contrast, density, motion), so switching packs is exactly as
+    /// live as the light/dark flip.
+    pack: ThemePack = .house,
 };
 
 /// The default palette is the house neutral register, converted from
@@ -356,7 +390,97 @@ pub const RadiusTokens = struct {
 pub const StrokeTokens = struct {
     hairline: f32 = 1,
     regular: f32 = 1,
+    /// Focus ring stroke width.
     focus: f32 = 2,
+    /// How far the focus ring sits OUTSIDE the control's border — the
+    /// ring-offset treatment: the control keeps its own border and the
+    /// ring floats this gap outside it, so focus never restyles the
+    /// control. Together with `focus` this is the whole ring geometry.
+    focus_offset: f32 = 2,
+};
+
+/// The interaction-state formulas the emitters apply when a control's
+/// themed table (`ControlTokens`) does not state an explicit color for
+/// the state: multiplicative washes over the control's own base color.
+/// Promoting the formulas to tokens lets a theme restate how the WHOLE
+/// register responds to interaction without touching any emitter; the
+/// defaults are the measured house recipe.
+pub const StateTokens = struct {
+    /// Filled controls hovered: the base fill at 90% of its own alpha —
+    /// the wash lightens on light surfaces and deepens on dark ones
+    /// without a second color per scheme.
+    hover_fill_alpha: f32 = 0.9,
+    /// Filled controls pressed: one step past hover, 80%.
+    pressed_fill_alpha: f32 = 0.8,
+    /// The disabled register: fill, border, and ink all fade to this
+    /// fraction of their rest strength, so the control mutes as one
+    /// piece and a checked-but-disabled control still reads as checked.
+    disabled_alpha: f32 = 0.5,
+    /// Selection wash over static (read-only) text: the accent as a
+    /// translucent band under glyphs that keep their own ink. Editable
+    /// fields invert instead (solid accent + accent_text) — no alpha.
+    selection_wash_alpha: f32 = 0.3,
+    /// The quiet destructive chip's wash ladder (rest, hover, pressed):
+    /// feedback DEEPENS the wash — a translucent chip signals under the
+    /// pointer by gaining ink, opposite of the filled variants' alpha
+    /// cuts. These are the light-scheme fallbacks; the themed control
+    /// tables restate per-scheme strengths where they differ.
+    destructive_wash_alpha: f32 = 0.10,
+    destructive_wash_hover_alpha: f32 = 0.15,
+    destructive_wash_pressed_alpha: f32 = 0.20,
+    /// The destructive badge chip's wash: badges are smaller than
+    /// buttons, so the chip carries slightly more ink to stay legible.
+    badge_destructive_wash_alpha: f32 = 0.12,
+    /// Secondary buttons hovered: the muted fill at 80% of its own
+    /// alpha — the filled-variant hover cut applied to the muted chip.
+    secondary_hover_alpha: f32 = 0.8,
+};
+
+/// The control metric ladder: the measured size register every control
+/// draws from, promoted to tokens so a theme pack can restate the whole
+/// scale (heights, insets, icon metrics) without touching layout code.
+/// Defaults are the house base register. All values are pre-density:
+/// the density channel multiplies on top exactly as before.
+pub const ControlMetricTokens = struct {
+    /// The ONE control height register — buttons, inputs, and select
+    /// triggers all sit on this whole-pixel ladder (sm/default/lg)
+    /// instead of a multiplicative scale: heights on the 4px grid keep
+    /// a mixed toolbar row at exactly one height and pixel-snap cleanly
+    /// at every scale factor. Every kind on the register moves together.
+    control_height_sm: f32 = 28,
+    control_height: f32 = 32,
+    control_height_lg: f32 = 36,
+    /// A button's horizontal inset per size rung. The house register
+    /// holds ONE 10px inset across the ladder (the sizes already speak
+    /// through height, radius, and the sm label step); packs whose
+    /// buttons breathe wider at lg state each rung explicitly.
+    button_inset_sm: f32 = 10,
+    button_inset: f32 = 10,
+    button_inset_lg: f32 = 10,
+    /// How far the sm button label steps DOWN from the button type size
+    /// (14 -> 12.8 on the house scale): the compact rung is a genuinely
+    /// smaller control, and a full-size label inside its box crowds the
+    /// padding. Fractional on purpose — the measured compact size.
+    button_label_sm_step: f32 = 1.2,
+    /// How far the lg button label steps UP from the button type size.
+    /// Zero in the house register — a bigger button earns more chrome,
+    /// not bigger glyphs — but packs with a large-button type rung use
+    /// this to reach it.
+    button_label_lg_step: f32 = 0,
+    /// Gap between a button's inline icon and its label: intra-content
+    /// spacing (the glyph and the label are one phrase), so it never
+    /// widens with the size ladder.
+    button_icon_gap: f32 = 6,
+    /// Inline icons size just above their companion text (extent = text
+    /// size + this step) so icon and label read as one line. Shared by
+    /// buttons, badges, and row-shaped controls.
+    icon_text_step: f32 = 2,
+    /// Default extent of row-shaped widgets (list rows and friends)
+    /// before the size/density channel scales it.
+    row_extent: f32 = 28,
+    /// The whole-pixel step the sized control insets take around their
+    /// base (sm = base - step, lg = base + step).
+    size_inset_step: f32 = 2,
 };
 
 pub const ShadowToken = struct {
@@ -701,7 +825,19 @@ pub const PixelSnapTokens = struct {
 pub const ControlVisualTokens = struct {
     background: ?Color = null,
     hover_background: ?Color = null,
+    /// The pressed-or-selected fill (both feedback and on-state reach
+    /// for it when the more specific channels below are unset).
     active_background: ?Color = null,
+    /// The transient pointer-down fill alone. Null falls through to
+    /// `active_background`, then to the state-formula washes — so a
+    /// theme that wants press and on-state to differ states both.
+    pressed_background: ?Color = null,
+    /// Disabled fill and ink. Null keeps the half-strength wash
+    /// register (`StateTokens.disabled_alpha` over the rest colors);
+    /// themes whose disabled treatment is a color SWAP (a flat gray
+    /// chip under gray text) state the pair here.
+    disabled_background: ?Color = null,
+    disabled_foreground: ?Color = null,
     foreground: ?Color = null,
     border: ?Color = null,
     radius: ?f32 = null,
@@ -887,9 +1023,45 @@ pub const StrokeTokenOverrides = struct {
     hairline: ?f32 = null,
     regular: ?f32 = null,
     focus: ?f32 = null,
+    focus_offset: ?f32 = null,
 
     pub fn apply(self: StrokeTokenOverrides, base: StrokeTokens) StrokeTokens {
         return applyFlatTokenOverrides(StrokeTokens, base, self);
+    }
+};
+
+pub const StateTokenOverrides = struct {
+    hover_fill_alpha: ?f32 = null,
+    pressed_fill_alpha: ?f32 = null,
+    disabled_alpha: ?f32 = null,
+    selection_wash_alpha: ?f32 = null,
+    destructive_wash_alpha: ?f32 = null,
+    destructive_wash_hover_alpha: ?f32 = null,
+    destructive_wash_pressed_alpha: ?f32 = null,
+    badge_destructive_wash_alpha: ?f32 = null,
+    secondary_hover_alpha: ?f32 = null,
+
+    pub fn apply(self: StateTokenOverrides, base: StateTokens) StateTokens {
+        return applyFlatTokenOverrides(StateTokens, base, self);
+    }
+};
+
+pub const ControlMetricTokenOverrides = struct {
+    control_height_sm: ?f32 = null,
+    control_height: ?f32 = null,
+    control_height_lg: ?f32 = null,
+    button_inset_sm: ?f32 = null,
+    button_inset: ?f32 = null,
+    button_inset_lg: ?f32 = null,
+    button_label_sm_step: ?f32 = null,
+    button_label_lg_step: ?f32 = null,
+    button_icon_gap: ?f32 = null,
+    icon_text_step: ?f32 = null,
+    row_extent: ?f32 = null,
+    size_inset_step: ?f32 = null,
+
+    pub fn apply(self: ControlMetricTokenOverrides, base: ControlMetricTokens) ControlMetricTokens {
+        return applyFlatTokenOverrides(ControlMetricTokens, base, self);
     }
 };
 
@@ -1002,6 +1174,9 @@ pub const ControlVisualTokenOverrides = struct {
     background: ?Color = null,
     hover_background: ?Color = null,
     active_background: ?Color = null,
+    pressed_background: ?Color = null,
+    disabled_background: ?Color = null,
+    disabled_foreground: ?Color = null,
     foreground: ?Color = null,
     border: ?Color = null,
     radius: ?f32 = null,
@@ -1110,6 +1285,8 @@ pub const DesignTokenOverrides = struct {
     spacing: SpacingTokenOverrides = .{},
     radius: RadiusTokenOverrides = .{},
     stroke: StrokeTokenOverrides = .{},
+    states: StateTokenOverrides = .{},
+    metrics: ControlMetricTokenOverrides = .{},
     shadow: ShadowTokensOverrides = .{},
     blur: BlurTokenOverrides = .{},
     motion: MotionTokenOverrides = .{},
@@ -1130,6 +1307,8 @@ pub const DesignTokens = struct {
     spacing: SpacingTokens = .{},
     radius: RadiusTokens = .{},
     stroke: StrokeTokens = .{},
+    states: StateTokens = .{},
+    metrics: ControlMetricTokens = .{},
     shadow: ShadowTokens = .{},
     blur: BlurTokens = .{},
     motion: MotionTokens = .{},
@@ -1146,12 +1325,21 @@ pub const DesignTokens = struct {
     text_measure: ?*const text_metrics.TextMeasureProvider = null,
 
     pub fn theme(options: ThemeOptions) DesignTokens {
-        return .{
-            .colors = ColorTokens.theme(options.color_scheme, options.contrast),
-            .controls = ControlTokens.theme(options.color_scheme, options.contrast),
-            .motion = if (options.reduce_motion) MotionTokens.reduced() else .{},
-            .density = options.density,
+        // The pack resolves the register (palette, control tables, and
+        // any metric/type restatements); scheme-independent options
+        // (motion, density) apply uniformly on top, so every pack flips
+        // light/dark and honors reduce-motion exactly like the house
+        // register does.
+        var tokens: DesignTokens = switch (options.pack) {
+            .house => .{
+                .colors = ColorTokens.theme(options.color_scheme, options.contrast),
+                .controls = ControlTokens.theme(options.color_scheme, options.contrast),
+            },
+            .geist => geist_theme.designTokens(options.color_scheme, options.contrast),
         };
+        if (options.reduce_motion) tokens.motion = MotionTokens.reduced();
+        tokens.density = options.density;
+        return tokens;
     }
 
     pub fn themeWithOverrides(options: ThemeOptions, overrides: DesignTokenOverrides) DesignTokens {
@@ -1165,6 +1353,8 @@ pub const DesignTokens = struct {
         next.spacing = overrides.spacing.apply(next.spacing);
         next.radius = overrides.radius.apply(next.radius);
         next.stroke = overrides.stroke.apply(next.stroke);
+        next.states = overrides.states.apply(next.states);
+        next.metrics = overrides.metrics.apply(next.metrics);
         next.shadow = overrides.shadow.apply(next.shadow);
         next.blur = overrides.blur.apply(next.blur);
         next.motion = overrides.motion.apply(next.motion);

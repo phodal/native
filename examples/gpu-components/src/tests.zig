@@ -113,6 +113,8 @@ const pt = model.pt;
 
 const installComponentsCanvasModel = component_scene.installComponentsCanvasModel;
 const buildComponentsDisplayListFromWidgets = component_scene.buildComponentsDisplayListFromWidgets;
+const buildComponentsDisplayListFromWidgetsWithTokens = component_scene.buildComponentsDisplayListFromWidgetsWithTokens;
+const componentTokensForPack = component_scene.componentTokensForPack;
 const componentSurfaceSize = component_scene.componentSurfaceSize;
 const componentStatusbarHeightForSize = component_scene.componentStatusbarHeightForSize;
 const componentToolbarHeightForSize = component_scene.componentToolbarHeightForSize;
@@ -677,6 +679,86 @@ test "gpu components display list renders stable reference snapshot" {
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
+}
+
+/// Render the catalog reference surface under an arbitrary token set —
+/// the shared body of the per-theme signature tests below. `pixels` and
+/// `scratch` are caller-owned full-surface RGBA8 buffers; the rendered
+/// pixels stay in `pixels` so callers can also probe or export them.
+fn renderComponentsReferenceSurface(tokens: canvas.DesignTokens, pixels: []u8, scratch: []u8) !canvas.ReferenceRenderSurface {
+    var commands: [max_component_commands]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try buildComponentsDisplayListFromWidgetsWithTokens(&builder, tokens);
+    const display_list = builder.displayList();
+
+    var render_commands: [max_component_commands]canvas.RenderCommand = undefined;
+    var render_batches: [max_component_commands]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
+    var layers: [max_component_commands]canvas.RenderLayer = undefined;
+    var layer_cache_entries: [max_component_commands]canvas.RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [max_component_commands * 2]canvas.RenderLayerCacheAction = undefined;
+    var resources: [max_component_commands]canvas.RenderResource = undefined;
+    var cache_entries: [max_component_commands]canvas.RenderResourceCacheEntry = undefined;
+    var cache_actions: [max_component_commands * 2]canvas.RenderResourceCacheAction = undefined;
+    var images: [max_component_commands]canvas.RenderImage = undefined;
+    var image_cache_entries: [max_component_commands]canvas.RenderImageCacheEntry = undefined;
+    var image_cache_actions: [max_component_commands * 2]canvas.RenderImageCacheAction = undefined;
+    var visual_effects: [max_component_commands]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [max_component_commands]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [max_component_commands * 2]canvas.VisualEffectCacheAction = undefined;
+    var glyphs: [max_component_glyphs]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [max_component_glyphs]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [max_component_glyphs * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [max_component_commands]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [max_component_glyphs]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [max_component_commands]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [max_component_commands * 2]canvas.TextLayoutCacheAction = undefined;
+    var changes: [max_component_commands * 2 + 1]canvas.DiffChange = undefined;
+    const frame = try componentFrame(display_list, null, .{
+        .surface_size = geometry.SizeF.init(canvas_width, canvas_height),
+        .full_repaint = true,
+        .image_resources = &preview_images,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &images, &image_cache_entries, &image_cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+
+    @memset(pixels, 0);
+    const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
+    try surface.renderPass(frame.renderPass(), color(247, 249, 252));
+    return surface;
+}
+
+test "gpu components display list renders stable geist reference snapshot" {
+    // The SAME catalog widget tree as the house snapshot above, rendered
+    // under the built-in Geist pack — the second design system the SDK
+    // machine-verifies in CI. This pin proves the pack's entire register
+    // (palette, control tables, metrics, type) stays pixel-stable, and
+    // that theme selection composes through the ordinary token path with
+    // no emitter branches. Pinned 2026-07-06 alongside the pack's first
+    // authoring; light and dark captures of the catalog under the pack
+    // were reviewed by eye before blessing.
+    const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
+    const pixels = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(scratch);
+    const surface = try renderComponentsReferenceSurface(componentTokensForPack(.geist, .light), pixels, scratch);
+    try std.testing.expectEqual(@as(u64, 3464951459468051116), referenceSurfaceSignature(pixels));
+    try expectVisiblePixel(surface.pixelRgba8(36, 36));
+    try expectVisiblePixel(surface.pixelRgba8(92, 88));
+    try expectVisiblePixel(surface.pixelRgba8(330, 160));
+}
+
+test "gpu components house reference snapshot is reproducible through the shared per-theme path" {
+    // Sanity for the helper above: rendering the house register through
+    // the per-theme path reproduces the pinned house signature exactly,
+    // so the two snapshot tests can never drift apart mechanically.
+    const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
+    const pixels = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_count);
+    defer std.testing.allocator.free(scratch);
+    _ = try renderComponentsReferenceSurface(componentTokens(), pixels, scratch);
+    try std.testing.expectEqual(@as(u64, 8874355866572474226), referenceSurfaceSignature(pixels));
 }
 
 test "gpu components catalog previews use canonical built-in foundations" {

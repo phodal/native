@@ -521,7 +521,7 @@ fn widgetFocusPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF 
     // Focus rings stroke a rect offset OUTSIDE the control (the
     // ring-offset treatment), so the damage rect inflates by the same
     // offset the renderer uses.
-    return strokeBounds(widget_render_style.focusRingRect(widgetFocusPaintRect(widget, tokens)), tokens.stroke.focus);
+    return strokeBounds(widget_render_style.focusRingRect(widgetFocusPaintRect(widget, tokens), tokens), tokens.stroke.focus);
 }
 
 fn widgetInteractiveStatePaintBounds(widget: Widget, tokens: DesignTokens) geometry.RectF {

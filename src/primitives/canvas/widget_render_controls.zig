@@ -760,7 +760,7 @@ pub fn emitMenuItemWidget(builder: *Builder, widget: Widget, tokens: DesignToken
 /// checkmark). `selected` deliberately does not reach the fill, and no
 /// state draws a focus ring.
 fn menuItemWashColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
-    if (widget.state.pressed) return buttonStateBackground(visual, true, false, tokens.colors.surface_pressed);
+    if (widget.state.pressed) return widget_render_style.controlStateBackground(visual, true, true, false, tokens.colors.surface_pressed);
     if (widget.state.focused or widget.state.hovered) return buttonStateBackground(visual, false, true, tokens.colors.surface_subtle);
     return widget_render_style.transparentColor();
 }
@@ -942,7 +942,7 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .rect = box,
         .radius = radius,
         .fill = if (selected)
-            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled))
+            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled, tokens.states.disabled_alpha))
         else
             colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
     });
@@ -951,7 +951,7 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .rect = box,
         .radius = radius,
         .stroke = .{
-            .fill = colorFill(disabledWash(if (selected) widgetAccentColor(widget, visual.border orelse visual.active_background orelse tokens.colors.accent) else widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled)),
+            .fill = colorFill(disabledWash(if (selected) widgetAccentColor(widget, visual.border orelse visual.active_background orelse tokens.colors.accent) else widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled, tokens.states.disabled_alpha)),
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
@@ -960,7 +960,7 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         // The check keeps the accent-foreground tint even when disabled
         // (washed to half strength with the box) — swapping it to the
         // muted text gray would read muddy on the washed accent fill.
-        const check_color = disabledWash(widget.style.accent_foreground orelse visual.foreground orelse tokens.colors.accent_text, widget.state.disabled);
+        const check_color = disabledWash(widget.style.accent_foreground orelse visual.foreground orelse tokens.colors.accent_text, widget.state.disabled, tokens.states.disabled_alpha);
         const left = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.26, box.y + box.height * 0.54));
         const mid = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.43, box.y + box.height * 0.70));
         const right = pixelSnapGeometryPoint(tokens, geometry.PointF.init(box.x + box.width * 0.76, box.y + box.height * 0.32));
@@ -998,7 +998,7 @@ pub fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         // The border stays on the input hairline even when selected —
         // the primary-colored dot alone carries the checked state.
         .stroke = .{
-            .fill = colorFill(disabledWash(widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled)),
+            .fill = colorFill(disabledWash(widgetBorderColor(widget, visual.border orelse tokens.colors.border), widget.state.disabled, tokens.states.disabled_alpha)),
             .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
         },
     });
@@ -1015,7 +1015,7 @@ pub fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
             .id = widgetPartId(widget.id, 4),
             .rect = dot,
             .radius = Radius.all(dot.height * 0.5),
-            .fill = colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled)),
+            .fill = colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled, tokens.states.disabled_alpha)),
         });
     }
     try emitControlLabelWithColor(builder, widget, tokens, circle.x + circle.width + widgetControlInset(widget, tokens, tokens.spacing.sm), 5, visual.foreground orelse tokens.colors.text);
@@ -1039,9 +1039,9 @@ pub fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .rect = track,
         .radius = track_radius,
         .fill = if (selected)
-            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled))
+            colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled, tokens.states.disabled_alpha))
         else
-            colorFill(disabledWash(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed)), widget.state.disabled)),
+            colorFill(disabledWash(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed)), widget.state.disabled, tokens.states.disabled_alpha)),
     });
     // Borderless by default: the switch is a filled pill (primary when
     // on, the input wash when off) whose near-white thumb provides the
@@ -1072,6 +1072,7 @@ pub fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .fill = colorFill(disabledWash(
             if (selected) widget.style.accent_foreground orelse visual.foreground orelse tokens.colors.accent_text else widget.style.background orelse visual.foreground orelse tokens.colors.accent_text,
             widget.state.disabled,
+            tokens.states.disabled_alpha,
         )),
     });
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 4, track, track_radius);
@@ -1215,13 +1216,14 @@ fn emitWidgetFocusRing(builder: *Builder, widget: Widget, tokens: DesignTokens, 
 }
 
 /// The ring-offset focus treatment: the control keeps its own border
-/// and the ring strokes a concentric rounded rect 2px outside it, so
-/// focus adds an outline instead of recoloring the control's edge.
+/// and the ring strokes a concentric rounded rect the token-stated gap
+/// (`stroke.focus_offset`) outside it, so focus adds an outline instead
+/// of recoloring the control's edge.
 fn emitWidgetFocusRingForRect(builder: *Builder, widget: Widget, tokens: DesignTokens, slot: ObjectId, rect: geometry.RectF, radius: Radius) Error!void {
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, slot),
-        .rect = widget_render_style.focusRingRect(rect),
-        .radius = widget_render_style.focusRingRadius(radius),
+        .rect = widget_render_style.focusRingRect(rect, tokens),
+        .radius = widget_render_style.focusRingRadius(radius, tokens),
         .stroke = .{
             .fill = widgetFocusRingFill(widget, tokens),
             .width = tokens.stroke.focus,

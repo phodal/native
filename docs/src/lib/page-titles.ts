@@ -10,6 +10,7 @@ export const PAGE_TITLES: Record<string, string> = {
   "app-model": "App Model",
   "native-ui": "Native UI",
   state: "State & Data Flow",
+  theming: "Theming",
   runtime: "App & Runtime",
   frontend: "Frontend Projects",
   "native-surfaces": "Native Surfaces",

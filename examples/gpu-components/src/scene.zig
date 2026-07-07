@@ -346,9 +346,17 @@ pub fn installComponentsCanvasModel(runtime: *native_sdk.Runtime, window_id: nat
 }
 
 pub fn buildComponentsDisplayListFromWidgets(builder: *canvas.Builder) canvas.Error!void {
+    try buildComponentsDisplayListFromWidgetsWithTokens(builder, componentTokens());
+}
+
+/// The same catalog scene under an arbitrary token set — the per-theme
+/// reference path: the signature tests render the identical widget
+/// tree under each built-in pack, so every design system the SDK ships
+/// is machine-verified pixel-for-pixel, not just the default one.
+pub fn buildComponentsDisplayListFromWidgetsWithTokens(builder: *canvas.Builder, tokens: canvas.DesignTokens) canvas.Error!void {
     var nodes: [max_component_widgets]canvas.WidgetLayoutNode = undefined;
     const layout = try buildComponentsWidgetLayout(&nodes);
-    try buildComponentsDisplayList(builder, layout, componentTokens());
+    try buildComponentsDisplayList(builder, layout, tokens);
 }
 
 pub fn componentSurfaceSize(size: geometry.SizeF) geometry.SizeF {
@@ -502,6 +510,19 @@ pub fn componentTokensForScaleAndMotion(mode: ComponentThemeMode, pixel_snap_sca
 }
 
 pub fn componentTokensForScaleMotionAndContrast(mode: ComponentThemeMode, pixel_snap_scale: f32, reduce_motion: bool, high_contrast: bool) canvas.DesignTokens {
+    return componentTokensForPackScaleMotionAndContrast(.house, mode, pixel_snap_scale, reduce_motion, high_contrast);
+}
+
+/// The catalog tokens under a named theme pack: the same surface tuning
+/// (blur, motion, scroll physics, pixel snap) over whichever register
+/// the pack resolves — the per-theme reference renders and their pinned
+/// signatures build their tokens here so every pack is exercised
+/// through one code path.
+pub fn componentTokensForPack(pack: canvas.ThemePack, mode: ComponentThemeMode) canvas.DesignTokens {
+    return componentTokensForPackScaleMotionAndContrast(pack, mode, 1, false, false);
+}
+
+pub fn componentTokensForPackScaleMotionAndContrast(pack: canvas.ThemePack, mode: ComponentThemeMode, pixel_snap_scale: f32, reduce_motion: bool, high_contrast: bool) canvas.DesignTokens {
     var tokens = canvas.DesignTokens.theme(.{
         .color_scheme = switch (mode) {
             .light => .light,
@@ -509,6 +530,7 @@ pub fn componentTokensForScaleMotionAndContrast(mode: ComponentThemeMode, pixel_
         },
         .contrast = if (mode == .high or high_contrast) .high else .standard,
         .reduce_motion = reduce_motion,
+        .pack = pack,
     });
     tokens.blur = .{
         .sm = 5,

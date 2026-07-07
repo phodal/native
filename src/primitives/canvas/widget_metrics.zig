@@ -7,18 +7,21 @@ const Density = token_model.Density;
 const DesignTokens = token_model.DesignTokens;
 const Widget = widget_model.Widget;
 
-const default_widget_row_extent: f32 = 28;
-
-/// Button labels hold the base size at default and lg — a bigger button
-/// earns more chrome (height, inset), not bigger glyphs — but sm steps
-/// the label down 1.2px (14 -> 12.8 on the default scale): the compact
-/// rung is a genuinely smaller control, and a full-size label inside a
-/// 28px box crowds its own padding. The fractional step is deliberate —
-/// it is the measured compact label size, not a rounded approximation.
+/// Button labels step by the token-stated ladder
+/// (`metrics.button_label_sm_step`/`button_label_lg_step`): the house
+/// register holds the base size at default and lg — a bigger button
+/// earns more chrome (height, inset), not bigger glyphs — while sm
+/// steps the label down 1.2px (14 -> 12.8 on the default scale): the
+/// compact rung is a genuinely smaller control, and a full-size label
+/// inside a 28px box crowds its own padding. The fractional step is
+/// deliberate — the measured compact label size, not a rounded
+/// approximation. Packs with a large-button type rung state a positive
+/// lg step.
 pub fn widgetButtonTextSize(widget: Widget, tokens: DesignTokens) f32 {
     return switch (widget.size) {
-        .sm => @max(8, tokens.typography.button_size - 1.2),
-        .default, .icon, .heading, .display, .lg => tokens.typography.button_size,
+        .sm => @max(8, tokens.typography.button_size - tokens.metrics.button_label_sm_step),
+        .lg => @max(8, tokens.typography.button_size + tokens.metrics.button_label_lg_step),
+        .default, .icon, .heading, .display => tokens.typography.button_size,
     };
 }
 
@@ -100,43 +103,47 @@ pub fn widgetTextSpanLayoutOptions(widget: Widget, tokens: DesignTokens, max_wid
 }
 
 /// The ONE control height register — buttons, inputs, and select
-/// triggers all sit on the whole-pixel 28/32/36 ladder (sm/default/lg)
-/// instead of the multiplicative size scale (which lands on fractional
-/// heights): heights on the 4px grid keep a mixed toolbar row at exactly
-/// one height and pixel-snap cleanly at every scale factor. Every kind
-/// on the register moves together — a 32px button beside a 36px input
-/// would break the one-toolbar-row invariant this ladder exists for.
-/// The `icon` size is the default square.
+/// triggers all sit on the whole-pixel token ladder
+/// (`metrics.control_height_sm`/`control_height`/`control_height_lg`,
+/// 28/32/36 in the house register) instead of the multiplicative size
+/// scale (which lands on fractional heights): heights on the 4px grid
+/// keep a mixed toolbar row at exactly one height and pixel-snap
+/// cleanly at every scale factor. Every kind on the register moves
+/// together — a 32px button beside a 36px input would break the
+/// one-toolbar-row invariant this ladder exists for. The `icon` size is
+/// the default square.
 pub fn widgetControlHeight(widget: Widget, tokens: DesignTokens) f32 {
     const base: f32 = switch (widget.size) {
-        .sm => 28,
-        .default, .icon, .heading, .display => 32,
-        .lg => 36,
+        .sm => tokens.metrics.control_height_sm,
+        .default, .icon, .heading, .display => tokens.metrics.control_height,
+        .lg => tokens.metrics.control_height_lg,
     };
     return densityValue(tokens, base);
 }
 
 /// Vector icon extent inside icon-bearing controls (a button's
-/// `widget.icon`): sized just above the label text so icon and label
-/// read as one line. Shared by intrinsic layout and render so measured
-/// widths and painted pixels agree.
+/// `widget.icon`): sized just above the label text
+/// (`metrics.icon_text_step`) so icon and label read as one line.
+/// Shared by intrinsic layout and render so measured widths and painted
+/// pixels agree.
 pub fn widgetButtonIconExtent(widget: Widget, tokens: DesignTokens) f32 {
-    return widgetButtonTextSize(widget, tokens) + 2;
+    return widgetButtonTextSize(widget, tokens) + tokens.metrics.icon_text_step;
 }
 
-/// Gap between a button's inline icon and its label: 6 at EVERY step.
-/// The gap is intra-content spacing — the glyph and the label are one
-/// phrase — so it never widens with the size ladder; a bigger button
-/// earns more air at its edges (the inset), not inside its own label.
+/// Gap between a button's inline icon and its label: ONE register
+/// (`metrics.button_icon_gap`) at every step. The gap is intra-content
+/// spacing — the glyph and the label are one phrase — so it never
+/// widens with the size ladder; a bigger button earns more air at its
+/// edges (the inset), not inside its own label.
 pub fn widgetButtonIconGap(widget: Widget, tokens: DesignTokens) f32 {
     _ = widget;
-    return densityValue(tokens, 6);
+    return densityValue(tokens, tokens.metrics.button_icon_gap);
 }
 
 /// Extent of a vector icon inside a badge (`widget.icon`): sized just
 /// above the badge's label text. Shared by intrinsic layout and render.
 pub fn widgetBadgeIconExtent(widget: Widget, tokens: DesignTokens) f32 {
-    return widgetLabelTextSize(widget, tokens) + 2;
+    return widgetLabelTextSize(widget, tokens) + tokens.metrics.icon_text_step;
 }
 
 /// Gap between a badge's inline icon and its label.
@@ -149,7 +156,7 @@ pub fn widgetBadgeIconGap(widget: Widget, tokens: DesignTokens) f32 {
 /// icon and label read as one line. Shared by intrinsic layout and
 /// render so measured widths and painted pixels agree.
 pub fn widgetRowIconExtent(widget: Widget, tokens: DesignTokens) f32 {
-    return widgetBodyTextSize(widget, tokens) + 2;
+    return widgetBodyTextSize(widget, tokens) + tokens.metrics.icon_text_step;
 }
 
 /// Gap between a row's leading icon and its label.
@@ -158,36 +165,45 @@ pub fn widgetRowIconGap(widget: Widget, tokens: DesignTokens) f32 {
 }
 
 pub fn widgetDefaultRowHeight(widget: Widget, tokens: DesignTokens) f32 {
-    return widgetSizedDensityValue(widget, tokens, default_widget_row_extent);
+    return widgetSizedDensityValue(widget, tokens, tokens.metrics.row_extent);
 }
 
-/// A button's horizontal inset: ONE 10px register across the whole
-/// sm/default/lg ladder. The sizes already speak through height, radius,
-/// and (at sm) the label step, so the padding stays put — a wider inset
-/// ladder made buttons read as differently PROPORTIONED controls instead
-/// of the same control at three rungs, and 10px is what the compact
-/// control heights (28/32/36) can honestly afford. `icon`-sized buttons
-/// center their glyph in the square and need no inset.
+/// A button's horizontal inset per size rung
+/// (`metrics.button_inset_sm`/`button_inset`/`button_inset_lg`). The
+/// house register holds ONE 10px inset across the ladder — the sizes
+/// already speak through height, radius, and (at sm) the label step, so
+/// the padding stays put; a wider inset ladder made buttons read as
+/// differently PROPORTIONED controls instead of the same control at
+/// three rungs, and 10px is what the compact control heights (28/32/36)
+/// can honestly afford. Packs on a taller ladder state each rung.
+/// `icon`-sized buttons center their glyph in the square and need no
+/// inset.
 pub fn widgetButtonInset(widget: Widget, tokens: DesignTokens) f32 {
     if (widget.size == .icon) return 0;
-    return densityValue(tokens, 10);
+    const base: f32 = switch (widget.size) {
+        .sm => tokens.metrics.button_inset_sm,
+        .default, .icon, .heading, .display => tokens.metrics.button_inset,
+        .lg => tokens.metrics.button_inset_lg,
+    };
+    return densityValue(tokens, base);
 }
 
 pub fn widgetControlInset(widget: Widget, tokens: DesignTokens, base: f32) f32 {
-    return densityValue(tokens, widgetSizedTokenValue(widget, base));
+    return densityValue(tokens, widgetSizedTokenValue(widget, tokens, base));
 }
 
 pub fn widgetSizedDensityValue(widget: Widget, tokens: DesignTokens, value: f32) f32 {
     return densityValue(tokens, value) * widgetSizeScale(widget);
 }
 
-pub fn widgetSizedTokenValue(widget: Widget, value: f32) f32 {
+pub fn widgetSizedTokenValue(widget: Widget, tokens: DesignTokens, value: f32) f32 {
+    const step = tokens.metrics.size_inset_step;
     return switch (widget.size) {
-        .sm => @max(0, value - 2),
+        .sm => @max(0, value - step),
         // heading/display step type, not chrome: control metrics stay at
         // the default step.
         .default, .icon, .heading, .display => value,
-        .lg => value + 2,
+        .lg => value + step,
     };
 }
 

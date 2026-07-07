@@ -381,6 +381,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// scale afterwards: the model owns scheme/contrast/motion,
             /// the runtime owns the surface scale.
             tokens_fn: ?*const fn (model: *const ModelT) canvas.DesignTokens = null,
+            /// Which built-in theme pack the stock tokens resolve when
+            /// the app claims neither `tokens` nor `tokens_fn`: the
+            /// pack composes with the live system appearance (scheme,
+            /// contrast, reduced motion), so a packed app still
+            /// re-themes on the OS light/dark flip. Apps that own their
+            /// tokens pick a pack themselves via `ThemeOptions.pack`.
+            /// The scaffold wires this to app.zon's `theme` field
+            /// through `app_runner.manifestThemePack()`.
+            theme: canvas.ThemePack = .house,
             /// App font faces registered once, on the installing frame,
             /// BEFORE the first view build — so the very first layout
             /// already measures (and the first paint inks) with them.
@@ -1000,6 +1009,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 },
                 .contrast = if (self.system_appearance.high_contrast) .high else .standard,
                 .reduce_motion = self.system_appearance.reduce_motion,
+                .pack = self.options.theme,
             });
             tokens.pixel_snap.scale = self.pixel_snap_scale;
             return tokens;

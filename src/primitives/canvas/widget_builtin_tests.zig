@@ -2643,3 +2643,45 @@ test "widget text at intrinsic width does not wrap under geometry pixel snapping
         try std.testing.expect(seen);
     }
 }
+
+test "theme packs resolve by name and compose with every theme axis" {
+    const DesignTokensT = canvas.DesignTokens;
+    // Manifest-facing name resolution: known packs resolve, typos are
+    // null so callers can raise a teaching error with the valid list.
+    try std.testing.expectEqual(canvas.ThemePack.house, canvas.ThemePack.fromName("house").?);
+    try std.testing.expectEqual(canvas.ThemePack.geist, canvas.ThemePack.fromName("geist").?);
+    try std.testing.expectEqual(@as(?canvas.ThemePack, null), canvas.ThemePack.fromName("neon"));
+
+    // The default pack IS the house register: ThemeOptions without a
+    // pack must resolve byte-identically to before packs existed.
+    const house = DesignTokensT.theme(.{});
+    const house_explicit = DesignTokensT.theme(.{ .pack = .house });
+    try std.testing.expectEqualDeep(house, house_explicit);
+
+    // The pack changes the register while the scheme axis keeps
+    // working through it: geist light and dark differ from house and
+    // from each other, and the monochrome-primary identity flips with
+    // the scheme exactly like the house register's does.
+    const geist_light = DesignTokensT.theme(.{ .pack = .geist });
+    const geist_dark = DesignTokensT.theme(.{ .pack = .geist, .color_scheme = .dark });
+    try std.testing.expect(!std.meta.eql(geist_light.colors, house.colors));
+    try std.testing.expect(!std.meta.eql(geist_light.colors, geist_dark.colors));
+    try std.testing.expect(geist_light.colors.background.r > geist_dark.colors.background.r);
+
+    // Scheme-independent axes apply on top of any pack: reduce_motion
+    // zeroes the pack's motion register, density passes through.
+    const geist_reduced = DesignTokensT.theme(.{ .pack = .geist, .reduce_motion = true, .density = .compact });
+    try std.testing.expectEqual(@as(u32, 0), geist_reduced.motion.normal_ms);
+    try std.testing.expectEqual(canvas.Density.compact, geist_reduced.density);
+
+    // Overrides layer over a pack the same way they layer over the
+    // house register.
+    const overridden = DesignTokensT.themeWithOverrides(.{ .pack = .geist }, .{
+        .metrics = .{ .control_height = 44 },
+        .states = .{ .disabled_alpha = 0.4 },
+    });
+    try std.testing.expectEqual(@as(f32, 44), overridden.metrics.control_height);
+    try std.testing.expectEqual(@as(f32, 0.4), overridden.states.disabled_alpha);
+    // Fields the override left null keep the pack's values.
+    try std.testing.expectEqual(geist_light.metrics.control_height_lg, overridden.metrics.control_height_lg);
+}

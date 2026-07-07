@@ -24,6 +24,11 @@ pub const Metadata = struct {
     capabilities: []const []const u8 = &.{},
     bridge_commands: []const BridgeCommandMetadata = &.{},
     web_engine: []const u8 = "system",
+    /// The built-in theme pack the app selects (`theme = "geist"`).
+    /// Optional — absent keeps the house register. Validated against
+    /// the known pack names so a typo is a check error, never a silent
+    /// default-theme fallback.
+    theme: ?[]const u8 = null,
     cef: web_engine_tool.CefConfig = .{},
     frontend: ?FrontendMetadata = null,
     security: SecurityMetadata = .{},
@@ -44,6 +49,7 @@ pub const Metadata = struct {
         allocator.free(self.name);
         if (self.display_name) |value| allocator.free(value);
         if (self.description) |value| allocator.free(value);
+        if (self.theme) |value| allocator.free(value);
         allocator.free(self.version);
         allocator.free(self.web_engine);
         allocator.free(self.cef.dir);
@@ -328,6 +334,12 @@ pub fn validateFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) 
             .message = "app.zon description is invalid - it must be one non-empty line of at most 256 bytes with no control characters (it becomes the About panel credits line)",
         };
     }
+    if (metadata.theme) |theme_name| {
+        if (!isKnownThemePack(theme_name)) return .{
+            .ok = false,
+            .message = "app.zon theme is invalid - expected one of: house, geist",
+        };
+    }
     validateIconPaths(metadata.icons) catch return .{ .ok = false, .message = "app.zon icons are invalid" };
     if (try checkIconSources(allocator, io, std.fs.path.dirname(path) orelse ".", metadata.icons)) |icon_message| {
         return .{ .ok = false, .message = icon_message };
@@ -425,6 +437,7 @@ pub fn parseText(allocator: std.mem.Allocator, source: []const u8) !Metadata {
         .name = try allocator.dupe(u8, raw.name),
         .display_name = if (raw.display_name) |value| try allocator.dupe(u8, value) else null,
         .description = if (raw.description) |value| try allocator.dupe(u8, value) else null,
+        .theme = if (raw.theme) |value| try allocator.dupe(u8, value) else null,
         .version = try allocator.dupe(u8, raw.version),
         .icons = try duplicateStringList(allocator, raw.icons),
         .platforms = try duplicateStringList(allocator, raw.platforms),
@@ -841,6 +854,18 @@ fn deinitParsedMenus(allocator: std.mem.Allocator, menus: []const app_manifest.M
         if (menu.items.len > 0) allocator.free(menu.items);
     }
     if (menus.len > 0) allocator.free(menus);
+}
+
+/// The built-in theme pack names, kept in step with the canvas
+/// `ThemePack` enum (tooling deliberately does not link the canvas
+/// module; the runner re-validates at comptime, so a drift here shows
+/// up as a build error in the app, never a silently shipped typo).
+fn isKnownThemePack(name: []const u8) bool {
+    const known = [_][]const u8{ "house", "geist" };
+    for (known) |candidate| {
+        if (std.mem.eql(u8, name, candidate)) return true;
+    }
+    return false;
 }
 
 fn validateIconPaths(icons: []const []const u8) !void {
@@ -1768,4 +1793,22 @@ test "validate accepts a square icon source and prebuilt containers" {
 
     const result = try validateFile(gpa, std.testing.io, root ++ "/app.zon");
     try std.testing.expect(result.ok);
+}
+
+test "manifest validates the theme pack name" {
+    const metadata = try parseText(std.testing.allocator,
+        \\.{
+        \\  .id = "com.example.app",
+        \\  .name = "example",
+        \\  .version = "1.0.0",
+        \\  .theme = "geist",
+        \\}
+    );
+    defer metadata.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("geist", metadata.theme.?);
+    // The known-pack check is the tooling half of the contract; the
+    // runner re-validates the same names at comptime in the app build.
+    try std.testing.expect(isKnownThemePack("house"));
+    try std.testing.expect(isKnownThemePack("geist"));
+    try std.testing.expect(!isKnownThemePack("neon"));
 }

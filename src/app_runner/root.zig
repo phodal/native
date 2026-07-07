@@ -237,6 +237,19 @@ fn manifestStringField(comptime field: []const u8) []const u8 {
     return value;
 }
 
+/// The theme pack app.zon selects (`theme = "geist"`), resolved at
+/// comptime so an unknown name is a build error naming the field and
+/// the valid packs — never a silent fallback. Absent means the house
+/// register. Apps hand this to their `UiApp` options' `theme` field;
+/// the pack then composes with the live system appearance, so packed
+/// apps still re-theme on the OS light/dark flip.
+pub fn manifestThemePack() native_sdk.canvas.ThemePack {
+    if (comptime !@hasField(@TypeOf(app_manifest), "theme")) return .house;
+    const name: []const u8 = app_manifest.theme;
+    return comptime native_sdk.canvas.ThemePack.fromName(name) orelse
+        @compileError("unknown app.zon theme \"" ++ name ++ "\" — expected one of: house, geist");
+}
+
 /// Whether app.zon declares web content: the `webview` capability or a
 /// `frontend` block. Hosts build honest default menus from this — web
 /// items like Reload only exist when a webview can answer them, so

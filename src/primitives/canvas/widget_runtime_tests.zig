@@ -2518,7 +2518,7 @@ test "input-group focus change dirties the group's ring region" {
     // focus-ring region (frame + ring offset + stroke), not just the
     // textarea's own bounds — the group wears the ring on its behalf.
     const dirty = layout.renderStateDirtyBoundsWithTokens(.{}, .{ .focused_id = 3, .focus_visible_id = 3 }, tokens).?;
-    const ring = drawing_model.strokeBounds(widget_render_style.focusRingRect(geometry.RectF.init(20, 20, 200, 112)), tokens.stroke.focus);
+    const ring = drawing_model.strokeBounds(widget_render_style.focusRingRect(geometry.RectF.init(20, 20, 200, 112), tokens), tokens.stroke.focus);
     try std.testing.expect(dirty.x <= ring.x);
     try std.testing.expect(dirty.y <= ring.y);
     try std.testing.expect(dirty.maxX() >= ring.maxX());
@@ -2724,7 +2724,7 @@ test "checkbox radio and switch focus rings stay on the control glyph" {
             .stroke_rect => |focus| {
                 // The ring wraps the box 2px outside it — still glyph-
                 // sized, nowhere near the clickable label's row width.
-                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(box.rect), focus.rect);
+                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(box.rect, tokens), focus.rect);
                 try std.testing.expect(focus.rect.width < 32);
                 try std.testing.expect(focus.rect.width < 160);
                 try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);
@@ -2749,7 +2749,7 @@ test "checkbox radio and switch focus rings stay on the control glyph" {
     switch (radio_circle) {
         .stroke_rect => |circle| switch (radio_focus) {
             .stroke_rect => |focus| {
-                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(circle.rect), focus.rect);
+                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(circle.rect, tokens), focus.rect);
                 try std.testing.expect(focus.rect.width < 32);
                 try std.testing.expect(focus.rect.width < 160);
                 try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);
@@ -2775,7 +2775,7 @@ test "checkbox radio and switch focus rings stay on the control glyph" {
     switch (switch_track) {
         .fill_rounded_rect => |track| switch (switch_focus) {
             .stroke_rect => |focus| {
-                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(track.rect), focus.rect);
+                try std.testing.expectEqualDeep(widget_render_style.focusRingRect(track.rect, tokens), focus.rect);
                 try std.testing.expect(focus.rect.width < 80);
                 try std.testing.expect(focus.rect.width < 160);
                 try expectFillColor(tokens.colors.focus_ring, focus.stroke.fill);

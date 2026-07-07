@@ -270,6 +270,18 @@ typedef void (*native_sdk_appkit_bridge_callback_t)(void *context, uint64_t wind
 // exist only when it is set.
 native_sdk_appkit_host_t *native_sdk_appkit_create(const char *app_name, size_t app_name_len, const char *display_name, size_t display_name_len, const char *version, size_t version_len, const char *about_description, size_t about_description_len, int has_web_content, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
 void native_sdk_appkit_destroy(native_sdk_appkit_host_t *host);
+// Adopt pre-rendered straight-alpha RGBA8 pixels as the Dock icon (and
+// the About panel copy). The pixels are copied before return, so the
+// caller may free its buffer immediately; adoption happens on the main
+// queue. The Debug dev-run path renders the packaging pipeline's masked
+// macOS canvas and delivers it here, so a raw square icon source shows
+// the same rounded tile a packaged bundle would.
+void native_sdk_appkit_set_dock_icon_rgba(native_sdk_appkit_host_t *host, const uint8_t *pixels, size_t width, size_t height);
+// Load the Dock icon from an image file off the calling thread — the
+// same decode configureApplication runs for the manifest icon. The
+// Debug dev-run path falls back to this when its masked render fails,
+// keeping the pre-masking behavior (icon shown unshaped) as the floor.
+void native_sdk_appkit_set_dock_icon_file(native_sdk_appkit_host_t *host, const char *path, size_t path_len);
 void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_event_callback_t callback, void *context);
 void native_sdk_appkit_stop(native_sdk_appkit_host_t *host);
 void native_sdk_appkit_load_webview(native_sdk_appkit_host_t *host, const char *source, size_t source_len, int source_kind, const char *asset_root, size_t asset_root_len, const char *asset_entry, size_t asset_entry_len, const char *asset_origin, size_t asset_origin_len, int spa_fallback);

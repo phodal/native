@@ -1282,8 +1282,10 @@ test "widget comboboxes expose textbox semantics and render trigger chrome" {
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, combobox, .{});
     const display_list = builder.displayList();
-    // Fill, border, vector magnifier (4 commands), text, two chevrons.
-    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
+    // Fill, border, vector magnifier (4 commands), text, then the
+    // registry chevron-down (a transform pair bracketing its stroked
+    // path) — the same icon register the select trigger draws.
+    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
     switch (display_list.commands[6]) {
         .draw_text => |text| {
             try std.testing.expectEqualStrings("components", text.text);
@@ -1293,11 +1295,17 @@ test "widget comboboxes expose textbox semantics and render trigger chrome" {
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[7]) {
-        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(14, 12)), line.id),
+        .transform => {},
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[8]) {
-        .draw_line => |line| try std.testing.expectEqual(@as(ObjectId, widgetPartId(14, 13)), line.id),
+        // The chevron's stroke path lands on slot 13 (the icon's shape
+        // range starts at 12: fill slot skipped for a stroke-only icon).
+        .stroke_path => |stroke| try std.testing.expectEqual(@as(ObjectId, widgetPartId(14, 13)), stroke.id),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[9]) {
+        .transform => {},
         else => return error.TestUnexpectedResult,
     }
 }

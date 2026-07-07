@@ -2840,6 +2840,58 @@ void native_sdk_appkit_remove_tray(native_sdk_appkit_host_t *host) {
     }
 }
 
+/* Dock icon entry points, CEF engine: the Chromium shell is still a
+ * macOS app with a Dock tile, so the dev-run icon path (including the
+ * Debug-only masked render of raw image sources) applies here exactly
+ * as under the system host. The rgba form copies the caller's
+ * straight-alpha rows into a rep the image owns (the caller frees its
+ * buffer on return); only the NSApp adoption needs the main queue. */
+void native_sdk_appkit_set_dock_icon_rgba(native_sdk_appkit_host_t *host, const uint8_t *pixels, size_t width, size_t height) {
+    (void)host;
+    if (!pixels || width == 0 || height == 0) return;
+    @autoreleasepool {
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                        pixelsWide:(NSInteger)width
+                                                                        pixelsHigh:(NSInteger)height
+                                                                     bitsPerSample:8
+                                                                   samplesPerPixel:4
+                                                                          hasAlpha:YES
+                                                                          isPlanar:NO
+                                                                    colorSpaceName:NSCalibratedRGBColorSpace
+                                                                      bitmapFormat:NSBitmapFormatAlphaNonpremultiplied
+                                                                       bytesPerRow:0
+                                                                      bitsPerPixel:32];
+        if (!rep || !rep.bitmapData) return;
+        const size_t source_stride = width * 4;
+        const size_t dest_stride = (size_t)rep.bytesPerRow;
+        unsigned char *dest = rep.bitmapData;
+        for (size_t y = 0; y < height; y += 1) {
+            memcpy(dest + y * dest_stride, pixels + y * source_stride, source_stride);
+        }
+        NSImage *icon = [[NSImage alloc] initWithSize:NSMakeSize((CGFloat)width, (CGFloat)height)];
+        [icon addRepresentation:rep];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp setApplicationIconImage:icon];
+        });
+    }
+}
+
+void native_sdk_appkit_set_dock_icon_file(native_sdk_appkit_host_t *host, const char *path, size_t path_len) {
+    (void)host;
+    if (!path || path_len == 0) return;
+    @autoreleasepool {
+        NSString *pathString = [[NSString alloc] initWithBytes:path length:path_len encoding:NSUTF8StringEncoding];
+        if (pathString.length == 0) return;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:pathString];
+            if (!icon) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSApp setApplicationIconImage:icon];
+            });
+        });
+    }
+}
+
 void native_sdk_appkit_set_tray_callback(native_sdk_appkit_host_t *host, native_sdk_appkit_tray_callback_t callback, void *context) {
     NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
     object.trayCallback = callback;

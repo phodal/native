@@ -668,7 +668,14 @@ test "gpu components display list renders stable reference snapshot" {
     // specimen and its surface grew to hold three such rows. Reviewed
     // via regenerated docs select/dropdown/menu previews and live
     // light/dark captures before blessing.
-    try std.testing.expectEqual(@as(u64, 7885881543797400396), referenceSurfaceSignature(pixels));
+    // Re-pinned 2026-07-06 on the tree carrying the select rework
+    // (combobox chevron register): the combobox trigger's open-below
+    // affordance is now the same registry chevron-down at the shared
+    // row-icon extent the select trigger draws, instead of a
+    // hand-drawn two-line glyph. Only the catalog's combobox pixels
+    // move past the select-rework pin. Reviewed via the regenerated
+    // docs combobox previews (the sole preview churn) before blessing.
+    try std.testing.expectEqual(@as(u64, 12104365516327616860), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

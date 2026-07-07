@@ -7372,22 +7372,34 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     NativeSdkApplyProcessDisplayName(self.displayName);
     [self buildMenuBar];
     NativeSdkLaunchLap("menu_built");
-    if (self.iconPath.length > 0) {
-        // Decode the dock icon off the launch path: the synchronous
-        // .icns read+decode cost ~25 ms of launch-to-glass. The dock
-        // tile updates a few frames after launch instead — imperceptible,
-        // and identical when the file is missing (no icon either way).
-        NSString *iconPath = self.iconPath;
-        __weak NativeSdkAppKitHost *weakSelf = self;
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
-            if (!icon) return;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                weakSelf.appIcon = icon;
-                [NSApp setApplicationIconImage:icon];
-            });
+    [self loadDockIconFromFile:self.iconPath];
+}
+
+/* Decode a Dock icon file off the launch path: the synchronous .icns
+ * read+decode cost ~25 ms of launch-to-glass. The dock tile updates a
+ * few frames after launch instead — imperceptible, and identical when
+ * the file is missing (no icon either way). Shared by the manifest
+ * path (configureApplication) and the Debug dev-run fallback for when
+ * the pre-masked render is unavailable. */
+- (void)loadDockIconFromFile:(NSString *)iconPath {
+    if (iconPath.length == 0) return;
+    __weak NativeSdkAppKitHost *weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+        if (!icon) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf adoptDockIcon:icon];
         });
-    }
+    });
+}
+
+/* Main-thread Dock icon adoption: the Dock/app-switcher tile and the
+ * About panel copy (unbundled binaries have no bundle icon for the
+ * standard panel to find, so it is retained on the host explicitly). */
+- (void)adoptDockIcon:(NSImage *)icon {
+    if (!icon) return;
+    self.appIcon = icon;
+    [NSApp setApplicationIconImage:icon];
 }
 
 - (void)buildMenuBar {
@@ -8351,6 +8363,52 @@ void native_sdk_appkit_destroy(native_sdk_appkit_host_t *host) {
         return;
     }
     CFBridgingRelease(host);
+}
+
+void native_sdk_appkit_set_dock_icon_rgba(native_sdk_appkit_host_t *host, const uint8_t *pixels, size_t width, size_t height) {
+    if (!host || !pixels || width == 0 || height == 0) return;
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    @autoreleasepool {
+        /* Wrap the straight-alpha RGBA8 rows in a bitmap rep the image
+         * owns: the caller frees its buffer on return, so the pixels are
+         * copied row-by-row into the rep's own allocation (planes:NULL
+         * makes the rep allocate). Safe off the main thread — image
+         * construction is, only the NSApp adoption needs main. */
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                        pixelsWide:(NSInteger)width
+                                                                        pixelsHigh:(NSInteger)height
+                                                                     bitsPerSample:8
+                                                                   samplesPerPixel:4
+                                                                          hasAlpha:YES
+                                                                          isPlanar:NO
+                                                                    colorSpaceName:NSCalibratedRGBColorSpace
+                                                                      bitmapFormat:NSBitmapFormatAlphaNonpremultiplied
+                                                                       bytesPerRow:0
+                                                                      bitsPerPixel:32];
+        if (!rep || !rep.bitmapData) return;
+        const size_t source_stride = width * 4;
+        const size_t dest_stride = (size_t)rep.bytesPerRow;
+        unsigned char *dest = rep.bitmapData;
+        for (size_t y = 0; y < height; y += 1) {
+            memcpy(dest + y * dest_stride, pixels + y * source_stride, source_stride);
+        }
+        NSImage *icon = [[NSImage alloc] initWithSize:NSMakeSize((CGFloat)width, (CGFloat)height)];
+        [icon addRepresentation:rep];
+        __weak NativeSdkAppKitHost *weakObject = object;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakObject adoptDockIcon:icon];
+        });
+    }
+}
+
+void native_sdk_appkit_set_dock_icon_file(native_sdk_appkit_host_t *host, const char *path, size_t path_len) {
+    if (!host || !path || path_len == 0) return;
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    @autoreleasepool {
+        NSString *pathString = [[NSString alloc] initWithBytes:path length:path_len encoding:NSUTF8StringEncoding];
+        if (pathString.length == 0) return;
+        [object loadDockIconFromFile:pathString];
+    }
 }
 
 void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_event_callback_t callback, void *context) {

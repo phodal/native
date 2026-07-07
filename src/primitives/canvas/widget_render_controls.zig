@@ -593,7 +593,7 @@ pub fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTo
         }
     }
     if (widget.kind == .combobox) {
-        try emitComboboxChevron(builder, widget, tokens, visual, text_size);
+        try emitComboboxChevron(builder, widget, tokens, visual);
     }
     try emitSearchFieldClearButton(builder, widget, tokens, visual);
 }
@@ -609,21 +609,26 @@ fn emitSearchFieldClearButton(builder: *Builder, widget: Widget, tokens: DesignT
     try emitVectorIcon(builder, widget.id, 15, icon_frame, color, icon);
 }
 
-fn emitComboboxChevron(builder: *Builder, widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens, text_size: f32) Error!void {
+/// The combobox trigger's open-below affordance: the registry
+/// `chevron-down` icon at the shared row-icon extent, the same
+/// treatment the select trigger draws — one icon register across the
+/// control family instead of a hand-drawn two-line glyph. Muted, like
+/// the placeholder register: the chevron is an affordance, not
+/// content, so it never outweighs the entered text. Slot 12 starts the
+/// icon's shape range (fill/stroke pair), clear of the field chrome
+/// (1..11), the focus ring (14), and the clear affordance (15).
+fn emitComboboxChevron(builder: *Builder, widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Error!void {
+    const icon = icon_model.resolve("chevron-down") orelse return;
     const inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-    const chevron_size = @max(widgetSizedDensityValue(widget, tokens, 8), text_size - 4);
-    const center = geometry.PointF.init(widget.frame.x + widget.frame.width - inset - chevron_size * 0.5, widget.frame.y + widget.frame.height * 0.5);
-    const half = chevron_size * 0.36;
-    const drop = chevron_size * 0.28;
-    const left = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x - half, center.y - drop * 0.5));
-    const mid = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x, center.y + drop * 0.5));
-    const right = pixelSnapGeometryPoint(tokens, geometry.PointF.init(center.x + half, center.y - drop * 0.5));
-    const stroke = Stroke{
-        .fill = colorFill(widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted)),
-        .width = tokens.stroke.regular,
-    };
-    try builder.drawLine(.{ .id = widgetPartId(widget.id, 12), .from = left, .to = mid, .stroke = stroke });
-    try builder.drawLine(.{ .id = widgetPartId(widget.id, 13), .from = mid, .to = right, .stroke = stroke });
+    const chevron_size = widgetRowIconExtent(widget, tokens);
+    const icon_frame = geometry.RectF.init(
+        widget.frame.x + widget.frame.width - inset - chevron_size,
+        widget.frame.y + (widget.frame.height - chevron_size) * 0.5,
+        chevron_size,
+        chevron_size,
+    );
+    const color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted);
+    try emitVectorIcon(builder, widget.id, 12, icon_frame, color, icon);
 }
 
 fn emitSearchFieldIcon(builder: *Builder, widget: Widget, tokens: DesignTokens, icon_size: f32) Error!void {

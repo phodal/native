@@ -1532,6 +1532,135 @@ test "windowed virtual list lays out the built window at absolute virtual positi
     try std.testing.expectEqual(@as(usize, 100_000), tail_range.end_index);
 }
 
+// The overflow diagnostic's test seam lives on the layout module itself
+// (same canvas-module instance `layoutWidgetTree` runs through), so
+// these tests read exactly the counter the diagnostic path increments.
+const widget_layout_module = @import("widget_layout.zig");
+
+test "scroll scopes silence the vertical overflow diagnostic; bare overflow still warns" {
+    // A trailing virtualized scroll in a flex column, with the mounted
+    // window's extent (10 rows x 25 stride = 250) far past the space
+    // the column can give it (140 - 40 header = 100). This is the
+    // normal virtual-list operating mode — the runtime scrolls the
+    // window — so the layout must be correct AND no overflow
+    // diagnostic may fire for it. The diagnostic used to blame the
+    // parent bookkeeping here on every rebuild (hundreds of identical
+    // lines in a scrolling app) while the layout audit stayed clean.
+    var window_rows: [10]Widget = undefined;
+    for (&window_rows, 0..) |*row, index| {
+        row.* = .{
+            .id = @intCast(10 + index),
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 20),
+            .text = "Row",
+        };
+    }
+    const virtual_column = Widget{
+        .id = 1,
+        .kind = .column,
+        .children = &.{
+            .{ .id = 2, .kind = .row, .frame = geometry.RectF.init(0, 0, 0, 40) },
+            .{
+                .id = 3,
+                .kind = .scroll_view,
+                // Deep in the list: the window tracks a virtualized
+                // offset (items 100.. of 100k mounted).
+                .value = 2500,
+                .layout = .{
+                    .grow = 1,
+                    .gap = 5,
+                    .virtualized = true,
+                    .virtual_item_extent = 20,
+                    .virtual_item_count = 100_000,
+                    .virtual_first_index = 100,
+                },
+                .children = &window_rows,
+            },
+        },
+    };
+    widget_layout_module.test_axis_overflow_diagnostics = 0;
+    var nodes: [16]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(virtual_column, geometry.RectF.init(0, 0, 120, 140), &nodes);
+    try std.testing.expectEqual(@as(usize, 0), widget_layout_module.test_axis_overflow_diagnostics);
+    // The flex math is untouched by the silenced diagnostic: the grow
+    // scroll takes exactly the space after the header, and the first
+    // mounted row sits at its absolute virtual position (100 * 25 -
+    // 2500 = 0 into the viewport).
+    try expectLayoutFrame(layout, 3, geometry.RectF.init(0, 40, 120, 100));
+    try expectLayoutFrame(layout, 10, geometry.RectF.init(0, 40, 120, 20));
+
+    // The tracked-offset plain scroll shape (a markup `<scroll>` with a
+    // model-owned offset over a column of rows): the wrapper column is
+    // sized to the viewport, its rows extend far past it, pixels are
+    // correct — and the diagnostic stays quiet on every rebuild.
+    var tall_rows: [10]Widget = undefined;
+    for (&tall_rows, 0..) |*row, index| {
+        row.* = .{
+            .id = @intCast(30 + index),
+            .kind = .list_item,
+            .frame = geometry.RectF.init(0, 0, 0, 60),
+            .text = "Note",
+        };
+    }
+    const tracked_column = Widget{
+        .id = 1,
+        .kind = .column,
+        .children = &.{
+            .{ .id = 2, .kind = .row, .frame = geometry.RectF.init(0, 0, 0, 40) },
+            .{
+                .id = 3,
+                .kind = .scroll_view,
+                .value = 50,
+                .layout = .{ .grow = 1 },
+                .children = &.{
+                    .{ .id = 4, .kind = .column, .children = &tall_rows },
+                },
+            },
+        },
+    };
+    widget_layout_module.test_axis_overflow_diagnostics = 0;
+    var tracked_nodes: [16]WidgetLayoutNode = undefined;
+    const tracked_layout = try layoutWidgetTree(tracked_column, geometry.RectF.init(0, 0, 120, 140), &tracked_nodes);
+    try std.testing.expectEqual(@as(usize, 0), widget_layout_module.test_axis_overflow_diagnostics);
+    // The wrapper is viewport-sized and scrolled up by the offset; the
+    // rows stack from there — correct pixels, no warning.
+    try expectLayoutFrame(tracked_layout, 4, geometry.RectF.init(0, -10, 120, 100));
+    try expectLayoutFrame(tracked_layout, 30, geometry.RectF.init(0, -10, 120, 60));
+
+    // Control: the same tall column with NO scroll ancestor is real
+    // silent damage — the diagnostic must still fire for it.
+    const bare_column = Widget{
+        .id = 1,
+        .kind = .column,
+        .children = &tall_rows,
+    };
+    widget_layout_module.test_axis_overflow_diagnostics = 0;
+    var bare_nodes: [16]WidgetLayoutNode = undefined;
+    _ = try layoutWidgetTree(bare_column, geometry.RectF.init(0, 0, 120, 140), &bare_nodes);
+    try std.testing.expectEqual(@as(usize, 1), widget_layout_module.test_axis_overflow_diagnostics);
+
+    // Horizontal overflow inside a vertical scroll still warns: nothing
+    // scrolls sideways to reveal those pixels.
+    const wide_row_scroll = Widget{
+        .id = 1,
+        .kind = .scroll_view,
+        .children = &.{
+            .{
+                .id = 2,
+                .kind = .row,
+                .children = &.{
+                    .{ .id = 3, .kind = .badge, .frame = geometry.RectF.init(0, 0, 200, 20), .text = "Wide" },
+                    .{ .id = 4, .kind = .badge, .frame = geometry.RectF.init(0, 0, 200, 20), .text = "Wider" },
+                },
+            },
+        },
+    };
+    widget_layout_module.test_axis_overflow_diagnostics = 0;
+    var wide_nodes: [8]WidgetLayoutNode = undefined;
+    _ = try layoutWidgetTree(wide_row_scroll, geometry.RectF.init(0, 0, 120, 140), &wide_nodes);
+    try std.testing.expectEqual(@as(usize, 1), widget_layout_module.test_axis_overflow_diagnostics);
+}
+
 test "widget virtualized list exposes logical item semantics" {
     const children = [_]Widget{
         .{ .id = 2, .kind = .list_item, .frame = geometry.RectF.init(0, 0, 0, 20), .text = "Zero" },

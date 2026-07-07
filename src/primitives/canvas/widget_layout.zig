@@ -262,7 +262,7 @@ fn layoutAxisChildren(
     const assigned_extent = assignedAxisChildrenExtent(children, axis, fixed_extent, grow_total, remaining);
     const used_extent = assigned_extent + total_gap;
     if (axisLayoutOverflow(available_extent, used_extent)) |overflow| {
-        logAxisChildrenOverflow(output[parent_index].widget.kind, axis, available_extent, used_extent, overflow);
+        logAxisChildrenOverflow(output, parent_index, axis, available_extent, used_extent, overflow);
     }
     const free_extent = @max(0, available_extent - used_extent);
     var child_gap = clamped_gap;
@@ -308,17 +308,98 @@ pub fn axisLayoutOverflow(available_extent: f32, used_extent: f32) ?f32 {
 
 const layout_log = std.log.scoped(.zero_canvas_layout);
 
+/// Test seam for the overflow diagnostic below: incremented once per
+/// emitted (post-suppression) diagnostic in test builds, so regression
+/// tests can assert a shape stays quiet — or still warns — without
+/// scraping log output. Release and debug app builds never touch it.
+pub var test_axis_overflow_diagnostics: usize = 0;
+
+/// Whether the container at `parent_index` sits inside a vertically
+/// scrolling scope: a `.scroll_view` ancestor, or a virtualized
+/// container ancestor (layout-culled model-driven lists/grids). Inside
+/// such a scope, content taller than the viewport is the normal
+/// operating mode — the scroll exists precisely to reveal it — so the
+/// vertical overflow diagnostic must stay quiet there. The walk is the
+/// same rule the layout audit applies (`scopeScrollsVertically`), which
+/// is why the audit was already clean on these shapes. Anchored
+/// floating subtrees hoist out of every ancestor scope (window-clipped,
+/// not parent-clipped), so the walk stops at an anchor boundary just
+/// like the audit's clip-scope walk.
+fn widgetInsideVerticalScrollScope(output: []const WidgetLayoutNode, parent_index: usize) bool {
+    var current: ?usize = parent_index;
+    while (current) |index| {
+        const widget = output[index].widget;
+        if (widget.kind == .scroll_view or widget.layout.virtualized) return true;
+        if (widget.layout.anchor != null) return false;
+        current = output[index].parent_index;
+    }
+    return false;
+}
+
 /// Debug-build diagnostic for silent flex overflow: when the children's
 /// minimum extents exceed the container, the extra pixels spill past the
 /// content box with no visual cue at authoring time. Logged at .debug so
 /// debug app runs surface it while release builds and test runs stay
-/// quiet.
-fn logAxisChildrenOverflow(kind: widget_model.WidgetKind, axis: LayoutAxis, available_extent: f32, used_extent: f32, overflow: f32) void {
+/// quiet. Two carve-outs keep it honest:
+///
+/// - Vertical overflow inside a vertically scrolling scope is expected,
+///   never damage (see `widgetInsideVerticalScrollScope`): a tracked or
+///   virtualized scroll's content wrapper is sized to the viewport and
+///   its children legitimately extend past it on every rebuild, which
+///   used to repeat this line hundreds of times for a perfectly correct
+///   layout. Horizontal overflow still warns there — nothing scrolls
+///   sideways to reveal it.
+/// - The line names the concrete widget (root-first kind path, label
+///   snippet, id — the same identity the layout audit prints), because
+///   a bare kind like "column" is unactionable in any real tree.
+fn logAxisChildrenOverflow(output: []const WidgetLayoutNode, parent_index: usize, axis: LayoutAxis, available_extent: f32, used_extent: f32, overflow: f32) void {
+    if (axis == .vertical and widgetInsideVerticalScrollScope(output, parent_index)) return;
+    if (builtin.is_test) test_axis_overflow_diagnostics += 1;
     if (builtin.mode != .Debug) return;
+    var path_buffer: [256]u8 = undefined;
     layout_log.debug(
         "{s} children overflow the {s} axis by {d:.1}px (need {d:.1}px, have {d:.1}px): intrinsic/min sizes exceed the container - shrink the content, or give siblings grow factors or definite width/height that fit",
-        .{ @tagName(kind), @tagName(axis), overflow, used_extent, available_extent },
+        .{ axisOverflowWidgetPath(&path_buffer, output, parent_index), @tagName(axis), overflow, used_extent, available_extent },
     );
+}
+
+/// The offending container's identity for the overflow diagnostic: the
+/// root-first kind chain plus the container's label snippet and id
+/// (`column > card > column "Inbox" (id 42)`), assembled into the
+/// caller's buffer. Ancestors already have their layout nodes by the
+/// time a container lays out its children, so the parent chain is
+/// complete; a full audit-style path with sibling ordinals would need
+/// the finished tree, which does not exist mid-layout. Truncation on a
+/// deep tree keeps the prefix — the leaf id still lands via the audit.
+fn axisOverflowWidgetPath(buffer: []u8, output: []const WidgetLayoutNode, parent_index: usize) []const u8 {
+    var chain: [max_widget_depth]usize = undefined;
+    var chain_len: usize = 0;
+    var current: ?usize = parent_index;
+    while (current) |index| {
+        if (chain_len >= chain.len) break;
+        chain[chain_len] = index;
+        chain_len += 1;
+        current = output[index].parent_index;
+    }
+
+    var writer = std.Io.Writer.fixed(buffer);
+    var position = chain_len;
+    while (position > 0) {
+        position -= 1;
+        if (position != chain_len - 1) writer.print(" > ", .{}) catch break;
+        writer.print("{s}", .{@tagName(output[chain[position]].widget.kind)}) catch break;
+    }
+    const widget = output[parent_index].widget;
+    const label = if (widget.text.len > 0) widget.text else widget.semantics.label;
+    if (label.len > 0) {
+        // Longest clean UTF-8 prefix of at most 24 bytes: never split a
+        // multi-byte sequence mid-codepoint in the log line.
+        var snippet_len: usize = @min(label.len, 24);
+        while (snippet_len > 0 and snippet_len < label.len and text_model.isUtf8ContinuationByte(label[snippet_len])) snippet_len -= 1;
+        writer.print(" \"{s}\"", .{label[0..snippet_len]}) catch {};
+    }
+    if (widget.id != 0) writer.print(" (id {d})", .{widget.id}) catch {};
+    return writer.buffered();
 }
 
 /// Floor `value` with the widget's `min_size` for the axis and cap it at

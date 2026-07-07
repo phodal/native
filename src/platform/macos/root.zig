@@ -1,8 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geometry = @import("geometry");
 const platform_mod = @import("../root.zig");
 const policy_values = @import("../policy_values.zig");
 const security = @import("../../security/root.zig");
+// The packaging pipeline's one-image icon machinery: dev runs borrow its
+// macOS mask/inset render so the Dock tile matches `native package`.
+const app_icon = @import("canvas").app_icon;
 
 pub const Error = error{
     CallbackFailed,
@@ -104,6 +108,8 @@ const shortcut_modifier_shift: u32 = 1 << 4;
 
 extern fn native_sdk_appkit_create(app_name: [*]const u8, app_name_len: usize, display_name: [*]const u8, display_name_len: usize, version: [*]const u8, version_len: usize, about_description: [*]const u8, about_description_len: usize, has_web_content: c_int, window_title: [*]const u8, window_title_len: usize, bundle_id: [*]const u8, bundle_id_len: usize, icon_path: [*]const u8, icon_path_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int, titlebar_style: c_int, show_policy: c_int) ?*AppKitHost;
 extern fn native_sdk_appkit_destroy(host: *AppKitHost) void;
+extern fn native_sdk_appkit_set_dock_icon_rgba(host: *AppKitHost, pixels: [*]const u8, width: usize, height: usize) void;
+extern fn native_sdk_appkit_set_dock_icon_file(host: *AppKitHost, path: [*]const u8, path_len: usize) void;
 extern fn native_sdk_appkit_run(host: *AppKitHost, callback: AppKitCallback, context: ?*anyopaque) void;
 extern fn native_sdk_appkit_stop(host: *AppKitHost) void;
 extern fn native_sdk_appkit_load_webview(host: *AppKitHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
@@ -306,6 +312,79 @@ extern fn native_sdk_appkit_update_tray_title(host: *AppKitHost, title: [*]const
 extern fn native_sdk_appkit_remove_tray(host: *AppKitHost) void;
 extern fn native_sdk_appkit_set_tray_callback(host: *AppKitHost, callback: AppKitTrayCallback, context: ?*anyopaque) void;
 
+/// Whether a Dock icon path names a raw image source (.png/.svg) that
+/// `native package` would inset and mask onto the macOS icon grid.
+/// Debug builds only: dev runs are unbundled, so the Dock shows exactly
+/// the file the host is handed — a full-bleed square source would sit
+/// sharp-cornered next to every masked tile. Release apps read their
+/// icon from the bundle's .icns (already masked at package time), and
+/// prebuilt .icns paths ship untouched in every mode.
+fn devDockIconNeedsMask(path: []const u8) bool {
+    if (builtin.mode != .Debug) return false;
+    return app_icon.sourceKindForPath(path) != null;
+}
+
+/// Ceiling for a dev Dock icon source read. The pipeline caps sources at
+/// 16384px on a side; any honest PNG/SVG source sits far below this.
+const max_dev_dock_icon_source_bytes: usize = 32 * 1024 * 1024;
+
+/// Start the background masked render for a raw dev icon source. Kept
+/// off the launch path on purpose (the same reason the host decodes
+/// .icns files off it): the Debug-mode render costs real milliseconds,
+/// and the Dock tile updating a few frames after launch is
+/// imperceptible. Every failure falls back to the host's plain file
+/// load — the pre-parity behavior — so a broken source still shows
+/// whatever the file holds and packaging stays the surface that reports
+/// icon problems with teaching messages.
+fn spawnDevDockIconRender(host: *AppKitHost, path: []const u8) void {
+    const gpa = std.heap.c_allocator;
+    const path_copy = gpa.dupe(u8, path) catch {
+        native_sdk_appkit_set_dock_icon_file(host, path.ptr, path.len);
+        return;
+    };
+    const thread = std.Thread.spawn(.{}, devDockIconRenderMain, .{ host, path_copy }) catch {
+        gpa.free(path_copy);
+        native_sdk_appkit_set_dock_icon_file(host, path.ptr, path.len);
+        return;
+    };
+    thread.detach();
+}
+
+fn devDockIconRenderMain(host: *AppKitHost, path: []u8) void {
+    const gpa = std.heap.c_allocator;
+    defer gpa.free(path);
+    renderDevDockIcon(gpa, host, path) catch {
+        native_sdk_appkit_set_dock_icon_file(host, path.ptr, path.len);
+    };
+}
+
+/// Render the masked macOS canvas for a raw icon source and hand the
+/// pixels to the AppKit host. `renderMacosCanvas` is the exact packaging
+/// render: full-bleed art is inset to the icon-grid artwork square and
+/// masked by the standard rounded rectangle, while pre-shaped art (all
+/// four corners already transparent) ships untouched, never
+/// double-inset. Rendered at the pipeline's 1024 master size — the same
+/// canvas the packaged .icns tops out at — so the dev tile and the
+/// packaged tile are the same picture.
+fn renderDevDockIcon(gpa: std.mem.Allocator, host: *AppKitHost, path: []const u8) !void {
+    const kind = app_icon.sourceKindForPath(path) orelse return error.UnsupportedImage;
+    var threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_dev_dock_icon_source_bytes));
+    defer gpa.free(bytes);
+    var source = switch (try app_icon.loadSource(gpa, bytes, kind)) {
+        .ok => |value| value,
+        // Undecodable or non-square: fall back to the raw file load
+        // (the caller's catch) instead of guessing at a crop here.
+        .issue => return error.UnsupportedImage,
+    };
+    defer source.deinit(gpa);
+    const rgba = try app_icon.renderMacosCanvas(gpa, &source, app_icon.master_size);
+    defer gpa.free(rgba);
+    native_sdk_appkit_set_dock_icon_rgba(host, rgba.ptr, app_icon.master_size, app_icon.master_size);
+}
+
 pub const MacPlatform = struct {
     host: *AppKitHost,
     web_engine: platform_mod.WebEngine,
@@ -326,7 +405,17 @@ pub const MacPlatform = struct {
         const window_title = window_options.resolvedTitle(app_info.app_name);
         const frame = window_options.default_frame;
         const display_name = app_info.resolvedDisplayName();
-        const host = native_sdk_appkit_create(app_info.app_name.ptr, app_info.app_name.len, display_name.ptr, display_name.len, app_info.version.ptr, app_info.version.len, app_info.description.ptr, app_info.description.len, if (app_info.has_web_content) 1 else 0, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0, if (window_options.resizable) 1 else 0, titlebarStyleInt(window_options.titlebar), showModeInt(window_options.show)) orelse return error.CreateFailed;
+        // Dev-run Dock icon parity: a raw square icon source (.png/.svg)
+        // gets the packaging pipeline's macOS mask/inset before it
+        // reaches the Dock, so the dev tile matches the packaged one.
+        // The host's own file load is suppressed for those sources (an
+        // empty path at create) and a background render delivers the
+        // shaped pixels instead. Prebuilt .icns paths — and every
+        // release build, whose icon comes from the bundle — keep the
+        // classic load byte-for-byte.
+        const icon_path = if (devDockIconNeedsMask(app_info.icon_path)) "" else app_info.icon_path;
+        const host = native_sdk_appkit_create(app_info.app_name.ptr, app_info.app_name.len, display_name.ptr, display_name.len, app_info.version.ptr, app_info.version.len, app_info.description.ptr, app_info.description.len, if (app_info.has_web_content) 1 else 0, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, icon_path.ptr, icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0, if (window_options.resizable) 1 else 0, titlebarStyleInt(window_options.titlebar), showModeInt(window_options.show)) orelse return error.CreateFailed;
+        if (devDockIconNeedsMask(app_info.icon_path)) spawnDevDockIconRender(host, app_info.icon_path);
         // The startup window's declared content min-size floor
         // (AppKit `contentMinSize`); the create call above registers
         // the window under its id, so the floor applies right after.

@@ -180,6 +180,14 @@ pub fn build(b: *std.Build) void {
     tooling_mod.addImport("app_icon", app_icon_mod);
     const tooling_tests = testArtifact(b, tooling_mod);
 
+    // Ejected-component identity proofs: a separate test module because
+    // the canonical component sources under src/tooling/components/
+    // import `native_sdk` exactly as they will inside an app after
+    // `native eject component <name>` copies them there.
+    const eject_components_mod = module(b, target, optimize, "src/tooling/components/identity_tests.zig");
+    eject_components_mod.addImport("native_sdk", desktop_mod);
+    const eject_components_tests = testArtifact(b, eject_components_mod);
+
     const ui_markup_mod = module(b, target, optimize, "src/primitives/canvas/ui_markup.zig");
     const markup_lsp_mod = module(b, target, optimize, "tools/native-sdk/markup_lsp.zig");
     markup_lsp_mod.addImport("ui_markup", ui_markup_mod);
@@ -375,6 +383,7 @@ pub fn build(b: *std.Build) void {
     }
     test_step.dependOn(&b.addRunArtifact(automation_protocol_tests).step);
     test_step.dependOn(&b.addRunArtifact(tooling_tests).step);
+    test_step.dependOn(&b.addRunArtifact(eject_components_tests).step);
     test_step.dependOn(&b.addRunArtifact(markup_lsp_tests).step);
     test_step.dependOn(&b.addRunArtifact(automation_cli_tests).step);
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-package-types", "Verify package TypeScript platform feature names", &.{
@@ -629,6 +638,7 @@ pub fn build(b: *std.Build) void {
     addTestStep(b, "test-automation-protocol", "Run automation protocol tests", automation_protocol_tests);
     addTestStep(b, "test-automation-cli", "Run native automate CLI tests", automation_cli_tests);
     addTestStep(b, "test-tooling", "Run Native SDK tooling tests", tooling_tests);
+    addTestStep(b, "test-eject-components", "Run ejected-component widget-identity tests", eject_components_tests);
 
     const run_hello = b.addSystemCommand(&.{ "zig", "build", "run", b.fmt("-Dplatform={s}", .{platform_arg}), b.fmt("-Dtrace={s}", .{@tagName(trace_option)}) });
     run_hello.setCwd(b.path("examples/hello"));

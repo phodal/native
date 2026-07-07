@@ -11,6 +11,7 @@ export const PAGE_TITLES: Record<string, string> = {
   "native-ui": "Native UI",
   state: "State & Data Flow",
   theming: "Theming",
+  "building-components": "Building Components",
   runtime: "App & Runtime",
   frontend: "Frontend Projects",
   "native-surfaces": "Native Surfaces",

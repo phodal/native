@@ -87,13 +87,28 @@ pub fn main(init: std.process.Init) !void {
         try enterAppDir(init.io, verb_args.dir);
         runCheck(allocator, init.io, flagBool(args, "--strict")) catch |err| return failVerb(err);
     } else if (std.mem.eql(u8, command, "eject")) {
-        checkVerbFlags("eject", args[2..], .{
-            .usage = "eject [dir]",
-            .bool_flags = &.{"--yes"},
-        });
-        const verb_args = parseVerbArgs(allocator, args[2..], &.{}) catch fail("usage: native eject [dir]");
-        try enterAppDir(init.io, verb_args.dir);
-        runEject(allocator, init.io, init.environ_map) catch |err| return failVerb(err);
+        // `eject component <name>` is dispatched before the plain build
+        // eject so `component` is never mistaken for an app directory.
+        if (args.len > 2 and std.mem.eql(u8, args[2], "component")) {
+            checkVerbFlags("eject component", args[3..], .{
+                .usage = "eject component <name> [dir]",
+            });
+            const name = positionalArg(args[3..]) orelse {
+                std.debug.print("which component? ejectable components: {s}\nusage: native eject component <name> [dir]\n", .{tooling.eject_components.component_list});
+                std.process.exit(1);
+            };
+            const verb_args = parseVerbArgs(allocator, args[4..], &.{}) catch fail("usage: native eject component <name> [dir]");
+            try enterAppDir(init.io, verb_args.dir);
+            runEjectComponent(init.io, name) catch |err| return failVerb(err);
+        } else {
+            checkVerbFlags("eject", args[2..], .{
+                .usage = "eject [dir]",
+                .bool_flags = &.{"--yes"},
+            });
+            const verb_args = parseVerbArgs(allocator, args[2..], &.{}) catch fail("usage: native eject [dir]");
+            try enterAppDir(init.io, verb_args.dir);
+            runEject(allocator, init.io, init.environ_map) catch |err| return failVerb(err);
+        }
     } else if (std.mem.eql(u8, command, "doctor")) {
         try tooling.doctor.run(allocator, init.io, init.environ_map, args[2..]);
     } else if (std.mem.eql(u8, command, "cef")) {
@@ -281,6 +296,7 @@ fn usage() void {
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
         \\  check [dir] [--strict]                         validate src/*.native markup and app.zon (uses zig-out/model-contract.zon when fresh)
         \\  eject [dir]                                    write an owned build.zig/build.zig.zon into the app
+        \\  eject component <name> [dir]                   write an owned copy of a library composite into src/components/
         \\  cef install|path|doctor [--dir path] [--version version] [--source prepared|official] [--force]
         \\  doctor [--strict] [--manifest app.zon] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install]
         \\  validate [app.zon]
@@ -507,6 +523,43 @@ fn runEject(allocator: std.mem.Allocator, io: std.Io, env_map: *std.process.Envi
         \\generated graph under .native/ is unused and safe to delete.
         \\
     , .{});
+}
+
+/// `native eject component <name>`: transfer ownership of one library
+/// composite to the app — write its canonical source into
+/// src/components/, exactly once. The component registry, the writer,
+/// and the did-you-mean live in tooling (`eject_components.zig`); this
+/// wrapper owns the CLI's teaching messages.
+fn runEjectComponent(io: std.Io, name: []const u8) !void {
+    if (!tooling.buildgraph.fileExists(io, "app.zon")) {
+        std.debug.print("no app.zon here — `native eject component` runs inside an app directory (or pass one: `native eject component {s} path/to/app`)\n", .{name});
+        return error.MissingManifest;
+    }
+    const component = tooling.eject_components.find(name) orelse {
+        if (tooling.eject_components.suggestion(name)) |suggested| {
+            std.debug.print("unknown component \"{s}\" (did you mean \"{s}\"?) — ejectable components: {s}\n", .{ name, suggested, tooling.eject_components.component_list });
+        } else {
+            std.debug.print("unknown component \"{s}\" — ejectable components: {s}\n", .{ name, tooling.eject_components.component_list });
+        }
+        std.process.exit(1);
+    };
+    tooling.eject_components.eject(io, ".", component) catch |err| switch (err) {
+        error.AlreadyEjected => {
+            std.debug.print("already ejected at {s} - delete it to re-eject\n", .{component.path});
+            std.process.exit(1);
+        },
+        error.WriteFailed => {
+            std.debug.print("cannot write {s} — check the app directory is writable\n", .{component.path});
+            std.process.exit(1);
+        },
+    };
+    std.debug.print(
+        \\ejected: {s} now belongs to this app ({s}).
+        \\The file's header comment walks through migrating call sites; the
+        \\library form keeps working wherever you have not migrated. Run
+        \\`native check` to validate the app afterwards.
+        \\
+    , .{ component.path, component.form });
 }
 
 fn initAppName(allocator: std.mem.Allocator, io: std.Io, destination: []const u8) !struct { []const u8, bool } {

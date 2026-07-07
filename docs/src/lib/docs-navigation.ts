@@ -28,6 +28,7 @@ export const navSections: NavSection[] = [
       { name: "Native UI", href: "/native-ui" },
       { name: "State & Data Flow", href: "/state" },
       { name: "Theming", href: "/theming" },
+      { name: "Building Components", href: "/building-components" },
     ],
   },
   {

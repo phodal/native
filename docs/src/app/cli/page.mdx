@@ -80,6 +80,14 @@ native eject [dir]
 
 Write an owned `build.zig`/`build.zig.zon` into the app (once); the verbs then drive your files via `zig build`.
 
+### `native eject component`
+
+```sh
+native eject component <name> [dir]
+```
+
+Write an owned copy of a library composite into `src/components/` (once, never overwriting — ejecting again errors with the file to delete first). Ejectable today: `stepper`, `timeline`, `timeline-item` — the library views that are honest compositions of primitives; engine controls are not on the menu (theme them through [tokens](/theming) instead). `timeline` lands as a markup template (use it via `<use template="timeline" ...>`), the others as Zig view functions; each file opens with a header comment walking through the call-site migration, and each builds a widget tree identical to its library form at the moment of ejection. Unknown names get a did-you-mean plus the full ejectable list. See [Building Components](/building-components#use-eject-or-build).
+
 ### `native doctor`
 
 ```sh

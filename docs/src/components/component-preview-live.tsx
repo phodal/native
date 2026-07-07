@@ -2,8 +2,8 @@
 
 import Image from "next/image";
 import { useTheme } from "next-themes";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { LivePreview, PointerKind, loadPreviewEngine } from "@/lib/live-preview";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { LivePreview, PointerKind, type ThemePack, loadPreviewEngine } from "@/lib/live-preview";
 
 /**
  * A component-preview tile that upgrades from the static engine-rendered
@@ -86,6 +86,17 @@ const handled_keys = new Set([
  */
 const handled_shortcut_keys = new Set(["a", "c", "x", "v"]);
 
+/**
+ * The theme packs a live tile can present, in toggle order. The static
+ * webp underlay is only ever rendered in the default pack, so the
+ * toggle appears strictly on the live canvas layer, where the engine
+ * re-themes the retained scene in place.
+ */
+const pack_tabs = [
+  { pack: "house", label: "Default" },
+  { pack: "geist", label: "Geist" },
+] as const satisfies readonly { pack: ThemePack; label: string }[];
+
 function engineKeyName(key: string): string {
   return key === " " ? "space" : key.toLowerCase();
 }
@@ -138,6 +149,16 @@ export function ComponentPreviewLive({
   const isDark = resolvedTheme !== "light";
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
+  // Per-tile theme pack, local state only: the choice composes with the
+  // site-wide light/dark axis but is deliberately NOT persisted or
+  // shared across tiles — it is a "what does this component look like
+  // in the other register" glance, not a site preference. The ref lets
+  // the stable `activate` callback re-apply the choice when a tile
+  // scrolls back into view and its engine instance is recreated.
+  const [pack, setPack] = useState<ThemePack>("house");
+  const packRef = useRef(pack);
+  packRef.current = pack;
+  const packTabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   /** Mirror the engine's cursor channel onto the canvas's CSS cursor. */
   const syncCursor = useCallback(() => {
@@ -214,6 +235,11 @@ export function ComponentPreviewLive({
       if (!visibleRef.current && document.activeElement !== containerRef.current) return;
       const preview = engine.create(name, isDarkRef.current);
       if (!preview) return;
+      // Re-apply the tile's pack choice before the first paint: a tile
+      // that was toggled to another pack, scrolled away (releasing its
+      // instance), and scrolled back must come back in the chosen pack
+      // with no default-themed first frame.
+      if (packRef.current !== "house") preview.setThemePack(packRef.current);
       previewRef.current = preview;
       liveIdRef.current = registerLive(() => visibleRef.current, deactivate);
       setLive(true);
@@ -289,6 +315,17 @@ export function ComponentPreviewLive({
     preview.setTheme(isDark);
     wake();
   }, [isDark, live, wake]);
+
+  // ... and the tile's pack choice rides on top of it: the engine
+  // re-themes the retained scene in place (same rebuild path as the
+  // scheme flip), so pack × scheme always composes — Geist under a dark
+  // site is Geist dark.
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview || !live) return;
+    preview.setThemePack(pack);
+    wake();
+  }, [pack, live, wake]);
 
   // Re-render at the new scale when the tile resizes (or DPR changes).
   useEffect(() => {
@@ -465,12 +502,56 @@ export function ComponentPreviewLive({
         />
       ) : null}
       {interactive && live ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900"
-        >
-          WASM Preview
-        </span>
+        <div className="absolute right-2 top-2 flex items-center gap-1.5">
+          {/* Theme-pack toggle: the quiet text-tab register (active
+              foreground, inactive muted, thin divider) in the same pill
+              chrome as the badge so it stays legible over any canvas
+              pixels. Live-only — the static webp underlay is only ever
+              rendered in the default pack, so offering the toggle on a
+              static tile would be a false affordance. */}
+          <div
+            role="tablist"
+            aria-label="Preview theme pack"
+            className="inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4"
+          >
+            {pack_tabs.map((tab, index) => (
+              <Fragment key={tab.pack}>
+                {index > 0 && <span aria-hidden className="h-3 w-px bg-gray-alpha-400" />}
+                <button
+                  ref={(el) => {
+                    packTabRefs.current[index] = el;
+                  }}
+                  role="tab"
+                  aria-selected={pack === tab.pack}
+                  // Roving tabindex: one tab stop for the whole toggle,
+                  // arrows move within it — so tabbing past the tile
+                  // still reaches the canvas in one step.
+                  tabIndex={pack === tab.pack ? 0 : -1}
+                  onClick={() => setPack(tab.pack)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+                    event.preventDefault();
+                    const step = event.key === "ArrowRight" ? 1 : -1;
+                    const next = (index + step + pack_tabs.length) % pack_tabs.length;
+                    setPack(pack_tabs[next].pack);
+                    packTabRefs.current[next]?.focus();
+                  }}
+                  className={`transition-colors ${
+                    pack === tab.pack ? "text-gray-1000" : "text-gray-700 hover:text-gray-1000"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              </Fragment>
+            ))}
+          </div>
+          <span
+            aria-hidden
+            className="pointer-events-none inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900"
+          >
+            WASM Preview
+          </span>
+        </div>
       ) : null}
     </div>
   );

@@ -21,6 +21,7 @@ interface PreviewExports {
   preview_logical_width(handle: number): number;
   preview_logical_height(handle: number): number;
   preview_set_theme(handle: number, dark: number): number;
+  preview_set_theme_pack(handle: number, namePtr: number, nameLen: number): number;
   preview_pointer(handle: number, kind: number, x: number, y: number): void;
   preview_scroll(handle: number, x: number, y: number, dx: number, dy: number): void;
   preview_key(
@@ -49,6 +50,15 @@ interface PreviewExports {
     scratchLen: number,
   ): number;
 }
+
+/**
+ * The engine's built-in theme packs by their manifest-facing names.
+ * A pack is a complete token register (palette, control tables, type
+ * scale) that composes with the light/dark scheme axis, so any pack ×
+ * scheme combination is a live re-theme, never a scene rebuild from JS.
+ */
+export const themePacks = ["house", "geist"] as const;
+export type ThemePack = (typeof themePacks)[number];
 
 export const PointerKind = {
   down: 0,
@@ -173,6 +183,22 @@ export class LivePreview {
   setTheme(dark: boolean): void {
     if (this.destroyed) return;
     this.exports.preview_set_theme(this.handle, dark ? 1 : 0);
+  }
+
+  /**
+   * Switch the theme pack by name — the pack axis of the same in-place
+   * re-theme `setTheme` performs on the scheme axis. The engine refuses
+   * unknown names, so a stale page can never half-apply a pack.
+   */
+  setThemePack(pack: ThemePack): void {
+    if (this.destroyed) return;
+    const e = this.exports;
+    const bytes = encoder.encode(pack);
+    const ptr = e.preview_alloc(bytes.length);
+    if (!ptr) return;
+    new Uint8Array(e.memory.buffer).set(bytes, ptr);
+    e.preview_set_theme_pack(this.handle, ptr, bytes.length);
+    e.preview_free(ptr, bytes.length);
   }
 
   /** Step engine-owned frame animations (scroll momentum). */

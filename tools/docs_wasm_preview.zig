@@ -72,6 +72,10 @@ const Preview = struct {
     width: f32 = 0,
     height: f32 = 0,
     dark: bool = false,
+    /// Which built-in theme pack resolves the token register. Packs
+    /// compose with the scheme axis, so a pack swap and a light/dark
+    /// flip go through the identical rebuild path.
+    pack: canvas.ThemePack = .house,
     frame_index: u64 = 0,
     /// Last pointer position, kept so drag events can carry the
     /// per-event delta desktop platforms supply natively — the engine's
@@ -147,8 +151,11 @@ fn previewEventFn(context: *anyopaque, runtime: *native_sdk.Runtime, event: nati
     }
 }
 
-fn tokensForScheme(dark: bool) canvas.DesignTokens {
-    return canvas.DesignTokens.theme(.{ .color_scheme = if (dark) .dark else .light });
+fn tokensForTheme(dark: bool, pack: canvas.ThemePack) canvas.DesignTokens {
+    return canvas.DesignTokens.theme(.{
+        .color_scheme = if (dark) .dark else .light,
+        .pack = pack,
+    });
 }
 
 /// The preview host's window source (`Ui.virtualWindow`): the retained
@@ -219,6 +226,7 @@ export fn preview_create(name_ptr: ?[*]const u8, name_len: usize, dark: u32) ?*P
     self.width = scene.width;
     self.height = scene.height;
     self.dark = dark != 0;
+    self.pack = .house;
     self.frame_index = 0;
     self.last_pointer = null;
     self.rendered_revision = std.math.maxInt(u64);
@@ -256,7 +264,7 @@ fn installScene(self: *Preview) !void {
 /// every dispatched Msg, and on theme swaps (token-resolved styles like
 /// muted text re-resolve here).
 fn rebuildScene(self: *Preview) !void {
-    const tokens = tokensForScheme(self.dark);
+    const tokens = tokensForTheme(self.dark, self.pack);
     const next_index = self.arena_index ^ 1;
     _ = self.arenas[next_index].reset(.retain_capacity);
     var ui = Ui.init(self.arenas[next_index].allocator());
@@ -301,6 +309,26 @@ export fn preview_set_theme(self: ?*Preview, dark: u32) u32 {
     rebuildScene(p) catch return 0;
     // Theme swaps must repaint even if the revision bookkeeping ever
     // treats a pure re-emit as clean.
+    p.rendered_revision = std.math.maxInt(u64);
+    return 1;
+}
+
+/// Switch the built-in theme pack by its manifest-facing name ("house",
+/// "geist") — the pack axis of the same live re-theme `preview_set_theme`
+/// performs on the scheme axis: a full rebuild so every token-resolved
+/// widget style re-resolves against the pack's register, with
+/// engine-owned control state (focus, toggles, typed text) retained
+/// through the layout reconcile. Unknown names return 0 and leave the
+/// instance untouched, so the page can keep its selection honest.
+export fn preview_set_theme_pack(self: ?*Preview, name_ptr: ?[*]const u8, name_len: usize) u32 {
+    const p = self orelse return 0;
+    const ptr = name_ptr orelse return 0;
+    const pack = canvas.ThemePack.fromName(ptr[0..name_len]) orelse return 0;
+    if (p.pack == pack) return 1;
+    p.pack = pack;
+    rebuildScene(p) catch return 0;
+    // Same forced repaint as the scheme flip: a pack swap must never be
+    // reported clean.
     p.rendered_revision = std.math.maxInt(u64);
     return 1;
 }

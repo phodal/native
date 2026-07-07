@@ -1,6 +1,14 @@
 import createMDX from "@next/mdx";
 
-const withMDX = createMDX();
+const withMDX = createMDX({
+  options: {
+    // Plugin named as a string so the config stays serializable for
+    // Turbopack. GFM is what gives .mdx pages pipe tables (plus autolinks
+    // and strikethrough) — without it, table markdown renders as a plain
+    // paragraph of pipes.
+    remarkPlugins: [["remark-gfm"]],
+  },
+});
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

@@ -73,22 +73,13 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         {...props}
       />
     ),
+    // Markdown pipe tables render as bare table elements inside a scroll
+    // wrapper: the `article table` rules in globals.css style them, the
+    // same register the literal HTML tables on the component pages use.
     table: (props) => (
-      <div className="mb-4 overflow-x-auto">
-        <table className="w-full text-sm" {...props} />
+      <div className="overflow-x-auto">
+        <table {...props} />
       </div>
-    ),
-    th: (props) => (
-      <th
-        className="border-b border-neutral-200 px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-neutral-500 dark:border-neutral-800 dark:text-neutral-400"
-        {...props}
-      />
-    ),
-    td: (props) => (
-      <td
-        className="border-b border-neutral-100 px-3 py-2 text-neutral-600 dark:border-neutral-800/50 dark:text-neutral-400"
-        {...props}
-      />
     ),
     hr: () => <hr className="my-8 border-neutral-200 dark:border-neutral-800" />,
     strong: (props) => (

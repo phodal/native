@@ -610,7 +610,7 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t border-gray-alpha-400">
         <div className="mx-auto flex max-w-[1200px] flex-col items-center justify-between gap-4 px-6 py-10 label-14 text-gray-900 sm:flex-row">
-          <p>{siteName} · Apache-2.0 licensed</p>
+          <p>{siteName}</p>
           <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
             <Link href="/quick-start" className="transition-colors hover:text-gray-1000">
               Quick Start

@@ -138,10 +138,12 @@ fn albumKey(cell: *const model_mod.AlbumCell) canvas.UiKey {
 
 /// One bare album tile: the cover IS the tile — no card fill, border, or
 /// shadow around it (the flat `list_item` composite, the same chromeless
-/// register the track rows use). At rest only art and text paint; hover
-/// and press draw the row wash as a thin halo around the cover (the
-/// `tile_padding` inset exists exactly so the wash can show), keyboard
-/// focus draws the standard ring, and the whole tile — art, text, halo —
+/// register the track rows use). NO state wash at all: hover changes
+/// nothing visually — the pointer cursor is the whole hover affordance
+/// on a cover-art grid — and the transparent per-widget background
+/// override below is what silences the composite's built-in hover/press
+/// fill (painting a fully transparent wash instead). Keyboard focus
+/// still draws the standard ring, and the whole tile — art and text —
 /// stays one hit target with the album-by-artist accessible label.
 fn albumTile(ui: *Ui, fit: GridFit, cell: *const model_mod.AlbumCell) Ui.Node {
     const cover = fit.tile_width - tile_padding * 2;
@@ -151,6 +153,11 @@ fn albumTile(ui: *Ui, fit: GridFit, cell: *const model_mod.AlbumCell) Ui.Node {
         // between column-count breakpoints.
         .height = tile_padding * 2 + cover + cover_text_gap + tile_text_height,
         .padding = tile_padding,
+        // A widget-level background override recolors whatever state
+        // fill the composite would paint; fully transparent, it removes
+        // the hover and press washes without touching hit testing,
+        // cursor intent, or the focus ring.
+        .style = .{ .background = canvas.Color.rgba(0, 0, 0, 0) },
         .on_press = Msg{ .open_album = cell.id },
         .context_menu = &.{
             .{ .label = "Play Album", .msg = Msg{ .play_album = cell.id } },
@@ -287,11 +294,15 @@ fn trackKey(row: *const model_mod.TrackRow) canvas.UiKey {
 }
 
 /// One pressable track row: a FLAT list row (the list_item composite —
-/// no border, no card chrome; hover and the now-playing selection are
-/// full-width washes), with custom children flowing horizontally inside
-/// the wash. The native context menu is the Zig-only piece: right/ctrl-
-/// click presents the OS menu and each item dispatches a typed Msg
-/// exactly like a press.
+/// no border, no card chrome; hover is a full-width wash), with custom
+/// children flowing horizontally inside it. The gesture split is the
+/// desktop list convention: a single click (or Space on a ring-focused
+/// row) SELECTS, the double click (or Enter, via `on_submit`) PLAYS.
+/// The selection wears the inverted register — accent fill under
+/// window-background ink, stated per-widget through style tokens so the
+/// unselected rows keep their neutral hover/press washes. The native
+/// context menu is the Zig-only piece: right/ctrl-click presents the OS
+/// menu and each item dispatches a typed Msg exactly like a press.
 fn trackRowView(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
     return ui.el(.list_item, .{
         .global_key = canvas.uiKey(@as(u32, row.id)),
@@ -299,8 +310,11 @@ fn trackRowView(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
         .padding = 10,
         .gap = 12,
         .cross = .center,
-        .selected = row.now,
-        .on_press = Msg{ .play_track = row.id },
+        .selected = row.selected,
+        .style_tokens = if (row.selected) .{ .background = .accent } else .{},
+        .on_press = Msg{ .select_track = row.id },
+        .on_double_press = Msg{ .play_track = row.id },
+        .on_submit = Msg{ .play_track = row.id },
         // Two items per row on purpose: the per-view context-menu budget is
         // 512 items (canvas_limits), and the all-songs list mounts every
         // catalog track as a row — two items per row keeps a comfortable
@@ -313,42 +327,68 @@ fn trackRowView(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
     }, .{
         trackIndicator(ui, row),
         if (row.subtitle.len == 0)
-            ui.text(.{ .grow = 1, .style_tokens = if (row.now) .{ .foreground = .accent } else .{} }, row.title)
+            ui.text(.{ .grow = 1, .style_tokens = rowTitleTokens(row) }, row.title)
         else
             ui.column(.{ .gap = 1, .grow = 1 }, .{
-                ui.text(.{ .style_tokens = if (row.now) .{ .foreground = .accent } else .{} }, row.title),
-                ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, row.subtitle),
+                ui.text(.{ .style_tokens = rowTitleTokens(row) }, row.title),
+                ui.text(.{ .size = .sm, .style_tokens = rowMutedTokens(row) }, row.subtitle),
             }),
         if (row.queued)
             ui.el(.badge, .{ .variant = .secondary, .text = "Up next" }, .{})
         else
             ui.el(.stack, .{}, .{}),
-        durationText(ui, row.duration),
+        durationText(ui, row),
     });
 }
 
-/// The leading track-row slot: a vector play icon on the playing row, a
-/// muted pause icon on the loaded-but-paused row, and the track number
-/// everywhere else. Icons are decoration (never hit-tested), so the row's
-/// press handling is untouched; the fixed 24px slot keeps the number
-/// column's alignment.
+/// Row title ink: window-background on the selected (accent) row — the
+/// inverted register — accent on the loaded track's row, default
+/// otherwise.
+fn rowTitleTokens(row: *const model_mod.TrackRow) canvas.StyleTokenRefs {
+    if (row.selected) return .{ .foreground = .background };
+    if (row.now) return .{ .foreground = .accent };
+    return .{};
+}
+
+/// Row secondary ink (subtitle, duration, track number): muted at rest,
+/// window-background on the selected row — muted gray on the accent
+/// fill would fail the contrast the inverted register exists to keep.
+fn rowMutedTokens(row: *const model_mod.TrackRow) canvas.StyleTokenRefs {
+    if (row.selected) return .{ .foreground = .background };
+    return .{ .foreground = .text_muted };
+}
+
+/// The leading track-row slot: a STATE icon on the loaded track's row —
+/// the pause glyph while audio is playing, the play glyph while it is
+/// paused (the icon names the state, matching the transport button's
+/// convention) — and the track number everywhere else. Icons are
+/// decoration (never hit-tested), so the row's press handling is
+/// untouched; the fixed 24px slot keeps the number column's alignment.
+/// On the selected row the icon takes the inverted ink like the text —
+/// an accent glyph would vanish into the accent fill.
 fn trackIndicator(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
     if (!row.now) {
-        return ui.text(.{ .width = 24, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, row.number);
+        return ui.text(.{ .width = 24, .size = .sm, .style_tokens = rowMutedTokens(row) }, row.number);
     }
+    const icon_tokens: canvas.StyleTokenRefs = if (row.selected)
+        .{ .foreground = .background }
+    else if (row.playing)
+        .{ .foreground = .accent }
+    else
+        .{ .foreground = .text_muted };
     return ui.row(.{ .width = 24, .cross = .center }, .{
         if (row.playing)
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .accent } }, "play")
+            ui.icon(.{ .width = 14, .height = 14, .style_tokens = icon_tokens }, "pause")
         else
-            ui.icon(.{ .width = 14, .height = 14, .style_tokens = .{ .foreground = .text_muted } }, "pause"),
+            ui.icon(.{ .width = 14, .height = 14, .style_tokens = icon_tokens }, "play"),
     });
 }
 
 /// Right-aligned fixed-width duration. The fixed width is a column: it
 /// keeps every row's duration right edge aligned regardless of digit
 /// count ("8:05" vs "12:41"), sized for the widest plausible value.
-fn durationText(ui: *Ui, duration: []const u8) Ui.Node {
-    var node = ui.text(.{ .width = 44, .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, duration);
+fn durationText(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
+    var node = ui.text(.{ .width = 44, .size = .sm, .style_tokens = rowMutedTokens(row) }, row.duration);
     node.widget.text_alignment = .end;
     return node;
 }

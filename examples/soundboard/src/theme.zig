@@ -26,10 +26,11 @@ const pink_ink = Color.rgb8(255, 255, 255);
 /// The app's one brand statement, layered over whichever scheme/contrast
 /// register the pack resolves. Three slots carry the accent identity:
 ///
-/// - `colors.accent`/`accent_text`: the filled-primary pair — transport
-///   play button, "Playing" badges, selection washes, the now-playing
-///   row's title ink, and every control fill that derives from the
-///   accent channel (checkbox, switch, progress).
+/// - `colors.accent`/`accent_text`: the filled-primary pair — the
+///   selected track row's inverted fill, the header switcher's active
+///   segment, "Playing" badges, the loaded row's title ink, and every
+///   control fill that derives from the accent channel (checkbox,
+///   switch, progress).
 /// - `colors.focus_ring`: the pack spends its identity hue on focus;
 ///   with the identity moved to pink, the ring follows so focus and
 ///   accent chrome read as one system (pink on the page clears the 3:1

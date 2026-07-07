@@ -148,10 +148,68 @@ const LiveApp = struct {
 
     /// Move keyboard focus onto a widget through the automation verb —
     /// what `native automate widget-action <view> <id> focus` does.
+    /// This is QUIET focus (the pointer/programmatic contract, no ring):
+    /// on a plain list row the runtime treats it as transparent to keys.
     fn focusWidget(self: LiveApp, id: canvas.ObjectId) !void {
         var command_buffer: [96]u8 = undefined;
         const line = try std.fmt.bufPrint(&command_buffer, "widget-action {s} {d} focus", .{ main.canvas_label, id });
         try self.harness.runtime.dispatchAutomationCommand(self.app_state.app(), line);
+    }
+
+    /// Escalate focus to the RING register — the state a Tab landing
+    /// produces (focused AND focus-visible). Tests pin ring-vs-quiet
+    /// behavior with this instead of scripting a whole Tab walk to the
+    /// target, which would re-pin the tab order as a side effect.
+    fn focusWidgetRing(self: LiveApp, id: canvas.ObjectId) !void {
+        try self.focusWidget(id);
+        for (self.harness.runtime.views[0..self.harness.runtime.view_count]) |*view| {
+            if (std.mem.eql(u8, view.label, main.canvas_label)) view.canvas_widget_focus_visible_id = id;
+        }
+    }
+
+    /// The canvas view's focus-visible id (0 = no ring anywhere) — the
+    /// assertion surface for "arrows never dress rows in the ring".
+    fn focusVisibleId(self: LiveApp) canvas.ObjectId {
+        for (self.harness.runtime.views[0..self.harness.runtime.view_count]) |*view| {
+            if (std.mem.eql(u8, view.label, main.canvas_label)) return view.canvas_widget_focus_visible_id;
+        }
+        return 0;
+    }
+
+    /// One raw pointer event through the real gpu input path, WITH a
+    /// timestamp: the runtime derives multi-click counts from stamped
+    /// downs (zero timestamps honestly never chain), so double-click
+    /// tests must stamp like a real host does.
+    fn pointer(self: LiveApp, kind: native_sdk.platform.GpuSurfaceInputKind, x: f32, y: f32, timestamp_ns: u64) !void {
+        try self.harness.runtime.dispatchPlatformEvent(self.app_state.app(), .{ .gpu_surface_input = .{
+            .window_id = 1,
+            .label = main.canvas_label,
+            .kind = kind,
+            .timestamp_ns = timestamp_ns,
+            .x = x,
+            .y = y,
+        } });
+    }
+
+    /// A stamped click (down + up) at a point.
+    fn click(self: LiveApp, x: f32, y: f32, timestamp_ns: u64) !void {
+        try self.pointer(.pointer_down, x, y, timestamp_ns);
+        try self.pointer(.pointer_up, x, y, timestamp_ns + 10 * std.time.ns_per_ms);
+    }
+
+    /// A live widget's laid-out frame by kind + label (label falls back
+    /// to text, like `widgetIdByLabel`).
+    fn widgetFrameByLabel(self: LiveApp, kind: canvas.WidgetKind, label: []const u8) !geometry.RectF {
+        const layout = try self.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind != kind) continue;
+            if (std.mem.eql(u8, node.widget.semantics.label, label) or
+                (node.widget.semantics.label.len == 0 and std.mem.eql(u8, node.widget.text, label)))
+            {
+                return node.frame.normalized();
+            }
+        }
+        return error.WidgetNotFound;
     }
 };
 
@@ -377,22 +435,27 @@ test "the seek bar's rendered value advances with position events" {
     }
 }
 
-test "space is the app-wide transport key; focused widgets outrank it" {
+test "space is the app-wide transport key; ring focus outranks it, quiet rows do not" {
     // The media-app convention, pinned end-to-end through the raw key
     // path (the exact gpu input events a physical spacebar produces).
     // The precedence rule under test, in order:
-    //   1. a focused interactive widget consumes space for its OWN
-    //      activation (a focused track row plays that row, a focused
-    //      tab segment switches tabs);
-    //   2. a focused editable field keeps typing — structural, by
+    //   1. a RING-focused interactive widget consumes space for its OWN
+    //      activation (a tabbed-to track row selects, a header segment
+    //      switches) — and Enter on a ring-focused row is the row's
+    //      primary action: it plays;
+    //   2. a QUIETLY focused plain list row (the state a click leaves
+    //      behind) is transparent: space stays the transport toggle —
+    //      clicking around a music library must never re-aim the
+    //      spacebar;
+    //   3. a focused editable field keeps typing — structural, by
     //      widget kind, so any future text field inherits it;
-    //   3. otherwise — nothing focused, a slider, a bare scroll region —
+    //   4. otherwise — nothing focused, a slider, a bare scroll region —
     //      space falls through to the app-level transport toggle.
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
 
-    // (3) From idle with NOTHING focused: space starts the catalog's
+    // (4) From idle with NOTHING focused: space starts the catalog's
     // first track through the fallback — no widget was involved.
     try live.keyDown("space", " ");
     try testing.expect(app_state.model.playing);
@@ -402,23 +465,36 @@ test "space is the app-wide transport key; focused widgets outrank it" {
     try live.keyDown("space", " ");
     try testing.expect(!app_state.model.playing);
 
-    // (1) Focus a DIFFERENT track row in the songs list: space plays
-    // THAT row — activation outranks the global toggle.
+    // (2) QUIET focus on a DIFFERENT track row (what clicking it leaves
+    // behind): space is still the transport — it RESUMES the loaded
+    // track instead of playing the focused row, and the selection does
+    // not move either.
     try live.dispatch(.show_songs);
     const other = &model_mod.tracks[2];
     try live.focusWidget(try live.widgetIdByLabel(.list_item, other.title));
     try live.keyDown("space", " ");
+    try testing.expect(app_state.model.playing);
+    try testing.expectEqual(@as(?u8, model_mod.tracks[0].id), app_state.model.now);
+
+    // (1) RING focus on that row (the Tab contract): space activates
+    // the row — it SELECTS, playback untouched — and Enter plays it.
+    try live.focusWidgetRing(try live.widgetIdByLabel(.list_item, other.title));
+    try live.keyDown("space", " ");
+    try testing.expectEqual(@as(?u8, other.id), app_state.model.selected);
+    try testing.expectEqual(@as(?u8, model_mod.tracks[0].id), app_state.model.now);
+    try live.keyDown("enter", "");
     try testing.expectEqual(@as(?u8, other.id), app_state.model.now);
     try testing.expect(app_state.model.playing);
 
-    // (1) Focus the header's Albums tab segment: space activates the
-    // tab (widget wins again) and the transport does not move.
-    try live.focusWidget(try live.widgetIdByLabel(.segmented_control, "Albums"));
+    // (1) Focus the header's Albums segment (a button-group button):
+    // buttons keep their activation even under quiet focus — space
+    // switches the tab and the transport does not move.
+    try live.focusWidget(try live.widgetIdByLabel(.button, "Albums"));
     try live.keyDown("space", " ");
     try testing.expectEqual(model_mod.Tab.albums, app_state.model.tab);
     try testing.expect(app_state.model.playing);
 
-    // (2) Focus the search field: a space keystroke is TYPING — the
+    // (3) Focus the search field: a space keystroke is TYPING — the
     // character lands in the query and playback is untouched. The
     // exception is structural (widget kind), so it needs no per-field
     // wiring in the app.
@@ -429,13 +505,13 @@ test "space is the app-wide transport key; focused widgets outrank it" {
     try testing.expectEqual(@as(?u8, other.id), app_state.model.now);
     try live.dispatch(.{ .search_edit = .clear });
 
-    // (3) Focus the seek slider: space is not one of the slider's keys
+    // (4) Focus the seek slider: space is not one of the slider's keys
     // (arrows step, home/end jump), so it falls through and pauses.
     try live.focusWidget(try live.widgetIdByLabel(.slider, "Seek"));
     try live.keyDown("space", " ");
     try testing.expect(!app_state.model.playing);
 
-    // (3) Focus the album grid's scroll region: space is not a scroll
+    // (4) Focus the album grid's scroll region: space is not a scroll
     // key either (arrows and page keys are), so it resumes from there
     // too — "anywhere" includes plain content focus.
     try live.focusWidget(try live.widgetIdByLabel(.scroll_view, "Album grid"));
@@ -784,24 +860,32 @@ test "a full session: open an album, play it, and use the context menus" {
 
     // The now-playing bar reflects it: the primary transport button
     // wears the pause icon while playing, prev/next wear the real
-    // skip-back/skip-forward glyphs, and the playing track row keeps its
-    // decorative play indicator (a bare .icon leaf — never hit-tested).
+    // skip-back/skip-forward glyphs, and the playing track row carries
+    // its decorative STATE icon — the pause glyph while audio moves (a
+    // bare .icon leaf — never hit-tested).
     tree = try buildTree(arena, &model);
     try testing.expect(findByText(tree.root, .text, album_tracks[0].title) != null);
     try testing.expectEqualStrings("pause", findByLabel(tree.root, "Play or pause").?.icon);
     try testing.expectEqualStrings("skip-back", findByLabel(tree.root, "Previous track").?.icon);
     try testing.expectEqualStrings("skip-forward", findByLabel(tree.root, "Next track").?.icon);
-    try testing.expect(findByText(tree.root, .icon, "play") != null);
+    try testing.expect(findByText(tree.root, .icon, "pause") != null);
 
-    // Pressing a different track row switches to it; pressing the playing
-    // row toggles pause.
+    // A single press on a different track row SELECTS it — playback
+    // stays where it was; the double click (click count 2 on the
+    // release) is what plays the row.
     const other = &album_tracks[2];
     const row = findByLabel(tree.root, other.title).?;
     apply(&model, tree.msgForPointer(row.id, .up).?);
+    try testing.expectEqual(@as(?u8, other.id), model.selected);
+    try testing.expectEqual(@as(?u8, album_tracks[0].id), model.now);
+    apply(&model, tree.msgForPointerClick(row.id, .up, 2).?);
     try testing.expectEqual(@as(?u8, other.id), model.now);
+    try testing.expect(model.playing);
+
+    // Double-clicking the PLAYING row toggles pause in place.
     tree = try buildTree(arena, &model);
     const same_row = findByLabel(tree.root, other.title).?;
-    apply(&model, tree.msgForPointer(same_row.id, .up).?);
+    apply(&model, tree.msgForPointerClick(same_row.id, .up, 2).?);
     try testing.expect(!model.playing);
 
     // Context-menu items dispatch typed messages: Play Next queues, Copy
@@ -873,29 +957,36 @@ test "the system appearance drives the custom tokens live" {
     try testing.expectEqualDeep(pack_hc_dark, (try live.harness.runtime.canvasWidgetDesignTokens(1, main.canvas_label)).colors);
 }
 
-test "the Albums/Songs tabs render as segmented triggers with one active" {
-    // The header authors the strip as `<tabs>` + `<button selected=...>`;
-    // the markup engines lower those buttons to `segmented_control`
-    // widgets, so the active tab lifts to the surface per the house
-    // treatment instead of vanishing into the strip's wash.
+test "the Albums/Songs switcher is a flush button group with one active segment" {
+    // The header authors the switcher as `<button-group>` + `<button
+    // selected=...>`: attached segments (the group's default gap of 0
+    // collapses them into one bar with shared seams), each segment an
+    // ordinary button, with the exclusive choice carried by the
+    // `selected` bindings — exactly one segment is active at a time and
+    // clicking the other one moves it.
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
 
-    const Tabs = struct {
-        fn triggerId(layout: canvas.WidgetLayoutTree, label: []const u8) ?canvas.ObjectId {
+    const Switcher = struct {
+        fn segmentId(layout: canvas.WidgetLayoutTree, label: []const u8) ?canvas.ObjectId {
             for (layout.nodes) |node| {
-                if (node.widget.kind != .segmented_control) continue;
+                if (node.widget.kind != .button) continue;
                 if (std.mem.eql(u8, node.widget.text, label)) return node.widget.id;
             }
             return null;
         }
 
+        /// Exactly one BUTTON-GROUP segment is selected, and it is the
+        /// named one. Scoped to buttons whose parent is the group so a
+        /// future selected button elsewhere cannot satisfy the pin.
         fn expectExactlyOneActive(layout: canvas.WidgetLayoutTree, label: []const u8) !void {
             var active: usize = 0;
             var active_matches = false;
             for (layout.nodes) |node| {
-                if (node.widget.kind != .segmented_control) continue;
+                if (node.widget.kind != .button) continue;
+                const parent_index = node.parent_index orelse continue;
+                if (layout.nodes[parent_index].widget.kind != .button_group) continue;
                 if (!node.widget.state.selected) continue;
                 active += 1;
                 if (std.mem.eql(u8, node.widget.text, label)) active_matches = true;
@@ -903,29 +994,331 @@ test "the Albums/Songs tabs render as segmented triggers with one active" {
             try testing.expectEqual(@as(usize, 1), active);
             try testing.expect(active_matches);
         }
+
+        fn groupCount(layout: canvas.WidgetLayoutTree) usize {
+            var groups: usize = 0;
+            for (layout.nodes) |node| {
+                if (node.widget.kind == .button_group) groups += 1;
+            }
+            return groups;
+        }
     };
 
-    // Default tab is Albums: exactly one active trigger.
+    // Default tab is Albums: the group exists, exactly one active
+    // segment, and nothing lowers to the old tabs strip anymore.
     var layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
-    try Tabs.expectExactlyOneActive(layout, "Albums");
+    try testing.expectEqual(@as(usize, 1), Switcher.groupCount(layout));
+    try Switcher.expectExactlyOneActive(layout, "Albums");
+    for (layout.nodes) |node| {
+        try testing.expect(node.widget.kind != .segmented_control);
+        try testing.expect(node.widget.kind != .tabs);
+    }
 
     // Click Songs through the real widget path: the model switches and
-    // exactly one trigger stays active.
+    // exactly one segment stays active.
     var command_buffer: [96]u8 = undefined;
-    const songs_id = Tabs.triggerId(layout, "Songs").?;
+    const songs_id = Switcher.segmentId(layout, "Songs").?;
     const click_songs = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.canvas_label, songs_id });
     try live.harness.runtime.dispatchAutomationCommand(app_state.app(), click_songs);
     try testing.expectEqual(model_mod.Tab.songs, app_state.model.tab);
     layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
-    try Tabs.expectExactlyOneActive(layout, "Songs");
+    try Switcher.expectExactlyOneActive(layout, "Songs");
 
     // And back to Albums.
-    const albums_id = Tabs.triggerId(layout, "Albums").?;
+    const albums_id = Switcher.segmentId(layout, "Albums").?;
     const click_albums = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.canvas_label, albums_id });
     try live.harness.runtime.dispatchAutomationCommand(app_state.app(), click_albums);
     try testing.expectEqual(model_mod.Tab.albums, app_state.model.tab);
     layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
-    try Tabs.expectExactlyOneActive(layout, "Albums");
+    try Switcher.expectExactlyOneActive(layout, "Albums");
+}
+
+test "single click selects, double click plays — through the real pointer path" {
+    // The full gesture pipeline with STAMPED timestamps (the runtime
+    // derives click counts from them; zero timestamps never chain):
+    // click one = selection only, the rapid second click = playback,
+    // and a slow third click re-selects without ever toggling playback.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+
+    try live.dispatch(.show_songs);
+    const track = &model_mod.tracks[1];
+    const frame = try live.widgetFrameByLabel(.list_item, track.title);
+    const x = frame.x + frame.width / 2;
+    const y = frame.y + frame.height / 2;
+
+    // Click one: the row is selected, nothing plays.
+    try live.click(x, y, 100 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, track.id), app_state.model.selected);
+    try testing.expectEqual(@as(?u8, null), app_state.model.now);
+    try testing.expect(!app_state.model.playing);
+
+    // The rapid second click (within the 500 ms chain window, same
+    // point) carries click count 2 on its release: the row PLAYS.
+    try live.click(x, y, 250 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, track.id), app_state.model.now);
+    try testing.expect(app_state.model.playing);
+
+    // A SLOW third click (past the chain window) is a fresh single
+    // click: it re-selects the row and playback does not toggle.
+    try live.click(x, y, 2_000 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, track.id), app_state.model.selected);
+    try testing.expect(app_state.model.playing);
+}
+
+test "arrows move the selection without playback or a focus ring; enter plays it" {
+    // The selection-color-not-outline contract: after clicking a row
+    // (which leaves QUIET focus on it), Up/Down walk the app's
+    // selection — the accent row — while the runtime's focus ring stays
+    // dark (focus-visible id 0; outlines belong to Tab), playback never
+    // moves, and Enter plays whatever is selected.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+
+    try live.dispatch(.show_songs);
+    const first = &model_mod.tracks[0];
+    const frame = try live.widgetFrameByLabel(.list_item, first.title);
+    try live.click(frame.x + frame.width / 2, frame.y + frame.height / 2, 100 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, first.id), app_state.model.selected);
+    try testing.expect(!app_state.model.playing);
+
+    // Down walks to the next library track; no ring, no playback.
+    try live.keyDown("arrowdown", "");
+    try testing.expectEqual(@as(?u8, model_mod.tracks[1].id), app_state.model.selected);
+    try testing.expect(!app_state.model.playing);
+    try testing.expectEqual(@as(canvas.ObjectId, 0), live.focusVisibleId());
+
+    // Up walks back; another Up at the top edge CLAMPS (no wrap).
+    try live.keyDown("arrowup", "");
+    try testing.expectEqual(@as(?u8, first.id), app_state.model.selected);
+    try live.keyDown("arrowup", "");
+    try testing.expectEqual(@as(?u8, first.id), app_state.model.selected);
+    try testing.expectEqual(@as(canvas.ObjectId, 0), live.focusVisibleId());
+
+    // Enter plays the selection.
+    try live.keyDown("enter", "");
+    try testing.expectEqual(@as(?u8, first.id), app_state.model.now);
+    try testing.expect(app_state.model.playing);
+
+    // The selection domain follows the view: on the album detail page
+    // the arrows walk THAT record's tracks (dispatch-level — the same
+    // messages the key fallback emits).
+    const album = &model_mod.albums[1];
+    try live.dispatch(.{ .open_album = album.id });
+    try live.dispatch(.{ .select_track = model_mod.albumTracks(album.id)[0].id });
+    try live.dispatch(.select_next);
+    try testing.expectEqual(@as(?u8, model_mod.albumTracks(album.id)[1].id), app_state.model.selected);
+
+    // On the album GRID (no track list on screen) arrows move nothing.
+    try live.dispatch(.close_album);
+    const before = app_state.model.selected;
+    try live.dispatch(.select_next);
+    try testing.expectEqual(before, app_state.model.selected);
+}
+
+test "the selected row wears the inverted accent register; tiles wash nothing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    model.tab = .songs;
+    const selected = &model_mod.tracks[2];
+    const unselected = &model_mod.tracks[0];
+    apply(&model, .{ .select_track = selected.id });
+
+    // The selected row: accent fill under window-background ink — the
+    // per-widget style tokens resolve against the live theme, so the
+    // assertion reads the same resolved colors the renderer will.
+    const tree = try buildTree(arena, &model);
+    const row = findByLabel(tree.root, selected.title).?;
+    try testing.expect(row.state.selected);
+    try testing.expectEqualDeep(theme.light_colors.accent, row.style.background.?);
+    const title = findByText(row, .text, selected.title).?;
+    try testing.expectEqualDeep(theme.light_colors.background, title.style.foreground.?);
+
+    // Unselected rows keep the composite's own state washes (no
+    // override) and their ordinary ink.
+    const other_row = findByLabel(tree.root, unselected.title).?;
+    try testing.expect(!other_row.state.selected);
+    try testing.expect(other_row.style.background == null);
+
+    // Album tiles opt OUT of the state washes entirely: the transparent
+    // background override recolors any hover/press fill to nothing, so
+    // hovering a tile changes nothing visually (the pointer cursor is
+    // the affordance).
+    model.tab = .albums;
+    const grid_tree = try buildTree(arena, &model);
+    const album = &model_mod.albums[0];
+    const tile_label = try std.fmt.allocPrint(arena, "{s} by {s}", .{ album.title, album.artist });
+    const tile = findByLabel(grid_tree.root, tile_label).?;
+    try testing.expectEqual(@as(f32, 0), tile.style.background.?.a);
+}
+
+test "the transport buttons share one quiet register" {
+    // Item: the play button must not carry the filled accent — all
+    // three transport controls read as peers (sm ghost), with the
+    // play/pause identity carried by the bound icon alone.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    const tree = try buildTree(arena_state.allocator(), &model);
+    for ([_][]const u8{ "Previous track", "Play or pause", "Next track" }) |label| {
+        const button = findByLabel(tree.root, label).?;
+        try testing.expectEqual(canvas.WidgetKind.button, button.kind);
+        try testing.expectEqual(canvas.WidgetVariant.ghost, button.variant);
+        try testing.expectEqual(canvas.WidgetSize.sm, button.size);
+    }
+}
+
+test "the waveform mark trails the now-playing title" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    apply(&model, .{ .play_track = 1 });
+    const tree = try buildTree(arena_state.allocator(), &model);
+
+    // Find the row that carries the title text and assert the icon
+    // sits AFTER it in flow order — the wave reads as a listening
+    // indicator trailing the name, not a leading bullet.
+    const holder = findParentOfLabel(tree.root, "Now playing title").?;
+    var title_index: ?usize = null;
+    var icon_index: ?usize = null;
+    for (holder.children, 0..) |child, index| {
+        if (std.mem.eql(u8, child.semantics.label, "Now playing title")) title_index = index;
+        if (child.kind == .icon and std.mem.eql(u8, child.icon, "app:waveform")) icon_index = index;
+    }
+    try testing.expect(title_index != null);
+    try testing.expect(icon_index != null);
+    try testing.expect(icon_index.? > title_index.?);
+}
+
+test "the loaded row's state icon names the play state" {
+    // Item: the playing track's row shows the PAUSE glyph while audio
+    // moves and the PLAY glyph while it is paused (the icon names the
+    // state, like the transport button), and only the loaded row
+    // carries an indicator at all.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    model.tab = .songs;
+    apply(&model, .{ .play_track = 1 });
+    var tree = try buildTree(arena, &model);
+    try testing.expect(findByText(tree.root, .icon, "pause") != null);
+    try testing.expect(findByText(tree.root, .icon, "play") == null);
+
+    apply(&model, .toggle_play);
+    tree = try buildTree(arena, &model);
+    try testing.expect(findByText(tree.root, .icon, "play") != null);
+    try testing.expect(findByText(tree.root, .icon, "pause") == null);
+}
+
+test "the scrubber interpolates between position ticks and never rewinds" {
+    // The smooth-progress contract: while PLAYING, presented frames
+    // advance the rendered clock between the player's 500 ms ticks;
+    // tick corrections never rewind it mid-motion (small overruns hold
+    // flat, only a past-slack desync snaps); paused frames are inert
+    // (`on_frame` returns null — the idle law); and a resume across a
+    // long gap steps gently (the frame-interval clamp), never lurches.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+    const fx = &app_state.effects;
+    const model = &app_state.model;
+
+    // One warm-up frame: the INSTALLING first frame never reaches
+    // `on_frame`, so the surface width mirrors into the model here —
+    // otherwise the first playing frame would spend itself on
+    // `canvas_resized` instead of the clock.
+    try presentFrameAt(live, 2, 1_500 * std.time.ns_per_ms);
+    try testing.expectEqual(surface_size.width, model.canvas_width);
+
+    try live.dispatch(.{ .play_track = 1 });
+    const duration_ms: u64 = model_mod.trackById(1).duration_ms;
+    try fx.feedAudioEvent(.loaded, 0, duration_ms, true);
+    try live.wake();
+    try fx.feedAudioEvent(.position, 500, duration_ms, true);
+    try live.wake();
+    try testing.expectEqual(@as(u32, 500), model.elapsed_ms);
+
+    // Frames at ~60 Hz advance the rendered clock monotonically.
+    const frame_step_ns: u64 = 16_666_667;
+    var timestamp: u64 = 2_000 * std.time.ns_per_ms;
+    var previous = model.elapsed_ms;
+    for (0..6) |index| {
+        try presentFrameAt(live, 10 + index, timestamp);
+        try testing.expect(model.elapsed_ms > previous);
+        previous = model.elapsed_ms;
+        timestamp += frame_step_ns;
+    }
+
+    // A tick slightly BEHIND the rendered clock (interpolation ran a
+    // hair ahead) holds flat — the bar never visibly rewinds.
+    const ahead = model.elapsed_ms;
+    try fx.feedAudioEvent(.position, 500, duration_ms, true);
+    try live.wake();
+    try testing.expectEqual(ahead, model.elapsed_ms);
+
+    // A forward tick applies immediately.
+    try fx.feedAudioEvent(.position, 5_000, duration_ms, true);
+    try live.wake();
+    try testing.expectEqual(@as(u32, 5_000), model.elapsed_ms);
+
+    // A tick past the slack is a real desync (an external seek): snap.
+    try fx.feedAudioEvent(.position, 100, duration_ms, true);
+    try live.wake();
+    try testing.expectEqual(@as(u32, 100), model.elapsed_ms);
+
+    // PAUSE: the frame hook goes silent (null — no dispatch, so the
+    // frame channel starves: the idle law) and the clock freezes
+    // exactly, frame after frame.
+    try live.dispatch(.toggle_play);
+    try testing.expect(main.onFrame(model, .{ .size = surface_size, .timestamp_ns = timestamp }) == null);
+    var frozen: [3]u32 = undefined;
+    for (0..3) |index| {
+        timestamp += frame_step_ns;
+        try presentFrameAt(live, 20 + index, timestamp);
+        frozen[index] = model.elapsed_ms;
+    }
+    try testing.expectEqualSlices(u32, &.{ 100, 100, 100 }, &frozen);
+
+    // RESUME across the gap: the first frame's delta is clamped to a
+    // few display intervals, so the clock steps gently instead of
+    // swallowing the pause as playtime.
+    try live.dispatch(.toggle_play);
+    try testing.expect(main.onFrame(model, .{ .size = surface_size, .timestamp_ns = timestamp }) != null);
+    timestamp += 3_000 * std.time.ns_per_ms; // a long stale gap
+    try presentFrameAt(live, 30, timestamp);
+    try testing.expect(model.elapsed_ms > 100);
+    try testing.expect(model.elapsed_ms <= 100 + 67);
+}
+
+/// One presented frame with an explicit timestamp — the interpolation
+/// tests' clock hand.
+fn presentFrameAt(live: LiveApp, frame_index: u64, timestamp_ns: u64) !void {
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
+        .label = main.canvas_label,
+        .size = surface_size,
+        .scale_factor = 1,
+        .frame_index = frame_index,
+        .timestamp_ns = timestamp_ns,
+        .nonblank = true,
+    } });
+}
+
+/// The widget whose direct children include one labeled `label`.
+fn findParentOfLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
+    for (widget.children) |child| {
+        if (std.mem.eql(u8, child.semantics.label, label)) return widget;
+        if (findParentOfLabel(child, label)) |found| return found;
+    }
+    return null;
 }
 
 test "the track-change animation window opens on play and closes after" {
@@ -1185,6 +1578,40 @@ fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
         .timestamp_ns = frame_index * 1_000_000,
         .nonblank = true,
     } });
+}
+
+// Env-gated selection-round screenshot renderer (skipped by default,
+// never in CI): renders the SONGS list with the selection and playback
+// registers separated — one track playing (its state icon showing),
+// a DIFFERENT track selected (the inverted accent row) — plus the
+// button-group header and the quiet transport, once per color scheme.
+// PNGs land in /tmp/selection-shots/soundboard-{light,dark}-artifacts/.
+// To use:
+//
+//   SELECTION_SHOTS=1 zig build test
+test "render selection screenshots (env-gated)" {
+    if (!envGateSet("SELECTION_SHOTS")) return error.SkipZigTest;
+    const io = testing.io;
+
+    const live = try LiveApp.start(true);
+    defer live.stop();
+
+    // Playing one track a minute in, with ANOTHER track selected: the
+    // playing row carries the pause state icon while the selected row
+    // wears the accent fill — the two registers must read as different
+    // things in one frame.
+    try live.dispatch(.show_songs);
+    try live.dispatch(.{ .play_track = model_mod.tracks[0].id });
+    live.app_state.model.elapsed_ms = 67_500;
+    try live.dispatch(.{ .select_track = model_mod.tracks[2].id });
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light } });
+    try presentShotFrame(live, 2);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/selection-shots/soundboard-light-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/selection-shots/soundboard-dark-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
 }
 
 // Env-gated homepage screenshot renderer (skipped by default, never in

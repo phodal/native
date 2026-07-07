@@ -504,7 +504,12 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 360, 180), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
 
+    // Plain list rows walk on arrows only under the RING register
+    // (focused AND focus-visible — what Tab establishes). Quiet focus
+    // is pinned separately at the end of this test: it deliberately
+    // does NOT arrow-walk since the quiet-list-row seam landed.
     harness.runtime.views[0].canvas_widget_focused_id = 11;
+    harness.runtime.views[0].canvas_widget_focus_visible_id = 11;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
@@ -633,6 +638,27 @@ test "runtime moves focused grouped canvas controls with arrow keys" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 40), app_state.last_target_id);
     try std.testing.expectEqual(canvas.WidgetKind.button, app_state.last_target_kind);
     try std.testing.expectEqual(@as(u32, 13), app_state.widget_keyboard_count);
+
+    // The quiet-list-row seam: QUIET focus on a plain list row (what a
+    // pointer press or programmatic focus leaves — no visible ring) is
+    // transparent to the keyboard. Arrows neither walk the group nor
+    // escalate to the ring, and the key reaches the app TARGET-LESS
+    // (the app-level fallback seam), exactly as if nothing were
+    // focused — the app's own selection model owns those keys.
+    harness.runtime.views[0].canvas_widget_focused_id = 11;
+    harness.runtime.views[0].canvas_widget_focus_visible_id = 0;
+    app_state.last_target_id = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "arrowdown",
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 11), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), app_state.last_target_id);
+    try std.testing.expectEqual(@as(u32, 14), app_state.widget_keyboard_count);
+    try std.testing.expectEqualStrings("arrowdown", app_state.last_key);
 }
 
 test "runtime moves focus within house grouped component controls" {

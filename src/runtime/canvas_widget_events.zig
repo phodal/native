@@ -151,6 +151,18 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             if (!self.views[index].focused) return null;
             const focused_id = self.views[index].canvas_widget_focused_id;
             if (focused_id == 0) return null;
+            // FRAMEWORK BEHAVIOR CHANGE (deliberate, scoped): a QUIETLY
+            // focused plain list row routes no keyboard input — keys
+            // reach the app as target-less events, exactly as if nothing
+            // were focused. Quiet focus is the pointer/programmatic
+            // contract (no ring); on a list row it is bookkeeping, not a
+            // keyboard cursor, and letting it claim keys made a stale
+            // clicked row swallow the arrows/Enter an app-level
+            // selection model owns. The Tab-established ring register
+            // (focus_visible) keeps today's behavior in full: activation
+            // keys select, arrows walk rows. Tree rows (role treeitem)
+            // are exempt — their roving-focus keymap is the feature.
+            if (canvasWidgetQuietListRowFocus(self, index, focused_id)) return null;
             const keyboard = canvasWidgetKeyboardEventFromGpuInput(input_event, focused_id) orelse return null;
 
             const route = try self.views[index].widgetLayoutTree().routeKeyboardEvent(keyboard, output);
@@ -231,6 +243,22 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .source = route.target,
                 .route = route.entries,
             };
+        }
+
+        /// Whether keyboard focus sits QUIETLY (no visible ring) on a
+        /// plain list row — the one focus state the keyboard seams above
+        /// treat as transparent. Quiet focus lands on rows from pointer
+        /// presses and programmatic focus; it exists so activation can
+        /// find "the thing the user last touched", not to make the row a
+        /// keyboard cursor. Plain means `kind == .list_item` without the
+        /// treeitem role: ARIA tree rows carry a roving-focus keymap by
+        /// design and keep every key they have today.
+        fn canvasWidgetQuietListRowFocus(self: *const Runtime, index: usize, focused_id: canvas.ObjectId) bool {
+            if (focused_id == 0) return false;
+            if (self.views[index].canvas_widget_focus_visible_id == focused_id) return false;
+            const node_index = self.views[index].canvasWidgetNodeIndexById(focused_id) orelse return false;
+            const widget = self.views[index].widget_layout_nodes[node_index].widget;
+            return widget.kind == .list_item and widget.semantics.role != .treeitem;
         }
 
         /// Stamp the routed pointer event with its click count and
@@ -851,6 +879,15 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const focused_id = current_id orelse return false;
             const layout = self.views[index].widgetLayoutTree();
             const focused = layout.focusTargetById(focused_id) orelse return false;
+            // FRAMEWORK BEHAVIOR CHANGE (deliberate, scoped — the same
+            // seam as the keyboard-routing gate below): arrows and
+            // Home/End never escalate QUIET focus on a plain list row
+            // into the visible ring register. Only Tab (handled above)
+            // enters the keyboard-contract; from quiet row focus the
+            // navigation keys fall through to the app, whose selection
+            // model owns them. Ring-visible rows keep the full group
+            // walk unchanged; tree rows are exempt.
+            if (canvasWidgetQuietListRowFocus(self, index, focused_id)) return false;
             if (canvasWidgetGroupFocusEdgeFromInput(input_event)) |edge| {
                 // A tree row's Home/End jump to the SCOPE's edges (rows
                 // nest, so the group edge walk's same-parent rule would

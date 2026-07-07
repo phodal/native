@@ -237,6 +237,24 @@ pub const manifest_url_base: []const u8 = catalog.url_base orelse "";
 
 pub const Tab = enum { albums, songs };
 
+/// One presented frame's clock, delivered through `on_frame` WHILE
+/// PLAYING ONLY (main.zig gates it): the timestamp advances the rendered
+/// playback clock between the player's coarse position ticks, and the
+/// display's frame interval bounds the advance when frames were
+/// irregular (occlusion, a resume after pause), so a stale gap can never
+/// lurch the scrubber.
+pub const FrameClock = struct {
+    timestamp_ns: u64,
+    interval_ns: u64,
+};
+
+/// How far the rendered clock may run AHEAD of a player position tick
+/// before the disagreement stops being interpolation drift and gets
+/// snapped. Drift per 500 ms tick is a few milliseconds; anything past a
+/// full tick means reality changed (an external seek, a stall the
+/// buffering flag has not reported yet), and honesty beats smoothness.
+const position_snap_slack_ms: u32 = 600;
+
 pub const Msg = union(enum) {
     show_albums,
     show_songs,
@@ -247,7 +265,8 @@ pub const Msg = union(enum) {
     chrome_changed: native_sdk.WindowChrome,
     /// The canvas surface width, mirrored from presented frames through
     /// `on_frame` (main.zig emits it only when the width actually
-    /// changed, so steady playback frames dispatch nothing). The album
+    /// changed; unchanged-width frames instead carry the playback frame
+    /// clock while audio moves, and nothing at all otherwise). The album
     /// grid derives its column count from this — the layout system's
     /// grid takes a FIXED column count and rows/columns never
     /// flow-wrap, so adapting to the window is the model's job: track
@@ -258,6 +277,21 @@ pub const Msg = union(enum) {
     close_album,
     play_album: u8,
     play_track: u8,
+    /// Single click (and Space activation) on a track row: SELECTION
+    /// only — playback needs the double click, Enter, or the transport.
+    select_track: u8,
+    /// Arrow keys through the app-level key fallback: the selection
+    /// walks the track list on screen, clamped at its ends, without
+    /// touching playback.
+    select_next,
+    select_previous,
+    /// Enter through the app-level key fallback: play the selected
+    /// track (toggling pause when it is already the loaded one).
+    play_selected,
+    /// One presented frame while playing (`on_frame` gates it): advances
+    /// the rendered playback clock so the scrubber moves every frame,
+    /// not every 500 ms position tick.
+    frame_clock: FrameClock,
     toggle_play,
     next_track,
     prev_track,
@@ -279,6 +313,21 @@ pub const Msg = union(enum) {
     /// (the effects channel has no clipboard call today).
     copy_title: u8,
     copied: native_sdk.EffectExit,
+
+    /// Zig-only dispatch: the Zig-built views (album grid, track rows,
+    /// context menus), the app-level key fallback, and the runtime
+    /// channels (appearance, chrome, frames, audio, scroll echoes,
+    /// process exits) send these — never a markup on-* event — so the
+    /// dead-state lint must not ask for one.
+    pub const view_unbound = .{
+        "set_appearance", "chrome_changed", "canvas_resized",
+        "open_album",     "close_album",    "play_album",
+        "play_track",     "select_track",   "select_next",
+        "select_previous", "play_selected", "frame_clock",
+        "audio_event",    "grid_scrolled",  "detail_scrolled",
+        "songs_scrolled", "queue_track",    "copy_title",
+        "copied",
+    };
 };
 
 pub const Model = struct {
@@ -303,8 +352,25 @@ pub const Model = struct {
     canvas_width: f32 = min_canvas_width,
     songs_scroll: f32 = 0,
     now: ?u8 = null, // playing track id
+    /// The SELECTED track id — the inverted accent row in track lists.
+    /// Distinct from `now` on purpose: single click / arrows move the
+    /// selection, only a double click, Enter, or the transport moves
+    /// playback. Starting a track selects it too (the playing row is the
+    /// current row), but selecting never plays.
+    selected: ?u8 = null,
     playing: bool = false,
+    /// The RENDERED playback clock (labels, scrubber, the motion window).
+    /// While playing it advances every presented frame (`frame_clock`,
+    /// bounded per-frame steps) and the player's coarse position ticks
+    /// correct it: forward corrections apply, small backward ones hold
+    /// flat (the bar never visibly rewinds mid-play), and only a
+    /// past-slack disagreement snaps. Paused, buffering, and seeking
+    /// snap exactly — interpolation exists only where there is motion.
     elapsed_ms: u32 = 0,
+    /// The last `frame_clock` timestamp, the delta base for the rendered
+    /// clock. Never reset: a stale gap (pause, occlusion, boot) is
+    /// bounded by the frame-interval clamp in `advanceRenderedClock`.
+    frame_ns: u64 = 0,
     /// The loaded track's duration for display and seek math: the
     /// manifest value at start, replaced by the platform's decoded
     /// duration when the `.loaded` acknowledgment arrives (the platform
@@ -351,6 +417,27 @@ pub const Model = struct {
     /// Copy-to-clipboard bookkeeping: how many pbcopy spawns finished ok.
     copies_done: u32 = 0,
     copy_failed: bool = false,
+
+    /// Read by the ZIG-BUILT views (grid, detail, track rows), update
+    /// logic, or main's launch wiring — never bound in markup — so
+    /// opting them out keeps `native check`'s dead-state lint quiet
+    /// without weakening it for real drift. The markup fragments bind
+    /// the derived fns (`nowPlayingTitle`, `playPauseIcon`,
+    /// `progressFraction`, ...) instead of these backing stores.
+    pub const view_unbound = .{
+        "tab",             "open_album",     "grid_scroll",
+        "detail_scroll",   "canvas_width",   "songs_scroll",
+        "now",             "selected",       "playing",
+        "elapsed_ms",      "frame_ns",       "now_duration_ms",
+        "assets_missing",  "stream_failed",  "buffering",
+        "url_base_len",    "cache_dir_len",  "queue_dropped",
+        "seek_fraction",   "copies_done",    "copy_failed",
+        "appearance",      "search_buffer",  "url_base_buffer",
+        "cache_dir_buffer", "queue",         "covers",
+        "urlBase",         "cacheDir",       "streamingConfigured",
+        "searching",       "colorScheme",    "hasNowPlaying",
+        "playingAlbum",    "visibleAlbums",  "visibleTracks",
+    };
 
     // ------------------------------------------------------------- queries
 
@@ -570,6 +657,7 @@ pub const Model = struct {
             .duration = formatMs(arena, track.duration_ms),
             .now = model.now == track.id,
             .playing = model.now == track.id and model.playing,
+            .selected = model.selected == track.id,
             .queued = model.isQueued(track.id),
         };
     }
@@ -622,6 +710,8 @@ pub const TrackRow = struct {
     /// This track is loaded in the now-playing bar (playing or paused).
     now: bool,
     playing: bool,
+    /// This track is the SELECTION (accent row) — see `Model.selected`.
+    selected: bool,
     queued: bool,
 };
 
@@ -667,13 +757,14 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .close_album => model.open_album = null,
         .play_album => |id| startTrack(model, fx, albumTracks(id)[0].id),
-        .play_track => |id| {
-            if (model.now == id) {
-                setPlaying(model, fx, !model.playing);
-            } else {
-                startTrack(model, fx, id);
-            }
+        .play_track => |id| playOrToggle(model, fx, id),
+        .select_track => |id| model.selected = id,
+        .select_next => moveSelection(model, .next),
+        .select_previous => moveSelection(model, .previous),
+        .play_selected => {
+            if (model.selected) |id| playOrToggle(model, fx, id);
         },
+        .frame_clock => |frame| advanceRenderedClock(model, frame),
         .toggle_play => {
             if (model.now == null) {
                 startTrack(model, fx, tracks[0].id);
@@ -729,11 +820,26 @@ fn handleAudioEvent(model: *Model, fx: *Effects, event: native_sdk.EffectAudio) 
             model.buffering = event.buffering;
         },
         .position => {
-            model.elapsed_ms = @intCast(event.position_ms);
+            const position: u32 = @intCast(event.position_ms);
             if (event.duration_ms > 0) model.now_duration_ms = @intCast(event.duration_ms);
             // The stream's honest stall flag rides every tick; local
             // files always report false.
             model.buffering = event.buffering;
+            // The coarse tick CORRECTS the frame-advanced rendered
+            // clock. In motion, forward corrections apply and small
+            // backward ones hold flat — the bar must never visibly
+            // rewind because our frames ran a few ms ahead of the
+            // player — while a past-slack disagreement is a real
+            // desync (an external seek, an unreported stall) and
+            // snaps. With no motion (paused, buffering) the tick is
+            // simply the truth.
+            if (model.playing and !model.buffering) {
+                if (position > model.elapsed_ms or model.elapsed_ms - position > position_snap_slack_ms) {
+                    model.elapsed_ms = position;
+                }
+            } else {
+                model.elapsed_ms = position;
+            }
         },
         .completed => advance(model, fx),
         .failed, .rejected => {
@@ -758,13 +864,93 @@ fn handleAudioEvent(model: *Model, fx: *Effects, event: native_sdk.EffectAudio) 
     }
 }
 
+/// The play gesture on a specific track (double click, Enter, context
+/// paths): a different track starts fresh, the loaded one toggles
+/// play/pause in place. Either way the track becomes the selection —
+/// the playing row is the current row.
+fn playOrToggle(model: *Model, fx: *Effects, track_id: u8) void {
+    model.selected = track_id;
+    if (model.now == track_id) {
+        setPlaying(model, fx, !model.playing);
+    } else {
+        startTrack(model, fx, track_id);
+    }
+}
+
+const SelectionStep = enum { previous, next };
+
+/// Whether a track sits in the track list currently on screen — the
+/// domain the arrow-key selection walks. Songs tab: the search-filtered
+/// library (the same predicate `visibleTracks` renders). Album detail:
+/// the whole record, never filtered (matching `albumTrackRows`). The
+/// album GRID shows no track list, so arrows move nothing there.
+fn trackInCurrentList(model: *const Model, track: *const Track) bool {
+    return switch (model.tab) {
+        .songs => model.trackMatches(track),
+        .albums => if (model.open_album) |album_id| track.album == album_id else false,
+    };
+}
+
+/// Move the selection one row up or down the visible track list,
+/// clamped at the ends (no wrap — arrows at an edge hold, they never
+/// teleport). No selection yet (or one filtered out of view): down
+/// enters at the top, up at the bottom. One pass over the flattened
+/// track table, which IS view order for both list shapes.
+fn moveSelection(model: *Model, step: SelectionStep) void {
+    var first: ?u8 = null;
+    var last: ?u8 = null;
+    var before: ?u8 = null;
+    var after: ?u8 = null;
+    var seen_selected = false;
+    for (&tracks) |*track| {
+        if (!trackInCurrentList(model, track)) continue;
+        if (first == null) first = track.id;
+        last = track.id;
+        if (model.selected == track.id) {
+            seen_selected = true;
+        } else if (!seen_selected) {
+            before = track.id;
+        } else if (after == null) {
+            after = track.id;
+        }
+    }
+    const target: ?u8 = switch (step) {
+        .next => if (seen_selected) (after orelse model.selected) else first,
+        .previous => if (seen_selected) (before orelse model.selected) else last,
+    };
+    if (target) |id| model.selected = id;
+}
+
+/// One presented frame while playing: advance the rendered clock by the
+/// real frame delta, clamped to a few display intervals so a stale gap
+/// (resume after pause, an occluded window, boot) steps gently instead
+/// of lurching, and capped at the duration. Motion-gated twice — the
+/// `on_frame` hook only emits the Msg while playing, and this re-checks
+/// so a replayed journal straddling a pause boundary stays exact.
+fn advanceRenderedClock(model: *Model, frame: FrameClock) void {
+    const last = model.frame_ns;
+    model.frame_ns = frame.timestamp_ns;
+    if (!model.playing or model.now == null or model.buffering) return;
+    const interval: u64 = if (frame.interval_ns > 0) frame.interval_ns else std.time.ns_per_s / 60;
+    const delta_ns: u64 = if (last == 0 or frame.timestamp_ns <= last)
+        interval
+    else
+        @min(frame.timestamp_ns - last, interval * 4);
+    const advanced = @as(u64, model.elapsed_ms) + delta_ns / std.time.ns_per_ms;
+    const limit: u64 = if (model.now_duration_ms > 0) model.now_duration_ms else advanced;
+    model.elapsed_ms = @intCast(@min(advanced, limit));
+}
+
 fn startTrack(model: *Model, fx: *Effects, track_id: u8) void {
     const track = trackById(track_id);
     model.now = track_id;
-    // `elapsed_ms` restarts here and advances with position events — it
-    // is also the motion clock for the now-playing slide-in window, so
-    // animation gating replays deterministically (no live clock read
-    // anywhere).
+    // Starting a track selects it: the playing row is the current row
+    // for the arrow keys and the inverted accent register alike.
+    model.selected = track_id;
+    // `elapsed_ms` restarts here and advances with frame-clock messages
+    // corrected by position events — it is also the motion clock for
+    // the now-playing slide-in window, so animation gating replays
+    // deterministically (no live clock read anywhere).
     model.elapsed_ms = 0;
     model.now_duration_ms = track.duration_ms;
     // A fresh attempt clears the degraded notices; if the source is

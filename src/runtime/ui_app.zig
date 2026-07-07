@@ -2831,7 +2831,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             if (pointer_event.pointer.phase == .up) {
                 if (try self.dispatchContextMenuFallbackItem(runtime, tree, pointer_event.window_id, target.id)) return;
             }
-            if (tree.msgForPointer(target.id, pointer_event.pointer.phase)) |msg| {
+            // The click count rides the release into typed dispatch: a
+            // double-click's second release resolves the target's
+            // `on_double_press` handler (falling back to the ordinary
+            // press), while its first release already dispatched the
+            // single press — select-then-act, the list convention.
+            if (tree.msgForPointerClick(target.id, pointer_event.pointer.phase, pointer_event.pointer.click_count)) |msg| {
                 try self.dispatch(runtime, pointer_event.window_id, msg);
             }
         }

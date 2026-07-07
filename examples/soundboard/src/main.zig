@@ -139,20 +139,28 @@ pub fn soundboardOptions() SoundboardApp.Options {
     };
 }
 
-/// The media-app space convention: SPACE toggles the transport from
-/// anywhere in the app. This is the app-level key FALLBACK (`on_key`),
-/// so the framework's precedence rule applies before it ever fires:
-/// a focused track row consumes space to play THAT row, a focused
-/// button activates itself, and a focused editable field keeps typing
-/// spaces — the text-entry exception is structural (checked by widget
-/// kind in the runtime), so the header's search field today and any
-/// future text field block the toggle without this function knowing
-/// they exist. Everything else — header chrome, an empty grid, the
-/// seek slider, plain scroll focus, or no focus at all — falls through
-/// here and toggles play/pause.
+/// The media-app keyboard conventions, all through the app-level key
+/// FALLBACK (`on_key`), so the framework's precedence rule applies
+/// before any of them fire: a RING-focused widget consumes its own keys
+/// (a tabbed-to row selects on Space and plays on Enter, a slider takes
+/// the arrows), and a focused editable field keeps typing — the
+/// text-entry exception is structural (checked by widget kind in the
+/// runtime), so the header's search field blocks all of these without
+/// this function knowing it exists. A QUIETLY focused track row (the
+/// state a click leaves behind) is transparent to keys by the
+/// framework's quiet-list-row rule, so after clicking around the
+/// library these still work app-wide:
+///   - SPACE toggles the transport;
+///   - Up/Down ARROWS move the SELECTION (the accent row), never
+///     playback and never the focus ring — outlines belong to Tab;
+///   - ENTER plays the selected track (pause toggle when it is the
+///     loaded one).
 pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
     if (keyboard.modifiers.hasNavigationModifier() or keyboard.modifiers.shift) return null;
     if (std.ascii.eqlIgnoreCase(keyboard.key, "space")) return .toggle_play;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown")) return .select_next;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowup")) return .select_previous;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "enter")) return .play_selected;
     return null;
 }
 
@@ -176,17 +184,33 @@ fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
 }
 
-/// The album grid's width channel: every presented frame carries the
-/// surface size, and a WIDTH CHANGE (a live window resize, fullscreen)
-/// dispatches it into the model so the grid re-derives its column count
-/// on the very next rebuild. Frames at an unchanged width return null —
-/// steady playback never spins the update loop. The one-frame lag is
-/// inherent and invisible: the resize-triggered rebuild still lays out
-/// with the previous width, then the frame it presents delivers the new
-/// one and the corrected grid is on screen a frame later.
+/// The per-frame hook carries two channels, both gated so the idle law
+/// holds (an idle app presents zero frames):
+///
+/// 1. The album grid's width channel: a WIDTH CHANGE (a live window
+///    resize, fullscreen) dispatches into the model so the grid
+///    re-derives its column count on the very next rebuild. The
+///    one-frame lag is inherent and invisible: the resize-triggered
+///    rebuild still lays out with the previous width, then the frame it
+///    presents delivers the new one and the corrected grid is on screen
+///    a frame later.
+///
+/// 2. The smooth-scrubber frame clock, WHILE PLAYING ONLY: each
+///    presented frame's timestamp advances the rendered playback clock
+///    (`advanceRenderedClock`), whose changed scrubber presents the
+///    next frame — the dispatch loop sustains itself exactly as long as
+///    audio moves. Pause, stop, buffering, or idle return null, the
+///    display list stops changing, and the frame channel starves on its
+///    own: zero frames while nothing moves, with no arming flag to
+///    forget to clear.
 pub fn onFrame(model: *const Model, frame: native_sdk.platform.GpuFrame) ?Msg {
-    if (frame.size.width == model.canvas_width) return null;
-    return Msg{ .canvas_resized = frame.size.width };
+    if (frame.size.width != model.canvas_width) {
+        return Msg{ .canvas_resized = frame.size.width };
+    }
+    if (model.playing and model.now != null and !model.buffering) {
+        return Msg{ .frame_clock = .{ .timestamp_ns = frame.timestamp_ns, .interval_ns = frame.frame_interval_ns } };
+    }
+    return null;
 }
 
 /// The runtime owns transient slider state (`.change` carries no value);

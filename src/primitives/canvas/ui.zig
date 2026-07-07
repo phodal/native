@@ -256,6 +256,14 @@ pub const VirtualWindowRecord = struct {
 
 pub const UiHandlerEvent = enum {
     press,
+    /// A multi-click press (click_count >= 2 on the release): the
+    /// double-click channel. Resolution lives in `msgForPointerClick`:
+    /// a double-click release prefers this handler and falls back to
+    /// `.press`, so binding it is strictly additive — the first click
+    /// of every double-click still dispatches the single-press message
+    /// (select, then open/play), the way list selection conventions
+    /// expect.
+    double_press,
     toggle,
     change,
     submit,
@@ -613,6 +621,15 @@ pub fn Ui(comptime Msg: type) type {
             /// only).
             anchor_offset: f32 = 4,
             on_press: ?Msg = null,
+            /// Double-click Msg (builder-only): dispatched on a release
+            /// whose click count reached 2, in place of `on_press` for
+            /// that release. The FIRST click of the double still
+            /// dispatches `on_press` on its own release, so the natural
+            /// pairing is select-on-press + act-on-double-press (a list
+            /// row that selects on click and opens/plays on double
+            /// click). Like `on_press`, binding it makes the element a
+            /// hit target and press claimer.
+            on_double_press: ?Msg = null,
             on_toggle: ?Msg = null,
             on_change: ?Msg = null,
             on_submit: ?Msg = null,
@@ -721,6 +738,7 @@ pub fn Ui(comptime Msg: type) type {
             wrap: ?bool = null,
             style_tokens: StyleTokenRefs = .{},
             on_press: ?Msg = null,
+            on_double_press: ?Msg = null,
             on_toggle: ?Msg = null,
             on_change: ?Msg = null,
             on_submit: ?Msg = null,
@@ -965,11 +983,34 @@ pub fn Ui(comptime Msg: type) type {
                 return null;
             }
 
+            /// `msgForPointer` with the pointer's click count: a release
+            /// whose count reached 2 prefers the widget's `on_double_press`
+            /// handler and falls back to the ordinary press resolution
+            /// (so a double-click on a widget without the double channel
+            /// behaves exactly like two single clicks). This is the
+            /// dispatcher the runtime pointer path uses; the two-argument
+            /// form stays the single-click entry point.
+            pub fn msgForPointerClick(self: Tree, target_id: ObjectId, phase: canvas.WidgetPointerPhase, click_count: u8) ?Msg {
+                if (phase == .up and click_count >= 2) {
+                    if (self.msgFor(target_id, .double_press)) |msg| return msg;
+                }
+                return self.msgForPointer(target_id, phase);
+            }
+
             /// Typed dispatch for keyboard events: engine control intents
             /// (activation keys, slider steps) plus enter-to-submit on text
             /// entry widgets.
             pub fn msgForKeyboard(self: Tree, target_id: ObjectId, keyboard: canvas.WidgetKeyboardEvent) ?Msg {
                 const widget = self.findWidget(target_id) orelse return null;
+                // A list row prefers a bound submit handler on plain
+                // Enter: Enter is the row's PRIMARY action (open the
+                // record, play the track — the desktop list convention),
+                // while Space keeps the select activation below. Only
+                // rows that bind `on_submit` take this branch; everything
+                // else resolves exactly as before.
+                if (widget.kind == .list_item and isSubmitKeyboard(widget, keyboard)) {
+                    if (self.msgFor(target_id, .submit)) |msg| return msg;
+                }
                 if (canvas.widgetKeyboardControlIntent(widget, keyboard)) |intent| {
                     if (self.msgForIntent(target_id, intent)) |msg| return msg;
                 }
@@ -1019,6 +1060,7 @@ pub fn Ui(comptime Msg: type) type {
                 .wrap = options.wrap,
                 .style_tokens = options.style_tokens,
                 .on_press = options.on_press,
+                .on_double_press = options.on_double_press,
                 .on_toggle = options.on_toggle,
                 .on_change = options.on_change,
                 .on_submit = options.on_submit,
@@ -2220,6 +2262,11 @@ pub fn Ui(comptime Msg: type) type {
             // Typed handlers imply the matching accessibility actions, the
             // same way a stringly `command` does for engine-owned dispatch.
             if (node.on_press != null) widget.semantics.actions.press = true;
+            // A double-press handler makes the element pressable too:
+            // the double-click's first release must land somewhere, and
+            // an element that acts on double click without claiming
+            // presses would be unreachable by pointer at all.
+            if (node.on_double_press != null) widget.semantics.actions.press = true;
             if (node.on_toggle != null) widget.semantics.actions.toggle = true;
             // A hold handler makes the element pressable (hit target +
             // press claimer), like on_press: the hold gesture starts as a
@@ -2255,6 +2302,7 @@ pub fn Ui(comptime Msg: type) type {
                 widget.children = child_widgets;
             }
             appendHandler(handlers, handler_len, widget.id, .press, node.on_press);
+            appendHandler(handlers, handler_len, widget.id, .double_press, node.on_double_press);
             appendHandler(handlers, handler_len, widget.id, .toggle, node.on_toggle);
             appendHandler(handlers, handler_len, widget.id, .change, node.on_change);
             appendHandler(handlers, handler_len, widget.id, .submit, node.on_submit);
@@ -2366,6 +2414,7 @@ pub fn Ui(comptime Msg: type) type {
         fn countHandlers(node: Node) usize {
             var total: usize = 0;
             if (node.on_press != null) total += 1;
+            if (node.on_double_press != null) total += 1;
             if (node.on_toggle != null) total += 1;
             if (node.on_change != null) total += 1;
             if (node.on_submit != null) total += 1;
@@ -2600,6 +2649,11 @@ fn isSubmitKeyboard(widget: Widget, keyboard: canvas.WidgetKeyboardEvent) bool {
         // primary chord — cmd+Enter on macOS, ctrl+Enter elsewhere.
         // Shift/alt variants stay free for apps.
         .textarea => keyboard.modifiers.hasCommandModifier() and !keyboard.modifiers.alt and !keyboard.modifiers.shift,
+        // List rows: plain Enter is the row's primary action when the
+        // app binds `on_submit` (play the track, open the record); the
+        // select activation keeps Space. `msgForKeyboard` resolves the
+        // preference — this predicate only says Enter QUALIFIES.
+        .list_item => !keyboard.modifiers.hasNavigationModifier(),
         else => false,
     };
 }

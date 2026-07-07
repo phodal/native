@@ -410,6 +410,22 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
 
         pub fn dispatchAutomationWidgetKey(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize, id: canvas.ObjectId, key: []const u8) anyerror!void {
             try focusAutomationCanvasWidget(self, view_index, id);
+            // An automation KEY action emulates the KEYBOARD contract on
+            // its target. Plain list rows are transparent to keys under
+            // QUIET focus (the quiet-list-row rule in the keyboard
+            // routing), so the synthesized activation must reach the row
+            // the way a Tab-then-key would: escalate exactly this target
+            // kind to the ring register before dispatching. Every other
+            // kind keeps the quiet programmatic focus it always had.
+            if (self.views[view_index].canvasWidgetNodeIndexById(id)) |node_index| {
+                const widget = self.views[view_index].widget_layout_nodes[node_index].widget;
+                const plain_list_row = widget.kind == .list_item and widget.semantics.role != .treeitem;
+                if (plain_list_row and self.views[view_index].canvas_widget_focus_visible_id != id) {
+                    const previous_state = self.views[view_index].canvasWidgetRenderState();
+                    self.views[view_index].canvas_widget_focus_visible_id = id;
+                    try CanvasWidgetEventMethods().invalidateForCanvasWidgetRenderStateChange(self, view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
+                }
+            }
             try self.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
                 .window_id = self.views[view_index].window_id,
                 .label = self.views[view_index].label,

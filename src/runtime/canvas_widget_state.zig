@@ -113,6 +113,14 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 }
             }
             self.frame_profile.end(.reconcile, reconcile_begin);
+            // Source-declared layout tweens, AFTER the reconciled tree is
+            // retained (the arm reads the kept fraction as its `from`)
+            // and BEFORE the display refresh (a reduced-motion snap must
+            // paint in this rebuild's frame, not the next one). Both
+            // markup engines and the Zig builder lower `resize-duration`
+            // into the same widget fields, so this one walk is the whole
+            // consumer.
+            try armSourceDeclaredLayoutTweens(self, index, layout);
             const requested_frame = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);
             if ((layout_dirty or widget_revision_changed) and !requested_frame) try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
             return self.views[index].info();
@@ -224,6 +232,16 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             try validateViewLabel(label);
             const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
             if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+            try startCanvasWidgetLayoutTweenForView(self, index, tween);
+            return self.views[index].info();
+        }
+
+        /// The tween contract's core, shared by the public command above
+        /// and the source-declared lowering in `setCanvasWidgetLayout`
+        /// (a split whose SOURCE declares `resize_duration_ms` arms the
+        /// same tween the Zig hook would, so both authoring surfaces
+        /// step identical fractions on identical frame clocks).
+        fn startCanvasWidgetLayoutTweenForView(self: *Runtime, index: usize, tween: canvas.CanvasWidgetLayoutTween) anyerror!void {
             if (tween.id == 0) return error.InvalidCommand;
             if (!std.math.isFinite(tween.to)) return error.InvalidCommand;
             const node_index = self.views[index].canvasWidgetNodeIndexById(tween.id) orelse return error.InvalidCommand;
@@ -238,24 +256,72 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                     // on the target through the snap path below.
                     self.views[index].removeCanvasWidgetLayoutTween(tween.id);
                 } else {
-                    if (active.spec.to == tween.to) return self.views[index].info();
+                    if (active.spec.to == tween.to) return;
                     active.spec = tween;
                     active.from = current;
                     active.start_ns = 0;
                     try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
-                    return self.views[index].info();
+                    return;
                 }
             }
-            if (current == tween.to) return self.views[index].info();
+            if (current == tween.to) return;
 
             if (!snap and self.views[index].armCanvasWidgetLayoutTween(.{ .spec = tween, .from = current })) {
                 try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
-                return self.views[index].info();
+                return;
             }
             if (try self.views[index].applyCanvasWidgetSplitFraction(node_index, tween.to)) |dirty| {
                 try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, index, dirty);
             }
-            return self.views[index].info();
+        }
+
+        /// The SOURCE-declared half of the layout tween: a split whose
+        /// tree declares a nonzero `resize_duration_ms` treats its
+        /// declared `value` as the tween target. Called by
+        /// `setCanvasWidgetLayout` after the reconciled tree lands (the
+        /// reconcile kept the rendered fraction instead of snapping it
+        /// to the moved source), so every rebuild re-declares the tween
+        /// exactly like the Zig `layout_tweens` hook does — idempotent
+        /// per target, retargeting on a new one, snapping under reduced
+        /// motion. Skips:
+        ///   - value 0: the "unset" sentinel (a bare split lays out at
+        ///     0.5); nothing declares a target, so nothing tweens;
+        ///   - a pressed divider: a live drag owns the fraction — the
+        ///     tween re-arms on the first rebuild after release.
+        fn armSourceDeclaredLayoutTweens(self: *Runtime, index: usize, source: canvas.WidgetLayoutTree) anyerror!void {
+            for (source.nodes) |node| {
+                if (node.widget.kind != .split or node.widget.id == 0) continue;
+                if (node.widget.resize_duration_ms == 0) continue;
+                if (node.widget.value == 0) continue;
+                if (canvasWidgetSplitDividerPressed(self, index, node.widget.id)) continue;
+                startCanvasWidgetLayoutTweenForView(self, index, .{
+                    .id = node.widget.id,
+                    .to = node.widget.value,
+                    .duration_ms = node.widget.resize_duration_ms,
+                    .easing = node.widget.resize_easing,
+                }) catch |err| switch (err) {
+                    // The id vanished in reconcile (hidden pane, dropped
+                    // subtree): nothing to move — same tolerance as the
+                    // Zig hook's stale-id skip.
+                    error.InvalidCommand => continue,
+                    else => return err,
+                };
+            }
+        }
+
+        /// Whether the RETAINED tree's pressed widget is this split's
+        /// synthesized divider — a live drag. The drag owns the fraction
+        /// while it lasts, so the source-declared tween stands down and
+        /// re-arms on the first rebuild after release.
+        fn canvasWidgetSplitDividerPressed(self: *Runtime, index: usize, split_id: canvas.ObjectId) bool {
+            const pressed_id = self.views[index].canvas_widget_pressed_id;
+            if (pressed_id == 0) return false;
+            const divider_index = self.views[index].canvasWidgetNodeIndexById(pressed_id) orelse return false;
+            const divider = self.views[index].widget_layout_nodes[divider_index];
+            if (divider.widget.kind != .split_divider) return false;
+            const parent_index = divider.parent_index orelse return false;
+            if (parent_index >= self.views[index].widget_layout_node_count) return false;
+            return self.views[index].widget_layout_nodes[parent_index].widget.id == split_id;
         }
 
         /// One presented frame's worth of layout-tween motion for a

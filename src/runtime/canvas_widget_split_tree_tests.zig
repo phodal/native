@@ -591,3 +591,140 @@ test "identical recorded frame clocks replay a layout tween to identical fractio
         try std.testing.expectEqual(first, second);
     }
 }
+
+// ------------------------------------- source-declared layout tweens
+
+/// The markup shape of the tween declaration: `value` binds the model's
+/// TARGET fraction and `resize-duration`/`resize-easing` arm the runtime
+/// tween when a rebuild moves it — no Zig hook anywhere in this app.
+const tween_markup_source =
+    \\<split value="{fraction}" resize-duration="180" resize-easing="standard" on-resize="resized">
+    \\  <column min-width="60"></column>
+    \\  <column min-width="60"></column>
+    \\</split>
+;
+
+const TweenMarkupModel = struct { fraction: f32 = 0.5 };
+
+/// Build the markup view for `model`, lay it out at the test surface
+/// size, and land it through `setCanvasWidgetLayout` — one markup-app
+/// rebuild, minus the app-loop plumbing the tween path never touches.
+fn setTweenMarkupLayout(harness: anytype, arena: std.mem.Allocator, model: *const TweenMarkupModel) !canvas.ObjectId {
+    var view = try canvas.MarkupView(TweenMarkupModel, TestMsg).init(arena, tween_markup_source);
+    var ui = TestUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, model));
+    const nodes = try arena.alloc(canvas.WidgetLayoutNode, 8);
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 309, 100), nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    return tree.root.id;
+}
+
+test "a markup-declared tween steps the same fractions as the Zig-declared one" {
+    // The full-stack pin: `resize-duration`/`resize-easing` in markup
+    // and `startCanvasWidgetLayoutTween` in Zig are ONE primitive. Both
+    // runs ease 0.5 -> 0.2 over 180 ms standard on the same recorded
+    // frame clock; every sampled fraction must be bitwise identical.
+    const timestamps = [_]u64{ 5_000_000, 30_000_000, 90_000_000, 140_000_000, 200_000_000 };
+    var zig_fractions: [timestamps.len]f32 = undefined;
+    var markup_fractions: [timestamps.len]f32 = undefined;
+
+    {
+        // Zig-declared: the runtime command the layout_tweens hook calls.
+        const harness = try TestHarness().create(std.testing.allocator, .{});
+        defer harness.destroy(std.testing.allocator);
+        var app_state: ObservingApp = .{};
+        const app = app_state.app();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const split_id = try installTweenSplit(harness, app, arena.allocator());
+        _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.2, .duration_ms = 180, .easing = .standard });
+        for (timestamps, 0..) |timestamp_ns, index| {
+            try tweenFrame(harness, app, timestamp_ns);
+            zig_fractions[index] = try splitFraction(harness, split_id);
+        }
+        try std.testing.expectEqual(@as(f32, 0.2), zig_fractions[timestamps.len - 1]);
+    }
+
+    {
+        // Markup-declared: the first rebuild mounts at the resting 0.5
+        // (a mount never animates); the second moves the bound value to
+        // 0.2, the reconcile KEEPS the rendered 0.5 instead of snapping,
+        // and the runtime eases toward the moved value.
+        const harness = try TestHarness().create(std.testing.allocator, .{});
+        defer harness.destroy(std.testing.allocator);
+        harness.null_platform.gpu_surfaces = true;
+        var app_state: ObservingApp = .{};
+        const app = app_state.app();
+        try harness.start(app);
+        _ = try harness.runtime.createView(.{
+            .window_id = 1,
+            .label = "canvas",
+            .kind = .gpu_surface,
+            .frame = geometry.RectF.init(0, 0, 309, 100),
+        });
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var model = TweenMarkupModel{ .fraction = 0.5 };
+        _ = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+        model.fraction = 0.2;
+        const split_id = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+        // The moved source did NOT snap: the rendered fraction is still
+        // at the resting value until the frames drive it.
+        try std.testing.expectEqual(@as(f32, 0.5), try splitFraction(harness, split_id));
+        for (timestamps, 0..) |timestamp_ns, index| {
+            try tweenFrame(harness, app, timestamp_ns);
+            markup_fractions[index] = try splitFraction(harness, split_id);
+        }
+        // Each tween step dispatched the same on-resize echo a drag
+        // would, through the markup-bound handler.
+        try std.testing.expect(app_state.resize_count > 0);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
+    }
+
+    for (zig_fractions, markup_fractions) |zig_fraction, markup_fraction| {
+        try std.testing.expectEqual(zig_fraction, markup_fraction);
+    }
+}
+
+test "a re-declared markup tween target keeps its clock and reduced motion snaps the source move" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 309, 100),
+    });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var model = TweenMarkupModel{ .fraction = 0.5 };
+    _ = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+    model.fraction = 0.2;
+    const split_id = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+    const t0: u64 = 1_000_000_000;
+    try tweenFrame(harness, app, t0);
+    try tweenFrame(harness, app, t0 + 90_000_000);
+    const mid = try splitFraction(harness, split_id);
+    try std.testing.expect(mid < 0.5 and mid > 0.2);
+
+    // A rebuild mid-tween (each on-resize echo causes one in a real app)
+    // re-declares the same target: the tween must keep its clock — the
+    // fraction holds and the ramp continues, no Zeno crawl.
+    _ = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+    try std.testing.expectEqual(mid, try splitFraction(harness, split_id));
+    try tweenFrame(harness, app, t0 + 200_000_000);
+    try std.testing.expectEqual(@as(f32, 0.2), try splitFraction(harness, split_id));
+
+    // Reduced motion: the next source move snaps through the drag
+    // mutation path on the rebuild itself — no frames, no animation.
+    harness.runtime.appearance.reduce_motion = true;
+    model.fraction = 0.4;
+    _ = try setTweenMarkupLayout(harness, arena.allocator(), &model);
+    try std.testing.expectEqual(@as(f32, 0.4), try splitFraction(harness, split_id));
+}

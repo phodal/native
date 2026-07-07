@@ -316,6 +316,26 @@ const fixtures = [_]Fixture{
         .expect = "expected a number",
     },
     .{
+        .name = "a whole-number binding in resize-duration accepts",
+        .source =
+        \\<split value="{ratio}" resize-duration="{count}" resize-easing="standard" on-resize="pane">
+        \\  <panel><text>a</text></panel>
+        \\  <panel><text>b</text></panel>
+        \\</split>
+        ,
+        .expect = null,
+    },
+    .{
+        .name = "a string binding in resize-duration rejects like any whole-class attribute",
+        .source =
+        \\<split value="{ratio}" resize-duration="{name}" on-resize="pane">
+        \\  <panel><text>a</text></panel>
+        \\  <panel><text>b</text></panel>
+        \\</split>
+        ,
+        .expect = "expected a whole number",
+    },
+    .{
         .name = "an arena-computed binding in equality rejects",
         .source =
         \\<column>

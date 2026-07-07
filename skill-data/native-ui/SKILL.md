@@ -263,6 +263,7 @@ How the pieces fit, all model-owned (TEA):
 - **`min-width` on the panes bounds the drag** — the divider clamps so neither pane shrinks below its floor, on drag, keyboard, and layout alike.
 - **Uncontrolled works too**: without `on-resize`, the divider position survives rebuilds under the source-wins reconcile (a source-side `value` change wins), but pane CONTENT lays out at the declared fraction until the model echoes — bind the handler for the exact controlled loop.
 - **Keyboard**: Tab reaches the divider; Left/Right step the fraction (Shift for 2x), Home/End jump to the clamp edges. Automation drives it with `widget-drag`/`widget-key`, and snapshots show the divider as `role=separator` with the fraction as its value.
+- **Animated resize**: `resize-duration="180"` (milliseconds, `split` only — a teaching error elsewhere) makes the bound `value` a target — a model-driven move (a collapse toggle, not a drag echo) eases the rendered fraction there one presented frame at a time instead of snapping, dispatching the same `on-resize` echoes a drag would; `resize-easing` (`linear`/`standard`/`emphasized`/`spring`) shapes the ramp and needs the nonzero duration beside it (alone it is a teaching error), and reduced-motion appearances snap automatically — apps declare nothing extra.
 - Three panes = nested splits, as above. More than two children is a validation error (put conditional content inside a pane).
 
 ### Trees: disclosure rows with the ARIA tree keymap

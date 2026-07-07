@@ -22,6 +22,23 @@ import { AttrTable } from "@/components/attr-table";
 
 A `value` of 0 lays out at 0.5, so a fresh model starts centered. Put conditional or repeated content inside a pane container — the split itself takes exactly two children.
 
+## Animated resize
+
+`resize-duration` (milliseconds) turns the bound `value` into a target: a rebuild that moves it — a collapse toggle in `update`, not a drag echo — eases the rendered fraction there instead of snapping, one step per presented frame, reflowing both panes exactly as a divider drag would and dispatching the same `on-resize` echoes. `resize-easing` names the curve (`linear`, `standard` — the default — `emphasized`, `spring`) and needs a nonzero duration beside it. Under a reduced-motion appearance the split snaps automatically — apps need do nothing. Omitting `resize-duration` (or setting 0) keeps today's snap.
+
+```html
+<split value="{sidebar_fraction}" resize-duration="180" resize-easing="standard" on-resize="sidebar_resized" gap="8" grow="1">
+  <panel padding="12" min-width="180">
+    <text foreground="text_muted">Sidebar</text>
+  </panel>
+  <panel padding="12" min-width="320">
+    <text foreground="text_muted">Content</text>
+  </panel>
+</split>
+```
+
+Here `sidebar_fraction` is the model's declared resting fraction — flip it between the expanded and collapsed values in `update` and the runtime animates the divider there. In Zig views the same pair is `ElementOptions.resize_duration`/`resize_easing` on `ui.split`.
+
 ## Zig builder
 
 `on_resize` pairs with `valueMsg`, which builds the `f32`-payload message constructor.
@@ -50,4 +67,4 @@ And in `update`:
 
 ## Attributes
 
-<AttrTable attrs={["value", "min-width", "gap", "on-resize"]} />
+<AttrTable attrs={["value", "resize-duration", "resize-easing", "min-width", "gap", "on-resize"]} />

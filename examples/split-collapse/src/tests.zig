@@ -44,3 +44,15 @@ test "runtime mode flips only the resting flag; the tween hook declares the targ
     main.update(&model, .{ .split_resized = 0.21 });
     try testing.expectEqual(@as(f32, 0.21), model.fraction);
 }
+
+test "markup mode derives the split's declared resting fraction from the collapsed flag" {
+    // The markup view binds value="{pane_fraction}" with resize-duration,
+    // so flipping the flag IS the collapse: the declared value moves to
+    // the target and the runtime tween eases the rendered fraction there.
+    var model = main.initModel(false);
+    try testing.expectEqual(main.expanded_fraction, model.pane_fraction());
+    main.update(&model, .toggle);
+    try testing.expectEqual(main.collapsed_fraction, model.pane_fraction());
+    main.update(&model, .toggle);
+    try testing.expectEqual(main.expanded_fraction, model.pane_fraction());
+}

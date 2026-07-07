@@ -122,6 +122,42 @@ test "NSUI round-trips the input-group vocabulary under its fresh codes" {
     try testing.expectEqual(@as(u16, 63), schema.elementByName("input-group-actions").?.code);
 }
 
+test "NSUI round-trips the split layout-tween pair under its fresh codes" {
+    // resize-duration/resize-easing serialize like any attribute — fresh
+    // registry codes ride the wire automatically, no schema bump — so a
+    // tweened split survives encode/decode node-for-node and the dump
+    // shows the pair by name and code.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\<split value="{fraction}" resize-duration="180" resize-easing="emphasized" on-resize="resized">
+        \\  <panel><text>sidebar</text></panel>
+        \\  <panel><text>content</text></panel>
+        \\</split>
+    ;
+    const document = try parseSource(arena, source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+
+    var diagnostic = nsui.CodecDiagnostic{};
+    const bytes = try nsui.encode(arena, document, .{}, &diagnostic);
+    const decoded = try nsui.decode(arena, bytes, &diagnostic);
+    try expectNodesEqual(document.root.?, decoded.root.?);
+
+    // The wire carries the registry codes, never the names.
+    try testing.expectEqual(@as(u16, 71), schema.attrByName("resize-duration").?.code);
+    try testing.expectEqual(@as(u16, 72), schema.attrByName("resize-easing").?.code);
+
+    // The JSON inspection view (`native markup dump`) shows the pair.
+    const hash = try nsui.documentHash(arena, decoded);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    defer out.deinit();
+    try nsui.writeJson(decoded, hash, &out.writer);
+    const json = out.written();
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"resize-duration\",\"code\":71,\"value\":\"180\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"resize-easing\",\"code\":72,\"value\":\"emphasized\"") != null);
+}
+
 test "NSUI golden bytes for a minimal document" {
     // Hand-checkable pin of the exact layout. If this changed, the WIRE
     // changed: bump the schema version and write the migration — never

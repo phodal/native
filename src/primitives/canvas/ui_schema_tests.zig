@@ -22,17 +22,17 @@ test "registry codes are stable: assigned at birth, never renumbered or renamed"
     // the new fingerprint ONLY for additions; renames/renumbers are
     // schema-version-bump events, not silent edits.
     try testing.expectEqual(@as(usize, 64), schema.elements.len);
-    try testing.expectEqual(@as(usize, 70), schema.attrs.len);
+    try testing.expectEqual(@as(usize, 72), schema.attrs.len);
     try testing.expectEqual(@as(usize, 10), schema.events.len);
     // Re-pinned for the span composite addition (element 64).
     try testing.expectEqual(
         @as(u64, 0x034c0f17117fe9c5),
         tableFingerprint(schema.ElementInfo, &schema.elements),
     );
-    // Re-pinned for the span attribute additions: weight (68), mono (69),
-    // and italic (70).
+    // Re-pinned for the split layout-tween attribute additions:
+    // resize-duration (71) and resize-easing (72).
     try testing.expectEqual(
-        @as(u64, 0x2f54595a76897bec),
+        @as(u64, 0xe462d5e094b9b19c),
         tableFingerprint(schema.AttrInfo, &schema.attrs),
     );
     try testing.expectEqual(

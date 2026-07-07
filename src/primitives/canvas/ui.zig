@@ -555,6 +555,23 @@ pub fn Ui(comptime Msg: type) type {
             /// both honor it); `.none` pins it regardless of the token.
             /// Meaningless on non-scroll elements.
             overscroll: canvas.WidgetOverscroll = .default,
+            /// Layout-tween duration in milliseconds for `split`
+            /// (markup `resize-duration`): nonzero makes the split's
+            /// declared `value` a TARGET — a rebuild that moves it no
+            /// longer snaps the panes; the runtime eases the rendered
+            /// fraction toward it over this duration, one step per
+            /// presented frame on the recorded frame clock, reflowing
+            /// both panes exactly as a divider drag would and noting
+            /// the same `on_resize` echoes. 0 (the default) keeps the
+            /// classic snap. Reduced-motion appearances snap inside
+            /// the runtime — apps declare nothing extra.
+            resize_duration: u32 = 0,
+            /// Easing of the split layout tween (markup
+            /// `resize-easing`): a `canvas.Easing` member. Only
+            /// meaningful with a nonzero `resize_duration` — the
+            /// markup validator rejects easing without a duration as
+            /// silently-inert data.
+            resize_easing: canvas.Easing = .standard,
             style: canvas.WidgetStyle = .{},
             /// Named token references resolved against design tokens in
             /// `finalizeWithTokens`; explicit `style` values win.
@@ -1365,6 +1382,14 @@ pub fn Ui(comptime Msg: type) type {
         /// an unbound split keeps its divider position across rebuilds
         /// through the source-wins reconcile, but pane content lays out
         /// at the declared fraction until the model echoes.
+        ///
+        /// With a nonzero `resize_duration` the declared `value` is a
+        /// TARGET instead: a rebuild that moves it eases the rendered
+        /// fraction there over that many milliseconds (`resize_easing`
+        /// names the curve) instead of snapping — the declarative twin
+        /// of `UiApp.Options.layout_tweens`, and the shape markup's
+        /// `resize-duration`/`resize-easing` lower to. Reduced motion
+        /// snaps inside the runtime.
         pub fn split(self: *Self, options: ElementOptions, children: anytype) Node {
             return self.el(.split, options, children);
         }
@@ -2428,6 +2453,8 @@ pub fn Ui(comptime Msg: type) type {
                 .semantics = options.semantics,
                 .window_drag = options.window_drag,
                 .overscroll = options.overscroll,
+                .resize_duration_ms = options.resize_duration,
+                .resize_easing = options.resize_easing,
             };
             applyKindDefaultLayout(kind, options, &widget.layout);
             return widget;

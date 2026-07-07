@@ -20,6 +20,7 @@ const TextRange = text_model.TextRange;
 const TextSelection = text_model.TextSelection;
 const CanvasRenderAnimation = canvas.CanvasRenderAnimation;
 const BlurTokenRef = token_model.BlurTokenRef;
+const Easing = token_model.Easing;
 const MotionDuration = token_model.MotionDuration;
 const MotionTokens = token_model.MotionTokens;
 
@@ -781,6 +782,22 @@ pub const Widget = struct {
     /// this region bounce past them. Honored by both scroll paths — the
     /// engine's wheel/kinetic physics and the native OS scroller.
     overscroll: WidgetOverscroll = .default,
+    /// Declared layout-tween duration for `.split` widgets
+    /// (`resize_duration:` in the builder, `resize-duration=` in
+    /// markup), in milliseconds. Nonzero turns the split's declared
+    /// `value` into a TARGET: when a rebuild moves the value, the
+    /// runtime keeps the rendered fraction and eases it toward the new
+    /// value over this duration — one step per presented frame on the
+    /// recorded frame clock, through the same mutation path a divider
+    /// drag uses (dirty regions, `on_resize` echoes, reconcile
+    /// survival). 0 (the default) keeps the classic snap, so every
+    /// existing tree and document behaves exactly as before. Reduced
+    /// motion snaps inside the runtime. Ignored on every other kind.
+    resize_duration_ms: u32 = 0,
+    /// Easing curve of the split layout tween (`resize_easing:` /
+    /// `resize-easing=`). Only meaningful with a nonzero
+    /// `resize_duration_ms`.
+    resize_easing: Easing = .standard,
     /// Window-drag surface (`window-drag="true"` / `.window_drag`): a
     /// pointer press that lands here — or falls through plain text /
     /// icons / decorations onto it — moves the WINDOW instead of

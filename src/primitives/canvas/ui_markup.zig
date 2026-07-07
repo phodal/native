@@ -1221,6 +1221,20 @@ pub const overscroll_value_names = [_][]const u8{ "default", "none", "rubber_ban
 
 pub const overscroll_value_message = "unknown overscroll value - scroll takes default (follow the ScrollPhysics.overscroll token, off unless a theme flips it), none (pin at the content edges), or rubber_band (bounce past them)";
 
+pub const resize_duration_element_message = "resize-duration is only supported on split - it declares the split's layout tween (milliseconds; 0 snaps, the default): a rebuild that moves the bound value eases the rendered fraction there instead of snapping; anywhere else it would be silently inert";
+
+pub const resize_easing_element_message = "resize-easing is only supported on split - it names the easing curve of the split's layout tween (linear, standard, emphasized, spring); anywhere else it would be silently inert";
+
+/// The `resize-easing` attribute's closed value vocabulary: the member
+/// names of `canvas.Easing`, mirrored as data here (this layer stays
+/// std-only) with a lockstep test in ui_markup_view_tests.zig holding the
+/// mirror equal to the live enum.
+pub const resize_easing_value_names = [_][]const u8{ "linear", "standard", "emphasized", "spring" };
+
+pub const resize_easing_value_message = "unknown resize-easing value - split takes linear, standard (the default), emphasized, or spring";
+
+pub const resize_easing_dependent_attr_message = "resize-easing needs a nonzero resize-duration on the same split - without a duration the split snaps and the easing is silently inert";
+
 pub const avatar_image_message = "image takes one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes) - runtime image ids are model data, not markup literals; 0 renders the initials fallback";
 pub const avatar_image_element_message = "image is only supported on avatar - the other image-bearing widgets (image, icon-button) stay Zig views (ui.image with ElementOptions.image)";
 
@@ -2922,6 +2936,45 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     if (parseAttrExpression(attribute.value)) |expression| {
                         if (expression == .literal and !nameInList(expression.literal, &overscroll_value_names)) {
                             return attrError(node, attribute, overscroll_value_message);
+                        }
+                    }
+                }
+                if (std.mem.eql(u8, attribute.name, "resize-duration")) {
+                    // The layout tween exists only where a fraction can
+                    // move: anywhere but a split the option is silently
+                    // inert (same policy as overscroll off scroll).
+                    if (!std.mem.eql(u8, node.name, "split")) {
+                        return attrError(node, attribute, resize_duration_element_message);
+                    }
+                }
+                if (std.mem.eql(u8, attribute.name, "resize-easing")) {
+                    if (!std.mem.eql(u8, node.name, "split")) {
+                        return attrError(node, attribute, resize_easing_element_message);
+                    }
+                    // Easing shapes a ramp that exists only while a
+                    // nonzero duration declares one: easing alone (or
+                    // beside a literal 0 duration) is silently inert, so
+                    // it is a teaching error (same policy as
+                    // anchor-alignment without anchor). A binding-valued
+                    // duration resolves at build and stays legal here.
+                    const duration_raw = node.attr("resize-duration") orelse {
+                        return attrError(node, attribute, resize_easing_dependent_attr_message);
+                    };
+                    if (parseAttrExpression(duration_raw)) |duration_expression| {
+                        if (duration_expression == .literal) {
+                            const duration = std.fmt.parseInt(u32, duration_expression.literal, 10) catch 1;
+                            if (duration == 0) {
+                                return attrError(node, attribute, resize_easing_dependent_attr_message);
+                            }
+                        }
+                    }
+                    // The closed value vocabulary, checked on literals
+                    // here so the teaching error lands at validation
+                    // (bindings resolve at build, where the engines
+                    // enforce the same set).
+                    if (parseAttrExpression(attribute.value)) |expression| {
+                        if (expression == .literal and !nameInList(expression.literal, &resize_easing_value_names)) {
+                            return attrError(node, attribute, resize_easing_value_message);
                         }
                     }
                 }

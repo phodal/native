@@ -695,6 +695,37 @@ test "overflow value vocabulary mirrors the live TextOverflow enum" {
     }
 }
 
+test "resize-duration and resize-easing on split stamp the layout-tween declaration" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = Model{};
+
+    // A split declaring the tween pair; a bare split keeps the zero
+    // (snap) defaults, so existing documents lower byte-identically.
+    var view = try InboxMarkup.init(arena, "<column>\n  <split value=\"0.3\" resize-duration=\"180\" resize-easing=\"emphasized\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n  <split value=\"0.5\">\n    <panel><text>c</text></panel>\n    <panel><text>d</text></panel>\n  </split>\n</column>");
+    var ui = InboxUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const tweened = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.split, tweened.kind);
+    try testing.expectEqual(@as(u32, 180), tweened.resize_duration_ms);
+    try testing.expectEqual(canvas.Easing.emphasized, tweened.resize_easing);
+    try testing.expectEqual(@as(f32, 0.3), tweened.value);
+    const plain = tree.root.children[1];
+    try testing.expectEqual(@as(u32, 0), plain.resize_duration_ms);
+    try testing.expectEqual(canvas.Easing.standard, plain.resize_easing);
+}
+
+test "resize-easing value vocabulary mirrors the live Easing enum" {
+    // The validator's std-only mirror of the enum's member names; a new
+    // member cannot ship without its markup spelling.
+    const fields = @typeInfo(canvas.Easing).@"enum".fields;
+    try testing.expectEqual(fields.len, canvas.ui_markup.resize_easing_value_names.len);
+    inline for (fields, 0..) |field, index| {
+        try testing.expectEqualStrings(field.name, canvas.ui_markup.resize_easing_value_names[index]);
+    }
+}
+
 test "span weight vocabulary mirrors the live TextSpanWeight enum" {
     // The validator's std-only mirror of the enum's member names; a new
     // member cannot ship without its markup spelling.

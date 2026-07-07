@@ -734,8 +734,16 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
         const previous_source = canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id) orelse continue;
         // Source-wins: the runtime-owned fraction survives rebuilds only
         // while the SOURCE fraction is unchanged; a source-side change
-        // (the model echoing or driving the fraction) wins.
-        if (node.widget.value != previous_source) continue;
+        // (the model echoing or driving the fraction) wins — UNLESS the
+        // split declares a layout tween (`resize_duration_ms` nonzero):
+        // then the moved source value is a TARGET, the rendered fraction
+        // stays where it is, and the runtime's tween lowering (armed
+        // right after this reconcile lands, in setCanvasWidgetLayout)
+        // eases it there one presented frame at a time. Reduced motion
+        // still snaps: the tween lowering's snap path applies the target
+        // through this same mutation family in the same rebuild.
+        const source_moved = node.widget.value != previous_source;
+        if (source_moved and node.widget.resize_duration_ms == 0) continue;
         if (node.widget.value == previous_runtime) continue;
         staged_nodes[index].widget.value = previous_runtime;
         // Retained trees clear children; a split without them keeps the

@@ -830,6 +830,67 @@ test "overflow validates as text-scoped with a closed value vocabulary" {
     }
 }
 
+test "resize-duration and resize-easing validate as split-scoped with a closed easing vocabulary" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Valid: a duration alone (with and without easing), every easing
+    // vocabulary value beside a nonzero duration, bindings for both
+    // (resolved by the engines at build), and an explicit 0 duration
+    // WITHOUT easing (a declared snap is legal; easing beside it is not).
+    const valid_sources = [_][]const u8{
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\" resize-easing=\"linear\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\" resize-easing=\"standard\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\" resize-easing=\"emphasized\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\" resize-easing=\"spring\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"{speed}\" resize-easing=\"{curve}\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+        "<column>\n  <split value=\"{fraction}\" resize-duration=\"0\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+    };
+    for (valid_sources) |source| {
+        var parser = markup.Parser.init(arena, source);
+        try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+    }
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // The layout tween exists only where a fraction can move: a
+        // split. Anywhere else the pair is silently inert (same policy
+        // as overscroll off scroll).
+        .{
+            .source = "<column>\n  <row resize-duration=\"180\">\n    <text>a</text>\n  </row>\n</column>",
+            .message = markup.resize_duration_element_message,
+        },
+        .{
+            .source = "<column>\n  <scroll resize-easing=\"standard\">\n    <column><text>a</text></column>\n  </scroll>\n</column>",
+            .message = markup.resize_easing_element_message,
+        },
+        // Easing shapes a ramp only a nonzero duration declares: alone,
+        // or beside a literal 0, it is silently inert data (same policy
+        // as anchor-alignment without anchor).
+        .{
+            .source = "<column>\n  <split value=\"{fraction}\" resize-easing=\"standard\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+            .message = markup.resize_easing_dependent_attr_message,
+        },
+        .{
+            .source = "<column>\n  <split value=\"{fraction}\" resize-duration=\"0\" resize-easing=\"standard\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+            .message = markup.resize_easing_dependent_attr_message,
+        },
+        // Literal easing values outside the closed vocabulary teach the
+        // set (the names mirror canvas.Easing member for member).
+        .{
+            .source = "<column>\n  <split value=\"{fraction}\" resize-duration=\"180\" resize-easing=\"bouncy\">\n    <panel><text>a</text></panel>\n    <panel><text>b</text></panel>\n  </split>\n</column>",
+            .message = markup.resize_easing_value_message,
+        },
+    };
+    for (cases) |case| {
+        var parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expect(info.line > 0);
+    }
+}
+
 test "size validates as the two-axis closed vocabulary with teaching errors" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

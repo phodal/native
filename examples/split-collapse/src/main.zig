@@ -12,6 +12,10 @@
 //!     `runtime.startCanvasLayoutTween` call when the toggle flips, no
 //!     per-frame Msgs, no rebuilds while the runtime drives the fraction
 //!     toward the target.
+//!   - Markup tween (`SPLIT_COLLAPSE_MARKUP=1`): the same primitive
+//!     declared entirely in markup — `resize-duration="180"` on the
+//!     split makes its bound value a tween target, so the view file is
+//!     the whole animation and this Zig file supplies only model/update.
 //!
 //! Each presented frame during a tween logs `tween-frame dt_ms=...` on
 //! stderr, so a driver (or a person) can count the visible steps of the
@@ -56,6 +60,24 @@ pub const Model = struct {
     /// True runs the historical on_frame/Msg-tick driver; false asks the
     /// runtime to drive the fraction (the layout tween primitive).
     manual_mode: bool = false,
+
+    /// The markup view's declared RESTING fraction: the split binds
+    /// `value="{pane_fraction}"` and its `resize-duration` makes this a
+    /// tween target, so flipping `collapsed` is the whole collapse.
+    pub fn pane_fraction(model: *const Model) f32 {
+        return if (model.collapsed) collapsed_fraction else expanded_fraction;
+    }
+
+    pub fn toggle_label(model: *const Model) []const u8 {
+        return if (model.collapsed) "Expand sidebar" else "Collapse sidebar";
+    }
+
+    pub fn content_hint(model: *const Model) []const u8 {
+        return if (model.collapsed)
+            "The sidebar is collapsed; this pane reflowed to fill the width."
+        else
+            "The sidebar is expanded; drag the divider or press the button.";
+    }
 };
 
 pub const Msg = union(enum) {
@@ -200,6 +222,20 @@ fn webPanes(model: *const Model, out: []SplitCollapseApp.WebViewPane) usize {
     return 1;
 }
 
+// ------------------------------------------------------------- markup mode
+
+/// SPLIT_COLLAPSE_MARKUP=1: the markup-only twin of the runtime tween.
+/// The whole animation is declared in the view — `resize-duration` on
+/// the split — so this mode sets NO on_frame and NO layout_tweens hook;
+/// the on-resize echoes still land in `update` as `split_resized`, so
+/// the same tween-echo cadence log measures the markup path.
+pub const markup_source = @embedFile("split_collapse.native");
+pub const CompiledSplitView = canvas.CompiledMarkupView(Model, Msg, markup_source);
+
+/// How the collapse is driven: the historical per-frame Msg idiom, the
+/// Zig `layout_tweens` hook, or the markup-declared `resize-duration`.
+pub const Mode = enum { manual, runtime, markup };
+
 // ---------------------------------------------------------------------- app
 
 pub const SplitCollapseApp = native_sdk.UiApp(Model, Msg);
@@ -271,17 +307,20 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
-pub fn appOptions(manual: bool) SplitCollapseApp.Options {
+pub fn appOptions(mode: Mode) SplitCollapseApp.Options {
     return .{
         .name = "split-collapse",
         .scene = shell_scene,
         .canvas_label = canvas_label,
         .update = update,
-        .view = rootView,
+        // Markup mode renders the compiled markup view; the tween is
+        // declared IN the view (resize-duration), so neither Zig hook
+        // exists there.
+        .view = if (mode == .markup) CompiledSplitView.build else rootView,
         .init_fx = initFx,
         .on_appearance = onAppearance,
-        .on_frame = if (manual) onFrame else null,
-        .layout_tweens = if (manual) null else layoutTweens,
+        .on_frame = if (mode == .manual) onFrame else null,
+        .layout_tweens = if (mode == .runtime) layoutTweens else null,
         .web_panes = if (web_pane_enabled) webPanes else null,
     };
 }
@@ -294,11 +333,18 @@ pub fn initModel(manual: bool) Model {
 
 pub fn main(init: std.process.Init) !void {
     // SPLIT_COLLAPSE_MANUAL=1 selects the historical on_frame/Msg-tick
-    // driver; the default runs the runtime layout tween.
+    // driver; SPLIT_COLLAPSE_MARKUP=1 the markup-declared tween
+    // (resize-duration in the view, no Zig hooks); the default runs the
+    // Zig-declared runtime layout tween.
     const manual = if (init.environ_map.get("SPLIT_COLLAPSE_MANUAL")) |value|
         !std.mem.eql(u8, value, "0")
     else
         false;
+    const markup_mode = if (init.environ_map.get("SPLIT_COLLAPSE_MARKUP")) |value|
+        !std.mem.eql(u8, value, "0")
+    else
+        false;
+    const mode: Mode = if (markup_mode) .markup else if (manual) .manual else .runtime;
     if (init.environ_map.get("SPLIT_COLLAPSE_AUTO_MS")) |value| {
         auto_toggle_interval_ms = std.fmt.parseInt(u64, value, 10) catch 0;
     }
@@ -308,7 +354,7 @@ pub fn main(init: std.process.Init) !void {
 
     const app_state = try std.heap.page_allocator.create(SplitCollapseApp);
     defer std.heap.page_allocator.destroy(app_state);
-    app_state.* = SplitCollapseApp.init(std.heap.page_allocator, initModel(manual), appOptions(manual));
+    app_state.* = SplitCollapseApp.init(std.heap.page_allocator, initModel(mode == .manual), appOptions(mode));
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "split-collapse",

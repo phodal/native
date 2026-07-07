@@ -417,6 +417,14 @@
       "doc": "scroll only: edge behavior of the region. none pins scrolling at the content edges (the shipped default via the ScrollPhysics.overscroll token), rubber_band lets this region bounce past them, default follows the token. Honored by the engine's scroll physics and the native OS scroller alike."
     },
     {
+      "name": "resize-duration",
+      "doc": "split only: layout-tween duration in milliseconds (a plain number or one {binding}). Nonzero makes the bound value a TARGET - a rebuild that moves it eases the rendered fraction there, one step per presented frame, reflowing both panes like a divider drag and dispatching the same on-resize echoes. 0 (and absent) snaps, today's behavior. Reduced-motion appearances snap automatically - apps declare nothing extra."
+    },
+    {
+      "name": "resize-easing",
+      "doc": "split only, beside a nonzero resize-duration: easing curve of the layout tween - linear, standard (the default), emphasized, or spring. Easing without a duration is a teaching error (it would be silently inert)."
+    },
+    {
       "name": "background",
       "doc": "Background color token (literal ColorTokens field name: background, surface, surface_subtle, ...)."
     },

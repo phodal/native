@@ -394,6 +394,17 @@ pub const attrs = [_]AttrInfo{
     .{ .code = 68, .name = "weight", .class = .option, .group = .composite },
     .{ .code = 69, .name = "mono", .class = .flag, .group = .composite },
     .{ .code = 70, .name = "italic", .class = .flag, .group = .composite },
+    // Split layout-tween declaration (split only; the validator scopes
+    // both). resize-duration in whole milliseconds — 0 (and absent) is
+    // today's snap, so every existing document keeps its behavior —
+    // makes the split's `value` a TARGET the runtime eases the rendered
+    // fraction toward, one step per presented frame. resize-easing names
+    // a `canvas.Easing` member (linear, standard, emphasized, spring)
+    // and is only meaningful with a nonzero duration (easing without a
+    // duration is a teaching error, not silence). Reduced-motion
+    // appearances snap inside the runtime; documents declare nothing.
+    .{ .code = 71, .name = "resize-duration", .class = .whole, .group = .option, .field = "resize_duration" },
+    .{ .code = 72, .name = "resize-easing", .class = .option, .group = .option, .field = "resize_easing" },
 };
 
 // ----------------------------------------------------------------- events

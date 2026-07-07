@@ -440,6 +440,45 @@ test "compiled overscroll stamps the region edge behavior identically to the int
     try testing.expectEqual(canvas.WidgetOverscroll.rubber_band, interpreted_feed.overscroll);
 }
 
+// ------------------------------------------- split layout-tween parity
+
+const split_tween_markup =
+    \\<split value="0.3" resize-duration="180" resize-easing="spring" grow="1">
+    \\  <panel><text>sidebar</text></panel>
+    \\  <panel><text>content</text></panel>
+    \\</split>
+;
+
+const SplitTweenCompiled = canvas.CompiledMarkupView(EntriesModel, EntriesMsg, split_tween_markup);
+
+test "compiled split tween pair lowers into the layout-tween declaration identically to the interpreter" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const entries = [_]Entry{.{ .id = 11, .label = "first" }};
+    const model = EntriesModel{ .entries = &entries };
+
+    var view = try markup_view.MarkupView(EntriesModel, EntriesMsg).init(arena, split_tween_markup);
+    var interpreter_ui = EntriesUi.init(arena);
+    const interpreted = try interpreter_ui.finalize(try view.build(&interpreter_ui, &model));
+    var compiled_ui = EntriesUi.init(arena);
+    const compiled = try compiled_ui.finalize(SplitTweenCompiled.build(&compiled_ui, &model));
+    try expectSameTree(EntriesMsg, interpreted, compiled);
+
+    // Both engines stamp the same declaration the runtime lowers into a
+    // layout tween: value is the target, duration arms it, easing shapes
+    // it. Bare splits keep the zero (snap) defaults, so existing
+    // documents lower byte-identically.
+    const compiled_split = fixture.findByKind(compiled.root, .split).?;
+    const interpreted_split = fixture.findByKind(interpreted.root, .split).?;
+    try testing.expectEqual(@as(u32, 180), compiled_split.resize_duration_ms);
+    try testing.expectEqual(@as(u32, 180), interpreted_split.resize_duration_ms);
+    try testing.expectEqual(canvas.Easing.spring, compiled_split.resize_easing);
+    try testing.expectEqual(canvas.Easing.spring, interpreted_split.resize_easing);
+    try testing.expectEqual(interpreted_split.value, compiled_split.value);
+}
+
 // --------------------- multi-child for bodies and the for-empty else
 
 const multi_entries_markup =

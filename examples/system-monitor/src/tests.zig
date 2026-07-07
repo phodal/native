@@ -1151,3 +1151,44 @@ test "chrome geometry pads the header and matches its height to the tall band" {
     // hides the OS bar this header replaces.
     try testing.expectEqual(.hidden_inset_tall, main.shell_scene.windows[0].titlebar);
 }
+
+test "the uptime value paragraph moved to markup unchanged" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var model = Model{};
+    var fx = model_mod.Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    model_mod.update(&model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_fixture } }, &fx);
+
+    // The markup fragment (a <text> with one bold <span>) builds the
+    // exact widget the builder paragraph produced: same kind, same
+    // concatenated text, same span list, same heading size and width,
+    // same accessible label — so the tile renders pixel-identical.
+    var markup_ui = Ui.init(arena);
+    const markup_node = view_mod.UptimeValueView.build(&markup_ui, &model);
+
+    var hand_ui = Ui.init(arena);
+    const hand_node = hand_ui.paragraph(.{
+        .width = view_mod.spark_width,
+        .size = .heading,
+        .semantics = .{ .label = model.uptimeValue(hand_ui.arena) },
+    }, &.{
+        .{ .text = model.uptimeValue(hand_ui.arena), .weight = .bold },
+    });
+
+    try testing.expectEqual(canvas.WidgetKind.text, markup_node.widget.kind);
+    try testing.expectEqualStrings(hand_node.widget.text, markup_node.widget.text);
+    try testing.expectEqualStrings(model.uptimeValue(arena), markup_node.widget.text);
+    try testing.expect(canvas.text_spans.textSpansEqual(hand_node.widget.spans, markup_node.widget.spans));
+    try testing.expectEqual(canvas.TextSpanWeight.bold, markup_node.widget.spans[0].weight);
+    try testing.expectEqual(hand_node.widget.layout.min_size, markup_node.widget.layout.min_size);
+    try testing.expectEqual(hand_node.widget.layout.max_size, markup_node.widget.layout.max_size);
+    try testing.expectEqual(view_mod.spark_width, markup_node.widget.layout.min_size.width);
+    try testing.expectEqual(canvas.WidgetSize.heading, markup_node.widget.size);
+    try testing.expectEqualStrings(hand_node.widget.semantics.label, markup_node.widget.semantics.label);
+    // One text run for assistive tech: spans stay visual.
+    try testing.expectEqual(@as(usize, 0), markup_node.nodes.len);
+}

@@ -1493,3 +1493,48 @@ test "compiled chart series resolve through slice-valued template args like the 
     try expectSameChartData(firstChartWidget(interpreted.root).?.chart, compiled_chart.chart);
     try testing.expectEqual(@as(f32, 12), compiled_chart.chart.series[0].values[0]);
 }
+
+// ------------------------------------------------- span paragraph parity
+
+const SpanUi = canvas.Ui(fixture.SpanMsg);
+const SpanInterpreter = markup_view.MarkupView(fixture.SpanModel, fixture.SpanMsg);
+const SpanCompiled = canvas.CompiledMarkupView(fixture.SpanModel, fixture.SpanMsg, fixture.span_markup_source);
+
+test "compiled span paragraphs build the interpreter's and the hand-written paragraphs exactly" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const model = fixture.SpanModel{};
+
+    var view = try SpanInterpreter.init(arena, fixture.span_markup_source);
+    var interpreted_ui = SpanUi.init(arena);
+    const interpreted = try interpreted_ui.finalize(try view.build(&interpreted_ui, &model));
+
+    var compiled_ui = SpanUi.init(arena);
+    const compiled = try compiled_ui.finalize(SpanCompiled.build(&compiled_ui, &model));
+
+    var hand_ui = SpanUi.init(arena);
+    const hand = try hand_ui.finalize(fixture.handSpanView(&hand_ui, &model));
+
+    // The three engines agree node for node: mixed weight/mono/italic/
+    // color runs, bindings inside spans, a bound weight, single-space
+    // collapsing, and the abutting punctuation run.
+    try expectSameTree(fixture.SpanMsg, hand, interpreted);
+    try expectSameTree(fixture.SpanMsg, hand, compiled);
+    try expectSameTexts(interpreted.root, compiled.root);
+
+    // Span lists agree style for style and byte for byte.
+    for (interpreted.root.children, compiled.root.children) |interpreted_child, compiled_child| {
+        try testing.expect(canvas.text_spans.textSpansEqual(interpreted_child.spans, compiled_child.spans));
+    }
+    const compiled_disk = compiled.root.children[0];
+    try testing.expectEqualStrings("Disk 182 GB of 512 GB used; run native doctor!", compiled_disk.text);
+    try testing.expectEqual(@as(usize, 12), compiled_disk.spans.len);
+    try testing.expectEqual(canvas.TextSpanWeight.bold, compiled_disk.spans[2].weight);
+    try testing.expect(compiled_disk.spans[10].monospace);
+
+    // Accessibility parity pin: one text run, no semantic children.
+    try testing.expectEqual(@as(usize, 0), compiled_disk.children.len);
+    try testing.expectEqualStrings("Total line", compiled.root.children[1].semantics.label);
+}

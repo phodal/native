@@ -184,6 +184,27 @@ const fixtures = [_]Fixture{
         .expect = "binding does not name a model field",
     },
     .{
+        // Bindings inside inline spans are ordinary rendered text: the
+        // walk reaches the span's run and its attribute expressions like
+        // any element's.
+        .name = "span paragraphs with bindings inside spans accept",
+        .source =
+        \\<column>
+        \\  <text><span weight="bold">{name}</span> holds <span mono="{active}">{count}</span> cards</text>
+        \\</column>
+        ,
+        .expect = null,
+    },
+    .{
+        .name = "a missing binding inside a span rejects",
+        .source =
+        \\<column>
+        \\  <text>value <span weight="bold">{missing}</span></text>
+        \\</column>
+        ,
+        .expect = "binding does not name a model field",
+    },
+    .{
         // The buffer is the edit model, not the text: both checkers
         // teach the pub fn accessor shape with the SAME message (the
         // shared constant pins the vocabularies together, like

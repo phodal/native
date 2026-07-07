@@ -246,6 +246,12 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 // buildInputGroup.
                 return self.failNode(node, markup.input_group_actions_parent_message);
             }
+            if (std.mem.eql(u8, node.name, "span")) {
+                // Spans inside a text paragraph are consumed by
+                // buildSpanParagraph; one reaching here has no text
+                // parent.
+                return self.failNode(node, markup.span_parent_message);
+            }
             const kind = elementKind(node.name) orelse {
                 return self.failNode(node, "unknown element");
             };
@@ -398,6 +404,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 var built = ui.el(kind, options, .{});
                 built.widget.text = typed.literal;
                 return built;
+            }
+
+            // The span paragraph: a text element with inline <span>
+            // children lowers through Ui.paragraph, exactly like a
+            // builder span paragraph. Mirrors the validator and the
+            // compiled engine.
+            if (kind == .text and markup.nodeHasSpanChildren(inner)) {
+                return self.buildSpanParagraph(ui, scope, inner, options);
             }
 
             // The list-row composite: a text-taking element whose content
@@ -1825,15 +1839,93 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             return self.failValue(node, "binding does not name a model field");
         }
 
+        // ------------------------------------------------ span paragraphs
+
+        /// A `<text>` with inline `<span>` children: the span paragraph.
+        /// Each content child lowers to one `canvas.TextSpan` — plain runs
+        /// (single-space separators the parser spliced included) keep the
+        /// paragraph style, span children carry their own weight, mono,
+        /// italic, and foreground — and the list lowers through
+        /// `Ui.paragraph`, so byte rebasing, span-aware wrapping, and
+        /// semantics match a builder span paragraph exactly: the widget
+        /// announces as ONE text run (spans are visual, never semantic
+        /// children). Mirrors the validator and the compiled engine.
+        fn buildSpanParagraph(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, options: Ui.ElementOptions) BuildError!Ui.Node {
+            // A span paragraph always word-wraps (builder parity), so the
+            // single-line policies are dead data here. Mirrors the
+            // validator and the compiled engine's compile error.
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "wrap") or std.mem.eql(u8, attribute.name, "overflow")) {
+                    return self.failNode(node, markup.span_paragraph_wrap_message);
+                }
+            }
+            const spans = try ui.arena.alloc(canvas.TextSpan, node.children.len);
+            var len: usize = 0;
+            for (node.children) |child| {
+                if (child.kind == .text) {
+                    spans[len] = .{ .text = try self.runText(ui, scope, node, child) };
+                    len += 1;
+                    continue;
+                }
+                if (!markup.nodeIsSpan(child)) return self.failNode(child, markup.text_inline_children_message);
+                spans[len] = try self.buildSpan(ui, scope, child);
+                len += 1;
+            }
+            return ui.paragraph(options, spans[0..len]);
+        }
+
+        /// One `<span>`: the shared shape check (closed attribute set,
+        /// exactly one run, no nesting), then the style channels resolved
+        /// against the scope — weight and the flags take bindings like any
+        /// option attribute, foreground stays a literal token name.
+        fn buildSpan(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError!canvas.TextSpan {
+            if (markup.spanShapeError(node)) |info| {
+                self.diagnostic = .{ .line = info.line, .column = info.column, .message = info.message, .path = info.path };
+                return error.MarkupBuild;
+            }
+            var span = canvas.TextSpan{};
+            for (node.attrs) |attribute| {
+                if (std.mem.eql(u8, attribute.name, "weight")) {
+                    const text = try self.stringAttr(scope, node, attribute, markup.span_weight_value_message);
+                    span.weight = std.meta.stringToEnum(canvas.TextSpanWeight, text) orelse {
+                        return self.failValue(node, markup.span_weight_value_message);
+                    };
+                } else if (std.mem.eql(u8, attribute.name, "mono")) {
+                    span.monospace = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                } else if (std.mem.eql(u8, attribute.name, "italic")) {
+                    span.italic = (try self.evalAttrExpression(scope, node, attribute)).truthy();
+                } else if (std.mem.eql(u8, attribute.name, "foreground")) {
+                    span.color = std.meta.stringToEnum(canvas.TextSpanColor, attribute.value) orelse {
+                        return self.failValue(node, markup.unknown_color_token_message);
+                    };
+                }
+                // spanShapeError already rejected every other name.
+            }
+            span.text = try self.runText(ui, scope, node, node.children[0]);
+            return span;
+        }
+
         fn interpolatedText(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode) BuildError![]const u8 {
             if (node.children.len > 1) return self.failText(node, "text elements take a single run of text");
-            var source: []const u8 = "";
-            var segments: ?[]const markup.TypedTextSegment = null;
             for (node.children) |child| {
-                if (child.kind != .text) return self.failText(node, "text elements may only contain text");
-                source = child.text;
-                segments = child.typed_text;
+                if (child.kind != .text) {
+                    // A span here sits inside a single-style label, not a
+                    // paragraph — teach the <text> home instead of the
+                    // generic message.
+                    if (markup.nodeIsSpan(child)) return self.failText(child, markup.span_text_only_message);
+                    return self.failText(node, "text elements may only contain text");
+                }
+                return self.runText(ui, scope, node, child);
             }
+            return "";
+        }
+
+        /// Interpolate ONE text run (`{...}` bindings and expressions)
+        /// into the build arena: the shared body behind plain text leaves
+        /// and every span-paragraph run. `node` positions diagnostics.
+        fn runText(self: *Self, ui: *Ui, scope: *Scope, node: markup.MarkupNode, run: markup.MarkupNode) BuildError![]const u8 {
+            const source = run.text;
+            const segments = run.typed_text;
             if (std.mem.indexOfScalar(u8, source, '{') == null) return source;
 
             var out: std.ArrayListUnmanaged(u8) = .empty;

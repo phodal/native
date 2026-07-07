@@ -1238,8 +1238,16 @@ test "slot placement rules validate with teaching messages" {
 fn expectSpansCover(source: []const u8, node: markup.MarkupNode) !void {
     switch (node.kind) {
         .text => {
-            // A text run's span is exactly its trimmed visible bytes.
-            try testing.expectEqualStrings(node.text, source[node.span.start..node.span.end]);
+            if (std.mem.eql(u8, node.text, " ") and !std.mem.eql(u8, source[node.span.start..node.span.end], " ")) {
+                // The parser-spliced inline separator (span paragraphs):
+                // its text is the canonical single space while its span
+                // covers the whitespace gap it collapsed, so write-back
+                // still owns the exact source bytes.
+                try testing.expect(node.span.end > node.span.start);
+            } else {
+                // A text run's span is exactly its trimmed visible bytes.
+                try testing.expectEqualStrings(node.text, source[node.span.start..node.span.end]);
+            }
         },
         else => {
             // An element/structure node spans `<` through its closing `>`.
@@ -1372,4 +1380,59 @@ test "canonicalization stamps typed values that match on-the-fly classification"
     try testing.expectEqualStrings("a", run.typed_text.?[0].binding);
     try testing.expectEqualStrings(" + ", run.typed_text.?[1].literal);
     try testing.expectEqualStrings("b", run.typed_text.?[2].binding);
+}
+
+// ------------------------------------------------- inline span separators
+
+test "whitespace between a span paragraph's runs collapses to one spliced space" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Whitespace between inline children is STRUCTURE inside a span
+    // paragraph: the parser materializes it as a single-space text node,
+    // so spacing serializes, hashes, and round-trips as ordinary content.
+    const source = "<column><text>value <span weight=\"bold\">42</span>\n    of <span mono=\"true\">60</span>.</text></column>";
+    var parser = markup.Parser.init(arena, source);
+    const document = try parser.parse();
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+    const text_node = document.root.?.children[0];
+
+    // [value][ ][span 42][ ][of][ ][span 60][.] — the multi-byte
+    // "\n    " gap collapses to one space, and the "." run abuts its
+    // span (no gap, no separator).
+    try testing.expectEqual(@as(usize, 8), text_node.children.len);
+    try testing.expectEqualStrings("value", text_node.children[0].text);
+    try testing.expectEqualStrings(" ", text_node.children[1].text);
+    try testing.expect(markup.nodeIsSpan(text_node.children[2]));
+    try testing.expectEqualStrings(" ", text_node.children[3].text);
+    try testing.expectEqualStrings("of", text_node.children[4].text);
+    try testing.expectEqualStrings(" ", text_node.children[5].text);
+    try testing.expect(markup.nodeIsSpan(text_node.children[6]));
+    try testing.expectEqualStrings(".", text_node.children[7].text);
+
+    // Separator spans cover the exact whitespace gap (write-back bytes),
+    // and their positions derive from the gap start like every node.
+    const separator = text_node.children[3];
+    try testing.expectEqualStrings("\n    ", source[separator.span.start..separator.span.end]);
+    try expectSpansCover(source, document.root.?);
+
+    // The comptime parser splices identical separators.
+    const comptime_document = comptime markup.parseComptime("<column><text>value <span weight=\"bold\">42</span>\n    of <span mono=\"true\">60</span>.</text></column>");
+    const comptime_text = comptime_document.root.?.children[0];
+    try testing.expectEqual(@as(usize, 8), comptime_text.children.len);
+    try testing.expectEqualStrings(" ", comptime_text.children[1].text);
+    try testing.expectEqualStrings(".", comptime_text.children[7].text);
+
+    // Span-less text keeps the classic trim: no separators appear.
+    var plain_parser = markup.Parser.init(arena, "<column><text>  hi there  </text></column>");
+    const plain = try plain_parser.parse();
+    try testing.expectEqual(@as(usize, 1), plain.root.?.children[0].children.len);
+    try testing.expectEqualStrings("hi there", plain.root.?.children[0].children[0].text);
+
+    // Comments between runs are transparent: their bytes never count as
+    // author whitespace, so commented-but-abutting runs stay abutting.
+    var comment_parser = markup.Parser.init(arena, "<column><text><span>a</span><!-- glue --><span>b</span></text></column>");
+    const commented = try comment_parser.parse();
+    try testing.expectEqual(@as(usize, 2), commented.root.?.children[0].children.len);
 }

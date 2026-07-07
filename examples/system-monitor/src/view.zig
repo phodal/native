@@ -36,6 +36,12 @@ pub const CpuSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark
 pub const MemSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark_mem.native"));
 pub const ProcSparkView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spark_proc.native"));
 
+// The uptime tile's hero stat: a markup span paragraph (`<text>` with a
+// bold `<span>` run), compiled like the sparks and composed into the Zig
+// tile. The tests hold it widget-for-widget equal to the builder
+// paragraph it replaced (ui.paragraph with one bold span).
+pub const UptimeValueView = canvas.CompiledMarkupView(Model, Msg, @embedFile("uptime_value.native"));
+
 // ------------------------------------------------------- layout constants
 // Precision layout, calculator-style: the sparkline geometry drives the
 // tile width and the tile row drives the window. The tests assert the
@@ -152,9 +158,7 @@ fn uptimeTile(ui: *Ui, model: *const Model) Ui.Node {
         .semantics = .{ .label = "Uptime tile" },
     }, ui.column(.{ .gap = 4 }, .{
         ui.text(.{ .size = .sm, .style_tokens = .{ .foreground = .text_muted } }, "Uptime"),
-        ui.paragraph(.{ .width = spark_width, .size = .heading, .semantics = .{ .label = model.uptimeValue(ui.arena) } }, &.{
-            .{ .text = model.uptimeValue(ui.arena), .weight = .bold },
-        }),
+        UptimeValueView.build(ui, model),
         // One-line tile caption: elide at the tile width, never wrap
         // over the caption line below.
         ui.text(.{ .width = spark_width, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, "since boot (pid 1 elapsed time)"),

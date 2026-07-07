@@ -210,6 +210,12 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
                 // buildInputGroup.
                 comptime fail(node, markup.input_group_actions_parent_message);
             }
+            if (comptime std.mem.eql(u8, node.name, "span")) {
+                // Spans inside a text paragraph are consumed by
+                // buildSpanParagraph; one reaching here has no text
+                // parent.
+                comptime fail(node, markup.span_parent_message);
+            }
             const kind = comptime (interpreter.elementKind(node.name) orelse fail(node, "unknown element"));
             // Interpreter parity: extract a direct context-menu child —
             // metadata on this element (lowered to the declared
@@ -334,6 +340,13 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
                 var built = ui.el(kind, options, .{});
                 built.widget.text = icon_name;
                 return built;
+            }
+
+            // Interpreter parity: the span paragraph — a text element
+            // with inline <span> children lowers through Ui.paragraph,
+            // exactly like a builder span paragraph.
+            if (comptime (kind == .text and markup.nodeHasSpanChildren(inner))) {
+                return buildSpanParagraph(inner, entries, ui, model, scope, options);
             }
 
             // Interpreter parity: the list-row composite — a text-taking
@@ -2067,16 +2080,108 @@ pub fn CompiledMarkupDocument(comptime ModelT: type, comptime MsgT: type, compti
         const comptime_text_quota_base = 2_000;
         const comptime_text_quota_per_byte = 100;
 
+        // ------------------------------------------------ span paragraphs
+
+        /// Comptime mirror of the interpreter's `buildSpanParagraph`: a
+        /// text element with inline `<span>` children lowers through
+        /// `Ui.paragraph` — plain runs (parser-spliced separators
+        /// included) keep the paragraph style, span children carry their
+        /// own channels — so byte rebasing, span-aware wrapping, and
+        /// semantics match a builder span paragraph exactly: the widget
+        /// announces as ONE text run (spans are visual, never semantic
+        /// children). Misuse fails compilation with the interpreter's
+        /// message.
+        fn buildSpanParagraph(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: Ui.ElementOptions) Ui.Node {
+            comptime {
+                // A span paragraph always word-wraps (builder parity), so
+                // the single-line policies are dead data here.
+                for (node.attrs) |attribute| {
+                    if (std.mem.eql(u8, attribute.name, "wrap") or std.mem.eql(u8, attribute.name, "overflow")) {
+                        fail(node, markup.span_paragraph_wrap_message);
+                    }
+                }
+                for (node.children) |child| {
+                    if (child.kind != .text and !markup.nodeIsSpan(child)) {
+                        fail(child, markup.text_inline_children_message);
+                    }
+                }
+            }
+            const spans = ui.arena.alloc(canvas.TextSpan, node.children.len) catch {
+                ui.failed = true;
+                return ui.el(.text, options, .{});
+            };
+            inline for (0..node.children.len) |index| {
+                const child = comptime node.children[index];
+                if (comptime (child.kind == .text)) {
+                    spans[index] = .{ .text = interpolatedRun(node, comptime child.text, entries, ui, model, scope) };
+                } else {
+                    spans[index] = buildSpan(child, entries, ui, model, scope);
+                }
+            }
+            return ui.paragraph(options, spans);
+        }
+
+        /// Comptime mirror of the interpreter's `buildSpan`: the shared
+        /// shape check at comptime, literal weight and foreground resolved
+        /// at comptime (a typo is a compile error), bound weight and the
+        /// flags resolved at runtime like any option attribute.
+        fn buildSpan(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) canvas.TextSpan {
+            comptime {
+                if (markup.spanShapeError(node)) |info| failInfo(info);
+            }
+            var span = canvas.TextSpan{};
+            if (comptime (node.attr("weight") != null)) {
+                const raw = comptime node.attr("weight").?;
+                const expression = comptime (markup.parseAttrExpression(raw) orelse fail(node, invalid_expression_message));
+                if (comptime (expression == .literal)) {
+                    span.weight = comptime (std.meta.stringToEnum(canvas.TextSpanWeight, expression.literal) orelse
+                        fail(node, markup.span_weight_value_message));
+                } else {
+                    comptime requireVariant(exprVariant(node, entries, raw), &.{.string}, node, markup.span_weight_value_message);
+                    const text = switch (evalExpr(node, entries, raw, ui, model, scope)) {
+                        .string => |value| value,
+                        else => runtimeFail([]const u8, ui),
+                    };
+                    span.weight = std.meta.stringToEnum(canvas.TextSpanWeight, text) orelse runtimeFail(canvas.TextSpanWeight, ui);
+                }
+            }
+            if (comptime (node.attr("mono") != null)) {
+                span.monospace = evalExpr(node, entries, comptime node.attr("mono").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("italic") != null)) {
+                span.italic = evalExpr(node, entries, comptime node.attr("italic").?, ui, model, scope).truthy();
+            }
+            if (comptime (node.attr("foreground") != null)) {
+                span.color = comptime (std.meta.stringToEnum(canvas.TextSpanColor, node.attr("foreground").?) orelse
+                    fail(node, markup.unknown_color_token_message));
+            }
+            span.text = interpolatedRun(node, comptime node.children[0].text, entries, ui, model, scope);
+            return span;
+        }
+
         fn interpolatedText(comptime node: markup.MarkupNode, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) []const u8 {
             const text = comptime blk: {
                 if (node.children.len > 1) fail(node, "text elements take a single run of text");
                 var content: []const u8 = "";
                 for (node.children) |child| {
-                    if (child.kind != .text) fail(node, "text elements may only contain text");
+                    if (child.kind != .text) {
+                        // A span here sits inside a single-style label,
+                        // not a paragraph (interpreter and validator
+                        // parity).
+                        if (markup.nodeIsSpan(child)) fail(child, markup.span_text_only_message);
+                        fail(node, "text elements may only contain text");
+                    }
                     content = child.text;
                 }
                 break :blk content;
             };
+            return interpolatedRun(node, text, entries, ui, model, scope);
+        }
+
+        /// Interpolate ONE text run (`{...}` bindings and expressions)
+        /// into the build arena: the shared body behind plain text leaves
+        /// and every span-paragraph run. `node` positions diagnostics.
+        fn interpolatedRun(comptime node: markup.MarkupNode, comptime text: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype) []const u8 {
             if (comptime (std.mem.indexOfScalar(u8, text, '{') == null)) return text;
 
             var out: std.ArrayListUnmanaged(u8) = .empty;

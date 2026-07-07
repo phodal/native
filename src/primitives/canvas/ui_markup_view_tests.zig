@@ -695,6 +695,16 @@ test "overflow value vocabulary mirrors the live TextOverflow enum" {
     }
 }
 
+test "span weight vocabulary mirrors the live TextSpanWeight enum" {
+    // The validator's std-only mirror of the enum's member names; a new
+    // member cannot ship without its markup spelling.
+    const fields = @typeInfo(canvas.TextSpanWeight).@"enum".fields;
+    try testing.expectEqual(fields.len, canvas.ui_markup.span_weight_value_names.len);
+    inline for (fields, 0..) |field, index| {
+        try testing.expectEqualStrings(field.name, canvas.ui_markup.span_weight_value_names[index]);
+    }
+}
+
 test "gap on stacking containers fails the build with the teaching message" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -3238,4 +3248,159 @@ test "chart series values resolve through slice-valued template args" {
     try testing.expectEqual(@as(usize, 1), chart_widget.chart.series.len);
     try testing.expectEqual(@as(f32, 12), chart_widget.chart.series[0].values[0]);
     try testing.expect(chart_widget.chart.series[0].fill);
+}
+
+// ------------------------------------------------------- span paragraphs
+
+pub const SpanMsg = union(enum) { noop };
+
+pub const SpanModel = struct {
+    used: []const u8 = "182 GB",
+    total: []const u8 = "512 GB",
+    emphasis: []const u8 = "bold",
+    fixed_width: bool = true,
+
+    pub fn tool(model: *const SpanModel) []const u8 {
+        _ = model;
+        return "native doctor";
+    }
+};
+
+const SpanUi = canvas.Ui(SpanMsg);
+const SpanMarkup = markup_view.MarkupView(SpanModel, SpanMsg);
+
+/// The span-paragraph fixture both engines build (the compiled parity
+/// suite reuses it): mixed weight/mono/italic/color runs, bindings inside
+/// spans, a bound weight, single-space collapsing between runs, and an
+/// abutting punctuation run (no whitespace, no separator).
+pub const span_markup_source =
+    \\<column gap="8" width="360">
+    \\  <text>
+    \\    Disk <span weight="bold">{used}</span> of
+    \\    <span foreground="text_muted">{total}</span> used; run
+    \\    <span mono="{fixed_width}">{tool}</span><span italic="true">!</span>
+    \\  </text>
+    \\  <text label="Total line"><span weight="{emphasis}">Total</span> {used}</text>
+    \\</column>
+;
+
+/// The hand-written equivalent: ui.paragraph over the exact span list the
+/// markup lowers to (parser-spliced single-space separators included).
+pub fn handSpanView(ui: *SpanUi, model: *const SpanModel) SpanUi.Node {
+    return ui.column(.{ .gap = 8, .width = 360 }, .{
+        ui.paragraph(.{}, &.{
+            .{ .text = "Disk" },
+            .{ .text = " " },
+            .{ .text = model.used, .weight = .bold },
+            .{ .text = " " },
+            .{ .text = "of" },
+            .{ .text = " " },
+            .{ .text = model.total, .color = .text_muted },
+            .{ .text = " " },
+            .{ .text = "used; run" },
+            .{ .text = " " },
+            .{ .text = model.tool(), .monospace = model.fixed_width },
+            .{ .text = "!", .italic = true },
+        }),
+        ui.paragraph(.{ .semantics = .{ .label = "Total line" } }, &.{
+            .{ .text = "Total", .weight = .bold },
+            .{ .text = " " },
+            .{ .text = model.used },
+        }),
+    });
+}
+
+test "markup span paragraphs build the hand-written paragraph exactly" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = SpanModel{};
+
+    var view = try SpanMarkup.init(arena, span_markup_source);
+    var markup_ui = SpanUi.init(arena);
+    const markup_tree = try markup_ui.finalize(try view.build(&markup_ui, &model));
+
+    var hand_ui = SpanUi.init(arena);
+    const hand_tree = try hand_ui.finalize(handSpanView(&hand_ui, &model));
+
+    var markup_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer markup_ids.deinit(testing.allocator);
+    var hand_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+    defer hand_ids.deinit(testing.allocator);
+    try collectIds(markup_tree.root, &markup_ids, testing.allocator);
+    try collectIds(hand_tree.root, &hand_ids, testing.allocator);
+    try testing.expectEqualSlices(canvas.ObjectId, hand_ids.items, markup_ids.items);
+
+    // Same span lists (styles and bytes) and the same concatenated
+    // paragraph text, run for run.
+    const markup_disk = markup_tree.root.children[0];
+    const hand_disk = hand_tree.root.children[0];
+    try testing.expectEqualStrings("Disk 182 GB of 512 GB used; run native doctor!", markup_disk.text);
+    try testing.expectEqualStrings(hand_disk.text, markup_disk.text);
+    try testing.expect(canvas.text_spans.textSpansEqual(hand_disk.spans, markup_disk.spans));
+    try testing.expectEqual(@as(usize, 12), markup_disk.spans.len);
+    try testing.expectEqual(canvas.TextSpanWeight.bold, markup_disk.spans[2].weight);
+    try testing.expectEqual(@as(?canvas.TextSpanColor, .text_muted), markup_disk.spans[6].color);
+    try testing.expect(markup_disk.spans[10].monospace);
+    try testing.expect(markup_disk.spans[11].italic);
+    // The abutting punctuation run: no separator between mono and "!".
+    try testing.expectEqualStrings("native doctor!", markup_disk.text[markup_disk.text.len - 14 ..]);
+
+    // The bound weight resolves like any option value.
+    const markup_total = markup_tree.root.children[1];
+    const hand_total = hand_tree.root.children[1];
+    try testing.expect(canvas.text_spans.textSpansEqual(hand_total.spans, markup_total.spans));
+    try testing.expectEqual(canvas.TextSpanWeight.bold, markup_total.spans[0].weight);
+
+    // Accessibility pin: a span paragraph announces as ONE text run —
+    // the widget carries the full concatenated text, no semantic
+    // children (spans are visual), exactly like the builder paragraph.
+    try testing.expectEqual(@as(usize, 0), markup_disk.children.len);
+    try testing.expectEqual(@as(usize, 0), hand_disk.children.len);
+    try testing.expectEqualStrings("Total line", markup_total.semantics.label);
+}
+
+test "span misuse fails the build with the pinned teaching messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const model = SpanModel{};
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // A span with no text parent has no paragraph to style.
+        .{ .source = "<column>\n  <span>alone</span>\n</column>", .message = canvas.ui_markup.span_parent_message },
+        // The other text leaves draw one single-style label.
+        .{ .source = "<column>\n  <badge><span>styled</span></badge>\n</column>", .message = canvas.ui_markup.span_text_only_message },
+        // A text-or-children host flows the span to the generic walk,
+        // whose placement hook teaches the <text> home.
+        .{ .source = "<column>\n  <list-item label=\"Row\"><span>styled</span></list-item>\n</column>", .message = canvas.ui_markup.span_parent_message },
+        // The closed attribute set: spans are visual runs.
+        .{ .source = "<text><span size=\"sm\">x</span></text>", .message = canvas.ui_markup.span_attr_message },
+        .{ .source = "<text><span on-press=\"noop\">x</span></text>", .message = canvas.ui_markup.span_attr_message },
+        // The closed weight vocabulary.
+        .{ .source = "<text><span weight=\"heavy\">x</span></text>", .message = canvas.ui_markup.span_weight_value_message },
+        // Spans do not nest and hold no elements.
+        .{ .source = "<text><span><span>x</span></span></text>", .message = canvas.ui_markup.span_content_message },
+        // An empty span is dead markup.
+        .{ .source = "<text><span weight=\"bold\"/> x</text>", .message = canvas.ui_markup.span_content_message },
+        // Color tokens stay a closed literal vocabulary on spans too.
+        .{ .source = "<text><span foreground=\"reddish\">x</span></text>", .message = canvas.ui_markup.unknown_color_token_message },
+        // Structure tags cannot sit between runs (spans are static).
+        .{ .source = "<text><span>a</span><if test=\"{fixed_width}\"><text>b</text></if></text>", .message = canvas.ui_markup.text_inline_children_message },
+        // Single-line policies are dead on an always-wrapping paragraph.
+        .{ .source = "<text wrap=\"true\"><span>x</span> y</text>", .message = canvas.ui_markup.span_paragraph_wrap_message },
+        .{ .source = "<text overflow=\"clip\"><span>x</span> y</text>", .message = canvas.ui_markup.span_paragraph_wrap_message },
+    };
+    for (cases) |case| {
+        // The interpreter fails the build with the message...
+        var view = try SpanMarkup.init(arena, case.source);
+        var ui = SpanUi.init(arena);
+        try testing.expectError(error.MarkupBuild, view.build(&ui, &model));
+        try testing.expectEqualStrings(case.message, view.diagnostic.message);
+        // ...and the model-agnostic validator reports the same one.
+        var parser = canvas.ui_markup.Parser.init(arena, case.source);
+        const document = try parser.parse();
+        const info = canvas.ui_markup.validate(document) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+    }
 }

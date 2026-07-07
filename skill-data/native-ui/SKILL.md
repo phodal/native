@@ -172,6 +172,7 @@ Automation drives the native path honestly: snapshots list every widget's declar
 | `split` | split | two-pane horizontal splitter: exactly two element children (nest splits for more panes), the engine synthesizes the draggable divider between them. `value` binds the model-owned first-pane fraction (0 lays out at 0.5), `on-resize` names an f32 Msg variant dispatched with every applied fraction (echo it back through `value` — see Splitters), `min-width` on the panes bounds the drag, `gap` sets the divider band thickness. The divider is focusable: Left/Right (Shift for bigger steps) adjust, Home/End jump to the clamp edges |
 | `tree` | tree | disclosure-tree container (vertical flow): descendant rows carrying `role="treeitem"` — at ANY nesting depth — form one roving keyboard focus set with the ARIA tree keymap. Up/Down walk visible rows (selection follows focus through each row's `on-press`), Left collapses an expanded row or moves to the parent row, Right expands a collapsed row or moves to the first child row, Home/End jump to the edges, Enter/Space activate. Expandable rows bind `expanded` and `on-toggle`; the model owns selection and expansion (collapsed children are simply not rendered) |
 | `text`, `badge`, `tooltip` | text leaves | text content, `{}` interpolation allowed; `text` line policy via `wrap` (`"true"` word-wraps; `"false"`/unset paint one honest line, overflow eliding by default — `overflow="clip"` opts out), and `text` alone takes the typography rungs `size="heading"`/`size="display"` (themable token steps above title — section headings, hero stats, timer numerals) |
+| `text` > `span` | inline styled runs | mixed-style text in ONE wrapped paragraph: span children style runs with `weight="regular\|medium\|bold"`, `mono`, `italic`, `foreground` (token name); `{bindings}` interpolate inside spans; whitespace between runs collapses to a single space (none = the runs abut); spans do not nest, take no events, and the paragraph announces as one text run — see "Rich text" |
 | `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | label is the text content; `button`, `toggle-button`, `list-item`, and `menu-item` also take `icon="save"` — a vector icon drawn inline (buttons/toggle-buttons before the label, icon-only when the content is empty: add a `label`; list/menu items as a leading slot), ONE hit target whose icon follows the element's enabled/disabled tint (no overlay stacking, no duplicated `on-press`); tab strips are `toggle-button` children, so tabs get icons this way; `select` shows `placeholder` while empty and dispatches `on-press`; `avatar` renders initials, or a runtime image via `image="{binding}"` (see the Images section) |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` (a 0..1 fraction on slider and progress; progress clamps out-of-range values at render, never an error); the checkbox/radio label rides `text="..."` — these are not text-bearing elements, so text content is a teaching error (`label=` alone names one for accessibility without a visible label); a slider's `value` follows the source when it MOVES (model-driven progress renders every rebuild) and keeps the user's drag while the source replays the same value — use `slider` for seek bars, `progress` for display-only; a markup slider's `on-change` dispatches a PLAIN Msg with no value payload — mirror the applied value into the model with `Options.sync` (the Zig builder's `on_value = Ui.valueMsg(.tag)` does deliver the applied f32) |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits via `on-input`, enter via `on-submit` on single-line kinds; in a `textarea`, Enter (and Shift+Enter) inserts a newline and `on-submit` dispatches on primary+Enter (cmd on macOS, ctrl elsewhere); `search-field` carries a built-in trailing clear affordance whenever it holds text (press the x, or Escape while focused — both clear through the text-edit path, so `on-input` hears it; no attribute, no external Clear button needed) |
@@ -925,9 +926,23 @@ Three composites for pipeline/run UIs — pure compositions of existing widgets 
 - Display-only: never a hit target and no `on-*` events; clicks fall through to the nearest pressable ancestor, so charts inside pressable rows keep the row clickable. Axis labels are composition — put `text` elements around the plot; the chart draws no text.
 - Zig escape hatch: `ui.chart(ChartOptions, &.{canvas.ChartSeries...})` is the same code with the same options, plus what markup deliberately excludes — `.band` series (min/max envelope: `values` upper, `low` lower — a PAIRED second slice per point) and series lists composed at view time (`examples/deck` builds its peak-trace series data in the model; a truly dynamic series COUNT is builder territory).
 
-## Rich text: inline spans and markdown (Zig views)
+## Rich text: inline spans and markdown
 
-Mixed-style text inside ONE wrapped paragraph is a Zig-builder feature (markup exposure is planned; the grammar is currently frozen):
+Mixed-style text inside ONE wrapped paragraph: put `<span>` children inside a `<text>` element. Each span styles one run — `weight` (`regular`/`medium` — the semibold rung —/`bold`), `mono`, `italic`, and `foreground` (a color token name) — and the whole thing word-wraps as one paragraph, announcing to assistive tech as ONE text run (spans are visual). Bindings interpolate inside spans like any text:
+
+```html
+<text>
+  Disk <span weight="bold">{diskUsed}</span> of
+  <span foreground="text_muted">{diskTotal}</span> — run
+  <span mono="true">native doctor</span> if this looks wrong.
+</text>
+```
+
+- Whitespace between runs collapses to a single space; runs written with NO whitespace between them abut (`<span mono="true">init.zig</span>.` puts the period flush against the mono run).
+- Spans do not nest and take no events or keys — layout (`width`, `grow`, `text-alignment`), identity, and `label` stay on the enclosing `<text>`. A span paragraph always word-wraps, so `wrap`/`overflow` on it are teaching errors.
+- Markup exposes the span model's weight/mono/italic/color channels; `underline`, `strikethrough`, `scale`, and `link` spans stay Zig-builder territory (below).
+
+The same paragraph from a Zig view, plus the builder-only channels:
 
 ```zig
 const spans = [_]canvas.TextSpan{

@@ -51,6 +51,7 @@ The runtime owns the rest: install, presentation, resize, typed event dispatch, 
 | `split` | two-pane splitter | exactly two element children (nest splits for more panes); the engine synthesizes the draggable divider between them. `value` binds the model-owned first-pane fraction, `on-resize` names an f32 Msg variant dispatched with each applied fraction (echo it back through `value`), `min-width` on the panes bounds the drag, `gap` sets the divider band thickness; the focused divider takes Left/Right (Shift for bigger steps) and Home/End |
 | `tree` | disclosure tree | vertical container whose descendant rows with `role="treeitem"` — at any nesting depth — form one roving keyboard focus set: Up/Down walk visible rows (selection follows focus via each row's `on-press`), Left collapses or moves to the parent row, Right expands or moves to the first child row, Home/End jump to the edges, Enter/Space activate; expandable rows bind `expanded` and `on-toggle`, and the model owns both states |
 | `text`, `badge`, `tooltip` | text leaves | `{}` interpolation allowed in content; `text` takes a line policy via `wrap` (`"true"` word-wraps; `"false"`/unset paint one honest line) and an overflow policy via `overflow` (`ellipsis` — the default trailing elision — or `clip`) and the typography rungs via `size="heading"`/`size="display"` (themable token steps above title — section headings, hero stats) |
+| `text` > `span` | inline styled runs | mixed-style text in one wrapped paragraph: span children style runs with `weight="regular\|medium\|bold"`, `mono`, `italic`, `foreground` (a token name); `{bindings}` interpolate inside spans; whitespace between runs collapses to a single space (none = the runs abut); spans do not nest, take no events, and the paragraph announces as one text run — see [Rich text](#rich-text-inline-spans-and-markdown) |
 | `button`, `toggle-button`, `list-item`, `menu-item`, `toggle`, `switch`, `select`, `avatar` | text-bearing controls | the label is the element content; `button`, `toggle-button`, `list-item`, and `menu-item` also take `icon="..."` — a vector icon drawn inline (buttons and toggle-buttons before the label, icon-only when the content is empty; list and menu items as a leading slot), one hit target that follows the element's enabled/disabled tint; tab strips are `toggle-button` children, so tabs get icons this way; `select` shows its `placeholder` while empty and dispatches `on-press`; `avatar` renders initials, or a runtime image via `image="{binding}"`. `list-item` alone also accepts element children IN PLACE of the text run (the list-row composite): the children flow horizontally inside the row's flat chrome — transparent at rest, full-width hover/selected washes, one hit target — so composite rows (title + snippet, leading icon + trailing badge) stay honest list rows instead of bordered boxes; name the row with `label` and never mix a text run with children. Rows that really are cards (a kanban board's draggable cards) opt into the card treatment explicitly with `background`/`radius` |
 | `checkbox`, `radio`, `slider`, `progress` | value controls | `checked`, `value` |
 | `text-field`, `input`, `search-field`, `combobox`, `textarea` | text entry | `placeholder`; edits arrive via `on-input` |
@@ -403,7 +404,19 @@ Capacities are fixed and loud (`canvas_limits`): `max_registered_canvas_images` 
 
 ## Rich text: inline spans and markdown
 
-Mixed-style text inside one wrapped paragraph — bold, italic, inline code, color tokens, strikethrough, links — is available from the Zig builder as *spans*:
+Mixed-style text inside one wrapped paragraph is markup's `<span>`: inline children of a `<text>` element, each styling one run with `weight` (`regular`, `medium` — the semibold rung — or `bold`), `mono`, `italic`, and `foreground` (a color token name). `{bindings}` interpolate inside spans like any text, and the whole paragraph word-wraps as one block:
+
+```html
+<text>
+  Disk <span weight="bold">{diskUsed}</span> of
+  <span foreground="text_muted">{diskTotal}</span> — run
+  <span mono="true">native doctor</span> if this looks wrong.
+</text>
+```
+
+Whitespace between runs collapses to a single space; runs written with no whitespace between them abut, which is how a mono run takes trailing punctuation (`<span mono="true">init.zig</span>.`). Spans do not nest and take no events or keys — layout, identity, and the accessible name stay on the enclosing `<text>` — and the paragraph announces to assistive tech as **one** text run: spans are visual, not structural. Because a span paragraph always word-wraps (reserving its real wrapped height), the single-line `wrap`/`overflow` policies are rejected on it. Both engines lower spans through the same paragraph builder, so a markup span paragraph renders identically to a Zig-built one.
+
+The full span model — including `underline`, `strikethrough`, `scale`, and link spans — is available from the Zig builder as *spans*:
 
 ```zig
 const spans = [_]canvas.TextSpan{

@@ -413,3 +413,57 @@ test "NSUI round-trips chart composites through registry codes" {
     const edited = try parseSource(arena, edited_source);
     try testing.expect(base_hash != try nsui.documentHash(arena, edited));
 }
+
+test "NSUI round-trips span paragraphs under their fresh codes" {
+    // Inline spans serialize like any element — fresh registry codes ride
+    // the wire automatically, no schema bump — and the parser-spliced
+    // single-space separators are ordinary text runs, so a spacing-
+    // sensitive paragraph survives encode/decode node-for-node even in
+    // the span-stripped hash form.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\<column gap="8">
+        \\  <text>Disk <span weight="bold">{used}</span> of <span foreground="text_muted">{total}</span>; run <span mono="true">native doctor</span><span italic="true">!</span></text>
+        \\</column>
+    ;
+    const document = try parseSource(arena, source);
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(document));
+
+    var diagnostic = nsui.CodecDiagnostic{};
+    const bytes = try nsui.encode(arena, document, .{}, &diagnostic);
+    const decoded = try nsui.decode(arena, bytes, &diagnostic);
+    try expectNodesEqual(document.root.?, decoded.root.?);
+
+    // The hash form (spans and provenance stripped) keeps the separator
+    // runs too: spacing is structure, never a byte-gap artifact.
+    const stripped = try nsui.encode(arena, document, .{ .spans = false, .provenance = false }, &diagnostic);
+    const stripped_decoded = try nsui.decode(arena, stripped, &diagnostic);
+    // [Disk][ ][span][ ][of][ ][span]["; run"][ ][span][span] — the
+    // abutting "; run" and "!" runs keep their glue, the spaced runs
+    // keep exactly one separator each.
+    const text_node = stripped_decoded.root.?.children[0];
+    try testing.expectEqual(@as(usize, 11), text_node.children.len);
+    try testing.expectEqualStrings(" ", text_node.children[3].text);
+    try testing.expectEqualStrings("; run", text_node.children[7].text);
+    try testing.expectEqualStrings("!", text_node.children[10].children[0].text);
+
+    // The wire carries the registry codes, never the names.
+    try testing.expectEqual(@as(u16, 64), schema.elementByName("span").?.code);
+    try testing.expectEqual(@as(u16, 68), schema.attrByName("weight").?.code);
+    try testing.expectEqual(@as(u16, 69), schema.attrByName("mono").?.code);
+    try testing.expectEqual(@as(u16, 70), schema.attrByName("italic").?.code);
+
+    // The JSON inspection view (`native markup dump`) shows the spans:
+    // element name, code, styled attributes, and the separator runs.
+    const hash = try nsui.documentHash(arena, decoded);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    defer out.deinit();
+    try nsui.writeJson(decoded, hash, &out.writer);
+    const json = out.written();
+    try testing.expect(std.mem.indexOf(u8, json, "\"node\":\"span\",\"code\":64") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"weight\",\"code\":68,\"value\":\"bold\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"name\":\"mono\",\"code\":69,\"value\":\"true\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"text\":\"{used}\"") != null);
+}

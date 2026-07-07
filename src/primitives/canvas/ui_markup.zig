@@ -353,8 +353,42 @@ pub const Parser = struct {
         }
 
         node.children = children.items;
+        if (std.mem.eql(u8, name, "text")) {
+            node.children = try self.spliceInlineSeparators(node.children);
+        }
         node.span.end = self.index;
         return node;
+    }
+
+    /// Whitespace between a span paragraph's inline children is STRUCTURE:
+    /// the parser trims every text run, so "value <span>42</span>" would
+    /// otherwise render "value42". When a <text> holds span children, any
+    /// source whitespace between two adjacent content children collapses
+    /// to ONE single-space text node spliced between them — materialized
+    /// here, at parse time, so the spacing is ordinary text content that
+    /// serializes, hashes, and round-trips like any other run (the NSUI
+    /// document hash strips spans, so spacing can never live in byte
+    /// gaps). Runs written with no whitespace between them abut, which is
+    /// how a mono run takes trailing punctuation. Span-less text keeps
+    /// the classic trim exactly as before.
+    fn spliceInlineSeparators(self: *Parser, children: []const MarkupNode) ParseError![]const MarkupNode {
+        if (!childrenIncludeSpan(children)) return children;
+        var separators: usize = 0;
+        for (children[1..], children[0 .. children.len - 1]) |next, previous| {
+            if (gapHasInlineSpace(self.source, previous.span.end, next.span.start)) separators += 1;
+        }
+        if (separators == 0) return children;
+        const out = try self.arena.alloc(MarkupNode, children.len + separators);
+        var len: usize = 0;
+        for (children, 0..) |child, index| {
+            if (index > 0 and gapHasInlineSpace(self.source, children[index - 1].span.end, child.span.start)) {
+                out[len] = inlineSeparatorNode(self.source, children[index - 1].span.end, child.span.start);
+                len += 1;
+            }
+            out[len] = child;
+            len += 1;
+        }
+        return out[0..len];
     }
 
     fn parseClosingTag(self: *Parser, open_name: []const u8) ParseError!void {
@@ -651,8 +685,28 @@ fn parseElementComptime(comptime parser: *Parser) MarkupNode {
     }
 
     node.children = children;
+    if (std.mem.eql(u8, name, "text")) {
+        node.children = spliceInlineSeparatorsComptime(parser.source, node.children);
+    }
     node.span.end = parser.index;
     return node;
+}
+
+/// Comptime mirror of `Parser.spliceInlineSeparators`: identical gap
+/// predicate and separator shape, with comptime slice concatenation in
+/// place of the arena — both engines see one materialized document.
+fn spliceInlineSeparatorsComptime(comptime source: []const u8, comptime children: []const MarkupNode) []const MarkupNode {
+    comptime {
+        if (!childrenIncludeSpan(children)) return children;
+        var out: []const MarkupNode = &.{};
+        for (children, 0..) |child, index| {
+            if (index > 0 and gapHasInlineSpace(source, children[index - 1].span.end, child.span.start)) {
+                out = out ++ &[_]MarkupNode{inlineSeparatorNode(source, children[index - 1].span.end, child.span.start)};
+            }
+            out = out ++ &[_]MarkupNode{child};
+        }
+        return out;
+    }
 }
 
 /// Surface the parser's diagnostic (already positioned by the shared
@@ -1298,6 +1352,65 @@ pub fn nodeIsContextMenu(node: MarkupNode) bool {
     return node.kind == .element and std.mem.eql(u8, node.name, "context-menu");
 }
 
+/// A `<span>` element child: consumed by its parent `<text>` (lowered
+/// into the paragraph's flat span list, never built on its own). Shared
+/// by the validator and both engines; comptime-callable.
+pub fn nodeIsSpan(node: MarkupNode) bool {
+    return node.kind == .element and std.mem.eql(u8, node.name, "span");
+}
+
+/// Whether a text element's content is a span paragraph (any inline
+/// `<span>` child): the discriminator both engines use to pick the
+/// paragraph lowering over the plain single-run path. Comptime-callable.
+pub fn nodeHasSpanChildren(node: MarkupNode) bool {
+    for (node.children) |child| {
+        if (nodeIsSpan(child)) return true;
+    }
+    return false;
+}
+
+fn childrenIncludeSpan(children: []const MarkupNode) bool {
+    for (children) |child| {
+        if (nodeIsSpan(child)) return true;
+    }
+    return false;
+}
+
+/// Whether the source bytes between two adjacent inline children contain
+/// whitespace (comments are transparent: their bytes never count), i.e.
+/// whether the author separated the runs. Comptime-callable; both
+/// parsers splice separators through this one predicate.
+fn gapHasInlineSpace(source: []const u8, start: usize, end: usize) bool {
+    var index = start;
+    while (index < @min(end, source.len)) {
+        if (std.mem.startsWith(u8, source[index..], "<!--")) {
+            const close = std.mem.indexOfPos(u8, source, index + 4, "-->") orelse return false;
+            index = close + 3;
+            continue;
+        }
+        switch (source[index]) {
+            ' ', '\t', '\r', '\n' => return true,
+            else => index += 1,
+        }
+    }
+    return false;
+}
+
+/// The single-space separator text node spliced between two inline
+/// children whose source gap held whitespace. Its span covers the gap
+/// (write-back anchors stay honest) and its position derives from the
+/// gap's first byte, keeping the span↔position conformance law.
+fn inlineSeparatorNode(source: []const u8, start: usize, end: usize) MarkupNode {
+    const position = positionAt(source, start);
+    return .{
+        .kind = .text,
+        .text = " ",
+        .line = position.line,
+        .column = position.column,
+        .span = .{ .start = start, .end = end },
+    };
+}
+
 /// Whether an element can HOST a context-menu: right-click resolution
 /// walks the hit route, so the host must be a hit target — or carry a
 /// bound on-press/on-hold, which makes any element pressable. Shared by
@@ -1637,6 +1750,20 @@ pub const input_group_actions_attr_message = "unknown attribute for input-group-
 pub const input_group_actions_children_message = "input-group-actions takes element children (buttons, spacers - if/else/for around them are fine) - text content is only allowed inside text-bearing elements";
 pub const text_leaf_children_message = "this element takes text content only - wrap element children in a container (row, column, stack)";
 pub const text_leaf_single_run_message = "text elements take a single run of text";
+pub const text_inline_children_message = "text takes one run of text and inline span children only - wrap other elements in a container (row, column, stack)";
+pub const span_parent_message = "span is only allowed inside text - it styles one run of the enclosing paragraph, so it needs a <text> parent";
+pub const span_text_only_message = "span is only supported inside text - the other text-bearing elements draw one single-style label; put the styled runs in a <text> paragraph composed next to this element";
+pub const span_attr_message = "unknown attribute for span - it takes weight (regular, medium, bold), mono, italic, and foreground; spans are visual runs, so events, keys, and layout stay on the enclosing text";
+pub const span_weight_value_message = "unknown weight value - span takes regular, medium (the semibold rung), or bold";
+pub const span_content_message = "span takes a single run of text (a literal, {bindings}, or both) - spans do not nest and hold no element children (the paragraph lowers to one flat run list)";
+pub const span_paragraph_wrap_message = "wrap and overflow do not apply to a span paragraph - inline spans always word-wrap and the paragraph reserves its wrapped height; drop the attribute (or the spans)";
+
+/// The span `weight` attribute's closed value vocabulary: the member
+/// names of `canvas.TextSpanWeight`, mirrored as data here (this layer
+/// stays std-only) with a lockstep test in ui_markup_view_tests.zig
+/// holding the mirror equal to the live enum. `medium` is the semibold
+/// rung: the reserved medium sans face sits between regular and bold.
+pub const span_weight_value_names = [_][]const u8{ "regular", "medium", "bold" };
 pub const text_or_children_content_message = "this element takes either one run of text or element children - not both; move the text into a <text> child (and keep label= for the accessible name)";
 pub const table_row_parent_message = "table-row is only allowed inside a table (structure tags in between are fine)";
 pub const table_cell_parent_message = "table-cell is only allowed inside a table-row (structure tags in between are fine)";
@@ -2322,10 +2449,72 @@ fn validateInputGroupActions(document: MarkupDocument, node: MarkupNode, templat
     return null;
 }
 
+/// One `<span>` inside a text paragraph: a closed attribute set (weight,
+/// mono, italic, foreground — the span model's markup channels) around
+/// exactly one run of text. Spans do not nest: the engine's paragraph is
+/// a FLAT run list, so nesting would invent a cascade the renderer does
+/// not have. Pub and comptime-callable: the validator and BOTH engines
+/// run this one shape check, so the closed vocabulary is stated once.
+pub fn spanShapeError(node: MarkupNode) ?MarkupErrorInfo {
+    for (node.attrs) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "weight")) {
+            // Closed literal vocabulary; bindings resolve at build, where
+            // the engines enforce the same set.
+            if (parseAttrExpression(attribute.value)) |expression| {
+                if (expression == .literal and !nameInList(expression.literal, &span_weight_value_names)) {
+                    return attrError(node, attribute, span_weight_value_message);
+                }
+            }
+            if (attrExpressionError(attribute.value, invalid_expression_message)) |message| {
+                return attrError(node, attribute, message);
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "mono") or std.mem.eql(u8, attribute.name, "italic")) {
+            if (attrExpressionError(attribute.value, invalid_expression_message)) |message| {
+                return attrError(node, attribute, message);
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, attribute.name, "foreground")) {
+            // The existing color token channel: a literal ColorTokens
+            // field name, exactly like foreground anywhere else.
+            if (!nameInList(attribute.value, &known_color_token_names)) {
+                const message = if (parseAttrExpression(attribute.value)) |expression|
+                    (if (expression == .literal) unknown_color_token_message else style_token_literal_message)
+                else
+                    style_token_literal_message;
+                return attrError(node, attribute, message);
+            }
+            continue;
+        }
+        return attrError(node, attribute, span_attr_message);
+    }
+    var text_runs: usize = 0;
+    for (node.children) |child| {
+        if (child.kind != .text) return errorAt(child, span_content_message);
+        text_runs += 1;
+        if (text_runs > 1) return errorAt(child, text_leaf_single_run_message);
+    }
+    if (text_runs == 0) return errorAt(node, span_content_message);
+    return null;
+}
+
+/// The validator's span pass: the shared shape check plus the source-text
+/// guards (interpolation grammar and tofu) over the span's run.
+fn validateSpan(node: MarkupNode) ?MarkupErrorInfo {
+    if (spanShapeError(node)) |info| return info;
+    for (node.children) |child| {
+        if (textInterpolationError(child)) |info| return info;
+        if (textNodeCoverageError(child)) |info| return info;
+    }
+    return null;
+}
+
 /// The rule hooks the composite registry entries name. A registry entry
 /// whose hook this table does not implement is a compile error (below),
 /// so attachment and implementation can never drift.
-const rule_hook_names = [_][]const u8{ "markdown", "stepper", "step", "timeline", "timeline-item", "chart", "series", "context-menu", "input-group", "input-group-actions" };
+const rule_hook_names = [_][]const u8{ "markdown", "stepper", "step", "timeline", "timeline-item", "chart", "series", "context-menu", "input-group", "input-group-actions", "span" };
 
 comptime {
     for (schema.elements) |entry| {
@@ -2378,6 +2567,12 @@ fn validateRuleHook(hook: []const u8, document: MarkupDocument, node: MarkupNode
         // validateInputGroup; one reaching the generic pass sits outside
         // an input-group.
         return errorAt(node, input_group_actions_parent_message);
+    }
+    if (std.mem.eql(u8, hook, "span")) {
+        // Spans inside a text paragraph are consumed by the text leaf's
+        // content pass; one reaching the generic pass sits outside a
+        // text leaf.
+        return errorAt(node, span_parent_message);
     }
     // The comptime check above proves every registry hook lands in one of
     // the branches; a name reaching here is not a registry hook at all.
@@ -2450,7 +2645,11 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                 // Elements that also take children (the list-row
                 // composite) hold EITHER one text run OR element
                 // children; mixing the two is a teaching error. Pure
-                // text keeps the classic single-run rule.
+                // text keeps the classic single-run rule — except the
+                // text element itself, whose runs may interleave with
+                // inline <span> children (the span paragraph).
+                const is_text = std.mem.eql(u8, node.name, "text");
+                const has_spans = is_text and nodeHasSpanChildren(node);
                 const takes_children = nameInList(node.name, &known_text_or_children_element_names);
                 const has_elements = takes_children and nodeHasElementContent(node);
                 var text_runs: usize = 0;
@@ -2460,12 +2659,38 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                         // not content: it never renders in the flow, so
                         // the content-model rules look through it.
                         if (nodeIsContextMenu(child)) continue;
+                        if (nodeIsSpan(child)) {
+                            // Inline spans belong to the text paragraph;
+                            // the other single-style labels cannot split
+                            // their run. Text-or-children hosts
+                            // (list-item) flow spans to the generic child
+                            // walk, whose placement hook teaches the
+                            // <text> home — the same path both engines
+                            // take.
+                            if (is_text) {
+                                if (validateSpan(child)) |info| return info;
+                                continue;
+                            }
+                            if (!takes_children) return errorAt(child, span_text_only_message);
+                            continue;
+                        }
+                        if (is_text) return errorAt(child, text_inline_children_message);
                         if (!takes_children) return errorAt(child, text_leaf_children_message);
                         continue;
                     }
                     if (has_elements) return errorAt(child, text_or_children_content_message);
                     text_runs += 1;
-                    if (text_runs > 1) return errorAt(child, text_leaf_single_run_message);
+                    if (text_runs > 1 and !has_spans) return errorAt(child, text_leaf_single_run_message);
+                }
+                if (has_spans) {
+                    // A span paragraph always word-wraps (builder parity),
+                    // so the single-line policies are dead data here —
+                    // rejected instead of silently inert.
+                    for (node.attrs) |attribute| {
+                        if (std.mem.eql(u8, attribute.name, "wrap") or std.mem.eql(u8, attribute.name, "overflow")) {
+                            return attrError(node, attribute, span_paragraph_wrap_message);
+                        }
+                    }
                 }
             }
             if (std.mem.eql(u8, node.name, "icon")) {
@@ -2763,8 +2988,14 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
             return errorAt(child, else_placement_message);
         }
         // A direct context-menu child was already validated by its host
-        // element above; recursing would fire the placement hook.
+        // element above; recursing would fire the placement hook. Span
+        // children of a text paragraph were consumed by the text leaf's
+        // content pass the same way.
         if (node.kind == .element and nodeIsContextMenu(child)) {
+            previous_kind = child.kind;
+            continue;
+        }
+        if (node.kind == .element and std.mem.eql(u8, node.name, "text") and nodeIsSpan(child)) {
             previous_kind = child.kind;
             continue;
         }

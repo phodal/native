@@ -251,6 +251,10 @@
     {
       "name": "input-group-actions",
       "doc": "The input-group's accessory row (only inside input-group, after its textarea): leading/trailing controls on one bottom row inside the group's border — put a <spacer grow=\"1\"/> between the leading controls and the trailing send. Children are ordinary elements (if/else/for work). Takes gap, key, global-key."
+    },
+    {
+      "name": "span",
+      "doc": "Inline styled run inside a <text> paragraph: mixed-weight, mono, italic, and token-colored runs word-wrap as ONE paragraph and announce as one text run. Takes weight (regular|medium|bold), mono, italic, foreground; content is one run of text ({bindings} work). Whitespace between runs collapses to a single space; runs written with no whitespace between them abut. Spans do not nest; layout, events, and identity stay on the enclosing text."
     }
   ],
   "structure": [
@@ -712,6 +716,24 @@
       {
         "name": "global-key",
         "doc": "Parent-independent identity: ids survive reparenting between containers."
+      }
+    ],
+    "span": [
+      {
+        "name": "weight",
+        "doc": "span: the run's weight — regular, medium (the semibold rung), or bold (a literal or one {binding} producing one of those names)."
+      },
+      {
+        "name": "mono",
+        "doc": "span: renders the run in the mono face (true/false or a {binding}) — inline code, file names, keyboard keys. Mono ignores weight and italic (one mono face ships)."
+      },
+      {
+        "name": "italic",
+        "doc": "span: slants the run (true/false or a {binding})."
+      },
+      {
+        "name": "foreground",
+        "doc": "span: the run's color as a literal ColorTokens field name (e.g. text_muted, success, warning) — unset inherits the paragraph's foreground."
       }
     ],
     "dropdown-menu": [

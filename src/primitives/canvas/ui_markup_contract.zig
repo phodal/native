@@ -1062,6 +1062,7 @@ const Checker = struct {
     }
 
     fn checkElement(self: *Checker, node: markup.MarkupNode) CheckErr!void {
+        if (std.mem.eql(u8, node.name, "span")) return self.checkSpan(node);
         if (std.mem.eql(u8, node.name, "markdown")) return self.checkMarkdown(node);
         if (std.mem.eql(u8, node.name, "stepper")) return self.checkStepper(node);
         if (std.mem.eql(u8, node.name, "timeline-item")) return self.checkTimelineItem(node);
@@ -1244,6 +1245,26 @@ const Checker = struct {
             // kind and color are closed literal vocabularies — the
             // structural validator's job.
         }
+    }
+
+    /// One `<span>` inside a text paragraph: weight resolves like any
+    /// option-name attribute (bindings must produce a string), the flags
+    /// resolve truthy over any kind, and the run's `{bindings}` check
+    /// through the child walk exactly like any rendered text. foreground
+    /// is a closed literal vocabulary — the structural validator's job.
+    fn checkSpan(self: *Checker, node: markup.MarkupNode) CheckErr!void {
+        for (node.attrs) |attribute| {
+            if (std.mem.eql(u8, attribute.name, "weight")) {
+                const kind = try self.attrKind(node, attribute, attribute.value);
+                try self.requireAttrKind(node, attribute, kind, &.{.string}, markup.span_weight_value_message);
+                continue;
+            }
+            if (std.mem.eql(u8, attribute.name, "mono") or std.mem.eql(u8, attribute.name, "italic")) {
+                _ = try self.attrKind(node, attribute, attribute.value);
+                continue;
+            }
+        }
+        try self.checkChildList(node.children);
     }
 
     fn checkTimelineItem(self: *Checker, node: markup.MarkupNode) CheckErr!void {

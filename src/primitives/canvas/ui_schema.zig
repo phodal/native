@@ -289,6 +289,13 @@ pub const elements = [_]ElementInfo{
     // to a plain row inside the group's border.
     .{ .code = 62, .name = "input-group", .rule_hook = "input-group" },
     .{ .code = 63, .name = "input-group-actions", .rule_hook = "input-group-actions" },
+    // Inline styled run inside a <text> paragraph: consumed by its parent
+    // text leaf (lowered into the paragraph's flat span list, never to a
+    // widget of its own), exactly like step/series/context-menu. Spans
+    // carry weight, mono, italic, and the existing foreground token
+    // channel; everything else about the paragraph (wrap, alignment,
+    // events, identity) stays on the enclosing text element.
+    .{ .code = 64, .name = "span", .rule_hook = "span" },
 };
 
 // ------------------------------------------------------------- attributes
@@ -379,6 +386,14 @@ pub const attrs = [_]AttrInfo{
     // scopes it): ellipsis (the default) or clip. 67: re-minted at birth
     // from a same-day 66 collision, before landing anywhere serialized.
     .{ .code = 67, .name = "overflow", .class = .option, .group = .option, .field = "overflow" },
+    // Inline span attributes (the <span> composite; its rule hook owns
+    // the closed set). weight names a text-span weight rung (regular,
+    // medium — the semibold rung — or bold); mono selects the mono face;
+    // italic slants the run. Span color rides the existing foreground
+    // token attribute (code 30), so no fresh code is minted for it.
+    .{ .code = 68, .name = "weight", .class = .option, .group = .composite },
+    .{ .code = 69, .name = "mono", .class = .flag, .group = .composite },
+    .{ .code = 70, .name = "italic", .class = .flag, .group = .composite },
 };
 
 // ----------------------------------------------------------------- events

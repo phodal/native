@@ -188,6 +188,14 @@ pub const max_search = 48;
 /// than the OS band, or the header's controls center below the traffic
 /// lights the system centers within its own band.
 pub const header_natural_height: f32 = 52;
+/// The window's content min-width floor (main.zig declares it on the
+/// shell window) and the default `canvas_width` before the first
+/// presented frame reports the real surface size. Defaulting to the
+/// FLOOR is deliberate: a tree built before any frame arrives (boot,
+/// tree-level tests, the layout audit's smallest swept size) derives an
+/// album grid that fits the narrowest window the shell allows — it can
+/// underfill a wider surface for one frame, never overflow a narrow one.
+pub const min_canvas_width: f32 = 1056;
 
 /// Effect keys, model-owned identity (effect-key style). Audio playback
 /// keys are the track ids themselves — one key namespace per channel.
@@ -237,6 +245,14 @@ pub const Msg = union(enum) {
     /// pads its leading edge past the traffic lights and matches its
     /// height to the titlebar band. Delivered through `on_chrome`.
     chrome_changed: native_sdk.WindowChrome,
+    /// The canvas surface width, mirrored from presented frames through
+    /// `on_frame` (main.zig emits it only when the width actually
+    /// changed, so steady playback frames dispatch nothing). The album
+    /// grid derives its column count from this — the layout system's
+    /// grid takes a FIXED column count and rows/columns never
+    /// flow-wrap, so adapting to the window is the model's job: track
+    /// the width, chunk in the view.
+    canvas_resized: f32,
     search_edit: canvas.TextInputEvent,
     open_album: u8,
     close_album,
@@ -281,6 +297,10 @@ pub const Model = struct {
     /// overlays the content (fullscreen, standard chrome, tests).
     chrome_leading: f32 = 0,
     header_height: f32 = header_natural_height,
+    /// The live canvas width, from `canvas_resized`. Seeds at the window
+    /// min-width floor (see `min_canvas_width`) so pre-first-frame trees
+    /// fit the narrowest window; the first presented frame corrects it.
+    canvas_width: f32 = min_canvas_width,
     songs_scroll: f32 = 0,
     now: ?u8 = null, // playing track id
     playing: bool = false,
@@ -634,6 +654,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // height is the floor when no band overlays the content.
             model.header_height = @max(header_natural_height, chrome.insets.top);
         },
+        .canvas_resized => |width| model.canvas_width = width,
         .search_edit => |edit| model.search_buffer.apply(edit),
         .grid_scrolled => |state| model.grid_scroll = state.offset,
         .detail_scrolled => |state| model.detail_scroll = state.offset,

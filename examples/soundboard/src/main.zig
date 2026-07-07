@@ -36,8 +36,10 @@ pub const window_height: f32 = 720;
 /// Content min-size floor the window enforces: the smallest size where
 /// the header, album grid, and now-playing rail lay out without clipping
 /// or overlap — proven by the layout audit sweep in tests.zig, which
-/// sweeps from exactly this floor.
-pub const window_min_width: f32 = 1056;
+/// sweeps from exactly this floor. The model owns the value because it
+/// doubles as the pre-first-frame `canvas_width` default the adaptive
+/// album grid derives from.
+pub const window_min_width: f32 = model_mod.min_canvas_width;
 pub const window_min_height: f32 = 600;
 
 const app_permissions = [_][]const u8{ native_sdk.security.permission_command, native_sdk.security.permission_view };
@@ -131,6 +133,7 @@ pub fn soundboardOptions() SoundboardApp.Options {
         .on_appearance = onAppearance,
         .on_chrome = onChrome,
         .on_key = onKey,
+        .on_frame = onFrame,
         .animations = animations,
         .sync = sync,
     };
@@ -171,6 +174,19 @@ pub fn tokensFromModel(model: *const Model) canvas.DesignTokens {
 /// the `auto` theme preference follows them live.
 fn onAppearance(appearance: native_sdk.Appearance) ?Msg {
     return Msg{ .set_appearance = appearance };
+}
+
+/// The album grid's width channel: every presented frame carries the
+/// surface size, and a WIDTH CHANGE (a live window resize, fullscreen)
+/// dispatches it into the model so the grid re-derives its column count
+/// on the very next rebuild. Frames at an unchanged width return null —
+/// steady playback never spins the update loop. The one-frame lag is
+/// inherent and invisible: the resize-triggered rebuild still lays out
+/// with the previous width, then the frame it presents delivers the new
+/// one and the corrected grid is on screen a frame later.
+pub fn onFrame(model: *const Model, frame: native_sdk.platform.GpuFrame) ?Msg {
+    if (frame.size.width == model.canvas_width) return null;
+    return Msg{ .canvas_resized = frame.size.width };
 }
 
 /// The runtime owns transient slider state (`.change` carries no value);

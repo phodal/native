@@ -1227,6 +1227,105 @@ fn envGateSet(name: [*:0]const u8) bool {
     return std.c.getenv(name) != null;
 }
 
+// ------------------------------------------------------- adaptive grid
+
+/// Per-row tile counts of the retained album grid: the frames of every
+/// listitem-role tile, bucketed by row y. Returns the count of rows
+/// written and fills `first_x` with the leading tile's x per row (the
+/// tail-row left-align check).
+fn gridRowCounts(layout: canvas.WidgetLayoutTree, counts: []usize, first_x: []f32) usize {
+    var rows: usize = 0;
+    var current_y: f32 = -1;
+    for (layout.nodes) |node| {
+        if (node.widget.semantics.role != .listitem) continue;
+        if (node.widget.kind != .list_item) continue;
+        if (rows == 0 or node.frame.y != current_y) {
+            if (rows == counts.len) return rows;
+            current_y = node.frame.y;
+            counts[rows] = 0;
+            first_x[rows] = node.frame.x;
+            rows += 1;
+        }
+        counts[rows - 1] += 1;
+        first_x[rows - 1] = @min(first_x[rows - 1], node.frame.x);
+    }
+    return rows;
+}
+
+/// Drive one full live resize: the window-manager resize event (the
+/// runtime re-lays-out at the new bounds), then the frame it presents
+/// at the new size (whose `on_frame` hook mirrors the width into the
+/// model and rebuilds with the re-derived column count).
+fn resizeTo(live: LiveApp, width: f32, height: f32, frame_index: u64) !void {
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_resized = .{
+        .label = main.canvas_label,
+        .window_id = 1,
+        .frame = geometry.RectF.init(0, 0, width, height),
+        .scale_factor = 1,
+    } });
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
+        .label = main.canvas_label,
+        .size = geometry.SizeF.init(width, height),
+        .scale_factor = 1,
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .nonblank = true,
+    } });
+}
+
+test "the album grid re-chunks its rows live as the window resizes" {
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    var counts: [8]usize = undefined;
+    var first_x: [8]f32 = undefined;
+
+    // The launch surface (1080 wide) fits four min-width tiles per row,
+    // and the whole catalog chunks accordingly. Row counts and the
+    // expected rows both derive from the manifest, never hardcoded.
+    try resizeTo(live, main.window_width, main.window_height, 2);
+    try testing.expectEqual(main.window_width, live.app_state.model.canvas_width);
+    var fit = view_mod.gridFit(main.window_width);
+    try testing.expectEqual(@as(usize, 4), fit.columns);
+    var layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    var rows = gridRowCounts(layout, &counts, &first_x);
+    try expectChunking(rows, counts[0..rows], first_x[0..rows], fit.columns);
+
+    // Widen the window: six tiles fit, the same catalog re-chunks into
+    // fewer, longer rows, and the tail row (8 albums into rows of 6
+    // leaves a short one) starts at the same leading edge as a full row.
+    try resizeTo(live, 1520, 800, 3);
+    try testing.expectEqual(@as(f32, 1520), live.app_state.model.canvas_width);
+    fit = view_mod.gridFit(1520);
+    try testing.expectEqual(@as(usize, 6), fit.columns);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    rows = gridRowCounts(layout, &counts, &first_x);
+    try expectChunking(rows, counts[0..rows], first_x[0..rows], fit.columns);
+
+    // And back down to the window's min floor: four per row again — the
+    // path is live in both directions, not a one-shot at boot.
+    try resizeTo(live, main.window_min_width, main.window_height, 4);
+    fit = view_mod.gridFit(main.window_min_width);
+    try testing.expectEqual(@as(usize, 4), fit.columns);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    rows = gridRowCounts(layout, &counts, &first_x);
+    try expectChunking(rows, counts[0..rows], first_x[0..rows], fit.columns);
+}
+
+/// Assert one chunking: full rows of `columns` tiles, the catalog's
+/// remainder in a final short row, and EVERY row starting at the same
+/// leading x (the tail left-aligns instead of centering or stretching).
+fn expectChunking(rows: usize, counts: []const usize, first_x: []const f32, columns: usize) !void {
+    const albums = model_mod.albums.len;
+    try testing.expectEqual((albums + columns - 1) / columns, rows);
+    for (counts, 0..) |count, row| {
+        const expected = if (row + 1 < rows or albums % columns == 0) columns else albums % columns;
+        try testing.expectEqual(expected, count);
+    }
+    for (first_x) |x| {
+        try testing.expectEqual(first_x[0], x);
+    }
+}
+
 test "chrome geometry pads the header and matches its height to the tall band" {
     var fx = model_mod.Effects.init(testing.allocator);
     defer fx.deinit();

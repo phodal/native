@@ -3,8 +3,9 @@
 //! header.native / nowplaying.native / album_title.native); this file
 //! holds the Zig-only sections the closed markup grammar cannot express —
 //! rounded-square cover images (`ElementOptions.image` outside the
-//! avatar), the album grid's column count, and per-track native context
-//! menus — plus the root view that composes all of it into one tree.
+//! avatar), the album grid's width-derived column count, and per-track
+//! native context menus — plus the root view that composes all of it
+//! into one tree.
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
@@ -27,12 +28,54 @@ pub const CompiledNowPlayingView = canvas.CompiledMarkupView(Model, Msg, nowplay
 // widget-for-widget equal to the builder paragraph it replaced.
 pub const AlbumTitleView = canvas.CompiledMarkupView(Model, Msg, @embedFile("album_title.native"));
 
-const grid_columns: usize = 4;
-const card_width: f32 = 240;
-const cover_size: f32 = card_width - 24; // card padding x2
-const card_height: f32 = cover_size + 68;
+// The album grid is ADAPTIVE: the layout system's grid takes a fixed
+// column count (rows and columns never flow-wrap children), so the
+// column count is derived here, per rebuild, from the canvas width the
+// model tracks (`canvas_resized`, mirrored from presented frames). The
+// rule is the standard adaptive-grid register: as many min-width tiles
+// as fit the row, the leftover split evenly — tiles grow modestly until
+// one more column fits, then snap back toward the minimum.
+/// The narrowest an album tile may get. Sized so the cover (tile width
+/// minus the hover-wash inset on both sides) never drops below the
+/// generous cover the fixed four-column grid established.
+const min_tile_width: f32 = 232;
+/// Gap between bare tiles. Tighter than the old carded grid on purpose:
+/// with no card chrome the gap IS the whole separation between covers,
+/// and the bare music-library register reads best with covers closer
+/// together than boxed cards were.
+const grid_gap: f32 = 12;
+/// Inset between the tile's hover/press wash and the cover art: on a
+/// bare tile the wash must show AROUND the art to read at all (the art
+/// would paint over a same-sized wash), so each tile keeps a thin halo.
+const tile_padding: f32 = 8;
+/// Vertical gap between the cover and the title/artist block.
+const cover_text_gap: f32 = 8;
+/// The title + artist block's height (one body line over one small
+/// line), used to derive the tile's total height from its width.
+const tile_text_height: f32 = 36;
 const detail_cover_size: f32 = 184;
 const content_padding: f32 = 24;
+
+/// The width→columns rule, answered for one canvas width.
+pub const GridFit = struct {
+    /// How many min-width tiles (plus gaps) fit the content row.
+    columns: usize,
+    /// The evenly-grown tile width at that column count.
+    tile_width: f32,
+};
+
+/// Columns = how many minimum-width tiles fit the padded content row;
+/// tile width = the row split evenly at that count. Never below one
+/// column, and the floor guard keeps the math total for degenerate
+/// widths (a zero-sized test surface).
+pub fn gridFit(canvas_width: f32) GridFit {
+    const available = @max(min_tile_width, canvas_width - content_padding * 2);
+    const fitting = @floor((available + grid_gap) / (min_tile_width + grid_gap));
+    const columns: usize = @intFromFloat(@max(1, fitting));
+    const gaps = grid_gap * @as(f32, @floatFromInt(columns - 1));
+    const tile_width = (available - gaps) / @as(f32, @floatFromInt(columns));
+    return .{ .columns = columns, .tile_width = tile_width };
+}
 
 pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
     return ui.column(.{ .grow = 1, .style_tokens = .{ .background = .background } }, .{
@@ -66,57 +109,80 @@ fn albumGridView(ui: *Ui, model: *const Model) Ui.Node {
         .semantics = .{ .label = "Album grid" },
     }, ui.column(.{ .padding = content_padding, .gap = 18 }, .{
         sectionHeading(ui, "Albums", ui.fmt("{d} of {d}", .{ cells.len, model_mod.albums.len })),
-        if (cells.len == 0) emptyState(ui, model) else albumGrid(ui, cells),
+        if (cells.len == 0) emptyState(ui, model) else albumGrid(ui, model, cells),
     }));
 }
 
-fn albumGrid(ui: *Ui, cells: []const model_mod.AlbumCell) Ui.Node {
-    var node = ui.el(.grid, .{
-        .gap = 16,
+fn albumGrid(ui: *Ui, model: *const Model, cells: []const model_mod.AlbumCell) Ui.Node {
+    const fit = gridFit(model.canvas_width);
+    // The grid node is EXPLICITLY sized to its shown columns rather than
+    // stretched to the row, because the engine divides the grid's width
+    // evenly among its columns: an exact width makes each cell exactly
+    // one tile wide, and a short result set (a narrow search) keeps
+    // tile-sized covers left-aligned instead of ballooning across the
+    // row. The tail row left-aligns the same way — cells fill in row
+    // order from the leading edge.
+    const columns = @min(fit.columns, cells.len);
+    const row_width = @as(f32, @floatFromInt(columns)) * (fit.tile_width + grid_gap) - grid_gap;
+    return ui.el(.grid, .{
+        .width = row_width,
+        .columns = columns,
+        .gap = grid_gap,
         .semantics = .{ .role = .list, .label = "Albums" },
-    }, ui.each(cells, albumKey, albumCard));
-    node.widget.layout.columns = grid_columns;
-    return node;
+    }, ui.eachCtx(fit, cells, albumKey, albumTile));
 }
 
 fn albumKey(cell: *const model_mod.AlbumCell) canvas.UiKey {
     return canvas.uiKey(cell.id);
 }
 
-fn albumCard(ui: *Ui, cell: *const model_mod.AlbumCell) Ui.Node {
-    return ui.panel(.{
-        .width = card_width,
-        .height = card_height,
-        .padding = 12,
+/// One bare album tile: the cover IS the tile — no card fill, border, or
+/// shadow around it (the flat `list_item` composite, the same chromeless
+/// register the track rows use). At rest only art and text paint; hover
+/// and press draw the row wash as a thin halo around the cover (the
+/// `tile_padding` inset exists exactly so the wash can show), keyboard
+/// focus draws the standard ring, and the whole tile — art, text, halo —
+/// stays one hit target with the album-by-artist accessible label.
+fn albumTile(ui: *Ui, fit: GridFit, cell: *const model_mod.AlbumCell) Ui.Node {
+    const cover = fit.tile_width - tile_padding * 2;
+    return ui.el(.list_item, .{
+        // Height derives from width: the square cover plus the text
+        // block and paddings, so tiles stay uniform as they grow
+        // between column-count breakpoints.
+        .height = tile_padding * 2 + cover + cover_text_gap + tile_text_height,
+        .padding = tile_padding,
         .on_press = Msg{ .open_album = cell.id },
         .context_menu = &.{
             .{ .label = "Play Album", .msg = Msg{ .play_album = cell.id } },
             .{ .label = "Open Album", .msg = Msg{ .open_album = cell.id } },
         },
-        .style_tokens = .{ .background = .surface, .radius = .lg, .border_color = .border },
         .semantics = .{ .role = .listitem, .label = ui.fmt("{s} by {s}", .{ cell.title, cell.artist }) },
-    }, ui.column(.{ .gap = 8 }, .{
-        ui.avatar(.{
-            .image = cell.cover,
-            .width = cover_size,
-            .height = cover_size,
-            .style = .{ .radius = 8 },
-            .semantics = .{ .label = ui.fmt("{s} cover", .{cell.title}) },
-        }, cell.initials),
-        ui.row(.{ .gap = 8, .cross = .center }, .{
-            ui.column(.{ .gap = 1, .grow = 1 }, .{
-                // One-line card title/artist by design: elide behind a
-                // trailing ellipsis at the card width, never wrap over
-                // the line below.
-                ui.text(.{ .wrap = false }, cell.title),
-                ui.text(.{ .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, cell.artist),
+    }, .{
+        // list_item flows children horizontally; the single grown column
+        // carries the vertical cover-over-text stack.
+        ui.column(.{ .gap = cover_text_gap, .grow = 1 }, .{
+            ui.avatar(.{
+                .image = cell.cover,
+                .width = cover,
+                .height = cover,
+                .style = .{ .radius = 8 },
+                .semantics = .{ .label = ui.fmt("{s} cover", .{cell.title}) },
+            }, cell.initials),
+            ui.row(.{ .gap = 8, .cross = .center }, .{
+                ui.column(.{ .gap = 1, .grow = 1 }, .{
+                    // One-line title/artist by design: elide behind a
+                    // trailing ellipsis at the tile width, never wrap
+                    // over the line below.
+                    ui.text(.{ .wrap = false }, cell.title),
+                    ui.text(.{ .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, cell.artist),
+                }),
+                if (cell.playing)
+                    ui.el(.badge, .{ .variant = .primary, .text = "Playing" }, .{})
+                else
+                    ui.el(.stack, .{}, .{}),
             }),
-            if (cell.playing)
-                ui.el(.badge, .{ .variant = .primary, .text = "Playing" }, .{})
-            else
-                ui.el(.stack, .{}, .{}),
         }),
-    }));
+    });
 }
 
 fn emptyState(ui: *Ui, model: *const Model) Ui.Node {

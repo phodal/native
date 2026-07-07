@@ -96,7 +96,26 @@ typedef struct native_sdk_gtk_native_view {
     int gpu_buf_width;
     int gpu_buf_height;
     int gpu_buf_stride;
+    /* Pre-first-present placeholder pump ONLY: a repeating timeout that
+     * arms the scheduler below until the first present lands, then
+     * removes itself (the macOS host's placeholder display timer, in
+     * GLib terms). Steady state never ticks it. */
     guint gpu_frame_timer;
+    /* ONE frame-event scheduler per surface (the macOS design): every
+     * producer that wants a frame event — runtime frame requests, pixel
+     * presents (the completion analog), the placeholder pump — funnels
+     * through native_sdk_gpu_surface_schedule_frame_emission, which keeps
+     * at most one emission in flight (gpu_emit_source is its GLib source)
+     * and fires it on the frame-interval grid anchored at
+     * gpu_last_emit_ns. Producers landing while one is queued fold into
+     * it: their facts (nonblank, sample color, buffer contents) are
+     * already view state when the emission fires. gpu_presented flips on
+     * the first present and retires the placeholder pump — from then on
+     * frames are demand-driven, so an idle surface emits ZERO frame
+     * events (the idle law the macOS host enforces). */
+    guint gpu_emit_source;
+    uint64_t gpu_last_emit_ns;
+    int gpu_presented;
     uint64_t gpu_frame_index;
     double gpu_emitted_width;
     double gpu_emitted_height;
@@ -549,10 +568,16 @@ static GtkWidget *native_sdk_make_native_widget(int kind, const char *label, con
  * runtime rasterizes canvas frames with the reference renderer and hands
  * RGBA8 buffers to native_sdk_gtk_present_gpu_surface_pixels, which converts
  * them into a premultiplied CAIRO_FORMAT_ARGB32 buffer and queues a redraw.
- * A 16 ms host timer plays the role of the `.timer` present mode: it emits
- * gpu_surface_frame events (and gpu_surface_resize on size/scale changes),
- * matching the macOS Metal host's event cadence. Pointer, scroll, and key
- * input map onto the same gpu_surface_input kinds the AppKit host emits.
+ * Frame events are DEMAND-DRIVEN through one scheduler per surface (the
+ * macOS host's design): runtime frame requests and pixel presents each
+ * arm a single grid-anchored emission, so an armed animation loop sees
+ * one gpu_surface_frame per frame interval and an idle surface sees
+ * none. Until the first present lands, a placeholder pump arms the same
+ * scheduler every 16 ms (the runtime's install choreography rides the
+ * first frame events), then removes itself. gpu_surface_resize rides
+ * the drawing area's resize/scale signals, no longer a poll. Pointer,
+ * scroll, and key input map onto the same gpu_surface_input kinds the
+ * AppKit host emits.
  *
  * Text input flows through a GtkIMContext (gtk_im_multicontext_new, so ibus /
  * fcitx / GtkIMContextSimple all work): key presses are offered to the IM
@@ -757,16 +782,45 @@ static void native_sdk_gpu_surface_scale_changed(GObject *object, GParamSpec *ps
     }
 }
 
-static gboolean native_sdk_gpu_surface_tick(gpointer data) {
-    native_sdk_gtk_native_view_t *view = data;
-    if (!view || !view->widget || !view->window || !view->window->host) return G_SOURCE_REMOVE;
+/* Advance the pacing clock for an emission that was SCHEDULED at
+ * lastEmit + interval (the macOS host's clock discipline, mirrored):
+ * stamping fire time would fold the timeout's delivery latency into
+ * every period, so the paced loop would drift slow; stamping the
+ * scheduled deadline keeps the average period exactly one frame
+ * interval (jitter stays, drift doesn't). A fire more than one interval
+ * late advances to the last GRID point at or before now — whole missed
+ * intervals are skipped, never queued as a catch-up burst, and a
+ * re-base from fire time (which would stretch every following period
+ * by the delivery latency) never happens. */
+static void native_sdk_gpu_surface_advance_pacing_clock(native_sdk_gtk_native_view_t *view) {
+    const uint64_t now = native_sdk_gpu_timestamp_ns();
+    if (view->gpu_last_emit_ns == 0) {
+        view->gpu_last_emit_ns = now;
+        return;
+    }
+    const uint64_t scheduled_ns = view->gpu_last_emit_ns + NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS;
+    if (now < scheduled_ns) {
+        /* Fired before the deadline (timer granularity); re-basing at
+         * now keeps the next delay a full interval. */
+        view->gpu_last_emit_ns = now;
+    } else {
+        view->gpu_last_emit_ns = scheduled_ns + ((now - scheduled_ns) / NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS) * NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS;
+    }
+}
+
+/* The single frame-event emission: view state (nonblank verdict, sample
+ * color, buffer geometry) is the payload, so one event serves frame
+ * requests and present completions alike. */
+static void native_sdk_gpu_surface_emit_frame(native_sdk_gtk_native_view_t *view) {
+    if (!view || !view->widget || !view->window || !view->window->host) return;
 
     const double width = native_sdk_gpu_surface_width(view);
     const double height = native_sdk_gpu_surface_height(view);
     const double scale = (double)gtk_widget_get_scale_factor(view->widget);
-    if (width <= 0 || height <= 0) return G_SOURCE_CONTINUE;
+    if (width <= 0 || height <= 0) return;
 
     (void)native_sdk_gpu_surface_sync_geometry(view, width, height, scale);
+    native_sdk_gpu_surface_advance_pacing_clock(view);
 
     view->gpu_frame_index += 1;
     native_sdk_emit(view->window->host, (native_sdk_gtk_event_t){
@@ -783,7 +837,67 @@ static gboolean native_sdk_gpu_surface_tick(gpointer data) {
         .nonblank = view->gpu_nonblank,
         .sample_color = view->gpu_sample_color,
     });
+}
+
+/* One-shot timeout body for the scheduled emission below. */
+static gboolean native_sdk_gpu_surface_emit_scheduled(gpointer data) {
+    native_sdk_gtk_native_view_t *view = data;
+    if (!view) return G_SOURCE_REMOVE;
+    /* Clear BEFORE emitting: the emission's engine dispatch may present
+     * and re-arm the scheduler, and that arm must see the slot free. */
+    view->gpu_emit_source = 0;
+    native_sdk_gpu_surface_emit_frame(view);
+    return G_SOURCE_REMOVE;
+}
+
+/* Schedule the surface's next frame event on the frame-interval grid.
+ * At most one emission is ever in flight; producers arriving while it
+ * is queued fold into it. Always fires through the main loop — a
+ * request lands mid engine dispatch and a synchronous emission would
+ * re-enter the engine — and the pacing clock's grid stamping keeps the
+ * loop hop out of the period. */
+static void native_sdk_gpu_surface_schedule_frame_emission(native_sdk_gtk_native_view_t *view) {
+    if (!view || !view->widget || !view->window || !view->window->host) return;
+    if (view->gpu_emit_source) return;
+    const uint64_t now = native_sdk_gpu_timestamp_ns();
+    uint64_t delay_ns = 0;
+    if (view->gpu_last_emit_ns > 0 && now < view->gpu_last_emit_ns + NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS) {
+        delay_ns = view->gpu_last_emit_ns + NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS - now;
+    }
+    view->gpu_emit_source = g_timeout_add((guint)((delay_ns + 500000ull) / 1000000ull), native_sdk_gpu_surface_emit_scheduled, view);
+}
+
+/* Placeholder pump: arms the scheduler every 16 ms until the first
+ * present lands, so the runtime's install choreography (fonts, first
+ * rebuild, first present) has frame events to ride before any producer
+ * exists. The first present retires it; steady state never ticks it. */
+static gboolean native_sdk_gpu_surface_placeholder_tick(gpointer data) {
+    native_sdk_gtk_native_view_t *view = data;
+    if (!view || !view->widget || !view->window || !view->window->host) return G_SOURCE_REMOVE;
+    if (view->gpu_presented) {
+        view->gpu_frame_timer = 0;
+        return G_SOURCE_REMOVE;
+    }
+    native_sdk_gpu_surface_schedule_frame_emission(view);
     return G_SOURCE_CONTINUE;
+}
+
+/* GtkDrawingArea resize: report the new logical size immediately (the
+ * demand-driven scheduler has no poll to catch it) so the runtime can
+ * re-render at the new geometry; its present re-arms the scheduler. */
+static void native_sdk_gpu_surface_resized(GtkDrawingArea *area, int width, int height, gpointer data) {
+    (void)area;
+    (void)width;
+    (void)height;
+    native_sdk_gtk_native_view_t *view = data;
+    if (!view || !view->widget) return;
+    const double logical_width = native_sdk_gpu_surface_width(view);
+    const double logical_height = native_sdk_gpu_surface_height(view);
+    if (logical_width <= 0 || logical_height <= 0) return;
+    const double scale = (double)gtk_widget_get_scale_factor(view->widget);
+    if (native_sdk_gpu_surface_sync_geometry(view, logical_width, logical_height, scale)) {
+        gtk_widget_queue_draw(view->widget);
+    }
 }
 
 static void native_sdk_gpu_surface_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data) {
@@ -993,9 +1107,10 @@ static void native_sdk_setup_gpu_surface_view(native_sdk_gtk_native_view_t *view
     gtk_widget_add_controller(view->widget, focus);
 
     g_signal_connect(view->widget, "notify::scale-factor", G_CALLBACK(native_sdk_gpu_surface_scale_changed), view);
+    g_signal_connect(view->widget, "resize", G_CALLBACK(native_sdk_gpu_surface_resized), view);
 
     gtk_widget_grab_focus(view->widget);
-    view->gpu_frame_timer = g_timeout_add(16, native_sdk_gpu_surface_tick, view);
+    view->gpu_frame_timer = g_timeout_add(16, native_sdk_gpu_surface_placeholder_tick, view);
 }
 
 static void native_sdk_teardown_gpu_surface_view(native_sdk_gtk_native_view_t *view) {
@@ -1003,6 +1118,10 @@ static void native_sdk_teardown_gpu_surface_view(native_sdk_gtk_native_view_t *v
     if (view->gpu_frame_timer) {
         g_source_remove(view->gpu_frame_timer);
         view->gpu_frame_timer = 0;
+    }
+    if (view->gpu_emit_source) {
+        g_source_remove(view->gpu_emit_source);
+        view->gpu_emit_source = 0;
     }
     if (view->widget && view->kind == NATIVE_SDK_GTK_VIEW_GPU_SURFACE) {
         gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(view->widget), NULL, NULL, NULL);
@@ -2881,9 +3000,11 @@ int native_sdk_gtk_request_gpu_surface_frame(native_sdk_gtk_host_t *host, uint64
     native_sdk_gtk_native_view_t *view = native_sdk_find_native_view(win, label_copy);
     free(label_copy);
     if (!view || view->kind != NATIVE_SDK_GTK_VIEW_GPU_SURFACE || !view->widget) return 0;
-    /* The per-view frame timer already drives `.timer` present mode; a
-     * request only needs to guarantee the next tick redraws. */
+    /* A runtime frame request is a producer on the surface's single
+     * frame-event scheduler: redraw retained content and arm the next
+     * grid-paced emission (folding into one already in flight). */
     gtk_widget_queue_draw(view->widget);
+    native_sdk_gpu_surface_schedule_frame_emission(view);
     return 1;
 }
 
@@ -2942,6 +3063,13 @@ int native_sdk_gtk_present_gpu_surface_pixels(native_sdk_gtk_host_t *host, uint6
     }
 
     gtk_widget_queue_draw(view->widget);
+    /* A present is the completion producer on the surface's single
+     * frame-event scheduler: the completion event it arms is what
+     * drives the runtime's frame loop (an armed animation presents,
+     * this echo steps it again). The first present also retires the
+     * placeholder pump — from here on frames exist only on demand. */
+    view->gpu_presented = 1;
+    native_sdk_gpu_surface_schedule_frame_emission(view);
     return 1;
 }
 

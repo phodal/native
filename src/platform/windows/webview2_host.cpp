@@ -263,6 +263,21 @@ struct NativeView {
     std::vector<uint8_t> gpu_bgra;
     int gpu_buf_width = 0;
     int gpu_buf_height = 0;
+    /* ONE frame-event scheduler per surface (the macOS design): every
+     * producer that wants a frame event — runtime frame requests, pixel
+     * presents (the completion analog), the pre-first-present placeholder
+     * pump — funnels through gpuSurfaceScheduleFrameEmission, which keeps
+     * at most one emission in flight (a one-shot WM_TIMER) and fires it
+     * on the frame-interval grid anchored at gpu_last_emit_ns. Producers
+     * landing while one is queued fold into it: their facts (nonblank,
+     * sample color, buffer contents) are already view state when the
+     * emission fires. gpu_presented flips on the first present and
+     * retires the placeholder pump — from then on frames are
+     * demand-driven, so an idle surface emits ZERO frame events (the
+     * idle law the macOS host enforces). */
+    bool gpu_emission_scheduled = false;
+    bool gpu_presented = false;
+    uint64_t gpu_last_emit_ns = 0;
     uint64_t gpu_frame_index = 0;
     double gpu_emitted_width = 0;
     double gpu_emitted_height = 0;
@@ -1468,10 +1483,18 @@ static void destroyNativeViewsForWindow(Host *host, uint64_t window_id) {
  * and hands RGBA8 buffers to native_sdk_windows_present_gpu_surface_pixels,
  * which swizzles them into a top-down 32bpp BGRA DIB and invalidates the
  * child; WM_PAINT blits with SetDIBitsToDevice (StretchDIBits while a
- * resize is in flight). A 16 ms WM_TIMER on the child plays the role of
- * the `.timer` present mode: it emits gpu_surface_frame events (and
- * gpu_surface_resize when the logical size or DPI scale changes), matching
- * the macOS Metal and Linux GTK hosts' event cadence. Mouse, wheel, and
+ * resize is in flight). Frame events are DEMAND-DRIVEN through one
+ * scheduler per surface (the macOS host's design): runtime frame
+ * requests and pixel presents each arm a single grid-anchored one-shot
+ * WM_TIMER emission, so an armed animation loop sees one
+ * gpu_surface_frame per frame interval and an idle surface sees none.
+ * Until the first present lands, a placeholder 16 ms WM_TIMER pump arms
+ * the same scheduler (the runtime's install choreography rides the
+ * first frame events), then removes itself. WM_TIMER granularity
+ * (~10-16 ms, coalesced under load) quantizes individual periods; the
+ * grid-anchored clock turns that into jitter, never drift.
+ * gpu_surface_resize rides WM_SIZE/DPI changes plus each emission's
+ * geometry sync. Mouse, wheel, and
  * key input map onto the same gpu_surface_input kinds the other hosts
  * emit; printable text arrives through WM_CHAR as text_input events while
  * WM_KEYDOWN carries only the key name, so nothing inserts twice.
@@ -1503,7 +1526,10 @@ constexpr int kGpuInputImeCommitComposition = 9;
 constexpr int kGpuInputImeCancelComposition = 10;
 constexpr int kGpuInputPointerCancel = 11;
 constexpr uint64_t kGpuFrameIntervalNs = 16666667ull;
+/* Placeholder pump timer (repeating, retired by the first present). */
 constexpr UINT_PTR kGpuFrameTimerId = 1;
+/* The one-shot scheduled-emission timer (the single frame-event gate). */
+constexpr UINT_PTR kGpuEmitTimerId = 2;
 
 static uint64_t gpuTimestampNs() {
     static LARGE_INTEGER frequency = {};
@@ -1720,12 +1746,42 @@ static bool gpuSurfaceLogicalSize(const NativeView &view, HWND hwnd, double scal
     return width > 0 && height > 0;
 }
 
-static void gpuSurfaceFrameTick(Host *host, NativeView &view, HWND hwnd) {
+/* Advance the pacing clock for an emission that was SCHEDULED at
+ * lastEmit + interval (the macOS host's clock discipline, mirrored):
+ * stamping fire time would fold WM_TIMER's delivery latency into every
+ * period, so the paced loop would drift slow; stamping the scheduled
+ * deadline keeps the average period exactly one frame interval (jitter
+ * stays, drift doesn't). A fire more than one interval late advances to
+ * the last GRID point at or before now — whole missed intervals are
+ * skipped, never queued as a catch-up burst, and a re-base from fire
+ * time (which would stretch every following period by the delivery
+ * latency) never happens. */
+static void gpuSurfaceAdvancePacingClock(NativeView &view) {
+    const uint64_t now = gpuTimestampNs();
+    if (view.gpu_last_emit_ns == 0) {
+        view.gpu_last_emit_ns = now;
+        return;
+    }
+    const uint64_t scheduled_ns = view.gpu_last_emit_ns + kGpuFrameIntervalNs;
+    if (now < scheduled_ns) {
+        /* Fired before the deadline (timer granularity); re-basing at
+         * now keeps the next delay a full interval. */
+        view.gpu_last_emit_ns = now;
+    } else {
+        view.gpu_last_emit_ns = scheduled_ns + ((now - scheduled_ns) / kGpuFrameIntervalNs) * kGpuFrameIntervalNs;
+    }
+}
+
+/* The single frame-event emission: view state (nonblank verdict, sample
+ * color, buffer geometry) is the payload, so one event serves frame
+ * requests and present completions alike. */
+static void gpuSurfaceEmitFrame(Host *host, NativeView &view, HWND hwnd) {
     const double scale = gpuSurfaceScale(hwnd);
     double width = 0;
     double height = 0;
     if (!gpuSurfaceLogicalSize(view, hwnd, scale, &width, &height)) return;
     (void)syncGpuSurfaceGeometry(host, view, width, height, scale);
+    gpuSurfaceAdvancePacingClock(view);
 
     view.gpu_frame_index += 1;
     WindowsEvent event = {};
@@ -1739,6 +1795,26 @@ static void gpuSurfaceFrameTick(Host *host, NativeView &view, HWND hwnd) {
     event.nonblank = view.gpu_nonblank;
     event.sample_color = view.gpu_sample_color;
     emitGpuSurfaceEvent(host, view, event);
+}
+
+/* Schedule the surface's next frame event on the frame-interval grid.
+ * At most one emission is ever in flight; producers arriving while it
+ * is queued fold into it. Always fires through the message loop — a
+ * request lands mid engine dispatch and a synchronous emission would
+ * re-enter the engine — and the pacing clock's grid stamping keeps the
+ * message hop out of the period. SetTimer clamps short delays up to its
+ * ~10 ms floor; the clock absorbs that as jitter, not drift. */
+static void gpuSurfaceScheduleFrameEmission(NativeView &view) {
+    if (!view.hwnd || view.gpu_emission_scheduled) return;
+    const uint64_t now = gpuTimestampNs();
+    uint64_t delay_ns = 0;
+    if (view.gpu_last_emit_ns > 0 && now < view.gpu_last_emit_ns + kGpuFrameIntervalNs) {
+        delay_ns = view.gpu_last_emit_ns + kGpuFrameIntervalNs - now;
+    }
+    const UINT delay_ms = (UINT)((delay_ns + 500000ull) / 1000000ull);
+    if (SetTimer(view.hwnd, kGpuEmitTimerId, delay_ms, nullptr)) {
+        view.gpu_emission_scheduled = true;
+    }
 }
 
 static void paintGpuSurface(NativeView &view, HWND hwnd, HDC dc) {
@@ -1819,7 +1895,24 @@ static LRESULT CALLBACK gpuSurfaceProc(HWND hwnd, UINT message, WPARAM wparam, L
     switch (message) {
         case WM_TIMER:
             if (wparam == kGpuFrameTimerId) {
-                gpuSurfaceFrameTick(host, *view, hwnd);
+                /* Placeholder pump: arm the scheduler until the first
+                 * present lands, then retire (SetTimer repeats until
+                 * KillTimer). */
+                if (view->gpu_presented) {
+                    KillTimer(hwnd, kGpuFrameTimerId);
+                    return 0;
+                }
+                gpuSurfaceScheduleFrameEmission(*view);
+                return 0;
+            }
+            if (wparam == kGpuEmitTimerId) {
+                /* The one scheduled emission fires: one-shot semantics
+                 * (KillTimer before the emit — SetTimer timers repeat),
+                 * and the scheduled flag clears BEFORE emitting so the
+                 * emission's engine dispatch can re-arm the scheduler. */
+                KillTimer(hwnd, kGpuEmitTimerId);
+                view->gpu_emission_scheduled = false;
+                gpuSurfaceEmitFrame(host, *view, hwnd);
                 return 0;
             }
             break;
@@ -3317,8 +3410,9 @@ int native_sdk_windows_create_view(Host *host, uint64_t window_id, const char *l
     reorderWindowChildren(host, window_id);
     if (kind == kViewGpuSurface) {
         /* The class WndProc resolves the host through GWLP_USERDATA; set it
-         * before the frame timer starts ticking so the first WM_TIMER can
-         * already emit gpu_surface_frame events. */
+         * before the placeholder pump starts ticking so the first WM_TIMER
+         * can already arm frame-event emissions (the pump retires itself
+         * after the first present; see the frame-scheduler comments). */
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(host));
         SetTimer(hwnd, kGpuFrameTimerId, 16, nullptr);
         SetFocus(hwnd);
@@ -3330,9 +3424,11 @@ int native_sdk_windows_request_gpu_surface_frame(Host *host, uint64_t window_id,
     if (!host || label_len == 0) return 0;
     auto found = host->native_views.find(nativeViewKey(window_id, slice(label, label_len)));
     if (found == host->native_views.end() || found->second.kind != kViewGpuSurface || !found->second.hwnd) return 0;
-    /* The per-view frame timer already drives `.timer` present mode; a
-     * request only needs to guarantee the next tick repaints. */
+    /* A runtime frame request is a producer on the surface's single
+     * frame-event scheduler: repaint retained content and arm the next
+     * grid-paced emission (folding into one already in flight). */
     InvalidateRect(found->second.hwnd, nullptr, FALSE);
+    gpuSurfaceScheduleFrameEmission(found->second);
     return 1;
 }
 
@@ -3378,6 +3474,13 @@ int native_sdk_windows_present_gpu_surface_pixels(Host *host, uint64_t window_id
     }
 
     InvalidateRect(view.hwnd, nullptr, FALSE);
+    /* A present is the completion producer on the surface's single
+     * frame-event scheduler: the completion event it arms is what
+     * drives the runtime's frame loop (an armed animation presents,
+     * this echo steps it again). The first present also retires the
+     * placeholder pump — from here on frames exist only on demand. */
+    view.gpu_presented = true;
+    gpuSurfaceScheduleFrameEmission(view);
     return 1;
 }
 

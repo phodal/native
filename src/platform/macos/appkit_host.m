@@ -346,6 +346,10 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, assign) uint64_t windowId;
 @property(nonatomic, strong) NSString *surfaceLabel;
 @property(nonatomic, assign) NSUInteger frameIndex;
+/* Whether this surface has completed at least one REAL present. Gates the
+ * occluded short-circuit: until the first present lands, occluded frames
+ * still render (surface establishment + the nonblank verdict). */
+@property(nonatomic, assign) BOOL hasEverPresented;
 @property(nonatomic, assign) BOOL renderedFrame;
 @property(nonatomic, assign) BOOL verifiedNonblankFrame;
 @property(nonatomic, assign) uint32_t lastSampleColor;
@@ -3074,6 +3078,24 @@ static BOOL NativeSdkGpuDrawTraceEnabled(void) {
     return enabled;
 }
 
+/* Frame-trace mode (NATIVE_SDK_GPU_FRAME_TRACE=1): one stderr line per
+ * renderFrame naming the path taken (occluded short-circuit, nil
+ * drawable, or a real present) plus how long nextDrawable held the main
+ * thread. The vend duration is the line's whole point: nextDrawable runs
+ * with its timeout DISALLOWED (see the layer setup), so a window whose
+ * compositing is parked can silently turn each frame into a main-thread
+ * stall — this trace is how that shows up as a number instead of a
+ * mystery. */
+static BOOL NativeSdkGpuFrameTraceEnabled(void) {
+    static BOOL enabled;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *value = getenv("NATIVE_SDK_GPU_FRAME_TRACE");
+        enabled = value && value[0] != 0 && strcmp(value, "0") != 0;
+    });
+    return enabled;
+}
+
 /* Incremental-verify mode: byte-compare every scissored dirty update
  * against a from-scratch full redraw of the same command list. Test-only
  * (the full redraw doubles the draw cost); enabled by environment. */
@@ -4882,25 +4904,69 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
     [self updateDrawableSize];
 
+    /* Occluded (or minimized, or hidden-app) windows never touch the
+     * drawable pool: complete the frame logically from retained state
+     * instead. The layer's nextDrawable runs with its timeout DISALLOWED
+     * (see the layer setup), so it BLOCKS until the window server hands a
+     * drawable back — and for a window whose compositing is parked that
+     * hand-back is not on the display grid but on the server's own lazy
+     * schedule, which turns each armed animation step into a main-thread
+     * stall of unbounded length (an armed 180 ms tween then crawls over
+     * seconds, stepping only when the parked present queue is serviced).
+     * Whether an occluded layer vends drawables promptly, slowly, or
+     * returns nil varies by OS release and pool pressure, so don't gamble
+     * on it: the occlusion bit is the honest signal. The deliberate
+     * occluded cadence is the SAME display-interval grid the visible loop
+     * paces on (scheduleFrameEventEmission + the armed-channel activity
+     * assertion), so a tween completes in ~its duration while covered and
+     * the retained canvas is CURRENT the moment the window is composited
+     * again — the occlusion observer flushes it to the glass then. A view
+     * not yet in a window keeps the present path: there is no occlusion
+     * truth to read before the window exists. */
+    NSWindow *window = self.window;
+    const BOOL occluded = window != nil && (window.occlusionState & NSWindowOcclusionStateVisible) == 0;
+    // The FIRST present is exempt from the occluded short-circuit: it is
+    // what establishes the surface's glass and proves the frame nonblank
+    // (the correctness verdict automation reads), and a window can launch
+    // fully covered — or behind a locked session — where the bit never
+    // clears. One bounded present to invisible glass is the honest price;
+    // the sustained-stream skip applies from the second frame on.
+    if (occluded && self.hasEverPresented) {
+        if (NativeSdkGpuFrameTraceEnabled()) {
+            fprintf(stderr, "native-sdk: gpu frame-trace path=occluded frame=%lu\n", (unsigned long)self.frameIndex);
+        }
+        self.glassFlushPending = YES;
+        [self scheduleFrameEventEmission];
+        return;
+    }
+
+    const uint64_t vendBeginNs = NativeSdkGpuFrameTraceEnabled() ? NativeSdkTimestampNanoseconds() : 0;
     id<CAMetalDrawable> drawable = [self.metalLayer nextDrawable];
+    if (NativeSdkGpuFrameTraceEnabled()) {
+        fprintf(stderr, "native-sdk: gpu frame-trace path=%s frame=%lu vend_us=%llu\n",
+                drawable ? "present" : "nil-drawable",
+                (unsigned long)self.frameIndex,
+                (unsigned long long)((NativeSdkTimestampNanoseconds() - vendBeginNs) / 1000));
+    }
     if (!drawable) {
-        // Occluded/unfocused windows are not composited, so the layer
-        // stops vending drawables. Dropping the frame here silently is
-        // not an option: the present-completion event drives the runtime's
-        // frame loop (input latency recording, canvas animations,
-        // automation snapshot refresh), so an occluded window went dead —
-        // frames requested by the runtime never completed. The content is
-        // already retained (canvasTexture holds the latest canvas pixels),
-        // so complete the frame logically instead: advance the frame
-        // index and emit the completion event from retained state, paced
-        // at the display's refresh interval exactly like retained frame
-        // requests (a successful present is vsync-paced by drawable
-        // availability; without pacing an occluded animation loop would
-        // spin unthrottled). The retained content flushes to the glass
-        // when the window is next composited (occlusion observer below).
-        // Policy: a frame requested by the runtime always completes
-        // regardless of window visibility; only the physical glass flush
-        // is deferred to visibility.
+        // The layer can decline a drawable even for a visible window
+        // (mid-resize size flux, transient pool pressure, a window whose
+        // compositing stopped before the occlusion bit flipped). Dropping
+        // the frame here silently is not an option: the present-completion
+        // event drives the runtime's frame loop (input latency recording,
+        // canvas animations, automation snapshot refresh), so the window
+        // would go dead — frames requested by the runtime never completed.
+        // The content is already retained (canvasTexture holds the latest
+        // canvas pixels), so complete the frame logically instead, exactly
+        // like the occluded short-circuit above: advance the frame index
+        // and emit the completion event from retained state, paced at the
+        // display's refresh interval (a successful present is vsync-paced
+        // by drawable availability; without pacing an animation loop here
+        // would spin unthrottled). The retained content flushes to the
+        // glass when the window is next composited (occlusion observer
+        // below). Policy: a frame requested by the runtime always
+        // completes regardless of window visibility; only the physical
+        // glass flush is deferred to visibility.
         self.glassFlushPending = YES;
         [self scheduleFrameEventEmission];
         return;
@@ -4988,6 +5054,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     self.glassFlushPending = NO;
     [commandBuffer presentDrawable:drawable];
     [commandBuffer commit];
+    self.hasEverPresented = YES;
 
     self.frameIndex += 1;
 }
